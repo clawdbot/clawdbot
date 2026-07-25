@@ -10,7 +10,7 @@ const LINUX_CA_BUNDLE_PATHS = [
 export type EnvMap = Record<string, string | undefined>;
 type AccessSyncFn = (path: string, mode?: number) => void;
 
-export function resolveLinuxSystemCaBundle(
+function resolveLinuxSystemCaBundle(
   params: {
     platform?: NodeJS.Platform;
     accessSync?: AccessSyncFn;
@@ -54,7 +54,7 @@ const VERSION_MANAGER_PATH_MARKERS: readonly string[] = [
   "/.nvs/",
 ];
 
-export function isNodeVersionManagerRuntime(
+function isNodeVersionManagerRuntime(
   env: EnvMap = process.env as EnvMap,
   execPath: string = process.execPath,
 ): boolean {

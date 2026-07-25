@@ -1,6 +1,7 @@
 // Gateway Talk realtime agent-consult bridge.
 // Starts chat.send runs that answer realtime Talk tool calls.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   ErrorCodes,
   errorShape,
@@ -9,6 +10,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import { buildRealtimeVoiceAgentConsultChatMessage } from "../talk/agent-consult-tool.js";
+import { abortChatRunById } from "./chat-abort.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import type {
   GatewayClient,
@@ -65,6 +67,7 @@ export async function startTalkRealtimeAgentConsult(params: {
   args: unknown;
   relaySessionId?: string;
   connId?: string;
+  onRunStarted?: (runId: string) => void;
 }): Promise<
   { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }
 > {
@@ -76,11 +79,15 @@ export async function startTalkRealtimeAgentConsult(params: {
   }
   const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
   const normalizedTalk = normalizeTalkSection(params.context.getRuntimeConfig().talk);
+  let acknowledgedRunId: string | undefined;
   const chatResponse = await new Promise<
     { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined
   >((resolve) => {
     let acknowledged = false;
-    const chatSendResult = chatHandlers["chat.send"]({
+    const chatSendResult = expectDefined(
+      chatHandlers["chat.send"],
+      "chat.send handler",
+    )({
       req: {
         type: "req",
         id: `${params.requestId}:talk-tool-call`,
@@ -102,6 +109,37 @@ export async function startTalkRealtimeAgentConsult(params: {
       },
       respond: (ok: boolean, result?: unknown, error?: ErrorShape) => {
         acknowledged = true;
+        if (ok && !terminalTalkChatSendAckError(normalizeTalkChatSendAckStatus(result))) {
+          const candidateRunId =
+            result && typeof result === "object" && !Array.isArray(result)
+              ? (result as Record<string, unknown>).runId
+              : undefined;
+          const runId = typeof candidateRunId === "string" ? candidateRunId : idempotencyKey;
+          try {
+            if (params.relaySessionId && params.connId) {
+              registerTalkRealtimeRelayAgentRun({
+                relaySessionId: params.relaySessionId,
+                connId: params.connId,
+                sessionKey: params.sessionKey,
+                runId,
+                callId: params.callId,
+              });
+            }
+            params.onRunStarted?.(runId);
+            acknowledgedRunId = runId;
+          } catch (registrationError) {
+            abortChatRunById(params.context, {
+              runId,
+              sessionKey: params.sessionKey,
+              stopReason: "voice session binding failed",
+            });
+            resolve({
+              ok: false,
+              error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(registrationError)),
+            });
+            return;
+          }
+        }
         resolve(
           ok
             ? { ok: true, result }
@@ -148,20 +186,6 @@ export async function startTalkRealtimeAgentConsult(params: {
   if (terminalAckError) {
     return { ok: false, error: terminalAckError };
   }
-  const runId =
-    result && typeof result === "object" && !Array.isArray(result)
-      ? typeof (result as Record<string, unknown>).runId === "string"
-        ? (result as Record<string, string>).runId
-        : idempotencyKey
-      : idempotencyKey;
-  if (params.relaySessionId && params.connId) {
-    registerTalkRealtimeRelayAgentRun({
-      relaySessionId: params.relaySessionId,
-      connId: params.connId,
-      sessionKey: params.sessionKey,
-      runId,
-      callId: params.callId,
-    });
-  }
-  return { ok: true, runId, idempotencyKey };
+  const runId = expectDefined(acknowledgedRunId, "talk agent run id");
+  return { ok: true, runId: expectDefined(runId, "talk agent run id"), idempotencyKey };
 }

@@ -25,6 +25,222 @@ extension OpenClawChatViewModel {
         self.contextUsageFraction = Self.chatContextUsageFraction(for: currentSession)
     }
 
+    /// Session lists publish canonical agent keys even when the UI presents `main`.
+    /// Keep visible model metadata on the same exact-then-alias read path.
+    func currentSessionEntry() -> OpenClawChatSessionEntry? {
+        self.sessions.first(where: { $0.key == self.sessionKey }) ??
+            self.sessions.first(where: {
+                self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
+            })
+    }
+
+    /// Session mutations and their ordering use the routed gateway identity,
+    /// never a presentation alias such as `main`.
+    func sessionMutationIdentity(for key: String, listedKey: String? = nil) -> String {
+        let listedKey = listedKey ?? self.sessions.first(where: { $0.key == key })?.key ??
+            (self.matchesCurrentSessionKey(incoming: key, current: self.sessionKey)
+                ? self.currentSessionEntry()?.key
+                : nil)
+        return self.modelPatchTarget(
+            sessionKey: key,
+            canonicalSessionKey: listedKey,
+            agentID: OpenClawChatSessionKey.agentID(from: key) ?? self.activeAgentId,
+            sessionRoutingContract: nil).canonicalSessionKey
+    }
+
+    func applyingLocalUnreadOverrides(
+        to sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry]
+    {
+        sessions.map { session in
+            var session = session
+            let identityKey = self.sessionMutationIdentity(for: session.key, listedKey: session.key)
+            if let unread = self.unreadPatchGuard.localUnreadOverride(key: identityKey) {
+                session.unread = unread
+            }
+            return session
+        }
+    }
+
+    func currentModelPatchTarget() -> ModelPatchTarget {
+        let session = self.currentSessionSnapshot()
+        return self.modelPatchTarget(
+            sessionKey: session.key,
+            canonicalSessionKey: self.currentSessionEntry()?.key,
+            agentID: session.deliveryAgentID,
+            sessionRoutingContract: session.sessionRoutingContract)
+    }
+
+    /// Model coordination uses the immutable gateway route, never a presentation alias such as `main`.
+    func modelPatchTarget(
+        sessionKey: String,
+        canonicalSessionKey: String? = nil,
+        agentID: String?,
+        sessionRoutingContract: String?) -> ModelPatchTarget
+    {
+        let presentationKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let listedKey = canonicalSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = if let listedKey, !listedKey.isEmpty {
+            listedKey
+        } else {
+            presentationKey
+        }
+        let normalizedAgentID = agentID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let routeAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let normalizedCandidate = candidate.lowercased()
+        let targetKey: String
+        let targetAgentID: String?
+        if OpenClawChatSessionKey.agentID(from: candidate) != nil || normalizedCandidate == "unknown" {
+            targetKey = candidate
+            targetAgentID = nil
+        } else if normalizedCandidate == "global" {
+            targetKey = candidate
+            targetAgentID = routeAgentID
+        } else if let routeAgentID {
+            targetKey = "agent:\(routeAgentID):\(candidate)"
+            targetAgentID = nil
+        } else {
+            targetKey = candidate
+            targetAgentID = nil
+        }
+        let normalizedContract = sessionRoutingContract?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let routeContract: String? = if self.usesMutableContractRouting(
+            sessionKey: candidate,
+            contract: normalizedContract)
+        {
+            normalizedContract?.isEmpty == false ? normalizedContract : nil
+        } else {
+            nil
+        }
+        return ModelPatchTarget(
+            canonicalSessionKey: targetKey,
+            agentID: targetAgentID,
+            sessionRoutingContract: routeContract)
+    }
+
+    func sessionEntryForThinking(
+        sessionKey: String,
+        canonicalSessionKey: String?,
+        agentID: String?) -> OpenClawChatSessionEntry?
+    {
+        if let canonicalSessionKey,
+           let exact = self.sessions.first(where: { $0.key == canonicalSessionKey })
+        {
+            return exact
+        }
+        if let exact = self.sessions.first(where: { $0.key == sessionKey }) {
+            return exact
+        }
+        return self.sessions.first(where: {
+            Self.matchesCurrentSessionKey(
+                incoming: $0.key,
+                current: sessionKey,
+                mainSessionKey: self.resolvedMainSessionKey,
+                activeAgentId: agentID)
+        })
+    }
+
+    func successfulModelPatchResult(
+        for target: ModelPatchTarget,
+        session: OpenClawChatSessionEntry?) -> OpenClawChatModelPatchResult?
+    {
+        guard let session,
+              let result = self.lastSuccessfulSettingsPatchResultsByTarget[target]
+        else { return nil }
+        let sessionModel = Self.normalizedModelIdentityComponent(session.model ?? self.sessionDefaults?.model)
+        let sessionProvider = Self.normalizedProvider(session.modelProvider ?? self.sessionDefaults?.modelProvider)
+        let resultModel = Self.normalizedModelIdentityComponent(result.model)
+        let resultProvider = Self.normalizedProvider(result.modelProvider)
+        guard resultModel == nil || resultModel == sessionModel else { return nil }
+        guard resultProvider == nil || resultProvider == sessionProvider else { return nil }
+        return result
+    }
+
+    func sessionIndexForModelState(sessionKey: String) -> Int? {
+        if let exact = self.sessions.firstIndex(where: { $0.key == sessionKey }) {
+            return exact
+        }
+        return self.sessions.firstIndex(where: {
+            self.matchesCurrentSessionKey(incoming: $0.key, current: sessionKey)
+        })
+    }
+
+    func updateCurrentSessionModel(
+        modelID: String?,
+        modelProvider: String?,
+        sessionKey: String,
+        syncSelection: Bool)
+    {
+        let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
+        var updated = existingIndex.map { self.sessions[$0] } ?? self.placeholderSession(key: sessionKey)
+        // Thinking metadata follows model identity; stale options must not survive a model change.
+        let preservesThinkingMetadata =
+            Self.normalizedModelIdentityComponent(updated.model) ==
+            Self.normalizedModelIdentityComponent(modelID) &&
+            Self.normalizedModelIdentityComponent(updated.modelProvider) ==
+            Self.normalizedModelIdentityComponent(modelProvider)
+        updated.modelProvider = modelProvider
+        updated.model = modelID
+        if !preservesThinkingMetadata {
+            updated.contextTokens = nil
+            updated.thinkingLevel = nil
+            updated.thinkingLevels = nil
+            updated.thinkingOptions = nil
+            updated.thinkingDefault = nil
+        }
+        if let index = existingIndex {
+            self.sessions[index] = updated
+        } else {
+            self.sessions.append(updated)
+        }
+        if syncSelection {
+            self.syncSelectedModel()
+        }
+    }
+
+    static func normalizedProvider(_ provider: String?) -> String? {
+        self.normalizedModelIdentityComponent(provider)
+    }
+
+    static func normalizedModelIdentityComponent(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    static func providerQualifiedModelSelectionID(modelID: String, provider: String) -> String {
+        let providerPrefix = "\(provider)/"
+        if modelID.hasPrefix(providerPrefix) {
+            return modelID
+        }
+        return "\(provider)/\(modelID)"
+    }
+
+    func placeholderSession(key: String) -> OpenClawChatSessionEntry {
+        OpenClawChatSessionEntry(
+            key: key,
+            kind: nil,
+            displayName: nil,
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: nil,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: nil,
+            modelProvider: nil,
+            model: nil,
+            contextTokens: nil)
+    }
+
     public var sessionChoices: [OpenClawChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
@@ -39,7 +255,7 @@ extension OpenClawChatViewModel {
             result.append(main)
             included.insert(main.key)
         } else {
-            result.append(placeholderSession(key: mainSessionKey))
+            result.append(self.placeholderSession(key: mainSessionKey))
             included.insert(mainSessionKey)
         }
 
@@ -57,7 +273,7 @@ extension OpenClawChatViewModel {
             if let current = sorted.first(where: { $0.key == self.sessionKey }) {
                 result.append(current)
             } else {
-                result.append(placeholderSession(key: sessionKey))
+                result.append(self.placeholderSession(key: sessionKey))
             }
         }
 

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Qa Lab tests cover cli plugin behavior.
 import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
@@ -214,9 +215,9 @@ describe("qa cli registration", () => {
       "--qa-profile",
       "smoke-ci",
       "--surface",
-      "channel-framework",
+      "channels",
       "--category",
-      "channel-framework.conversation-routing-and-delivery",
+      "channels.conversation-routing-and-delivery",
       "--scenario",
       "dm-chat-baseline",
       "--evidence-mode",
@@ -226,7 +227,7 @@ describe("qa cli registration", () => {
       "--provider-mode",
       "mock-openai",
       "--model",
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-luna",
       "--alt-model",
       "anthropic/claude-sonnet-4-6",
       "--concurrency",
@@ -239,13 +240,13 @@ describe("qa cli registration", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa-e2e/smoke-ci",
       profile: "smoke-ci",
-      surface: "channel-framework",
-      category: "channel-framework.conversation-routing-and-delivery",
+      surface: "channels",
+      category: "channels.conversation-routing-and-delivery",
       scenarioIds: ["dm-chat-baseline"],
       evidenceMode: "slim",
       transportId: "qa-channel",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-sonnet-4-6",
       concurrency: 2,
       allowFailures: true,
@@ -256,14 +257,14 @@ describe("qa cli registration", () => {
 
   it.each([
     ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
-    ["--surface", ["agent-runtime-and-provider-execution"]],
-    ["--category", ["channel-framework.conversation-routing-and-delivery"]],
+    ["--surface", ["agents"]],
+    ["--category", ["channels.conversation-routing-and-delivery"]],
     ["--scenario", ["dm-chat-baseline"]],
     ["--evidence-mode", ["slim"]],
     ["--exclude-test-execution-evidence", []],
     ["--transport", ["qa-channel"]],
     ["--provider-mode", ["mock-openai"]],
-    ["--model", ["openai/gpt-5.5"]],
+    ["--model", ["openai/gpt-5.6-luna"]],
     ["--alt-model", ["anthropic/claude-sonnet-4-6"]],
     ["--concurrency", ["2"]],
     ["--allow-failures", []],
@@ -551,9 +552,9 @@ describe("qa cli registration", () => {
       "--provider-mode",
       "live-frontier",
       "--model",
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-luna",
       "--alt-model",
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-luna",
       "--scenario",
       "slack-canary",
       "--credential-source",
@@ -565,7 +566,7 @@ describe("qa cli registration", () => {
     ]);
 
     expect(runMantisSlackDesktopSmokeCommand).toHaveBeenCalledWith({
-      alternateModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.6-luna",
       crabboxBin: "/tmp/crabbox",
       credentialRole: "maintainer",
       credentialSource: "env",
@@ -578,7 +579,7 @@ describe("qa cli registration", () => {
       machineClass: "beast",
       market: "on-demand",
       outputDir: ".artifacts/qa-e2e/mantis/slack-desktop",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       provider: "hetzner",
       providerMode: "live-frontier",
       repoRoot: "/tmp/openclaw-repo",
@@ -736,7 +737,12 @@ describe("qa cli registration", () => {
   });
 
   it("delegates discovered qa runner registration through the generic host seam", () => {
-    const [{ registration }] = listQaRunnerCliContributions.mock.results[0].value;
+    const mockResult = expectDefined(
+      listQaRunnerCliContributions.mock.results[0],
+      "QA runner contribution result",
+    );
+    const contribution = expectDefined(mockResult.value[0], "QA runner contribution");
+    const { registration } = contribution;
     expect(registration.register).toHaveBeenCalledTimes(1);
   });
 
@@ -895,20 +901,20 @@ describe("qa cli registration", () => {
     expect(options.pack).toBe("personal-agent");
   });
 
-  it("forwards --runtime-parity-tier for suite runs", async () => {
+  it("forwards --runtime-pair-lane for suite runs", async () => {
     await program.parseAsync([
       "node",
       "openclaw",
       "qa",
       "suite",
-      "--runtime-parity-tier",
-      "standard",
-      "--runtime-parity-tier",
-      "optional,soak",
+      "--runtime-pair-lane",
+      "core",
+      "--runtime-pair-lane",
+      "extended,soak",
     ]);
 
     const options = requireQaSuiteOptions();
-    expect(options.runtimeParityTier).toEqual(["standard", "optional,soak"]);
+    expect(options.runtimePairLane).toEqual(["core", "extended,soak"]);
   });
 
   it("routes credential add flags into the qa runtime command", async () => {

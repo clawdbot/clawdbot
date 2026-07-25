@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import {
@@ -12,29 +12,24 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  createAgentEventAuditRecorder,
-  projectAgentEventToAudit,
-  projectToolExecutionEventToAudit,
-  resetAgentEventAuditForTest,
-} from "./agent-event-audit.js";
-import {
-  auditEventStoreLimits,
-  listAuditEvents,
-  pruneExpiredAuditEvents,
-  recordAuditEvent,
-} from "./audit-event-store.js";
-import type { AuditEventInput } from "./audit-event-types.js";
+import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
+import { listAuditEvents, pruneExpiredAuditEvents, recordAuditEvent } from "./audit-event-store.js";
+import type { AuditEventInput, ToolActionAuditEventInput } from "./audit-event-types.js";
 import type { AuditEventWriter } from "./audit-event-writer.js";
 
 const tempDirs: string[] = [];
+const AUDIT_EVENT_MAX_ROWS_CONTRACT = 100_000;
+const AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT = 1_024;
+const AUDIT_EVENT_RETENTION_MS_CONTRACT = 30 * 24 * 60 * 60_000;
+let auditTestRunSequence = 0;
+let currentAuditTestRunId = "run-test-0";
 
 function createDatabaseOptions() {
   return { env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-audit-") } };
 }
 
 function auditInput(overrides: Partial<AuditEventInput> = {}): AuditEventInput {
-  return {
+  const input = {
     sourceSequence: 1,
     occurredAt: Date.now(),
     kind: "agent_run",
@@ -48,11 +43,17 @@ function auditInput(overrides: Partial<AuditEventInput> = {}): AuditEventInput {
     runId: "run-1",
     ...overrides,
   };
+  return {
+    ...input,
+    sourceId:
+      overrides.sourceId ??
+      `${input.runId}:${input.sourceSequence}:${input.occurredAt}:${input.action}`,
+  } as AuditEventInput;
 }
 
 function agentEvent(overrides: Partial<AgentEventPayload>): AgentEventPayload {
   return {
-    runId: "run-1",
+    runId: currentAuditTestRunId,
     seq: 1,
     stream: "lifecycle",
     ts: Date.now(),
@@ -69,7 +70,7 @@ function toolEvent(overrides: Partial<TrustedToolExecutionEvent> = {}): TrustedT
     type: "tool.execution.started",
     seq: 1,
     ts: Date.now(),
-    runId: "run-1",
+    runId: currentAuditTestRunId,
     sessionKey: "agent:coder:main",
     sessionId: "session-1",
     toolName: "exec",
@@ -78,9 +79,44 @@ function toolEvent(overrides: Partial<TrustedToolExecutionEvent> = {}): TrustedT
   } as TrustedToolExecutionEvent;
 }
 
+function captureAuditWriter(inputs: AuditEventInput[]): AuditEventWriter {
+  return {
+    ready: Promise.resolve(),
+    record: (input) => {
+      inputs.push(input);
+      return true;
+    },
+    stop: async () => {},
+  };
+}
+
+function projectAgentEventToAudit(event: AgentEventPayload): AuditEventInput | undefined {
+  const inputs: AuditEventInput[] = [];
+  const recorder = createAgentEventAuditRecorder({
+    writer: captureAuditWriter(inputs),
+    terminalSettleMs: 60_000,
+  });
+  recorder.record(event);
+  void recorder.stop();
+  return inputs.at(-1);
+}
+
+function projectToolExecutionEventToAudit(
+  event: TrustedToolExecutionEvent,
+): ToolActionAuditEventInput | undefined {
+  const inputs: AuditEventInput[] = [];
+  const recorder = createAgentEventAuditRecorder({ writer: captureAuditWriter(inputs) });
+  recorder.recordTool(event);
+  void recorder.stop();
+  return inputs.at(-1) as ToolActionAuditEventInput | undefined;
+}
+
+beforeEach(() => {
+  currentAuditTestRunId = `run-test-${++auditTestRunSequence}`;
+});
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  resetAgentEventAuditForTest();
   resetDiagnosticEventsForTest();
 });
 
@@ -159,18 +195,76 @@ describe("audit event persistence", () => {
     expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(1);
   });
 
+  it("rejects persisted run lifecycle tuples outside the closed contract", () => {
+    const database = createDatabaseOptions();
+    recordAuditEvent(auditInput(), database);
+    const { db } = openOpenClawStateDatabase(database);
+    db.prepare("UPDATE audit_events SET status = ? WHERE kind = 'agent_run'").run("failed");
+
+    expect(() => listAuditEvents({ database, limit: 10 })).toThrow(
+      "corrupt audit event row 1: invalid status",
+    );
+  });
+
   it("caps actual rows without treating dedupe sequence gaps as retained records", () => {
     const database = createDatabaseOptions();
     const occurredAt = Date.now();
     recordAuditEvent(auditInput({ occurredAt }), database);
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'audit_events'").run(
-      auditEventStoreLimits.maxRows + 1,
+      AUDIT_EVENT_MAX_ROWS_CONTRACT + 1,
     );
 
     recordAuditEvent(auditInput({ occurredAt: occurredAt + 1, sourceSequence: 2 }), database);
 
     expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(2);
+  });
+
+  it("prunes row overflow in batches instead of scanning the full cap per insert", () => {
+    const database = createDatabaseOptions();
+    const { db } = openOpenClawStateDatabase(database);
+    const occurredAt = Date.now();
+    db.prepare(
+      `WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+            numbers(n) AS (
+              SELECT 1 + a.d + 10*b.d + 100*c.d + 1000*d.d + 10000*e.d + 100000*f.d
+              FROM digits a, digits b, digits c, digits d, digits e, digits f
+            )
+       INSERT INTO audit_events (
+         event_id, source_id, source_sequence, occurred_at, kind, action, status,
+         actor_type, actor_id, agent_id, run_id
+       )
+       SELECT 'event-' || n, 'source-' || n, n, ? + n, 'agent_run',
+              'agent.run.started', 'started', 'agent', 'main', 'main', 'run-' || n
+       FROM numbers
+       WHERE n <= ?`,
+    ).run(occurredAt, AUDIT_EVENT_MAX_ROWS_CONTRACT + 1);
+
+    expect(
+      recordAuditEvent(
+        auditInput({
+          sourceSequence: AUDIT_EVENT_MAX_ROWS_CONTRACT + 2,
+          occurredAt: occurredAt + AUDIT_EVENT_MAX_ROWS_CONTRACT + 2,
+        }),
+        database,
+      ),
+    ).toBeDefined();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+      count: AUDIT_EVENT_MAX_ROWS_CONTRACT - AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
+    });
+  });
+
+  it("rolls back an insert whose sequence cannot be represented safely", () => {
+    const database = createDatabaseOptions();
+    const { db } = openOpenClawStateDatabase(database);
+    db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_events', ?)").run(
+      Number.MAX_SAFE_INTEGER,
+    );
+
+    expect(() => recordAuditEvent(auditInput(), database)).toThrow(
+      "audit event sequence is outside the supported integer range",
+    );
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
   });
 
   it("keeps reused run ids distinct across actual event timestamps", () => {
@@ -185,7 +279,7 @@ describe("audit event persistence", () => {
     const database = createDatabaseOptions();
     const occurredAt = Date.now();
     recordAuditEvent(auditInput({ occurredAt }), database);
-    const expiredAt = occurredAt + auditEventStoreLimits.retentionMs + 1;
+    const expiredAt = occurredAt + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1;
 
     expect(listAuditEvents({ database, limit: 10, now: expiredAt }).events).toEqual([]);
     pruneExpiredAuditEvents({ database, now: expiredAt });

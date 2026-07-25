@@ -82,6 +82,46 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
   });
 
+  it("applies ChatGPT Responses strict compat on first-party OpenAI API hosts", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const tools = [{ name: "demo", description: "", parameters: {} }] as never;
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-chatgpt-responses",
+      model: {
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+      } as never,
+      tools,
+    });
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+  });
+
+  it("leaves non-openai providers untouched by OpenAI strict compat", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const tools = [{ name: "demo", description: "", parameters: { type: "string" } }] as never;
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      modelApi: "anthropic-messages",
+      model: {
+        provider: "anthropic",
+        api: "anthropic-messages",
+        id: "claude-opus-4-6",
+      } as never,
+      tools,
+    });
+    expect(normalized).toBe(tools);
+  });
+
   it("collapses anyOf and oneOf unions for the deepseek family", () => {
     const hooks = buildProviderToolCompatFamilyHooks("deepseek");
     const tools = [
@@ -269,6 +309,58 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ).toStrictEqual([]);
   });
 
+  it("repairs null and inferred OpenAI tool schema types", () => {
+    expect(
+      normalizeOpenAIParameters({
+        type: null,
+        description: null,
+        default: null,
+        properties: {
+          payload: {
+            properties: { value: { type: "string", format: null } },
+          },
+          tags: {
+            items: { type: "string" },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        payload: {
+          type: "object",
+          properties: { value: { type: "string" } },
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
+    });
+  });
+
+  it("keeps unrepairable null schema constraints for downstream quarantine", () => {
+    // Null constraint keywords must not be silently dropped into a wider
+    // schema; only annotation nulls are repairable. An uninferable type: null
+    // is restored so projection rejects the tool instead of accepting
+    // undeclared arguments.
+    expect(
+      normalizeOpenAIParameters({
+        type: "object",
+        properties: {
+          payload: { type: null, description: "no shape hints" },
+          config: { type: "object", properties: {}, additionalProperties: null },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        payload: { type: null, description: "no shape hints" },
+        config: { type: "object", properties: {}, required: [], additionalProperties: null },
+      },
+    });
+  });
+
   it("preserves explicit empty properties maps when normalizing strict openai schemas", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const parameters = {
@@ -343,6 +435,49 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         testCase.parameters,
       );
     }
+  });
+
+  it("repairs legacy and content schema applicators without changing property dependencies", () => {
+    expect(
+      normalizeOpenAIParameters({
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+        dependencies: {
+          mode: ["payload"],
+          payload: { type: "object" },
+        },
+        additionalItems: { type: "object" },
+        contentSchema: { type: "object" },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+      dependencies: {
+        mode: ["payload"],
+        payload: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+      additionalItems: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      contentSchema: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    });
   });
 
   it("does not tighten or warn for permissive object schemas that use strict:false", () => {

@@ -15,9 +15,10 @@ export const lmstudioMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdap
   authProviderId: "lmstudio",
   allowExplicitWhenConfiguredAuto: true,
   create: async (options) => {
+    const providerId = options.provider?.trim() || "lmstudio";
     const { provider, client } = await createLmstudioEmbeddingProvider({
       ...options,
-      provider: "lmstudio",
+      provider: providerId,
       fallback: "none",
     });
     return {
@@ -26,7 +27,7 @@ export const lmstudioMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdap
         id: "lmstudio",
         inlineBatchTimeoutMs: 10 * 60_000,
         cacheKeyData: {
-          provider: "lmstudio",
+          provider: providerId,
           baseUrl: client.baseUrl,
           model: client.model,
           headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),

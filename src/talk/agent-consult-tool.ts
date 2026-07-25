@@ -26,6 +26,7 @@ export type RealtimeVoiceAgentConsultArgs = {
   question: string;
   context?: string;
   responseStyle?: string;
+  confirmationId?: string;
 };
 /** Compact transcript entry included in delegated agent prompts. */
 export type RealtimeVoiceAgentConsultTranscriptEntry = {
@@ -53,6 +54,11 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
       responseStyle: {
         type: "string",
         description: "Optional style hint for the spoken answer.",
+      },
+      confirmationId: {
+        type: "string",
+        description:
+          "Server-issued confirmation id from a prior VOICE_CONFIRMATION_REQUIRED result, supplied only after the user explicitly confirms aloud.",
       },
     },
     required: ["question"],
@@ -177,10 +183,14 @@ export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoice
   if (!question) {
     throw new Error("question required");
   }
+  const context = readConsultStringArg(args, "context");
+  const responseStyle = readConsultStringArg(args, "responseStyle");
+  const confirmationId = readConsultStringArg(args, "confirmationId");
   return {
     question,
-    context: readConsultStringArg(args, "context"),
-    responseStyle: readConsultStringArg(args, "responseStyle"),
+    context,
+    responseStyle,
+    ...(confirmationId ? { confirmationId } : {}),
   };
 }
 
@@ -232,7 +242,12 @@ export function buildRealtimeVoiceAgentConsultPrompt(params: {
 
 /** Collect only visible answer text from streamed delegated-agent payloads. */
 export function collectRealtimeVoiceAgentConsultVisibleText(
-  payloads: Array<{ text?: unknown; isError?: boolean; isReasoning?: boolean; isCommentary?: boolean }>,
+  payloads: Array<{
+    text?: unknown;
+    isError?: boolean;
+    isReasoning?: boolean;
+    isCommentary?: boolean;
+  }>,
 ): string | null {
   const chunks: string[] = [];
   for (const payload of payloads) {

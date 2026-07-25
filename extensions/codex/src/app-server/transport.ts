@@ -5,7 +5,7 @@
 /** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
   stdin: {
-    write: (data: string, callback?: (error?: Error | null) => void) => unknown;
+    write: (data: string | Uint8Array, callback?: (error?: Error | null) => void) => unknown;
     end?: () => unknown;
     destroy?: () => unknown;
     unref?: () => unknown;

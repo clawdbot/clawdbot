@@ -3,7 +3,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/index.js";
 
-export type ChannelPluginReloadTarget = {
+type ChannelPluginReloadTarget = {
   channelId: ChannelId;
   pluginId?: string | null;
   aliases?: readonly string[] | null;

@@ -210,15 +210,15 @@ Cron does not classify final-output prose or approval-looking refusal phrases as
 
 ## Retention
 
-Retention and pruning are controlled in config:
+Retention behavior:
 
 - `cron.sessionRetention` (default `24h`, or `false` to disable) prunes completed isolated run sessions.
-- `cron.runLog.keepLines` (default `2000`) prunes retained SQLite run-history rows per job. `cron.runLog.maxBytes` (default `2000000`) remains accepted for compatibility with older file-backed run logs; SQLite pruning is row-count based.
+- Run history keeps the newest 2000 terminal rows per cron job. Lost rows retain the standard 24-hour lost-task cleanup window.
 
 ## Migrating older jobs
 
 <Note>
-If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates `notify: true` webhook fallback jobs from `cron.webhook` to explicit webhook delivery. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. When `cron.webhook` is unset, the inert top-level `notify` marker is removed for jobs with no migration target (the existing delivery is preserved unchanged), so `doctor --fix` no longer keeps re-warning about them.
+If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates `notify: true` webhook fallback jobs from the retired raw `cron.webhook` value to explicit webhook delivery before removing that config key. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. Without a legacy webhook, the inert top-level `notify` marker is removed for jobs with no migration target (the existing delivery is preserved unchanged), so `doctor --fix` no longer keeps re-warning about them.
 </Note>
 
 ## Common edits
@@ -298,13 +298,25 @@ openclaw cron runs --id <job-id> --limit 50
 openclaw cron runs --id <job-id> --run-id <run-id>
 ```
 
-`openclaw cron list` shows all matching jobs by default. Pass `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
+`openclaw cron list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
 
 `openclaw cron get <job-id>` returns the stored job JSON directly. Use `cron show <job-id>` when you want the human-readable view with delivery-route preview.
 
 `cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated so external tooling can read job state without re-deriving it; human output may decorate repeated `error` statuses with a failure count.
 
 `cron runs` entries include delivery diagnostics with the intended cron target, the resolved target, message-tool sends, fallback use, and delivered state.
+
+Private per-job scratch (heartbeat checklists and similar monitor context):
+
+```bash
+openclaw cron scratch <job-id>                  # print current scratch content
+openclaw cron scratch <job-id> --json           # scratch plus revision metadata
+openclaw cron scratch <job-id> --set "text"     # replace scratch with exact text
+openclaw cron scratch <job-id> --file notes.md  # replace scratch from a file (- for stdin)
+openclaw cron scratch <job-id> --unset          # remove the scratch row
+```
+
+Scratch is stored in the shared state database, capped at 256 KiB, and never included in `cron list`/`cron get`/`cron runs` output. Writes are compare-and-swap guarded against the revision read at command start; pass `--expected-revision <n>` to pin an explicit revision instead. See [Heartbeat](/gateway/heartbeat#monitor-scratch-optional) for how heartbeat monitors use scratch.
 
 Agent and session retargeting:
 

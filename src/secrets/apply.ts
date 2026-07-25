@@ -11,11 +11,12 @@ import {
   coercePersistedAuthProfileStore,
   loadPersistedAuthProfileStore,
 } from "../agents/auth-profiles/persisted.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
-  deletePersistedAuthProfileStoreRaw,
-  resolveAuthProfileDatabasePath,
-} from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+  captureAuthProfileStorePersistenceSnapshot,
+  restoreAuthProfileStorePersistenceSnapshot,
+  saveAuthProfileStoreIfPersistenceSnapshotMatches,
+} from "../agents/auth-profiles/store.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   replaceConfigFile,
@@ -27,7 +28,7 @@ import type { ConfigWriteOptions } from "../config/io.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizePluginConfigId } from "../plugins/plugin-config-trust.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
@@ -46,6 +47,7 @@ import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
 import {
   listAuthProfileStoreAgentDirs,
   listLegacyAuthJsonPaths,
+  listSecretsDotEnvPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
@@ -64,7 +66,8 @@ type ApplyWrite = {
 
 type AuthStoreSnapshot = {
   agentDir: string;
-  store: ReturnType<typeof loadPersistedAuthProfileStore>;
+  persistence: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
+  owned?: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
 };
 
 type ProjectedState = {
@@ -338,7 +341,8 @@ async function projectPlanState(params: {
   });
 
   const envRawByPath = scrubEnvFiles({
-    env: params.env,
+    configPath,
+    stateDir,
     scrubbedValues: targetMutations.scrubbedValues,
     changedFiles,
     enabled: options.scrubEnv,
@@ -732,7 +736,8 @@ function scrubLegacyAuthJsonStores(params: {
 }
 
 function scrubEnvFiles(params: {
-  env: NodeJS.ProcessEnv;
+  configPath: string;
+  stateDir: string;
   scrubbedValues: Set<string>;
   changedFiles: Set<string>;
   enabled: boolean;
@@ -741,19 +746,20 @@ function scrubEnvFiles(params: {
   if (!params.enabled || params.scrubbedValues.size === 0) {
     return envRawByPath;
   }
-  const envPath = path.join(resolveConfigDir(params.env, os.homedir), ".env");
-  if (!fs.existsSync(envPath)) {
-    return envRawByPath;
-  }
-  const current = fs.readFileSync(envPath, "utf8");
-  const scrubbed = scrubEnvRaw(
-    current,
-    params.scrubbedValues,
-    new Set(listKnownSecretEnvVarNames()),
-  );
-  if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
-    envRawByPath.set(envPath, scrubbed.nextRaw);
-    params.changedFiles.add(envPath);
+  const knownSecretEnvVars = new Set(listKnownSecretEnvVarNames());
+  for (const envPath of listSecretsDotEnvPaths({
+    configPath: params.configPath,
+    stateDir: params.stateDir,
+  })) {
+    if (!fs.existsSync(envPath)) {
+      continue;
+    }
+    const current = fs.readFileSync(envPath, "utf8");
+    const scrubbed = scrubEnvRaw(current, params.scrubbedValues, knownSecretEnvVars);
+    if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
+      envRawByPath.set(envPath, scrubbed.nextRaw);
+      params.changedFiles.add(envPath);
+    }
   }
   return envRawByPath;
 }
@@ -928,7 +934,7 @@ export async function runSecretsApply(params: {
     if (!authStoreSnapshots.has(pathname)) {
       authStoreSnapshots.set(pathname, {
         agentDir,
-        store: loadPersistedAuthProfileStore(agentDir),
+        persistence: captureAuthProfileStorePersistenceSnapshot(agentDir),
       });
     }
   };
@@ -966,7 +972,21 @@ export async function runSecretsApply(params: {
       const agentDir = projected.authStoreAgentDirByPath.get(pathname);
       const store = coercePersistedAuthProfileStore(value);
       if (agentDir && store) {
-        saveAuthProfileStore(store, agentDir);
+        const snapshot = authStoreSnapshots.get(pathname);
+        if (!snapshot) {
+          throw new Error(`missing captured auth profile store for ${pathname}`);
+        }
+        const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+          store,
+          snapshot: snapshot.persistence,
+          agentDir,
+        });
+        // Persisted rows commit before runtime publication. Record their exact
+        // ownership first so a publication failure can still roll them back.
+        snapshot.owned = committed.owned;
+        if (!committed.publishRuntimeSnapshots()) {
+          throw new Error(`auth profile runtime publication failed for ${pathname}`);
+        }
       }
     }
   } catch (err) {
@@ -980,14 +1000,15 @@ export async function runSecretsApply(params: {
       }
     }
     for (const snapshot of authStoreSnapshots.values()) {
+      if (!snapshot.owned) {
+        continue;
+      }
       try {
-        if (snapshot.store) {
-          saveAuthProfileStore(snapshot.store, snapshot.agentDir, {
-            syncExternalCli: false,
-          });
-        } else {
-          deletePersistedAuthProfileStoreRaw(snapshot.agentDir);
-        }
+        restoreAuthProfileStorePersistenceSnapshot(
+          snapshot.persistence,
+          snapshot.owned,
+          snapshot.agentDir,
+        );
       } catch {
         // Best effort only; preserve original error.
       }
@@ -1025,3 +1046,4 @@ export const testing = {
   },
 };
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

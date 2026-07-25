@@ -5,10 +5,10 @@ scenario:
   surface: harness
   coverage:
     primary:
-      - harness.tool-trace-visibility
+      - observability.telemetry-tool-trace-visibility
     secondary:
-      - runtime.qa-bus
-      - tools.trace
+      - observability.telemetry-qa-bus
+      - observability.telemetry-trace
   objective: Verify QA-Lab can assert sanitized tool-call traces directly on bus messages.
   successCriteria:
     - QA bus messages can carry a toolCalls array.

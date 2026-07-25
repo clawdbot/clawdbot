@@ -1,9 +1,9 @@
 // Shared status output types.
 // These shapes are consumed by scan, summary, text report, and JSON status builders.
 
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionKind } from "../sessions/classify-session-kind.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   RetainedLostTaskAuditSummary,
   TaskAuditSummary,
@@ -66,6 +66,23 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  degradedSecretOwners?: Array<{
+    ownerKind: "account" | "capability" | "gateway" | "provider" | "route";
+    ownerId: string;
+    state: "unavailable";
+    degradationState?: "cold" | "stale";
+    paths: string[];
+    reason: string;
+  }>;
+  degradedPlugins?: Array<{
+    pluginId: string;
+    state: "configured-unavailable";
+    diagnostic: {
+      kind: "plugin-verification";
+      reason: import("../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      detail: string;
+    };
+  }>;
   tasks: TaskRegistrySummary;
   taskAudit: TaskAuditSummary;
   taskAuditRetainedLost?: RetainedLostTaskAuditSummary;

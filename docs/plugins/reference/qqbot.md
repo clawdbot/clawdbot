@@ -16,7 +16,7 @@ OpenClaw QQ Bot channel plugin for group and direct-message workflows.
 
 ## Surface
 
-channels: qqbot; contracts: tools; skills
+channels: `qqbot`; contracts: `tools`; skills
 
 ## Related docs
 

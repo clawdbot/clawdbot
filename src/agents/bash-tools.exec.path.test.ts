@@ -66,7 +66,11 @@ vi.mock("../infra/exec-approvals.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
     "../infra/exec-approvals.js",
   );
-  return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+  return {
+    ...mod,
+    resolveExecApprovals: () => createExecApprovals(),
+    resolveExecApprovalsLocked: async () => createExecApprovals(),
+  };
 });
 
 vi.mock("../process/supervisor/index.js", () => ({

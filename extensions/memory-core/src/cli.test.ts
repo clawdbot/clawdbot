@@ -10,15 +10,12 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "./dreaming-state.js";
-import {
-  readShortTermRecallEntries,
-  recordShortTermRecalls,
-  testing as shortTermTesting,
-} from "./short-term-promotion.js";
+  shortTermTestState as shortTermTesting,
+} from "./test-helpers.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -42,31 +39,43 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 vi.mock("./cli.host.runtime.js", async () => {
-  const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
+  const [
+    {
+      defaultRuntime,
+      formatErrorMessage,
+      setVerbose,
+      shortenHomeInString,
+      shortenHomePath,
+      theme,
+      withManager,
+      withProgress,
+      withProgressTotals,
+    },
+    { resolveSessionTranscriptsDirForAgent, resolveStateDir },
+    { listMemoryFiles, normalizeExtraMemoryPaths },
+  ] = await Promise.all([
     import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
     import("openclaw/plugin-sdk/memory-core-host-runtime-core"),
     import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
   ]);
   return {
-    colorize: runtimeCli.colorize,
-    defaultRuntime: runtimeCli.defaultRuntime,
-    formatErrorMessage: runtimeCli.formatErrorMessage,
+    defaultRuntime,
+    formatErrorMessage,
     getMemorySearchManager,
-    isRich: runtimeCli.isRich,
-    listMemoryFiles: runtimeFiles.listMemoryFiles,
+    listMemoryFiles,
     getRuntimeConfig,
-    normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
+    normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
-    resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
-    resolveStateDir: runtimeCore.resolveStateDir,
-    setVerbose: runtimeCli.setVerbose,
-    shortenHomeInString: runtimeCli.shortenHomeInString,
-    shortenHomePath: runtimeCli.shortenHomePath,
-    theme: runtimeCli.theme,
-    withManager: runtimeCli.withManager,
-    withProgress: runtimeCli.withProgress,
-    withProgressTotals: runtimeCli.withProgressTotals,
+    resolveSessionTranscriptsDirForAgent,
+    resolveStateDir,
+    setVerbose,
+    shortenHomeInString,
+    shortenHomePath,
+    theme,
+    withManager,
+    withProgress,
+    withProgressTotals,
   };
 });
 
@@ -83,8 +92,14 @@ let qmdCaseId = 0;
 beforeAll(async () => {
   await configureMemoryCoreDreamingStateForTests();
   ({ registerMemoryCli } = await import("./cli.js"));
-  ({ defaultRuntime, isVerbose, setVerbose } =
-    await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
+  const {
+    defaultRuntime: loadedDefaultRuntime,
+    isVerbose: loadedIsVerbose,
+    setVerbose: loadedSetVerbose,
+  } = await import("openclaw/plugin-sdk/memory-core-host-runtime-cli");
+  defaultRuntime = loadedDefaultRuntime;
+  isVerbose = loadedIsVerbose;
+  setVerbose = loadedSetVerbose;
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
   workspaceFixtureRoot = path.join(fixtureRoot, "workspace");
   qmdFixtureRoot = path.join(fixtureRoot, "qmd");
@@ -117,7 +132,7 @@ afterAll(async () => {
 });
 
 describe("memory cli", () => {
-  const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
+  const inactiveMemorySecretDiagnostic = "memory.search.remote.apiKey inactive"; // pragma: allowlist secret
 
   function firstMockCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
     const call = mock.mock.calls[0];
@@ -216,10 +231,13 @@ describe("memory cli", () => {
     expect(loggedOutput(spy)).not.toContain(expected);
   }
 
-  async function runMemoryCli(args: string[]) {
+  async function runMemoryCli(
+    args: string[],
+    hostOptions?: Parameters<typeof registerMemoryCli>[1],
+  ) {
     const program = new Command();
     program.name("test");
-    registerMemoryCli(program);
+    registerMemoryCli(program, hostOptions);
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
 
@@ -472,6 +490,14 @@ describe("memory cli", () => {
           provider: "auto",
           requestedProvider: "auto",
           vector: { enabled: true },
+          custom: {
+            llamaCppRuntime: {
+              engine: "llama.cpp",
+              state: "ready",
+              backend: "metal",
+              buildType: "prebuilt",
+            },
+          },
         }),
       close,
     });
@@ -483,19 +509,22 @@ describe("memory cli", () => {
     expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
     expectLogged(log, "Provider: auto");
     expectLogged(log, "Vector store: unknown");
+    expectNotLogged(log, "llama.cpp:");
     expect(close).toHaveBeenCalled();
   });
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
-            },
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     };
     getRuntimeConfig.mockReturnValue(config);
@@ -515,10 +544,7 @@ describe("memory cli", () => {
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
     expect(secretRefsCall.targetIds).toStrictEqual(
-      new Set([
-        "agents.defaults.memorySearch.remote.apiKey",
-        "agents.list[].memorySearch.remote.apiKey",
-      ]),
+      new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
     );
   });
 
@@ -589,7 +615,35 @@ describe("memory cli", () => {
       probeVectorStoreAvailability,
       probeVectorAvailability,
       probeEmbeddingAvailability,
-      status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
+      status: () =>
+        makeMemoryStatus({
+          files: 1,
+          chunks: 1,
+          custom: {
+            llamaCppRuntime: {
+              engine: "llama.cpp",
+              state: "ready",
+              backend: "metal",
+              buildType: "prebuilt",
+              deviceNames: ["Apple M4 Max"],
+              memory: {
+                totalBytes: 64 * 1024 ** 3,
+                usedBytes: 8 * 1024 ** 3,
+                freeBytes: 56 * 1024 ** 3,
+                unifiedBytes: 64 * 1024 ** 3,
+                observedAtMs: Date.parse("2026-07-10T12:00:00.000Z"),
+              },
+              offload: {
+                supported: true,
+                offloadedLayers: 20,
+                totalLayers: 24,
+              },
+              context: {
+                requestedSize: 4096,
+              },
+            },
+          },
+        }),
       close,
     });
 
@@ -600,6 +654,14 @@ describe("memory cli", () => {
     expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expectLogged(log, "Embeddings: ready");
+    expectLogged(log, "llama.cpp: metal (prebuilt)");
+    expectLogged(log, "Devices: Apple M4 Max");
+    expectLogged(
+      log,
+      "VRAM snapshot: 8.0 GB used · 56 GB free · 64 GB total · 64 GB unified (2026-07-10T12:00:00.000Z)",
+    );
+    expectLogged(log, "GPU offload: 20/24 layers");
+    expectLogged(log, "Requested context: 4096 tokens");
     expect(close).toHaveBeenCalled();
   });
 
@@ -1397,6 +1459,36 @@ describe("memory cli", () => {
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
+  });
+
+  it("passes the host local-service hook to CLI memory managers", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({ search: vi.fn(async () => []), close });
+    const acquireLocalService = vi.fn(async () => undefined);
+
+    await runMemoryCli(["search", "hello"], { acquireLocalService });
+
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+      acquireLocalService,
+    });
+  });
+
+  it("passes the host SQLite lease hook to CLI memory managers", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({ search: vi.fn(async () => []), close });
+    const withLease = vi.fn();
+
+    await runMemoryCli(["search", "hello"], { withLease });
+
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+      withLease,
+    });
   });
 
   it("accepts --query for memory search", async () => {
@@ -2394,3 +2486,4 @@ describe("memory cli", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

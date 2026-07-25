@@ -1,4 +1,3 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 /**
  * OAuth credential manager.
  * Resolves usable access tokens, refreshes expired credentials under global
@@ -9,6 +8,7 @@ import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, OAUTH_REFRESH_LOCK_OPTIONS, log } from "./constants.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
@@ -23,12 +23,8 @@ import {
   hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  overlayRuntimeExternalOAuthProfiles,
   shouldBootstrapFromExternalCliCredential,
-  shouldPersistRuntimeExternalOAuthProfile,
   shouldReplaceStoredOAuthCredential,
-  type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
 import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
 import {
@@ -39,7 +35,7 @@ import {
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential, OAuthCredentials } from "./types.js";
 
-export type OAuthManagerAdapter = {
+type OAuthManagerAdapter = {
   buildApiKey: (
     provider: string,
     credentials: OAuthCredential,
@@ -134,19 +130,6 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
     };
   }
 }
-
-export {
-  areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
-  isSafeToAdoptBootstrapOAuthIdentity,
-  isSafeToAdoptMainStoreOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  overlayRuntimeExternalOAuthProfiles,
-  shouldBootstrapFromExternalCliCredential,
-  shouldPersistRuntimeExternalOAuthProfile,
-  shouldReplaceStoredOAuthCredential,
-};
-export type { RuntimeExternalOAuthProfile };
 
 function hasOAuthCredentialChanged(
   previous: Pick<OAuthCredential, "access" | "refresh" | "expires">,
@@ -863,3 +846,4 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     resetRefreshQueuesForTest,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

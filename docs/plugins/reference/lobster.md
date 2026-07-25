@@ -16,4 +16,4 @@ Lobster workflow tool plugin for typed pipelines and resumable approvals.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`

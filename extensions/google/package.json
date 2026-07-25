@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/google-plugin",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "private": true,
   "description": "OpenClaw Google plugin",
   "type": "module",
   "dependencies": {
-    "@google/genai": "2.10.0",
+    "@google/genai": "2.12.0",
     "google-auth-library": "10.9.0"
   },
   "devDependencies": {

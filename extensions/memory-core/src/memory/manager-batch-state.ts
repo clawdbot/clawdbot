@@ -24,16 +24,14 @@ export function recordMemoryBatchFailure(
   params: {
     provider: string;
     message: string;
-    attempts?: number;
+    attempts: 1 | 2;
     forceDisable?: boolean;
   },
 ): MemoryBatchFailureState {
   if (!state.enabled) {
     return state;
   }
-  const increment = params.forceDisable
-    ? MEMORY_BATCH_FAILURE_LIMIT
-    : Math.max(1, params.attempts ?? 1);
+  const increment = params.forceDisable ? MEMORY_BATCH_FAILURE_LIMIT : params.attempts;
   const count = state.count + increment;
   const enabled = !(params.forceDisable || count >= MEMORY_BATCH_FAILURE_LIMIT);
   return {

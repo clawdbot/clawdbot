@@ -31,11 +31,12 @@ import { createDiscordSendResult } from "./send.receipt.js";
 import {
   buildDiscordSendError,
   createDiscordClient,
+  createDiscordMessageNonce,
   resolveChannelId,
   resolveDiscordChannel,
-  toDiscordFileBlob,
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
+  type DiscordAllowedMentions,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
 
@@ -168,6 +169,7 @@ type DiscordComponentSendOpts = {
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
   suppressEmbeds?: boolean;
+  allowedMentions?: DiscordAllowedMentions;
   /** Persist the concrete platform send before component bookkeeping can fail. */
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
 };
@@ -218,8 +220,7 @@ async function buildDiscordComponentPayload(params: {
     const filenameOverride = params.opts.filename?.trim();
     resolvedFileName = filenameOverride || media.fileName || "upload";
     spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
-    const fileData = toDiscordFileBlob(media.buffer);
-    files = [{ data: fileData, name: resolvedFileName }];
+    files = [{ data: media.buffer, name: resolvedFileName }];
   }
 
   const attachmentNames = extractComponentAttachmentNames(spec);
@@ -254,6 +255,7 @@ async function buildDiscordComponentPayload(params: {
 
   const payload: MessagePayloadObject = {
     components: buildResult.components,
+    allowed_mentions: params.opts.allowedMentions,
     ...(finalFlags ? { flags: finalFlags } : {}),
     ...(files ? { files } : {}),
   };
@@ -305,11 +307,17 @@ export async function sendDiscordComponentMessage(
     throw new Error("Discord components are not supported in forum-style channels");
   }
 
-  const { body, buildResult } = await buildDiscordComponentPayload({
+  const { body: componentBody, buildResult } = await buildDiscordComponentPayload({
     spec,
     opts,
     accountId: accountInfo.accountId,
   });
+  // Nonce enforcement belongs to Create Message; the shared builder also serves edits.
+  const body = {
+    ...componentBody,
+    nonce: createDiscordMessageNonce(),
+    enforce_nonce: true,
+  };
 
   let result: { id: string; channel_id: string };
   try {
@@ -319,6 +327,7 @@ export async function sendDiscordComponentMessage(
           body,
         }),
       "components",
+      { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
   } catch (err) {
     throw await buildDiscordSendError(err, {

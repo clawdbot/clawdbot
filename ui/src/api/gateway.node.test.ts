@@ -1,16 +1,17 @@
-// @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+/** @vitest-environment node */
+import { createHash } from "node:crypto";
 import {
+  ConnectErrorDetailCodes,
+  GATEWAY_CLIENT_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-} from "../../../packages/gateway-protocol/src/version.js";
-import type { DeviceIdentity } from "../lib/nodes/index.ts";
+} from "@openclaw/gateway-client/browser";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
   storeDeviceAuthToken as storeScopedDeviceAuthToken,
 } from "../lib/nodes/index.ts";
+import * as nodes from "../lib/nodes/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
@@ -22,6 +23,22 @@ const ROSITA_CRED = "rosita-device-token";
 const WILFRED_CRED = "wilfred-device-token";
 const TENANT_A_CRED = "tenant-a-device-token";
 const TENANT_B_CRED = "tenant-b-device-token";
+type DeviceIdentity = { deviceId: string; privateKey: string; publicKey: string };
+const CONTROL_UI_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.questions",
+  "operator.pairing",
+] as const;
+const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
+  "operator.approvals",
+  "operator.questions",
+  "operator.read",
+  "operator.talk.secrets",
+  "operator.write",
+] as const;
 const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(
     async (): Promise<DeviceIdentity> => ({
@@ -119,21 +136,8 @@ class MockWebSocket {
   }
 }
 
-vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/nodes/index.ts")>()),
-  loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
-  signDevicePayload: signDevicePayloadMock,
-}));
-
-const {
-  CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES,
-  CONTROL_UI_OPERATOR_SCOPES,
-  GatewayBrowserClient,
-  GatewayRequestError,
-  isNonRecoverableConnectError,
-  resolveGatewayErrorDetailCode,
-  shouldRetryWithDeviceToken,
-} = await import("./gateway.ts");
+const { GatewayBrowserClient, GatewayRequestError, resolveGatewayErrorDetailCode } =
+  await import("./gateway.ts");
 
 type ConnectFrame = {
   id?: string;
@@ -374,6 +378,10 @@ async function expectRetriedDeviceTokenConnect(params: {
 
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
+    vi.spyOn(nodes, "loadOrCreateDeviceIdentity").mockImplementation(
+      loadOrCreateDeviceIdentityMock,
+    );
+    vi.spyOn(nodes, "signDevicePayload").mockImplementation(signDevicePayloadMock);
     vi.useRealTimers();
     vi.unstubAllGlobals();
     const storage = createStorageMock();
@@ -402,6 +410,7 @@ describe("GatewayBrowserClient", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("requests full control ui operator scopes with explicit shared auth", async () => {
@@ -416,9 +425,13 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.caps).toEqual([
+      GATEWAY_CLIENT_CAPS.AGENT_KIND,
+      GATEWAY_CLIENT_CAPS.APPROVALS,
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+      GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+      GATEWAY_CLIENT_CAPS.UI_COMMANDS,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
@@ -450,7 +463,6 @@ describe("GatewayBrowserClient", () => {
 
     expect(error.message).toBe(`protocol mismatch: Control UI v${PROTOCOL_VERSION}`);
     expect(resolveGatewayErrorDetailCode(error)).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
-    expect(isNonRecoverableConnectError(error)).toBe(true);
   });
 
   it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {
@@ -596,6 +608,31 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
+  it("tracks inbound activity and delegates forced reconnect to the shared socket", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "token-oversized",
+    });
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    const activityAfterConnect = client.inboundActivitySeq;
+
+    ws.emitMessage({ type: "event", event: "tick", seq: 1, payload: {} });
+    expect(client.inboundActivitySeq).toBe(activityAfterConnect + 1);
+
+    client.forceReconnect("terminal liveness timeout");
+    expect(ws.lastClose).toEqual({ code: 4000, reason: "terminal liveness timeout" });
+  });
+
   it("reports failed request timing without including request params", async () => {
     const onRequestTiming = vi.fn();
     const client = new GatewayBrowserClient({
@@ -646,6 +683,9 @@ describe("GatewayBrowserClient", () => {
 
   it("reports connect phase timing without credentials or nonce values", async () => {
     const onConnectTiming = vi.fn();
+    vi.stubGlobal("performance", {
+      now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(35).mockReturnValue(40),
+    });
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -661,6 +701,7 @@ describe("GatewayBrowserClient", () => {
       "connect-plan-ready",
       "request-sent",
     ]);
+    expect([sentPayloads[0]?.durationMs, sentPayloads[0]?.phaseDurationMs]).toEqual([25, 25]);
     for (const payload of sentPayloads) {
       expect(payload.generation).toBe(1);
       expect(payload.durationMs).toBeTypeOf("number");
@@ -783,6 +824,39 @@ describe("GatewayBrowserClient", () => {
       client.stop();
       consoleError.mockRestore();
     }
+  });
+
+  it("publishes a credential-scoped recovery identity after hello", async () => {
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      token: "test-auth-token",
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+          deviceToken: "test-token-placeholder",
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(client.recoveryScopeReady).toBe(true);
+    expect(client.recoveryScope).toBe(
+      createHash("sha256").update("test-token-placeholder").digest("hex"),
+    );
+    expect(client.recoveryScope).not.toContain("test-token-placeholder");
+    client.stop();
   });
 
   it("keeps close callback errors from blocking reconnect scheduling", async () => {
@@ -980,6 +1054,7 @@ describe("GatewayBrowserClient", () => {
         "operator.admin",
         "operator.approvals",
         "operator.pairing",
+        "operator.questions",
         "operator.read",
         "operator.write",
       ],
@@ -1331,7 +1406,6 @@ describe("GatewayBrowserClient", () => {
     vi.useFakeTimers();
     const identity = createDeferred<DeviceIdentity>();
     loadOrCreateDeviceIdentityMock.mockImplementationOnce(() => identity.promise);
-
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -1360,7 +1434,6 @@ describe("GatewayBrowserClient", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     await Promise.resolve();
-
     expect(secondWs.sent).toHaveLength(0);
 
     const { connectFrame } = await continueConnect(secondWs, "nonce-current");
@@ -1397,7 +1470,13 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
-  it("does not auto-reconnect on AUTH_TOKEN_MISSING", async () => {
+  it.each([
+    ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+    ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+    ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+    ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+    ConnectErrorDetailCodes.PAIRING_REQUIRED,
+  ])("does not auto-reconnect on %s", async (detailCode) => {
     useNodeFakeTimers();
     localStorage.clear();
 
@@ -1414,7 +1493,7 @@ describe("GatewayBrowserClient", () => {
       error: {
         code: "INVALID_REQUEST",
         message: "unauthorized",
-        details: { code: "AUTH_TOKEN_MISSING" },
+        details: { code: detailCode },
       },
     });
     await expectSocketClosed(ws1);
@@ -1566,11 +1645,13 @@ describe("GatewayBrowserClient", () => {
   it("reports willRetry=false on credential rejections so the UI can fall back to the login gate", async () => {
     useNodeFakeTimers();
     const onClose = vi.fn();
+    const onConnectTiming = vi.fn();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       password: "wrong-password",
       onClose,
+      onConnectTiming,
     });
 
     const { ws, connectFrame } = await startConnect(client);
@@ -1589,93 +1670,16 @@ describe("GatewayBrowserClient", () => {
 
     const close = requireFirstMockArg(onClose, "close");
     expect(close.willRetry).toBe(false);
+    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+      phase: "failed",
+      errorCode: "INVALID_REQUEST",
+      hasDeviceIdentity: true,
+      hasPassword: true,
+    });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 
     vi.useRealTimers();
   });
 });
-
-describe("shouldRetryWithDeviceToken", () => {
-  beforeEach(() => {
-    stubWindowGlobals();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("allows a bounded retry for trusted loopback endpoints", () => {
-    expect(
-      shouldRetryWithDeviceToken({
-        deviceTokenRetryBudgetUsed: false,
-        authDeviceToken: undefined,
-        explicitGatewayToken: "shared-auth-token",
-        deviceIdentity: {
-          deviceId: "device-1",
-          privateKey: "private-key", // pragma: allowlist secret
-          publicKey: "public-key", // pragma: allowlist secret
-        },
-        storedToken: "stored-device-token",
-        canRetryWithDeviceTokenHint: true,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(true);
-  });
-
-  it("allows a bounded retry for loopback IPv4 addresses in the 127 block", () => {
-    expect(
-      shouldRetryWithDeviceToken({
-        deviceTokenRetryBudgetUsed: false,
-        authDeviceToken: undefined,
-        explicitGatewayToken: "shared-auth-token",
-        deviceIdentity: {
-          deviceId: "device-1",
-          privateKey: "private-key", // pragma: allowlist secret
-          publicKey: "public-key", // pragma: allowlist secret
-        },
-        storedToken: "stored-device-token",
-        canRetryWithDeviceTokenHint: true,
-        url: "ws://127.255.10.42:18789",
-      }),
-    ).toBe(true);
-  });
-
-  it("blocks the retry for DNS hosts beginning with a 127 label", () => {
-    for (const url of ["ws://127.example.invalid:18789", "ws://127.0.0.1.example.invalid:18789"]) {
-      expect(
-        shouldRetryWithDeviceToken({
-          deviceTokenRetryBudgetUsed: false,
-          authDeviceToken: undefined,
-          explicitGatewayToken: "shared-auth-token",
-          deviceIdentity: {
-            deviceId: "device-1",
-            privateKey: "private-key", // pragma: allowlist secret
-            publicKey: "public-key", // pragma: allowlist secret
-          },
-          storedToken: "stored-device-token",
-          canRetryWithDeviceTokenHint: true,
-          url,
-        }),
-      ).toBe(false);
-    }
-  });
-
-  it("blocks the retry after the one-shot budget is spent", () => {
-    expect(
-      shouldRetryWithDeviceToken({
-        deviceTokenRetryBudgetUsed: true,
-        authDeviceToken: undefined,
-        explicitGatewayToken: "shared-auth-token",
-        deviceIdentity: {
-          deviceId: "device-1",
-          privateKey: "private-key", // pragma: allowlist secret
-          publicKey: "public-key", // pragma: allowlist secret
-        },
-        storedToken: "stored-device-token",
-        canRetryWithDeviceTokenHint: true,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(false);
-  });
-});
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -53,8 +53,8 @@ vi.mock("../channels/registry.js", () => ({
 vi.mock("../commands/channel-setup/discovery.js", () => ({
   resolveChannelSetupEntries: (params: Parameters<ResolveChannelSetupEntries>[0]) =>
     resolveChannelSetupEntries(params),
-  shouldShowChannelInSetup: (meta: { exposure?: { setup?: boolean }; showInSetup?: boolean }) =>
-    meta.showInSetup !== false && meta.exposure?.setup !== false,
+  shouldShowChannelInSetup: (meta: { exposure?: { setup?: boolean } }) =>
+    meta.exposure?.setup !== false,
 }));
 
 vi.mock("../config/channel-configured.js", () => ({

@@ -49,5 +49,6 @@ describe("Logbook view", () => {
     render(renderLogbook({ host, client: null, connected: false }), container);
 
     expect(container.querySelector(".logbook-card__time")?.textContent?.trim()).toBe("16:30–17:30");
+    expect(container.querySelector(".logbook-card__duration")?.textContent?.trim()).toBe("1h");
   });
 });

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 // Resolves and classifies config paths for reads, writes, and metadata.
 import { isPlainObject } from "../utils.js";
@@ -18,11 +19,9 @@ function setOwnConfigProperty(node: PathNode, key: string, value: unknown): void
 }
 
 /** Parses CLI/config dot-notation paths and rejects unsafe object-key segments. */
-export function parseConfigPath(raw: string): {
-  ok: boolean;
-  path?: string[];
-  error?: string;
-} {
+export function parseConfigPath(
+  raw: string,
+): { ok: true; path: string[] } | { ok: false; error: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
     return {
@@ -47,9 +46,12 @@ export function parseConfigPath(raw: string): {
 
 /** Sets a value at a validated config path, creating missing plain-object parents. */
 export function setConfigValueAtPath(root: PathNode, path: string[], value: unknown): void {
+  const leafKey = path.at(-1);
+  if (leafKey === undefined) {
+    throw new Error("Config path must contain at least one segment");
+  }
   let cursor: PathNode = root;
-  for (let idx = 0; idx < path.length - 1; idx += 1) {
-    const key = path[idx];
+  for (const key of path.slice(0, -1)) {
     const existing = Object.hasOwn(cursor, key) ? cursor[key] : undefined;
     const next: PathNode = isPlainObject(existing) ? existing : {};
     if (next !== existing) {
@@ -57,15 +59,18 @@ export function setConfigValueAtPath(root: PathNode, path: string[], value: unkn
     }
     cursor = next;
   }
-  setOwnConfigProperty(cursor, path[path.length - 1], value);
+  setOwnConfigProperty(cursor, leafKey, value);
 }
 
 /** Removes a value at a config path and prunes empty parent objects created by setters. */
 export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean {
+  const leafKey = path.at(-1);
+  if (leafKey === undefined) {
+    return false;
+  }
   const stack: Array<{ node: PathNode; key: string }> = [];
   let cursor: PathNode = root;
-  for (let idx = 0; idx < path.length - 1; idx += 1) {
-    const key = path[idx];
+  for (const key of path.slice(0, -1)) {
     if (!Object.hasOwn(cursor, key)) {
       return false;
     }
@@ -76,7 +81,6 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
     stack.push({ node: cursor, key });
     cursor = next;
   }
-  const leafKey = path[path.length - 1];
   if (!Object.hasOwn(cursor, leafKey)) {
     return false;
   }
@@ -84,7 +88,7 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
   // Keep config writes tidy: removing foo.bar should also remove foo when it became empty, while
   // preserving any parent that still carries sibling config.
   for (let idx = stack.length - 1; idx >= 0; idx -= 1) {
-    const { node, key } = stack[idx];
+    const { node, key } = expectDefined(stack[idx], "stack entry at idx");
     const child = node[key];
     if (isPlainObject(child) && Object.keys(child).length === 0) {
       delete node[key];

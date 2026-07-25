@@ -1,4 +1,8 @@
 // Markdown Core module implements chunk text behavior.
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+
+export { avoidTrailingHighSurrogateBreak };
+
 function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
   if (!text) {
     return [];
@@ -18,7 +22,7 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
   let depth = 0;
 
   for (let i = 0; i < text.length; i++) {
-    const char = text[i];
+    const char = text.charAt(i);
     // Parenthesized spans often contain rewritten links or file references;
     // avoid splitting them unless the window has no safer outside break.
     if (char === "(") {
@@ -42,21 +46,67 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
   return { lastNewline, lastWhitespace };
 }
 
-/**
- * Keeps UTF-16 chunk boundaries from separating a supplementary-plane character.
- * A one-unit positive limit still needs to emit an entire surrogate pair.
- */
-export function avoidTrailingHighSurrogateBreak(text: string, start: number, end: number): number {
-  if (
-    end >= text.length ||
-    text.charCodeAt(end - 1) < 0xd800 ||
-    text.charCodeAt(end - 1) > 0xdbff ||
-    text.charCodeAt(end) < 0xdc00 ||
-    text.charCodeAt(end) > 0xdfff
-  ) {
-    return end;
+export type TextChunkRange = {
+  start: number;
+  end: number;
+};
+
+export type ChunkTextRangesOptions = {
+  limit: number;
+  mode?: "hard" | "preferred";
+};
+
+function findPreferredRangeEnd(text: string, start: number, end: number): number | undefined {
+  const slice = text.slice(start, end);
+  let paragraphEnd: number | undefined;
+  for (const match of slice.matchAll(/\n[\t ]*\n+/g)) {
+    if (match.index !== undefined) {
+      paragraphEnd = start + match.index + match[0].length;
+    }
   }
-  return end - 1 > start ? end - 1 : end + 1;
+  if (paragraphEnd !== undefined) {
+    return paragraphEnd;
+  }
+
+  const newlineIndex = text.lastIndexOf("\n", end - 1);
+  if (newlineIndex >= start) {
+    return newlineIndex + 1;
+  }
+
+  for (let index = end - 1; index > start; index -= 1) {
+    if (/\s/.test(text.charAt(index))) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Splits text into contiguous UTF-16 ranges without dropping separator whitespace.
+ * Preferred mode selects paragraph, newline, then whitespace boundaries.
+ */
+export function chunkTextRanges(text: string, options: ChunkTextRangesOptions): TextChunkRange[] {
+  if (!text) {
+    return [];
+  }
+  if (options.limit <= 0 || text.length <= options.limit) {
+    return [{ start: 0, end: text.length }];
+  }
+
+  const ranges: TextChunkRange[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const maxEnd = Math.min(text.length, start + options.limit);
+    const preferredEnd =
+      options.mode === "preferred" && maxEnd < text.length
+        ? findPreferredRangeEnd(text, start, maxEnd)
+        : undefined;
+    const candidateEnd = preferredEnd && preferredEnd > start ? preferredEnd : maxEnd;
+    const end = avoidTrailingHighSurrogateBreak(text, start, candidateEnd);
+    ranges.push({ start, end });
+    start = end;
+  }
+  return ranges;
 }
 
 /**

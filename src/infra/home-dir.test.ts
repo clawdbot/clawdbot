@@ -9,6 +9,7 @@ import {
   resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
   resolveRequiredOsHomeDir,
+  resolveUserPath,
 } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
@@ -272,6 +273,13 @@ describe("resolveHomeRelativePath", () => {
     },
   ])("$name", ({ input, opts, expected }) => {
     expect(resolveHomeRelativePath(input, opts)).toBe(expected);
+  });
+});
+
+describe("resolveUserPath", () => {
+  it("preserves the historical falsy-input contract", () => {
+    expect(resolveUserPath(undefined as unknown as string)).toBe("");
+    expect(resolveUserPath(null as unknown as string)).toBe("");
   });
 });
 

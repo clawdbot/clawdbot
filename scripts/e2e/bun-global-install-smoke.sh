@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 read_positive_int_env() {
   local name="${1:?missing environment variable name}"
@@ -78,114 +78,8 @@ run_with_timeout() {
   node scripts/e2e/lib/bun-global-install/assertions.mjs run-with-timeout "$timeout_ms" "$@"
 }
 
-restore_dist_from_image() {
-  local image="$1"
-  local ai_backup_dir=""
-  local ai_dist_installed=0
-  local backup_dir=""
-  local container_id=""
-  local dist_installed=0
-  local restore_complete=0
-  local temp_dir=""
-
-  cleanup_restore_dist() {
-    if [ -n "$container_id" ]; then
-      docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
-    fi
-    # Both build trees come from one image. A partial swap must restore both or
-    # the following package step could mix artifacts from different builds.
-    if [ "$restore_complete" != "1" ]; then
-      if [ "$dist_installed" = "1" ]; then
-        rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true
-      fi
-      if [ -n "$backup_dir" ] && [ -d "$backup_dir" ]; then
-        if [ ! -e "$ROOT_DIR/dist" ] && mv "$backup_dir" "$ROOT_DIR/dist" >/dev/null 2>&1; then
-          backup_dir=""
-        fi
-      fi
-      if [ "$ai_dist_installed" = "1" ]; then
-        rm -rf "$ROOT_DIR/packages/ai/dist" >/dev/null 2>&1 || true
-      fi
-      if [ -n "$ai_backup_dir" ] && [ -d "$ai_backup_dir" ]; then
-        if [ ! -e "$ROOT_DIR/packages/ai/dist" ] && \
-          mv "$ai_backup_dir" "$ROOT_DIR/packages/ai/dist" >/dev/null 2>&1; then
-          ai_backup_dir=""
-        fi
-      fi
-    fi
-    if [ -n "$temp_dir" ]; then
-      rm -rf "$temp_dir"
-    fi
-    if [ "$restore_complete" = "1" ] && [ -n "$backup_dir" ]; then
-      rm -rf "$backup_dir"
-    fi
-    if [ "$restore_complete" = "1" ] && [ -n "$ai_backup_dir" ]; then
-      rm -rf "$ai_backup_dir"
-    fi
-  }
-
-  echo "==> Reuse dist/ from Docker image: $image"
-  if ! container_id="$(docker_e2e_docker_cmd create "$image")"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  if ! temp_dir="$(mktemp -d "$ROOT_DIR/.bun-dist.XXXXXX")"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  if ! docker_e2e_docker_cmd cp \
-    "${container_id}:/app/node_modules/@openclaw/ai/dist" \
-    "$temp_dir/ai-dist"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  if [ -e "$ROOT_DIR/dist" ]; then
-    if ! backup_dir="$(mktemp -d "$ROOT_DIR/.dist-backup.XXXXXX")"; then
-      cleanup_restore_dist
-      return 1
-    fi
-    if ! rmdir "$backup_dir"; then
-      cleanup_restore_dist
-      return 1
-    fi
-    if ! mv "$ROOT_DIR/dist" "$backup_dir"; then
-      cleanup_restore_dist
-      return 1
-    fi
-  fi
-  if ! mv "$temp_dir/dist" "$ROOT_DIR/dist"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  dist_installed=1
-  if [ -e "$ROOT_DIR/packages/ai/dist" ]; then
-    if ! ai_backup_dir="$(mktemp -d "$ROOT_DIR/packages/ai/.dist-backup.XXXXXX")"; then
-      cleanup_restore_dist
-      return 1
-    fi
-    if ! rmdir "$ai_backup_dir"; then
-      cleanup_restore_dist
-      return 1
-    fi
-    if ! mv "$ROOT_DIR/packages/ai/dist" "$ai_backup_dir"; then
-      cleanup_restore_dist
-      return 1
-    fi
-  fi
-  if ! mv "$temp_dir/ai-dist" "$ROOT_DIR/packages/ai/dist"; then
-    cleanup_restore_dist
-    return 1
-  fi
-  ai_dist_installed=1
-  restore_complete=1
-  cleanup_restore_dist
-}
-
 resolve_package_tgz() {
+  local -a package_args
   if [ -n "$PACKAGE_TGZ" ]; then
     if [ ! -f "$PACKAGE_TGZ" ]; then
       echo "OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ does not exist: $PACKAGE_TGZ" >&2
@@ -196,7 +90,7 @@ resolve_package_tgz() {
   fi
 
   if [ -n "$DIST_IMAGE" ]; then
-    restore_dist_from_image "$DIST_IMAGE"
+    docker_e2e_restore_package_dist_from_image "$DIST_IMAGE"
   elif [ "$HOST_BUILD" != "0" ]; then
     echo "==> Build host package artifacts"
     pnpm build
@@ -212,11 +106,16 @@ resolve_package_tgz() {
   PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
 
   echo "==> Pack OpenClaw tarball"
+  package_args=(
+    --skip-build
+    --output-dir "$PACK_DIR"
+    --output-name openclaw-current.tgz
+  )
+  if [[ "${OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]; then
+    package_args+=(--allow-unreleased-changelog)
+  fi
   PACKAGE_TGZ="$(
-    node scripts/package-openclaw-for-docker.mjs \
-      --skip-build \
-      --output-dir "$PACK_DIR" \
-      --output-name openclaw-current.tgz
+    node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
   )"
   if [ -z "$PACKAGE_TGZ" ] || [ ! -f "$PACKAGE_TGZ" ]; then
     echo "missing packed OpenClaw tarball" >&2

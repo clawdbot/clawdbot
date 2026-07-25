@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildFileEntry,
@@ -13,6 +14,7 @@ import {
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   remapChunkLines,
+  runWithConcurrency,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
 
@@ -76,6 +78,46 @@ const multimodal: MemoryMultimodalSettings = normalizeMemoryMultimodalSettings({
 
 describe("memory host SDK package internals", () => {
   const getTmpDir = setupTempDirLifecycle("memory-package-");
+
+  it("drains in-flight work before propagating a concurrency failure", async () => {
+    const failure = new Error("embedding failed");
+    let releaseTask!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseTask = resolve;
+    });
+    const started: number[] = [];
+    const completed: number[] = [];
+    const run = runWithConcurrency(
+      [
+        async () => {
+          started.push(0);
+          await release;
+          completed.push(0);
+          return 0;
+        },
+        async () => {
+          started.push(1);
+          throw failure;
+        },
+        async () => {
+          started.push(2);
+          return 2;
+        },
+      ],
+      2,
+    );
+
+    await vi.waitFor(() => expect(started).toEqual([0, 1]));
+    const onSettled = vi.fn();
+    void run.then(onSettled, onSettled);
+    await Promise.resolve();
+    expect(onSettled).not.toHaveBeenCalled();
+
+    releaseTask();
+    await expect(run).rejects.toBe(failure);
+    expect(completed).toEqual([0]);
+    expect(started).toEqual([0, 1]);
+  });
 
   it("propagates directory creation failures", () => {
     const mkdirError = new Error("disk full");
@@ -251,7 +293,9 @@ describe("memory host SDK package internals", () => {
 
     remapChunkLines(chunks, lineMap);
 
-    expect(chunks[0].startLine).toBe(4);
-    expect(chunks[chunks.length - 1].endLine).toBe(13);
+    expect(expectDefined(chunks[0], "chunks[0] test invariant").startLine).toBe(4);
+    expect(
+      expectDefined(chunks[chunks.length - 1], "chunks[chunks.length - 1] test invariant").endLine,
+    ).toBe(13);
   });
 });

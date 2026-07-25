@@ -9,5 +9,10 @@ export function buildNodeShellCommand(command: string, platform?: string | null)
   if (normalized.startsWith("win")) {
     return ["cmd.exe", "/d", "/s", "/c", command];
   }
+  if (normalized === "darwin" || normalized.startsWith("macos")) {
+    // The Mac node binds static allowlisted commands through non-login sh.
+    // A login shell can execute unapproved startup files before the payload.
+    return ["/bin/sh", "-c", command];
+  }
   return ["/bin/sh", "-lc", command];
 }

@@ -170,7 +170,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       context,
       deviceToken: ROSITA_DEVICE_TOKEN,
       gatewayUrl: ROSITA_GATEWAY_URL,
-      route: "overview",
+      route: "sessions",
     });
     expect(requireConnectAuth(rositaReconnect.connect)).toMatchObject({
       deviceToken: ROSITA_DEVICE_TOKEN,

@@ -1,38 +1,17 @@
 // Nextcloud Talk tests cover core plugin behavior.
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
   stripNextcloudTalkTargetPrefix,
 } from "./normalize.js";
 import { resolveNextcloudTalkAllowlistMatch } from "./policy.js";
-import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import {
   extractNextcloudTalkHeaders,
   generateNextcloudTalkSignature,
   verifyNextcloudTalkSignature,
 } from "./signature.js";
-
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      await rm(dir, { recursive: true, force: true });
-    }
-  }
-});
-
-async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "nextcloud-talk-replay-"));
-  tempDirs.push(dir);
-  return dir;
-}
 
 function requireFirstTimingSafeEqualCall(mock: ReturnType<typeof vi.fn>): [unknown, unknown] {
   const [call] = mock.mock.calls;
@@ -81,13 +60,18 @@ describe("nextcloud talk core", () => {
     expect(stripNextcloudTalkTargetPrefix("nextcloud-talk:room:AbC123")).toBe("AbC123");
     expect(stripNextcloudTalkTargetPrefix("nc-talk:room:ops")).toBe("ops");
     expect(stripNextcloudTalkTargetPrefix("nc:room:ops")).toBe("ops");
+    expect(stripNextcloudTalkTargetPrefix("NC-TALK:ROOM:Ops")).toBe("Ops");
     expect(stripNextcloudTalkTargetPrefix("room:   ")).toBeUndefined();
 
     expect(normalizeNextcloudTalkMessagingTarget("room:AbC123")).toBe("nextcloud-talk:abc123");
     expect(normalizeNextcloudTalkMessagingTarget("nc-talk:room:Ops")).toBe("nextcloud-talk:ops");
+    expect(normalizeNextcloudTalkMessagingTarget("NEXTCLOUD-TALK:ROOM:Ops")).toBe(
+      "nextcloud-talk:ops",
+    );
 
     expect(looksLikeNextcloudTalkTargetId("nextcloud-talk:room:abc12345")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("nc:opsroom1")).toBe(true);
+    expect(looksLikeNextcloudTalkTargetId("room:opsroom1")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("abc12345")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("")).toBe(false);
   });
@@ -239,71 +223,6 @@ describe("nextcloud talk core", () => {
       vi.doUnmock("node:crypto");
       vi.resetModules();
     }
-  });
-
-  it("persists replay decisions across guard instances and scopes account namespaces", async () => {
-    const stateDir = await makeTempDir();
-
-    const firstGuard = createNextcloudTalkReplayGuard({ stateDir });
-    const firstAttempt = await firstGuard.shouldProcessMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-1",
-    });
-    const replayAttempt = await firstGuard.shouldProcessMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-1",
-    });
-
-    const secondGuard = createNextcloudTalkReplayGuard({ stateDir });
-    const restartReplayAttempt = await secondGuard.shouldProcessMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-1",
-    });
-    const otherAccountFirstAttempt = await secondGuard.shouldProcessMessage({
-      accountId: "account-b",
-      roomToken: "room-1",
-      messageId: "msg-1",
-    });
-
-    expect(firstAttempt).toBe(true);
-    expect(replayAttempt).toBe(false);
-    expect(restartReplayAttempt).toBe(false);
-    expect(otherAccountFirstAttempt).toBe(true);
-  });
-
-  it("releases in-flight replay claims when processing fails", async () => {
-    const guard = createNextcloudTalkReplayGuard({});
-
-    const firstClaim = await guard.claimMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-    });
-    const secondClaim = await guard.claimMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-    });
-
-    expect(firstClaim).toBe("claimed");
-    expect(secondClaim).toBe("inflight");
-
-    guard.releaseMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-      error: new Error("transient"),
-    });
-
-    const retryClaim = await guard.claimMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-    });
-    expect(retryClaim).toBe("claimed");
   });
 
   it("resolves allowlist matches", () => {

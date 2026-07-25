@@ -24,6 +24,9 @@ import {
   safeNetworkInterfaces,
 } from "../infra/network-interfaces.js";
 import {
+  deviceBootstrapProfilesEqual,
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
@@ -34,26 +37,28 @@ import {
   resolveTailscalePublishedHost,
 } from "../shared/tailscale-status.js";
 
-export type PairingSetupPayload = {
+type PairingSetupPayload = {
   url: string;
   urls?: string[];
   bootstrapToken: string;
 };
 
+type PairingSetupAccess = "full" | "limited" | "node";
+
 const PAIRING_SETUP_MAX_URLS = 8;
 
-export type PairingSetupCommandResult = {
+type PairingSetupCommandResult = {
   code: number | null;
   stdout: string;
   stderr?: string;
 };
 
-export type PairingSetupCommandRunner = (
+type PairingSetupCommandRunner = (
   argv: string[],
   opts: { timeoutMs: number; maxOutputBytes?: number },
 ) => Promise<PairingSetupCommandResult>;
 
-export type ResolvePairingSetupOptions = {
+type ResolvePairingSetupOptions = {
   env?: NodeJS.ProcessEnv;
   publicUrl?: string;
   preferRemoteUrl?: boolean;
@@ -64,12 +69,14 @@ export type ResolvePairingSetupOptions = {
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
 };
 
-export type PairingSetupResolution =
+type PairingSetupResolution =
   | {
       ok: true;
       payload: PairingSetupPayload;
       authLabel: "token" | "password";
       urlSource: string;
+      access: PairingSetupAccess;
+      accessDowngraded: boolean;
     }
   | {
       ok: false;
@@ -143,6 +150,29 @@ function isMobilePairingCleartextAllowedHost(host: string): boolean {
     normalized === "10.0.2.2" ||
     isPrivateLanHost(normalized)
   );
+}
+
+function isFullAccessMobilePairingUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "wss:") {
+      return true;
+    }
+    const host = normalizeMobilePairingHost(parsed.hostname);
+    return parsed.protocol === "ws:" && (host === "localhost" || isLoopbackIpAddress(host));
+  } catch {
+    return false;
+  }
+}
+
+function resolvePairingSetupAccess(profile: DeviceBootstrapProfileInput): PairingSetupAccess {
+  if (deviceBootstrapProfilesEqual(profile, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
+    return "full";
+  }
+  if (deviceBootstrapProfilesEqual(profile, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
+    return "node";
+  }
+  return "limited";
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {
@@ -430,6 +460,19 @@ export async function resolvePairingSetupFromConfig(
     }
   }
   const uniqueUrls = [...new Set(urls)].slice(0, PAIRING_SETUP_MAX_URLS);
+  const requestedBootstrapProfile =
+    options.bootstrapProfile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE;
+  const accessDowngraded =
+    deviceBootstrapProfilesEqual(
+      requestedBootstrapProfile,
+      FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    ) && uniqueUrls.some((url) => !isFullAccessMobilePairingUrl(url));
+  // Every advertised URL shares this bearer token. Keep plaintext LAN routes
+  // useful for node/chat access, but reserve admin handoff for an all-TLS
+  // route set (or same-host loopback, where no LAN observer exists).
+  const issuedBootstrapProfile = accessDowngraded
+    ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+    : requestedBootstrapProfile;
 
   return {
     ok: true,
@@ -439,11 +482,13 @@ export async function resolvePairingSetupFromConfig(
       bootstrapToken: (
         await issueDeviceBootstrapToken({
           baseDir: options.pairingBaseDir,
-          profile: options.bootstrapProfile ?? PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          profile: issuedBootstrapProfile,
         })
       ).token,
     },
     authLabel: authLabel.label,
     urlSource: urlResult.source ?? "unknown",
+    access: resolvePairingSetupAccess(issuedBootstrapProfile),
+    accessDowngraded,
   };
 }

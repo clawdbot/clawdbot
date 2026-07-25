@@ -221,6 +221,15 @@ export function resolveLoadedContextWindow(
   return contextWindow;
 }
 
+/** Uses the loaded context when present, otherwise the model's advertised maximum. */
+export function resolveLmstudioEffectiveContextWindow(
+  entry: Pick<LmstudioModelWire, "loaded_instances" | "max_context_length">,
+): number | null {
+  return (
+    resolveLoadedContextWindow(entry) ?? asPositiveSafeInteger(entry.max_context_length) ?? null
+  );
+}
+
 function normalizeLmstudioVariantIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -303,11 +312,15 @@ function normalizeConfiguredReasoningEffortMap(value: unknown): Record<string, s
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  const normalized = Object.fromEntries(
-    Object.entries(value)
-      .map(([key, mapped]) => [key.trim(), typeof mapped === "string" ? mapped.trim() : ""])
-      .filter(([key, mapped]) => key.length > 0 && mapped.length > 0),
-  );
+  const entries: Array<[string, string]> = [];
+  for (const [key, mapped] of Object.entries(value)) {
+    const normalizedKey = key.trim();
+    const normalizedValue = typeof mapped === "string" ? mapped.trim() : "";
+    if (normalizedKey && normalizedValue) {
+      entries.push([normalizedKey, normalizedValue]);
+    }
+  }
+  const normalized = Object.fromEntries(entries);
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -517,9 +530,10 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
   const loadedContextWindow = resolveLoadedContextWindow(entry);
   const advertisedContextWindow = asPositiveSafeInteger(entry.max_context_length) ?? null;
   const contextWindow = advertisedContextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
-  // Keep native/advertised context window metadata in catalog, but use a practical
-  // default target for model loading unless callers explicitly override it.
-  const contextTokens = Math.min(contextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
+  // ModelDefinitionConfig keeps the native maximum in contextWindow. Runtime
+  // budgeting and preload prefer contextTokens, so cap that to the loaded instance.
+  const effectiveContextWindow = loadedContextWindow ?? contextWindow;
+  const contextTokens = Math.min(effectiveContextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   const rawDisplayName = entry.display_name?.trim();
   return {
     id,
@@ -536,7 +550,7 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     compat: resolveLmstudioReasoningCompat(entry),
     contextWindow,
     contextTokens,
-    maxTokens: Math.max(1, Math.min(contextWindow, SELF_HOSTED_DEFAULT_MAX_TOKENS)),
+    maxTokens: Math.max(1, Math.min(effectiveContextWindow, SELF_HOSTED_DEFAULT_MAX_TOKENS)),
   };
 }
 

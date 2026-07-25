@@ -25,16 +25,12 @@ vi.mock("./session-utils.js", () => ({
   resolveSessionTranscriptCandidates: resolveSessionTranscriptCandidatesMock,
 }));
 
-import {
-  clearSessionTranscriptKeyCacheForTests,
-  resolveSessionKeyForTranscriptFile,
-} from "./session-transcript-key.js";
+import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 
 describe("resolveSessionKeyForTranscriptFile", () => {
   const now = 1_700_000_000_000;
 
   beforeEach(() => {
-    clearSessionTranscriptKeyCacheForTests();
     loadConfigMock.mockClear();
     loadCombinedSessionStoreForGatewayMock.mockReset();
     resolveGatewaySessionStoreTargetMock.mockReset();

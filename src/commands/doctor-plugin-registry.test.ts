@@ -1,6 +1,7 @@
 // Doctor plugin registry tests cover plugin registry checks and repair diagnostics.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
@@ -19,7 +20,6 @@ import {
   pluginRegistryIssueToHealthFinding,
   pluginRegistryIssueToRepairEffect,
 } from "./doctor-plugin-registry.js";
-import { DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV } from "./doctor/shared/plugin-registry-migration.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
@@ -312,18 +312,22 @@ describe("maybeRepairPluginRegistryState", () => {
       kind: "registry-missing-or-stale",
       path: registryPath,
     });
-    expect(pluginRegistryIssueToHealthFinding(issue)).toMatchObject({
+    expect(
+      pluginRegistryIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
+    ).toMatchObject({
       checkId: "core/doctor/plugin-registry",
       severity: "warning",
       path: registryPath,
       fixHint: "Run `openclaw doctor --fix` to rebuild the plugin registry from enabled plugins.",
     });
-    expect(pluginRegistryIssueToRepairEffect(issue)).toEqual({
-      kind: "state",
-      action: "would-rebuild-plugin-registry",
-      target: registryPath,
-      dryRunSafe: false,
-    });
+    expect(pluginRegistryIssueToRepairEffect(expectDefined(issue, "issue test invariant"))).toEqual(
+      {
+        kind: "state",
+        action: "would-rebuild-plugin-registry",
+        target: registryPath,
+        dryRunSafe: false,
+      },
+    );
   });
 
   it("maps stale managed npm bundled plugin shadows to structured findings", async () => {
@@ -466,22 +470,6 @@ describe("maybeRepairPluginRegistryState", () => {
         origin: "global",
       }),
     ]);
-  });
-
-  it("does not repair when registry migration is disabled", async () => {
-    const stateDir = makeTempDir();
-
-    const nextConfig = await maybeRepairPluginRegistryState({
-      stateDir,
-      env: hermeticEnv({
-        [DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]: "1",
-      }),
-      config: {},
-      prompter: { shouldRepair: true },
-    });
-
-    expect(nextConfig).toStrictEqual({});
-    expect(vi.mocked(note).mock.calls.join("\n")).toContain(DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV);
   });
 
   it("warns about stale managed npm packages that shadow bundled plugins", async () => {
@@ -916,5 +904,38 @@ describe("maybeRepairPluginRegistryState", () => {
     expect(notes).toContain("codex-plugin");
     expect(notes).toContain("openclaw doctor --fix");
     expect(fs.existsSync(linkPath)).toBe(false);
+  });
+
+  it("reports an unreadable managed npm package without aborting doctor", async () => {
+    const stateDir = makeTempDir();
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "broken",
+      packageName: "broken-plugin",
+      version: "2026.5.3",
+    });
+    fs.writeFileSync(path.join(managed.packageDir, "package.json"), "{", "utf8");
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "broken",
+        packageName: "broken-plugin",
+        packageDir: managed.packageDir,
+        version: "2026.5.3",
+      }),
+      { stateDir },
+    );
+
+    await expect(
+      maybeRepairPluginRegistryState({
+        stateDir,
+        env: hermeticEnv(),
+        config: {},
+        prompter: { shouldRepair: false },
+      }),
+    ).resolves.toEqual({});
+
+    const notes = vi.mocked(note).mock.calls.join("\n");
+    expect(notes).toContain("Managed npm plugin packages could not be inspected");
+    expect(notes).toContain("broken-plugin");
   });
 });

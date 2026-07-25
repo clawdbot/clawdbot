@@ -1,13 +1,17 @@
 // Covers agent-command reply normalization and outbound delivery status.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelThreadingAdapter,
+} from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
-import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
+import { deliverAgentCommandResult } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const deliverOutboundPayloadsMock = vi.hoisted(() =>
@@ -29,10 +33,12 @@ vi.mock("../../auto-reply/reply/reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: createReplyMediaPathNormalizerMock,
 }));
 
-type NormalizeParams = Parameters<typeof normalizeAgentCommandReplyPayloads>[0];
-type RunResult = NormalizeParams["result"];
 type DeliverParams = Parameters<typeof deliverAgentCommandResult>[0];
+type RunResult = DeliverParams["result"];
 type TextPayloadLike = { text?: unknown };
+type ResolveReplyTransportParams = Parameters<
+  NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>
+>[0];
 type MediaNormalizerOptions = {
   sessionKey?: unknown;
   agentId?: unknown;
@@ -51,19 +57,28 @@ const slackOutboundForTest: ChannelOutboundAdapter = {
 // Two registries let tests switch between no-channel and Slack-capable delivery
 // without loading the full plugin runtime.
 const emptyRegistry = createTestRegistry([]);
+const slackPluginForTest = createOutboundTestPlugin({
+  id: "slack",
+  outbound: slackOutboundForTest,
+  messaging: {
+    enableInteractiveReplies: ({ cfg }) =>
+      (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
+        ?.capabilities?.interactiveReplies === true,
+  },
+});
 const slackRegistry = createTestRegistry([
   {
     pluginId: "slack",
     source: "test",
-    plugin: createOutboundTestPlugin({
-      id: "slack",
-      outbound: slackOutboundForTest,
-      messaging: {
-        enableInteractiveReplies: ({ cfg }) =>
-          (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
-            ?.capabilities?.interactiveReplies === true,
+    plugin: {
+      ...slackPluginForTest,
+      threading: {
+        resolveReplyTransport: ({ threadId }: ResolveReplyTransportParams) => ({
+          replyToId: threadId == null ? undefined : String(threadId),
+          threadId: null,
+        }),
       },
-    }),
+    },
   },
 ]);
 
@@ -110,6 +125,8 @@ function latestOutboundDeliveryArgs(): {
   channel?: string;
   to?: string;
   accountId?: string;
+  replyToId?: string | null;
+  threadId?: string | number | null;
   payloads: ReplyPayload[];
   bestEffort?: boolean;
   queuePolicy?: string;
@@ -122,6 +139,8 @@ function latestOutboundDeliveryArgs(): {
     channel?: string;
     to?: string;
     accountId?: string;
+    replyToId?: string | null;
+    threadId?: string | number | null;
     payloads: ReplyPayload[];
     bestEffort?: boolean;
     queuePolicy?: string;
@@ -201,7 +220,7 @@ async function deliverMediaReplyForTest(
   });
 }
 
-describe("normalizeAgentCommandReplyPayloads", () => {
+describe("deliverAgentCommandResult payload normalization", () => {
   beforeEach(() => {
     setActivePluginRegistry(slackRegistry);
     deliverOutboundPayloadsMock.mockReset();
@@ -218,10 +237,10 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     setActivePluginRegistry(emptyRegistry);
   });
 
-  it("keeps Slack directives in text for direct agent deliveries", () => {
+  it("keeps Slack directives in text for direct agent deliveries", async () => {
     // Direct CLI deliveries preserve Slack directive markup because no channel
     // adapter has consumed it yet.
-    const normalized = normalizeAgentCommandReplyPayloads({
+    const delivered = await deliverAgentCommandResult({
       cfg: {
         channels: {
           slack: {
@@ -229,15 +248,17 @@ describe("normalizeAgentCommandReplyPayloads", () => {
           },
         },
       } as OpenClawConfig,
-      opts: { message: "test" } as AgentCommandOpts,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn() } as never,
+      opts: { message: "test", channel: "slack" } as AgentCommandOpts,
       outboundSession: undefined,
-      deliveryChannel: "slack",
+      sessionEntry: undefined,
       payloads: [{ text: "Choose [[slack_buttons: Retry:retry]]" }],
       result: createResult(),
     });
 
-    expect(normalized).toHaveLength(1);
-    expectTextPayload(normalized[0], "Choose [[slack_buttons: Retry:retry]]");
+    expect(delivered.payloads).toHaveLength(1);
+    expectTextPayload(delivered.payloads[0], "Choose [[slack_buttons: Retry:retry]]");
   });
 
   it("rechecks delivery ownership after asynchronous payload preparation", async () => {
@@ -364,16 +385,16 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(deliverySignal?.aborted).toBe(false);
   });
 
-  it("renders response prefix templates with the selected runtime model", () => {
-    const normalized = normalizeAgentCommandReplyPayloads({
+  it("renders response prefix templates with the selected runtime model", async () => {
+    const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: {
-          responsePrefix: "[{modelFull}]",
-        },
+        channels: { slack: { responsePrefix: "[{modelFull}]" } },
       } as OpenClawConfig,
-      opts: { message: "test" } as AgentCommandOpts,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn() } as never,
+      opts: { message: "test", channel: "slack" } as AgentCommandOpts,
       outboundSession: undefined,
-      deliveryChannel: "slack",
+      sessionEntry: undefined,
       payloads: [{ text: "Ready." }],
       result: createResult({
         meta: {
@@ -387,8 +408,8 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       }),
     });
 
-    expect(normalized).toHaveLength(1);
-    expectTextPayload(normalized[0], "[openai/gpt-5.4] Ready.");
+    expect(delivered.payloads).toHaveLength(1);
+    expectTextPayload(delivered.payloads[0], "[openai/gpt-5.4] Ready.");
   });
 
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
@@ -477,11 +498,13 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
       sessionId: "session-1",
       updatedAt: 2,
-      deliveryContext: {
-        channel: "slack",
-        to: "#fresh",
-        accountId: "workspace-1",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "slack",
+          to: "#fresh",
+          accountId: "workspace-1",
+        },
+      }),
     }));
 
     const delivered = await deliverAgentCommandResult({
@@ -534,11 +557,13 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
       sessionId: "session-2",
       updatedAt: 2,
-      deliveryContext: {
-        channel: "slack",
-        to: "#fresh",
-        accountId: "workspace-1",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "slack",
+          to: "#fresh",
+          accountId: "workspace-1",
+        },
+      }),
     }));
 
     const delivered = await deliverAgentCommandResult({
@@ -700,48 +725,6 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     );
   });
 
-  it("merges result metadata overrides into JSON output and returned results", async () => {
-    const runtime = {
-      log: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-    };
-
-    const delivered = await deliverAgentCommandResult({
-      cfg: {} as OpenClawConfig,
-      deps: {} as CliDeps,
-      runtime: runtime as never,
-      opts: {
-        message: "test",
-        json: true,
-        resultMetaOverrides: {
-          transport: "embedded",
-          fallbackFrom: "gateway",
-        },
-      } as AgentCommandOpts,
-      outboundSession: undefined,
-      sessionEntry: undefined,
-      payloads: [{ text: "local" }],
-      result: createResult(),
-    });
-
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      {
-        payloads: [{ text: "local", mediaUrl: null }],
-        meta: {
-          durationMs: 1,
-          transport: "embedded",
-          fallbackFrom: "gateway",
-        },
-      },
-      2,
-    );
-    expect(delivered.meta.durationMs).toBe(1);
-    expect(delivered.meta.transport).toBe("embedded");
-    expect(delivered.meta.fallbackFrom).toBe("gateway");
-  });
-
   it("preserves committed message-tool delivery evidence when automatic delivery is disabled", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
 
@@ -788,6 +771,935 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       },
     ]);
     expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not automatically redeliver text and media already sent to the same target", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+        threadId: "171.222",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready.", mediaUrls: ["/tmp/generated-image.png"] }],
+      result: {
+        ...createResult(),
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The image is ready."],
+        messagingToolSentMediaUrls: ["/tmp/generated-image.png"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            threadId: "171.222",
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-image.png"],
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(delivered.deliverySucceeded).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: false,
+      status: "suppressed",
+      succeeded: true,
+      reason: "no_visible_payload",
+    });
+    expect(delivered.messagingToolSentMediaUrls).toEqual(["/tmp/generated-image.png"]);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves duplicate media needed for a delivery operation", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const delivery = { pin: { enabled: true, required: true } };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ mediaUrls: ["/tmp/generated-image.png"], delivery }] as never,
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            mediaUrls: ["/tmp/generated-image.png"],
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({
+        mediaUrls: ["/tmp/generated-image.png"],
+        delivery,
+      }),
+    ]);
+  });
+
+  it("drops audioAsVoice when its media was already delivered", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ mediaUrls: ["/tmp/voice.ogg"], audioAsVoice: true }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            mediaUrls: ["/tmp/voice.ogg"],
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("dedupes delivered file media before normalization can add a failure warning", async () => {
+    createReplyMediaPathNormalizerMock.mockImplementationOnce(
+      (..._args: unknown[]) =>
+        async (payload: ReplyPayload): Promise<ReplyPayload> => ({
+          ...payload,
+          text: `${payload.text ?? ""}\n⚠️ Media failed.`,
+          mediaUrl: undefined,
+          mediaUrls: undefined,
+        }),
+    );
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready.", mediaUrls: ["file:///tmp/generated-image.png"] }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "The image is ready.",
+            mediaUrls: ["file:///tmp/generated-image.png"],
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(createReplyMediaPathNormalizerMock).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("dedupes media encoded in a final MEDIA directive", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "MEDIA:/tmp/generated-image.png" }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            mediaUrls: ["/tmp/generated-image.png"],
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps unsent media when only the matching text was already delivered", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+        threadId: "171.222",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready.", mediaUrls: ["/tmp/generated-image.png"] }],
+      result: {
+        ...createResult(),
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The image is ready."],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            threadId: "171.222",
+            text: "The image is ready.",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({
+        text: "",
+        mediaUrls: ["/tmp/generated-image.png"],
+      }),
+    ]);
+  });
+
+  it("dedupes sent text after applying the delivery response prefix", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        channels: { slack: { responsePrefix: "Bot:" } },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready" }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "Ready",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not add unresolved dynamic prefixes to message-tool evidence", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        channels: { slack: { responsePrefix: "[{modelFull}]" } },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready" }],
+      result: {
+        ...createResult({
+          meta: {
+            durationMs: 1,
+            agentMeta: { provider: "openai", model: "gpt-5.4" },
+          } as RunResult["meta"],
+        }),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "Ready",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({ text: "[openai/gpt-5.4] Ready" }),
+    ]);
+  });
+
+  it("dedupes exact short text on a confirmed matching route", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready" }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "Ready",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("dedupes visible text after parsing a final reply directive", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "[[reply_to_current]] Ready" }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "Ready",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not apply ambiguous global evidence across message-tool targets", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready", mediaUrls: ["/tmp/generated-image.png"] }],
+      result: {
+        ...createResult(),
+        messagingToolSentTexts: ["Ready"],
+        messagingToolSentMediaUrls: ["/tmp/generated-image.png"],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "slack", to: "channel:C123" },
+          { tool: "message", provider: "slack", to: "channel:C999" },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({
+        text: "Ready",
+        mediaUrls: ["/tmp/generated-image.png"],
+      }),
+    ]);
+  });
+
+  it("preserves final text that extends a message-tool send", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready. Dimensions are 1024x1024." }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "The image is ready.",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({
+        text: "The image is ready. Dimensions are 1024x1024.",
+      }),
+    ]);
+  });
+
+  it.each([
+    { name: "emoji", sentText: "❌ Failed", finalText: "✅ Failed" },
+    { name: "letter case", sentText: "US", finalText: "us" },
+    {
+      name: "significant whitespace",
+      sentText: "const x = 1;\n  return x;",
+      finalText: "const x = 1;\n return x;",
+    },
+  ])("preserves $name differences in exact replies", async ({ sentText, finalText }) => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: finalText }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: sentText,
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({ text: finalText }),
+    ]);
+  });
+
+  it("matches dedupe against the command thread instead of payload reply metadata", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+        threadId: "thread-a",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready.", replyToId: "thread-b" }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            threadId: "thread-b",
+            text: "The image is ready.",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    expect(latestOutboundDeliveryArgs().replyToId).toBe("thread-a");
+  });
+
+  it("keeps presentation content when only the matching text was already delivered", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready.", presentation }] as never,
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "The image is ready.",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({
+        text: "",
+        presentation,
+      }),
+    ]);
+  });
+
+  it("keeps location content when only the matching text was already delivered", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const location = { latitude: 48.858844, longitude: 2.294351 };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready.", location }] as never,
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "The image is ready.",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({
+        text: "",
+        location,
+      }),
+    ]);
+  });
+
+  it("keeps BTW content when the base text was already delivered", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready.", btw: { question: "What changed?" } }] as never,
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "The image is ready.",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({
+        text: "BTW\nQuestion: What changed?\n\nThe image is ready.",
+      }),
+    ]);
+  });
+
+  it("keeps delivery operations when the base text was already delivered", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const delivery = { pin: { enabled: true, required: true } };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready", delivery }] as never,
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "Ready",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({ text: "Ready", delivery }),
+    ]);
+  });
+
+  it.each([{ delivery: { pin: false } }, { delivery: { pin: { enabled: false } } }])(
+    "dedupes text for disabled delivery metadata: $delivery",
+    async ({ delivery }) => {
+      const delivered = await deliverAgentCommandResult({
+        cfg: {} as OpenClawConfig,
+        deps: {} as CliDeps,
+        runtime: { log: vi.fn(), error: vi.fn() } as never,
+        opts: {
+          message: "completion handoff",
+          deliver: true,
+          replyChannel: "slack",
+          replyTo: "channel:C123",
+        } as AgentCommandOpts,
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        payloads: [{ text: "Ready", delivery }] as never,
+        result: {
+          ...createResult(),
+          messagingToolSentTargets: [
+            {
+              tool: "message",
+              provider: "slack",
+              to: "channel:C123",
+              text: "Ready",
+            },
+          ],
+        } as RunResult,
+      });
+
+      expect(delivered.payloads).toEqual([]);
+      expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not dedupe an explicit send from a different account against the default account", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready" }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "work",
+            to: "channel:C123",
+            text: "Ready",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    expect(latestOutboundDeliveryArgs().accountId).toBe("default");
+  });
+
+  it("does not dedupe accountless default-account evidence against an explicit account", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+        replyAccountId: "work",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready" }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "Ready",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    expect(latestOutboundDeliveryArgs().accountId).toBe("work");
+  });
+
+  it("dedupes accountless evidence against the non-default run account", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+        replyAccountId: "work",
+        runContext: {
+          messageChannel: "slack",
+          currentChannelId: "channel:C123",
+          accountId: "work",
+        },
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready" }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "Ready",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not dedupe accountless source evidence against an explicit cross-account delivery", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+        replyAccountId: "other",
+        runContext: {
+          messageChannel: "slack",
+          currentChannelId: "channel:C123",
+          accountId: "work",
+        },
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Ready" }],
+      result: {
+        ...createResult(),
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            text: "Ready",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    expect(latestOutboundDeliveryArgs().accountId).toBe("other");
+  });
+
+  it("does not dedupe targetless cross-session messaging evidence", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready." }],
+      result: {
+        ...createResult(),
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The image is ready."],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({ text: "The image is ready." }),
+    ]);
+  });
+
+  it("keeps automatic delivery when message-tool media went to another target", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "completion handoff",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "channel:C123",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "The image is ready.", mediaUrls: ["/tmp/generated-image.png"] }],
+      result: {
+        ...createResult(),
+        messagingToolSentTexts: ["The image is ready."],
+        messagingToolSentMediaUrls: ["/tmp/generated-image.png"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:OTHER",
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-image.png"],
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    expect(latestOutboundDeliveryArgs().payloads).toEqual([
+      expect.objectContaining({
+        text: "The image is ready.",
+        mediaUrls: ["/tmp/generated-image.png"],
+      }),
+    ]);
   });
 
   it("adds sent deliveryStatus to JSON output after delivery completes", async () => {
@@ -1021,6 +1933,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
 
   it("emits JSON deliveryStatus before strict delivery failures rethrow", async () => {
     deliverOutboundPayloadsMock.mockRejectedValueOnce(new Error("Slack API timeout"));
+    const onDeliveryResult = vi.fn();
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -1052,6 +1965,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
         sessionEntry: undefined,
         payloads: [{ text: "here you go" }],
         result: createResult(),
+        onDeliveryResult,
       }),
     ).rejects.toThrow("Slack API timeout");
 
@@ -1063,6 +1977,11 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(json.deliveryStatus?.succeeded).toBe(false);
     expect(json.deliveryStatus?.error).toBe(true);
     expect(String(json.deliveryStatus?.errorMessage)).toContain("Slack API timeout");
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryStatus: expect.objectContaining({ status: "failed" }),
+      }),
+    );
   });
 
   it("emits JSON deliveryStatus before strict preflight failures rethrow", async () => {
@@ -1115,3 +2034,4 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

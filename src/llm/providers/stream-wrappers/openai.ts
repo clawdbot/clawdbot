@@ -2,6 +2,15 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
+import { emitModelTransportDebug } from "@openclaw/ai/transports";
+import {
+  flattenCompletionMessagesToStringContent,
+  stripCompletionMessagesToRoleContent,
+} from "@openclaw/ai/transports";
+import {
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
@@ -13,15 +22,6 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../../../agents/codex-native-web-search-core.js";
-import { emitModelTransportDebug } from "../../../agents/model-transport-debug.js";
-import {
-  flattenCompletionMessagesToStringContent,
-  stripCompletionMessagesToRoleContent,
-} from "../../../agents/openai-completions-string-content.js";
-import {
-  applyOpenAIResponsesPayloadPolicy,
-  resolveOpenAIResponsesPayloadPolicy,
-} from "../../../agents/openai-responses-payload-policy.js";
 import {
   resolveOpenAITextVerbosity,
   type OpenAITextVerbosity,
@@ -838,3 +838,4 @@ export function createOpenAIAttributionHeadersWrapper(
     });
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

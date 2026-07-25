@@ -1,16 +1,15 @@
 // Package Mac App tests cover package mac app script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
 
 function makePlist(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plistbuddy-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("openclaw-plistbuddy-");
   const plist = path.join(dir, "Info.plist");
   writeFileSync(
     plist,
@@ -70,6 +69,17 @@ function getSparkleBuildHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getSwiftPackageResolutionBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("run_with_locked_swift_packages()");
+  const end = script.indexOf("PNPM_CMD=()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
 function getStopPackagedAppBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("running_packaged_app_pids()");
@@ -93,9 +103,8 @@ function getSwiftCompatibilityBlock(): string {
 }
 
 function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-root-"));
-  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-tools-"));
-  tempDirs.push(root, toolsDir);
+  const root = tempDirs.make("openclaw-package-stop-root-");
+  const toolsDir = tempDirs.make("openclaw-package-stop-tools-");
 
   const appRoot = path.join(root, "dist", "OpenClaw.app");
   const appBinary = path.join(appRoot, "Contents", "MacOS", "OpenClaw");
@@ -131,12 +140,11 @@ function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
 }
 
 function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-root-"));
-  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
+  const root = tempDirs.make("openclaw-package-swift-root-");
+  const toolsDir = tempDirs.make("openclaw-package-swift-tools-");
   const developerDir = path.join(root, "Xcode.app", "Contents", "Developer");
   const appRoot = path.join(root, "OpenClaw.app");
   const xcodeSelectPath = path.join(toolsDir, "xcode-select");
-  tempDirs.push(root, toolsDir);
 
   writeFileSync(
     xcodeSelectPath,
@@ -155,13 +163,193 @@ function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
   `);
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+function runSwiftPackageResolutionHarness(mutateLockfile: boolean) {
+  const root = tempDirs.make("openclaw-swift-resolve-root-");
+  const toolsDir = tempDirs.make("openclaw-swift-resolve-tools-");
+  const resolvedFile = path.join(root, "apps", "macos", "Package.resolved");
+  const swiftPath = path.join(toolsDir, "swift");
+
+  mkdirSync(path.dirname(resolvedFile), { recursive: true });
+  writeFileSync(resolvedFile, "locked\n", { encoding: "utf8", flag: "wx" });
+  writeFileSync(
+    swiftPath,
+    [
+      "#!/usr/bin/env bash",
+      mutateLockfile ? `printf 'changed\\n' > ${JSON.stringify(resolvedFile)}` : ":",
+    ].join("\n"),
+    "utf8",
+  );
+  chmodSync(swiftPath, 0o755);
+
+  const result = runHelper(`
+    set -euo pipefail
+    ROOT_DIR=${JSON.stringify(root)}
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    ${getSwiftPackageResolutionBlock()}
+    run_with_locked_swift_packages swift package --scratch-path "$ROOT_DIR/apps/macos/.build/arm64" resolve
+  `);
+
+  return { result, resolvedFile };
+}
 
 describe("package-mac-app plist stamping", () => {
+  it("resolves canonical build provenance and rejects explicit invalid overrides", () => {
+    const commit = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    const valid = runHelper(`
+      source scripts/lib/build-metadata.sh
+      node() { echo "unexpected Node invocation" >&2; return 97; }
+      GIT_COMMIT=${JSON.stringify(commit)}
+      OPENCLAW_BUILD_TIMESTAMP=2026-07-10T12:34:56.7Z
+      printf '%s\n%s\n' "$(openclaw_resolve_git_commit "$PWD")" "$(openclaw_resolve_build_timestamp)"
+    `);
+    const invalidCommit = runHelper(`
+      source scripts/lib/build-metadata.sh
+      GIT_COMMIT=abc123
+      openclaw_resolve_git_commit "$PWD"
+    `);
+    const validAlias = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GITHUB_SHA
+      GIT_SHA=${JSON.stringify(commit)}
+      openclaw_resolve_git_commit "$PWD"
+    `);
+    const invalidTimestamp = runHelper(`
+      source scripts/lib/build-metadata.sh
+      OPENCLAW_BUILD_TIMESTAMP=2026-99-99T12:34:56Z
+      openclaw_resolve_build_timestamp
+    `);
+    const missingLocalCommit = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GIT_SHA GITHUB_SHA
+      empty_root="$(mktemp -d)"
+      openclaw_resolve_git_commit "$empty_root"
+    `);
+    const missingReleaseCommit = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GIT_SHA GITHUB_SHA
+      empty_root="$(mktemp -d)"
+      OPENCLAW_REQUIRE_BUILD_METADATA=1 openclaw_resolve_git_commit "$empty_root"
+    `);
+    const ambientGithubCommit = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GIT_SHA
+      GITHUB_SHA=${JSON.stringify("a".repeat(40))}
+      openclaw_resolve_git_commit "$PWD"
+    `);
+    const invalidGithubFallback = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GIT_SHA
+      GITHUB_SHA=bad
+      empty_root="$(mktemp -d)"
+      openclaw_resolve_git_commit "$empty_root"
+    `);
+    const checkedOutCommit = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    }).stdout.trim();
+
+    expect(valid.status).toBe(0);
+    expect(valid.stdout).toBe(`${commit.toLowerCase()}\n2026-07-10T12:34:56.700Z\n`);
+    expect(invalidCommit.status).toBe(1);
+    expect(invalidCommit.stderr).toContain(
+      "GIT_COMMIT must be a full 40-character hexadecimal commit",
+    );
+    expect(validAlias.status).toBe(0);
+    expect(validAlias.stdout).toBe(commit.toLowerCase());
+    expect(invalidTimestamp.status).toBe(1);
+    expect(invalidTimestamp.stderr).toContain(
+      "OPENCLAW_BUILD_TIMESTAMP must be an ISO-8601 UTC timestamp",
+    );
+    expect(missingLocalCommit.status).toBe(0);
+    expect(missingLocalCommit.stdout).toBe("unknown");
+    expect(missingReleaseCommit.status).toBe(1);
+    expect(missingReleaseCommit.stderr).toContain("full Git commit for the release build");
+    expect(ambientGithubCommit.status).toBe(0);
+    expect(ambientGithubCommit.stdout).toBe(checkedOutCommit);
+    expect(invalidGithubFallback.status).toBe(1);
+    expect(invalidGithubFallback.stderr).toContain(
+      "GITHUB_SHA must be a full 40-character hexadecimal commit",
+    );
+  });
+
+  it("normalizes valid timestamps without requiring host Node", () => {
+    const result = runHelper(`
+      source scripts/lib/build-metadata.sh
+      node() { echo "unexpected Node invocation" >&2; return 97; }
+      for value in \
+        0000-01-01T00:00:00Z \
+        2000-02-29T23:59:59.7Z \
+        2024-02-29T12:34:56.78Z \
+        2026-07-10T12:34:56.789Z; do
+        OPENCLAW_BUILD_TIMESTAMP="$value" openclaw_resolve_build_timestamp
+        printf '\n'
+      done
+      for value in \
+        2026-00-01T00:00:00Z \
+        2026-02-29T00:00:00Z \
+        2100-02-29T00:00:00Z \
+        2026-04-31T00:00:00Z \
+        2026-01-01T24:00:00Z \
+        2026-01-01T00:60:00Z \
+        2026-01-01T00:00:60Z \
+        2026-01-01T00:00:00+00:00; do
+        if OPENCLAW_BUILD_TIMESTAMP="$value" openclaw_resolve_build_timestamp >/dev/null 2>&1; then
+          exit 1
+        fi
+      done
+      unset OPENCLAW_BUILD_TIMESTAMP
+      generated="$(openclaw_resolve_build_timestamp)"
+      [[ "$generated" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.]000Z$ ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(
+      [
+        "0000-01-01T00:00:00.000Z",
+        "2000-02-29T23:59:59.700Z",
+        "2024-02-29T12:34:56.780Z",
+        "2026-07-10T12:34:56.789Z",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("uses the shared build metadata policy for full commit and timestamp stamps", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/build-metadata.sh"');
+    expect(script).toContain('BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"');
+    expect(script).toContain('BUILD_TS="$(openclaw_resolve_build_timestamp)"');
+    expect(script).toContain('export OPENCLAW_BUILD_TIMESTAMP="$BUILD_TS"');
+    expect(script).toContain('export GIT_COMMIT="$BUILD_GIT_COMMIT"');
+    expect(script).not.toContain("git rev-parse --short HEAD");
+  });
+
+  it("gates only release packaging on clean matching source and verifies the embedded commit", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const sourceCheck = script.indexOf('bash "$ROOT_DIR/scripts/apple-release-source-check.sh"');
+    const build = script.indexOf('cd "$ROOT_DIR/apps/macos"');
+    const embeddedRead = script.indexOf(
+      'plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit',
+    );
+    const signing = script.indexOf('"$ROOT_DIR/scripts/codesign-mac-app.sh"');
+    const releaseBranch = script.lastIndexOf(
+      'if [[ "$BUILD_CONFIG" == "release" ]]; then',
+      sourceCheck,
+    );
+    const releaseBranchEnd = script.indexOf("\nfi", sourceCheck);
+
+    expect(script).toContain('BUILD_CONFIG="${BUILD_CONFIG:-debug}"');
+    expect(sourceCheck).toBeGreaterThan(releaseBranch);
+    expect(sourceCheck).toBeLessThan(releaseBranchEnd);
+    expect(sourceCheck).toBeLessThan(build);
+    expect(script).toContain('--expected-commit "$BUILD_GIT_COMMIT"');
+    expect(embeddedRead).toBeGreaterThan(sourceCheck);
+    expect(embeddedRead).toBeLessThan(signing);
+    expect(script).toContain("Release app embedded Git commit");
+  });
+
   it("keeps dependency installation lockfile-safe", () => {
     const script = readFileSync(scriptPath, "utf8");
     const installBlock = script.slice(
@@ -174,12 +362,32 @@ describe("package-mac-app plist stamping", () => {
     expect(installBlock).not.toContain("--no-frozen-lockfile");
   });
 
+  it("builds and bundles the MLX TTS helper for every requested architecture", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const buildLoop = script.slice(
+      script.indexOf('for arch in "${BUILD_ARCHS[@]}"; do'),
+      script.indexOf('BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"'),
+    );
+    const helperCopy = script.slice(
+      script.indexOf('echo "🚚 Copying MLX TTS helper"'),
+      script.indexOf("SPARKLE_FRAMEWORK_PRIMARY="),
+    );
+
+    expect(buildLoop).toContain('swift build --package-path "$MLX_TTS_HELPER_ROOT"');
+    expect(buildLoop).toContain('--product "$MLX_TTS_HELPER_PRODUCT"');
+    expect(buildLoop).toContain('--arch "$arch"');
+    expect(helperCopy).toContain(
+      'cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"',
+    );
+    expect(helperCopy).toContain('/usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}"');
+    expect(helperCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"');
+  });
+
   it("falls back to corepack pnpm when the pnpm shim is absent", () => {
     const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
+    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
     const logPath = path.join(tempRoot, "corepack.log");
-    tempDirs.push(tempRoot, toolsDir);
 
     const corepackPath = path.join(toolsDir, "corepack");
     writeFileSync(
@@ -218,11 +426,10 @@ describe("package-mac-app plist stamping", () => {
 
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
-    const outerRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-outer-"));
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
+    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+    const outerRoot = tempDirs.make("openclaw-package-pnpm-outer-");
+    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
     const logPath = path.join(tempRoot, "pnpm.log");
-    tempDirs.push(tempRoot, outerRoot, toolsDir);
 
     writeFileSync(
       path.join(tempRoot, "package.json"),
@@ -280,9 +487,8 @@ describe("package-mac-app plist stamping", () => {
 
   it("fails with an actionable error when neither pnpm nor corepack pnpm is available", () => {
     const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
-    tempDirs.push(tempRoot, toolsDir);
+    const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
+    const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
 
     const result = runHelper(`
       set -euo pipefail
@@ -307,8 +513,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("fails with an actionable error when Swift tools are too old", () => {
     const helperBlock = getSwiftToolchainBlock();
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
-    tempDirs.push(toolsDir);
+    const toolsDir = tempDirs.make("openclaw-package-swift-tools-");
 
     const swiftPath = path.join(toolsDir, "swift");
     writeFileSync(
@@ -336,8 +541,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("accepts Swift tools 6.2 or newer", () => {
     const helperBlock = getSwiftToolchainBlock();
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
-    tempDirs.push(toolsDir);
+    const toolsDir = tempDirs.make("openclaw-package-swift-tools-");
 
     const swiftPath = path.join(toolsDir, "swift");
     writeFileSync(
@@ -364,9 +568,8 @@ describe("package-mac-app plist stamping", () => {
 
   it("runs Sparkle build metadata derivation from the repository root", () => {
     const helperBlock = getSparkleBuildHelperBlock();
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-root-"));
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-tools-"));
-    tempDirs.push(tempRoot, toolsDir);
+    const tempRoot = tempDirs.make("openclaw-package-sparkle-root-");
+    const toolsDir = tempDirs.make("openclaw-package-sparkle-tools-");
 
     const nodePath = path.join(toolsDir, "node");
     writeFileSync(
@@ -464,6 +667,10 @@ describe("package-mac-app plist stamping", () => {
       script.indexOf(
         'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
       ),
+      script.indexOf('echo "⌨️  Copying KeyboardShortcuts resources"'),
+    );
+    const keyboardShortcutsBlock = script.slice(
+      script.indexOf('echo "⌨️  Copying KeyboardShortcuts resources"'),
       script.indexOf("running_packaged_app_pids()"),
     );
 
@@ -475,8 +682,48 @@ describe("package-mac-app plist stamping", () => {
     expect(openClawKitBlock).toContain("exit 1");
     expect(openClawKitBlock).not.toContain("WARN:");
     expect(openClawKitBlock).not.toContain("continuing");
+    expect(keyboardShortcutsBlock).toContain("KeyboardShortcuts_KeyboardShortcuts.bundle");
+    expect(keyboardShortcutsBlock).toContain(
+      'cp -R "$KEYBOARD_SHORTCUTS_BUNDLE" "$APP_ROOT/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle"',
+    );
+    expect(keyboardShortcutsBlock).toContain("ERROR: KeyboardShortcuts resource bundle not found");
+    expect(keyboardShortcutsBlock).toContain("exit 1");
+    expect(keyboardShortcutsBlock).not.toContain("WARN:");
+    expect(keyboardShortcutsBlock).not.toContain("continuing");
     expect(script).not.toContain("Textual resource bundle");
     expect(script).not.toContain("ALLOW_MISSING_TEXTUAL_BUNDLE");
+  });
+
+  it("preserves locked Swift package resolution before building", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const resolveCall =
+      'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve';
+    const buildCall =
+      'run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
+
+    expect(script).toContain('resolved_file="$ROOT_DIR/apps/macos/Package.resolved"');
+    expect(script).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
+    expect(script).toContain('cp "$resolved_snapshot" "$resolved_file"');
+    expect(script).toContain("ERROR: Swift package resolution changed Package.resolved");
+    expect(script).toContain(resolveCall);
+    expect(script).toContain(buildCall);
+    expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(buildCall));
+  });
+
+  it("restores and rejects a Swift package resolution that changes the lockfile", () => {
+    const { result, resolvedFile } = runSwiftPackageResolutionHarness(true);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Swift package resolution changed Package.resolved");
+    expect(readFileSync(resolvedFile, "utf8")).toBe("locked\n");
+  });
+
+  it("accepts a Swift package resolution that preserves the lockfile", () => {
+    const { result, resolvedFile } = runSwiftPackageResolutionHarness(false);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(readFileSync(resolvedFile, "utf8")).toBe("locked\n");
   });
 
   it("embeds the canonical CLI installer as a signed app resource", () => {
@@ -486,6 +733,37 @@ describe("package-mac-app plist stamping", () => {
     expect(script).toContain('cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"');
     expect(script).toContain('chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"');
     expect(script.indexOf("Copying CLI installer")).toBeLessThan(
+      script.indexOf('echo "🔏 Signing bundle'),
+    );
+  });
+
+  it("embeds provider vectors as signed app resources", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const packageManifest = readFileSync("apps/macos/Package.swift", "utf8");
+
+    expect(packageManifest).toContain('.copy("Resources/ProviderIcons")');
+    expect(
+      readFileSync(
+        "apps/macos/Sources/OpenClaw/Resources/ProviderIcons/ProviderIcon-claude.svg",
+        "utf8",
+      ),
+    ).toContain("<svg");
+    expect(
+      readFileSync(
+        "apps/macos/Sources/OpenClaw/Resources/ProviderIcons/ProviderIcon-codex.svg",
+        "utf8",
+      ),
+    ).toContain("<svg");
+    expect(script).toContain(
+      'PROVIDER_ICONS_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/ProviderIcons"',
+    );
+    expect(script).toContain(
+      'echo "ERROR: Provider icon resources missing at $PROVIDER_ICONS_SRC"',
+    );
+    expect(script).toContain(
+      'cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"',
+    );
+    expect(script.indexOf("Copying provider icon resources")).toBeLessThan(
       script.indexOf('echo "🔏 Signing bundle'),
     );
   });

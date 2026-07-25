@@ -1,6 +1,8 @@
 // Assertions for Codex npm plugin live E2E scenarios.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import {
   assertPathInside,
@@ -17,6 +19,10 @@ import {
 const command = process.argv[2];
 const allowBetaCompatDiagnostics =
   process.env.OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS === "1";
+const sessionStoreContract =
+  process.env.OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT || "sqlite";
+const bindingStoreContract =
+  process.env.OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT || "plugin-kv";
 const MAX_TEXT_FILE_BYTES = readPositiveIntEnv(
   "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES",
   1024 * 1024,
@@ -41,6 +47,7 @@ const AGENT_TURN_TIMEOUT_SECONDS = readPositiveIntEnv(
   "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS",
   420,
 );
+const CODEX_BINDING_NAMESPACE = "app-server-thread-bindings";
 
 function readPositiveIntEnv(name, fallback) {
   const text = String(process.env[name] ?? fallback).trim();
@@ -80,8 +87,201 @@ function readTextFileTail(filePath, label, maxBytes = MAX_ERROR_TAIL_BYTES) {
   }
 }
 
+function readCodexBinding(sessionId, sessionKey, entry) {
+  if (bindingStoreContract === "legacy-sidecar") {
+    const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile : "";
+    if (!sessionFile) {
+      throw new Error(`missing legacy Codex session file for ${sessionId}`);
+    }
+    const bindingPath = `${sessionFile}.codex-app-server.json`;
+    const binding = readJson(bindingPath);
+    if (![1, 2].includes(binding.schemaVersion) || typeof binding.threadId !== "string") {
+      throw new Error(`invalid legacy Codex app-server binding: ${JSON.stringify(binding)}`);
+    }
+    return binding;
+  }
+  if (bindingStoreContract !== "plugin-kv") {
+    throw new Error(
+      `OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT must be plugin-kv or legacy-sidecar; got ${bindingStoreContract}`,
+    );
+  }
+
+  const dbPath = path.join(stateDir(), "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`missing OpenClaw state database: ${dbPath}`);
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const stableSessionKey = String(sessionKey ?? "").trim();
+    const key = stableSessionKey
+      ? `session-key:main:${createHash("sha256").update(stableSessionKey).digest("base64url")}`
+      : `session:main:${sessionId}`;
+    const row = db
+      .prepare(
+        `SELECT value_json
+           FROM plugin_state_entries
+          WHERE plugin_id = ? AND namespace = ? AND entry_key = ?
+            AND (expires_at IS NULL OR expires_at > ?)`,
+      )
+      .get("codex", CODEX_BINDING_NAMESPACE, key, Date.now());
+    if (!row || typeof row.value_json !== "string") {
+      throw new Error(`missing Codex app-server binding row: ${key}`);
+    }
+    const stored = JSON.parse(row.value_json);
+    if (stored?.version !== 1 || stored.state !== "active" || !stored.binding) {
+      throw new Error(`invalid Codex app-server binding row ${key}: ${row.value_json}`);
+    }
+    if (stored.sessionId && stored.sessionId !== sessionId) {
+      throw new Error(
+        `Codex app-server binding row ${key} belongs to session ${stored.sessionId}, expected ${sessionId}`,
+      );
+    }
+    return stored.binding;
+  } finally {
+    db.close();
+  }
+}
+
+function readLegacySessionEntry(sessionId) {
+  const storePath = path.join(stateDir(), "agents", "main", "sessions", "sessions.json");
+  const store = readJson(storePath);
+  const sessionMatch = Object.entries(store).find(
+    ([, candidate]) => candidate?.sessionId === sessionId,
+  );
+  if (!sessionMatch) {
+    throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
+  }
+  const [sessionKey, entry] = sessionMatch;
+  if (typeof entry.sessionFile !== "string" || !fs.existsSync(entry.sessionFile)) {
+    throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
+  }
+  const transcriptLines = readTextFileBounded(
+    entry.sessionFile,
+    "OpenClaw legacy session transcript",
+    Math.min(MAX_TEXT_FILE_BYTES, MAX_TRANSCRIPT_SCAN_BYTES),
+  )
+    .split("\n")
+    .filter((line) => line.trim());
+  if (transcriptLines.length > MAX_TRANSCRIPT_WALK_ENTRIES) {
+    throw new Error(
+      `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_WALK_ENTRIES} events for ${sessionId}`,
+    );
+  }
+  const transcriptEvents = transcriptLines.map((line, index) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      throw new Error(`invalid OpenClaw legacy transcript event ${index + 1} for ${sessionId}`);
+    }
+  });
+  return {
+    entry,
+    sessionKey,
+    transcriptEventCount: transcriptEvents.length,
+    transcriptEvents,
+  };
+}
+
+function readSessionEntry(sessionId) {
+  if (sessionStoreContract === "legacy-json") {
+    return readLegacySessionEntry(sessionId);
+  }
+  if (sessionStoreContract !== "sqlite") {
+    throw new Error(
+      `OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT must be sqlite or legacy-json; got ${sessionStoreContract}`,
+    );
+  }
+  const dbPath = path.join(stateDir(), "agents", "main", "agent", "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`missing agent session database: ${dbPath}`);
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    // Keep the aggregate check and row materialization on one SQLite snapshot.
+    // The release runner never loads transcript JSON until SQL proves the whole set is bounded.
+    db.exec("BEGIN");
+    try {
+      const row = db
+        .prepare(
+          `SELECT sn.session_key, sn.entry_json, sw.agent_harness_id
+             FROM session_nodes AS sn
+             INNER JOIN session_windows AS sw ON sw.session_id = sn.current_session_id
+            WHERE sw.session_id = ?
+            ORDER BY sn.updated_at DESC, sn.session_key
+            LIMIT 1`,
+        )
+        .get(sessionId);
+      if (!row || typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
+        throw new Error(`missing session store entry for ${sessionId}`);
+      }
+      const transcriptSummary = db
+        .prepare(
+          `SELECT COUNT(*) AS event_count,
+                  COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS transcript_bytes
+             FROM transcript_events
+            WHERE session_id = ?`,
+        )
+        .get(sessionId);
+      if (
+        !transcriptSummary ||
+        !Number.isSafeInteger(transcriptSummary.event_count) ||
+        !Number.isSafeInteger(transcriptSummary.transcript_bytes)
+      ) {
+        throw new Error(`invalid OpenClaw transcript summary for ${sessionId}`);
+      }
+      if (transcriptSummary.event_count > MAX_TRANSCRIPT_WALK_ENTRIES) {
+        throw new Error(
+          `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_WALK_ENTRIES} events for ${sessionId}`,
+        );
+      }
+      if (transcriptSummary.transcript_bytes > MAX_TRANSCRIPT_SCAN_BYTES) {
+        throw new Error(
+          `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_SCAN_BYTES} bytes for ${sessionId}`,
+        );
+      }
+      const transcriptRows = db
+        .prepare(
+          `SELECT event_json
+             FROM transcript_events
+            WHERE session_id = ?
+            ORDER BY seq`,
+        )
+        .all(sessionId);
+      let transcriptBytes = 0;
+      const transcriptEvents = transcriptRows.map((transcriptRow) => {
+        if (typeof transcriptRow.event_json !== "string") {
+          throw new Error(`invalid OpenClaw transcript event for ${sessionId}`);
+        }
+        transcriptBytes += Buffer.byteLength(transcriptRow.event_json);
+        if (transcriptBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
+          throw new Error(
+            `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_SCAN_BYTES} bytes for ${sessionId}`,
+          );
+        }
+        return JSON.parse(transcriptRow.event_json);
+      });
+      const entry = JSON.parse(row.entry_json);
+      return {
+        entry: {
+          ...entry,
+          agentHarnessId:
+            typeof row.agent_harness_id === "string" ? row.agent_harness_id : entry.agentHarnessId,
+          sessionId,
+        },
+        sessionKey: row.session_key,
+        transcriptEventCount: transcriptEvents.length,
+        transcriptEvents,
+      };
+    } finally {
+      db.exec("ROLLBACK");
+    }
+  } finally {
+    db.close();
+  }
+}
+
 function configure() {
-  const modelRef = process.argv[3] || "codex/gpt-5.4";
+  const modelRef = process.argv[3] || "openai/gpt-5.4";
   const state = stateDir();
   const cfgPath = configPath();
   const cfg = fs.existsSync(cfgPath) ? readJson(cfgPath) : {};
@@ -177,12 +377,6 @@ function assertPlugin() {
   }
   if (inspect.plugin?.id !== "codex" || inspect.plugin?.status !== "loaded") {
     throw new Error(`unexpected inspect plugin state: ${JSON.stringify(inspect.plugin)}`);
-  }
-  if (
-    !Array.isArray(inspect.plugin?.providerIds) ||
-    !inspect.plugin.providerIds.includes("codex")
-  ) {
-    throw new Error(`codex provider was not registered: ${JSON.stringify(inspect.plugin)}`);
   }
   const hasCodexHarness =
     (Array.isArray(inspect.plugin?.agentHarnessIds) &&
@@ -364,29 +558,193 @@ function assertNativeCodexSessionEvidence(params) {
     );
   }
   let scannedBytes = 0;
-  const matchingFile = files.find(({ filePath, stat }) => {
+  let matchingEvidence;
+  for (const { filePath, stat } of files) {
     const readableBytes = Math.min(stat.size, MAX_TEXT_FILE_BYTES);
     if (scannedBytes + readableBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
-      return false;
+      continue;
     }
     scannedBytes += readableBytes;
     const content = readTextFileTail(filePath, "native Codex session transcript", readableBytes);
-    return content.includes(params.marker) || content.includes(params.threadId);
-  })?.filePath;
-  if (!matchingFile) {
+    if (content.includes(params.marker) || content.includes(params.threadId)) {
+      matchingEvidence = { content, filePath };
+      break;
+    }
+  }
+  if (!matchingEvidence) {
     throw new Error(
       `native Codex session transcripts did not contain ${params.marker} or ${params.threadId}; scanned ${scannedBytes} bytes across ${files.length} newest files: ${files.map((entry) => entry.filePath).join(", ")}`,
     );
   }
-  assertPathInside(params.codexHome, matchingFile, "native Codex session transcript");
+  assertPathInside(params.codexHome, matchingEvidence.filePath, "native Codex session transcript");
+  return matchingEvidence;
 }
 
-function assertAgentTurn() {
-  const marker = process.argv[3];
-  const sessionId = process.argv[4];
-  const modelRef = process.argv[5];
-  const stdout = readTextFileBounded("/tmp/openclaw-codex-agent.json", "OpenClaw agent JSON");
-  const stderr = readTextFileTail("/tmp/openclaw-codex-agent.err", "OpenClaw agent stderr");
+function extractOpenClawToolTimeline(transcriptEvents) {
+  const timeline = [];
+  for (const event of transcriptEvents) {
+    const message = event?.type === "message" ? event.message : undefined;
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    if (message.role === "user") {
+      timeline.push({ type: "turn-start", index: timeline.length });
+    } else if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const item of message.content) {
+        if (
+          item?.type === "toolCall" &&
+          typeof item.id === "string" &&
+          typeof item.name === "string"
+        ) {
+          timeline.push({
+            type: "call",
+            id: item.id,
+            name: item.name,
+            args: item.arguments ?? item.input,
+            index: timeline.length,
+          });
+        }
+      }
+    } else if (message.role === "toolResult" && typeof message.toolCallId === "string") {
+      timeline.push({
+        type: "result",
+        id: message.toolCallId,
+        name: typeof message.toolName === "string" ? message.toolName : undefined,
+        isError: message.isError === true,
+        index: timeline.length,
+      });
+    }
+  }
+  return timeline;
+}
+
+function findSuccessfulToolResult(timeline, call, beforeIndex = Number.POSITIVE_INFINITY) {
+  return timeline.find(
+    (entry) =>
+      entry.type === "result" &&
+      entry.id === call.id &&
+      entry.index > call.index &&
+      entry.index < beforeIndex &&
+      entry.isError !== true,
+  );
+}
+
+function findToolResult(timeline, call, beforeIndex = Number.POSITIVE_INFINITY) {
+  return timeline.find(
+    (entry) =>
+      entry.type === "result" &&
+      entry.id === call.id &&
+      entry.index > call.index &&
+      entry.index < beforeIndex,
+  );
+}
+
+function assertFollowthroughTranscript({ transcriptEvents, progressMarker, completeMarker }) {
+  const timeline = extractOpenClawToolTimeline(transcriptEvents);
+  const markerCalls = timeline.flatMap((entry) => {
+    if (entry.type !== "call" || entry.name !== "message") {
+      return [];
+    }
+    const args = entry.args;
+    if (!args || typeof args !== "object") {
+      return [];
+    }
+    const text = [args.message, args.text, args.body, args.content].find(
+      (value) => typeof value === "string",
+    );
+    return text === progressMarker || text === completeMarker ? [{ ...entry, args, text }] : [];
+  });
+  const expected = [
+    { text: progressMarker, final: undefined },
+    { text: completeMarker, final: true },
+  ];
+  if (
+    markerCalls.length !== expected.length ||
+    markerCalls.some(
+      (call, index) =>
+        call.text !== expected[index].text ||
+        call.args.action !== "send" ||
+        call.args.final !== expected[index].final,
+    )
+  ) {
+    throw new Error(
+      `expected exact message final controls ${JSON.stringify(expected)}, got ${JSON.stringify(markerCalls.map((call) => ({ text: call.text, action: call.args.action, final: call.args.final })))}`,
+    );
+  }
+  const [progressCall, completeCall] = markerCalls;
+  const progressResult = findSuccessfulToolResult(timeline, progressCall, completeCall.index);
+  if (!progressResult) {
+    throw new Error("missing successful progress message result before completion");
+  }
+  const completeResult = findSuccessfulToolResult(timeline, completeCall);
+  if (!completeResult) {
+    throw new Error("missing successful completion message result");
+  }
+
+  let turnStartIndex = -1;
+  for (const entry of timeline) {
+    if (entry.type === "turn-start" && entry.index < progressCall.index) {
+      turnStartIndex = entry.index;
+    }
+  }
+  const prematureCalls = timeline.filter(
+    (entry) =>
+      entry.type === "call" &&
+      entry.id !== progressCall.id &&
+      entry.index > turnStartIndex &&
+      entry.index < progressResult.index,
+  );
+  if (prematureCalls.length > 0) {
+    throw new Error(
+      `expected progress to be the first completed tool call in its turn; premature calls: ${prematureCalls.map((entry) => entry.name).join(", ")}`,
+    );
+  }
+
+  const workCalls = timeline.filter(
+    (entry) =>
+      entry.type === "call" &&
+      entry.name !== "message" &&
+      entry.index > progressResult.index &&
+      entry.index < completeCall.index,
+  );
+  if (workCalls.length === 0) {
+    throw new Error("expected successful workspace work between progress and completion");
+  }
+  const successfulWorkCalls = workCalls.filter((entry) =>
+    findSuccessfulToolResult(timeline, entry, completeCall.index),
+  );
+  if (successfulWorkCalls.length === 0) {
+    throw new Error("expected successful workspace work between progress and completion");
+  }
+  const unsettledWorkCalls = workCalls.filter(
+    (entry) => !findToolResult(timeline, entry, completeCall.index),
+  );
+  if (unsettledWorkCalls.length > 0) {
+    throw new Error(
+      `expected all workspace work to settle before completion; unsettled calls: ${unsettledWorkCalls.map((entry) => entry.name).join(", ")}`,
+    );
+  }
+
+  const nextTurnStart = timeline.find(
+    (entry) => entry.type === "turn-start" && entry.index > completeResult.index,
+  );
+  const postCompletionWorkCalls = timeline.filter(
+    (entry) =>
+      entry.type === "call" &&
+      entry.name !== "message" &&
+      entry.index > completeCall.index &&
+      entry.index < (nextTurnStart?.index ?? Number.POSITIVE_INFINITY),
+  );
+  if (postCompletionWorkCalls.length > 0) {
+    throw new Error(
+      `unexpected workspace work after completion: ${postCompletionWorkCalls.map((entry) => entry.name).join(", ")}`,
+    );
+  }
+}
+
+function assertAgentTurnEvidence({ marker, sessionId, modelRef, stdoutPath, stderrPath }) {
+  const stdout = readTextFileBounded(stdoutPath, "OpenClaw agent JSON");
+  const stderr = readTextFileTail(stderrPath, "OpenClaw agent stderr");
   const response = JSON.parse(stdout);
   const text = extractAgentReplyTexts(JSON.stringify(response)).join("\n");
   if (!text.includes(marker)) {
@@ -402,26 +760,19 @@ function assertAgentTurn() {
     );
   }
 
-  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const store = readJson(storePath);
-  const entry = Object.values(store).find((candidate) => candidate?.sessionId === sessionId);
-  if (!entry) {
-    throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
-  }
+  const { entry, sessionKey, transcriptEventCount, transcriptEvents } = readSessionEntry(sessionId);
   if (entry.agentHarnessId !== "codex") {
     throw new Error(`expected codex harness in session entry, got ${entry.agentHarnessId}`);
   }
   if (entry.modelOverride && entry.modelOverride !== modelRef) {
     throw new Error(`unexpected session model override: ${entry.modelOverride}`);
   }
-  if (typeof entry.sessionFile !== "string" || !fs.existsSync(entry.sessionFile)) {
-    throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
+  if (!Number.isSafeInteger(transcriptEventCount) || transcriptEventCount < 1) {
+    throw new Error(`missing OpenClaw transcript events for ${sessionId}`);
   }
 
-  const bindingPath = `${entry.sessionFile}.codex-app-server.json`;
-  const binding = readJson(bindingPath);
-  if (![1, 2].includes(binding.schemaVersion) || typeof binding.threadId !== "string") {
+  const binding = readCodexBinding(sessionId, sessionKey, entry);
+  if (typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }
   if (binding.model !== modelRef.split("/").slice(1).join("/")) {
@@ -443,11 +794,72 @@ function assertAgentTurn() {
   }
   const codexSessionRoot = path.join(codexHome, "sessions");
   const nativeSessionRoot = path.join(codexHome, "home", ".codex", "sessions");
-  assertNativeCodexSessionEvidence({
+  const nativeSessionEvidence = assertNativeCodexSessionEvidence({
     codexHome,
     marker,
     roots: [codexSessionRoot, nativeSessionRoot],
     threadId: binding.threadId,
+  });
+  return { nativeSessionEvidence, transcriptEvents };
+}
+
+function assertAgentTurn() {
+  assertAgentTurnEvidence({
+    marker: process.argv[3],
+    sessionId: process.argv[4],
+    modelRef: process.argv[5],
+    stdoutPath: "/tmp/openclaw-codex-agent.json",
+    stderrPath: "/tmp/openclaw-codex-agent.err",
+  });
+}
+
+function assertFollowthrough() {
+  const progressMarker = process.argv[3];
+  const completeMarker = process.argv[4];
+  const sessionId = process.argv[5];
+  const modelRef = process.argv[6];
+  const artifactPath = process.argv[7];
+  const inputPaths = process.argv.slice(8);
+  if (inputPaths.length !== 3) {
+    throw new Error(`expected three follow-through input paths, got ${inputPaths.length}`);
+  }
+
+  const stdoutPath = "/tmp/openclaw-codex-followthrough.json";
+  const stderrPath = "/tmp/openclaw-codex-followthrough.err";
+  const response = JSON.parse(readTextFileBounded(stdoutPath, "OpenClaw follow-through JSON"));
+  const replyTexts = (response.payloads || [])
+    .map((payload) => (payload && typeof payload.text === "string" ? payload.text.trim() : ""))
+    .filter(Boolean);
+  const expectedReplies = [progressMarker, completeMarker];
+  if (JSON.stringify(replyTexts) !== JSON.stringify(expectedReplies)) {
+    throw new Error(
+      `expected exact progress and completion replies ${JSON.stringify(expectedReplies)}, got ${JSON.stringify(replyTexts)}`,
+    );
+  }
+
+  const expectedArtifact = `${inputPaths
+    .map((inputPath, index) =>
+      readTextFileBounded(inputPath, `follow-through input ${index + 1}`).trim(),
+    )
+    .join("\n")}\n`;
+  const artifact = readTextFileBounded(artifactPath, "Codex follow-through artifact");
+  if (artifact !== expectedArtifact) {
+    throw new Error(
+      `unexpected Codex follow-through artifact; expected ${JSON.stringify(expectedArtifact)}, got ${JSON.stringify(artifact)}`,
+    );
+  }
+
+  const evidence = assertAgentTurnEvidence({
+    marker: completeMarker,
+    sessionId,
+    modelRef,
+    stdoutPath,
+    stderrPath,
+  });
+  assertFollowthroughTranscript({
+    transcriptEvents: evidence.transcriptEvents,
+    progressMarker,
+    completeMarker,
   });
 }
 
@@ -507,6 +919,7 @@ const commands = {
   "print-codex-bin": printCodexBin,
   "assert-preflight": assertPreflight,
   "assert-agent-turn": assertAgentTurn,
+  "assert-followthrough": assertFollowthrough,
   "assert-uninstalled": assertUninstalled,
   "assert-agent-error": assertAgentError,
 };

@@ -6,7 +6,7 @@ import {
   type RuntimeHealthRecordEnvelope,
 } from "../plugin-state/runtime-health-store.js";
 
-export type PersistedContextEngineRuntimeQuarantine = {
+type PersistedContextEngineRuntimeQuarantine = {
   engineId: string;
   owner?: string;
   operation: string;

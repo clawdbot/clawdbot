@@ -8,7 +8,7 @@ on:
 permissions:
   actions: read
   contents: read
-  packages: write
+  packages: read
   pull-requests: read
 
 concurrency:
@@ -23,7 +23,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
@@ -32,6 +32,9 @@ jobs:
       include_release_path_suites: true
       include_openwebui: true
       include_live_suites: true
+      allow_unreleased_changelog: true
+      shared_image_artifact_namespace: scheduled-live
+      shared_image_policy: no-push-artifact
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}

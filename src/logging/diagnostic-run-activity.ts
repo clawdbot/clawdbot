@@ -1,5 +1,6 @@
 // Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
+  getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
@@ -61,6 +62,9 @@ type DiagnosticRunProgressActivityEvent = Pick<
 // steer gates): lowering it reopens #88870, removing it reopens #96168.
 export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
 
+// Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
+export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
+
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
   hasActiveEmbeddedRun?: boolean;
@@ -70,6 +74,16 @@ export type DiagnosticSessionActivitySnapshot = {
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
 };
+
+// Quiet-but-alive tool phases get the blocked-tool floor so a human message
+// cannot reclaim a healthy long tool that stuck recovery would not touch yet.
+export function resolveRunStaleThresholdMs(
+  activity: Pick<DiagnosticSessionActivitySnapshot, "activeWorkKind">,
+): number {
+  return activity.activeWorkKind === "tool_call"
+    ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+    : RUN_STALE_TAKEOVER_MS;
+}
 
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
@@ -614,11 +628,11 @@ export function getDiagnosticEmbeddedRunActivitySequence(): number {
   return embeddedRunSequence;
 }
 
-export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
+function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(params);
 }
 
-export function markDiagnosticToolStartedForTest(params: {
+function markDiagnosticToolStartedForTest(params: {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -628,28 +642,27 @@ export function markDiagnosticToolStartedForTest(params: {
   recordToolStarted(params);
 }
 
-export function markDiagnosticModelStartedForTest(
-  params: DiagnosticModelStartedActivityEvent,
-): void {
+function markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivityEvent): void {
   recordModelStarted(params);
 }
 
 export function resetDiagnosticRunActivityForTest(): void {
-  activityByRef.clear();
-  activityByRunId.clear();
-  embeddedRunSequence = 0;
-  unregisterDiagnosticRunActivityListener?.();
-  unregisterDiagnosticRunActivityListener = undefined;
-  registerDiagnosticRunActivityListener();
+  stopDiagnosticRunActivityTracking();
 }
 
 let unregisterDiagnosticRunActivityListener: (() => void) | undefined;
 
-function registerDiagnosticRunActivityListener(): void {
+export function startDiagnosticRunActivityTracking(): void {
   if (unregisterDiagnosticRunActivityListener) {
     return;
   }
+  const startAfterEventSequence = getInternalDiagnosticEventSequence();
   unregisterDiagnosticRunActivityListener = onInternalDiagnosticEvent((event) => {
+    // A prior lifecycle can leave already-sequenced events in the async queue.
+    // Ignore them so a restart cannot recreate activity that stop cleared.
+    if (event.seq <= startAfterEventSequence) {
+      return;
+    }
     switch (event.type) {
       case "tool.execution.started":
         recordToolStarted(event);
@@ -677,4 +690,20 @@ function registerDiagnosticRunActivityListener(): void {
   });
 }
 
-registerDiagnosticRunActivityListener();
+export function stopDiagnosticRunActivityTracking(): void {
+  unregisterDiagnosticRunActivityListener?.();
+  unregisterDiagnosticRunActivityListener = undefined;
+  activityByRef.clear();
+  activityByRunId.clear();
+  embeddedRunSequence = 0;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.diagnosticRunActivityTestApi")
+  ] = {
+    markDiagnosticModelStartedForTest,
+    markDiagnosticRunProgressForTest,
+    markDiagnosticToolStartedForTest,
+  };
+}

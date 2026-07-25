@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Quick Chat</title>
+    <link rel="stylesheet" href="quickchat.css" />
+  </head>
+  <body>
+    <main id="composer" class="composer">
+      <div class="composer-row">
+        <button
+          id="agent-chip"
+          class="agent-chip"
+          type="button"
+          aria-label="Choose agent"
+          aria-haspopup="menu"
+          aria-expanded="false"
+        >
+          <span id="agent-avatar" class="agent-avatar" aria-hidden="true">A</span>
+          <span class="agent-chevron" aria-hidden="true">⌄</span>
+        </button>
+        <input
+          id="message"
+          type="text"
+          placeholder="Message Agent"
+          aria-label="Quick Chat message"
+          autocomplete="off"
+        />
+        <button
+          id="shortcut-settings-button"
+          class="gear"
+          type="button"
+          aria-label="Quick Chat shortcut settings"
+          aria-expanded="false"
+          hidden
+        >
+          <span aria-hidden="true">⚙</span>
+        </button>
+        <button id="send" class="send" type="button" aria-label="Send message" disabled>
+          <span id="send-icon" class="send-icon" aria-hidden="true">↑</span>
+        </button>
+      </div>
+      <p id="status" class="status" role="alert"></p>
+      <section id="reply" class="reply" aria-label="Agent reply" aria-live="polite" hidden>
+        <div class="reply-header">
+          <div class="reply-agent">
+            <span id="reply-agent-avatar" class="agent-avatar-mini" aria-hidden="true">A</span>
+            <span id="reply-agent-name" class="reply-agent-name">Agent</span>
+          </div>
+          <span id="reply-state" class="reply-state" aria-hidden="true"></span>
+        </div>
+        <div id="reply-scroll" class="reply-scroll">
+          <div id="reply-text" class="reply-text"></div>
+          <span id="reply-thinking" class="reply-thinking">Thinking…</span>
+          <p id="reply-error" class="status reply-error" role="alert"></p>
+        </div>
+        <div id="reply-widgets" class="reply-widgets" hidden></div>
+      </section>
+    </main>
+    <section id="agent-menu" class="popover" aria-label="Choose agent" hidden>
+      <div class="popover-title">Agents</div>
+      <div id="agent-list" class="agent-list" role="menu"></div>
+    </section>
+    <section id="shortcut-settings" class="popover shortcut-settings" hidden>
+      <div class="popover-title">Quick Chat shortcut</div>
+      <div class="shortcut-row">
+        <code id="shortcut-value" class="shortcut-value"></code>
+        <button id="shortcut-capture" class="subtle-button" type="button">
+          Press new shortcut
+        </button>
+        <button id="shortcut-reset" class="subtle-button" type="button">Reset</button>
+      </div>
+      <p id="shortcut-error" class="shortcut-error" role="alert"></p>
+    </section>
+    <script type="module" src="quickchat.js"></script>
+  </body>
+</html>

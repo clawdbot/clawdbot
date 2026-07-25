@@ -28,13 +28,7 @@ import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { AgentToolResult } from "./runtime/index.js";
-export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
-export {
-  normalizeExecAsk,
-  normalizeExecHost,
-  normalizeExecSecurity,
-  normalizeExecTarget,
-} from "../infra/exec-approvals.js";
+export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -51,7 +45,7 @@ import {
   markExited,
   tail,
 } from "./bash-process-registry.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -60,7 +54,7 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
-import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
 
@@ -80,7 +74,7 @@ function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | u
  * Returns "application" if smkx is the last toggle, "normal" if rmkx is last,
  * or null if no toggle is found.
  */
-export function detectCursorKeyMode(raw: string): "application" | "normal" | null {
+function detectCursorKeyMode(raw: string): "application" | "normal" | null {
   const lastSmkx = raw.lastIndexOf(SMKX);
   const lastRmkx = raw.lastIndexOf(RMKX);
   if (lastSmkx === -1 && lastRmkx === -1) {
@@ -118,7 +112,7 @@ const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
 /** Failure categories used to explain exec process exits. */
-export type ExecProcessFailureKind =
+type ExecProcessFailureKind =
   | "shell-command-not-found"
   | "shell-not-executable"
   | "overall-timeout"
@@ -337,11 +331,12 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventRouting = session.eventRouting ?? {
     mainKey: session.mainKey,
     sessionScope: session.sessionScope,
   };
-  enqueueSystemEvent(summary, {
+  enqueueSystemEvent(eventText, {
     sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
     deliveryContext: session.notifyDeliveryContext,
   });
@@ -403,9 +398,7 @@ export function buildApprovalPendingMessage(params: {
   );
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+    lines.push("Allow Always is unavailable for this command.");
   }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");
@@ -421,8 +414,6 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
   }
   return Math.floor(value);
 }
-
-export { renderExecUpdateText } from "./bash-tools.exec-output.js";
 
 function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
@@ -450,7 +441,7 @@ function classifyExecFailureKind(params: {
 }
 
 /** Formats a user-facing reason for a failed exec process exit. */
-export function formatExecFailureReason(params: {
+function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
   exitSignal: NodeJS.Signals | number | null;
   timeoutSec: number | null | undefined;
@@ -460,12 +451,18 @@ export function formatExecFailureReason(params: {
       return "Command not found";
     case "shell-not-executable":
       return "Command not executable (permission denied)";
-    case "overall-timeout":
-      return typeof params.timeoutSec === "number" && params.timeoutSec > 0
-        ? `Command timed out after ${params.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
-        : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.";
+    case "overall-timeout": {
+      const timeoutText =
+        typeof params.timeoutSec === "number" && params.timeoutSec > 0
+          ? `Command timed out after ${params.timeoutSec} seconds.`
+          : "Command timed out.";
+      return `${appendExecTimeoutRetryGuidance(timeoutText, params.failureKind)}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`;
+    }
     case "no-output-timeout":
-      return "Command timed out waiting for output";
+      return appendExecTimeoutRetryGuidance(
+        "Command timed out waiting for output.",
+        params.failureKind,
+      );
     case "signal":
       return `Command aborted by signal ${params.exitSignal}`;
     case "aborted":
@@ -475,7 +472,7 @@ export function formatExecFailureReason(params: {
 }
 
 /** Converts a supervisor exit record into a normalized exec process outcome. */
-export function buildExecExitOutcome(params: {
+function buildExecExitOutcome(params: {
   exit: RunExit;
   aggregated: string;
   durationMs: number;
@@ -610,6 +607,8 @@ export async function runExecProcess(opts: {
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
+  /** Runs after process finalization and before the exit wake is queued. */
+  onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
@@ -695,16 +694,20 @@ export async function runExecProcess(opts: {
     });
   };
 
+  // One parser per stream so ESC sequences split across chunks are not mangled.
+  const sanitizeStdout = createStreamingBinaryOutputSanitizer();
+  const sanitizeStderr = createStreamingBinaryOutputSanitizer();
+
   const handleStdout = (data: string) => {
     const raw = data;
-    // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
+    // Detect smkx/rmkx BEFORE the sanitizer strips ESC sequences.
     // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
     // and sent atomically by terminals. Split across chunks is rare in practice.
     const mode = detectCursorKeyMode(raw);
     if (mode) {
       session.cursorKeyMode = mode;
     }
-    const str = sanitizeBinaryOutput(raw);
+    const str = sanitizeStdout(raw);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stdout", chunk);
       emitUpdate();
@@ -712,7 +715,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStderr = (data: string) => {
-    const str = sanitizeBinaryOutput(data);
+    const str = sanitizeStderr(data);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stderr", chunk);
       emitUpdate();
@@ -735,6 +738,49 @@ export async function runExecProcess(opts: {
       ...params,
       token: sandboxFinalizeToken,
     });
+  };
+  const finalizeAndSettleSession = async (
+    outcome: ExecProcessOutcome,
+  ): Promise<ExecProcessOutcome> => {
+    let finalOutcome = outcome;
+    session.finalizing = true;
+    try {
+      await finalizeSandboxExec({
+        status: outcome.status,
+        exitCode: outcome.exitCode,
+        timedOut: outcome.timedOut,
+      });
+    } catch (error) {
+      if (outcome.status === "completed") {
+        finalOutcome = buildExecRuntimeErrorOutcome({
+          error,
+          aggregated: session.aggregated.trim(),
+          durationMs: Date.now() - startedAt,
+        });
+      } else {
+        logWarn(`exec: sandbox finalize after process failure failed (${String(error)}).`);
+      }
+    } finally {
+      // Finalization can release remote process/session resources. Keep the
+      // background-work blocker until that owner transition has settled.
+      session.finalizing = false;
+      const shouldNotify = !session.exited;
+      if (shouldNotify) {
+        markExited(
+          session,
+          finalOutcome.exitCode,
+          finalOutcome.exitSignal,
+          finalOutcome.status,
+          finalOutcome.exitReason,
+          finalOutcome.noOutputTimedOut,
+        );
+      }
+      opts.onSettledBeforeNotify?.(finalOutcome);
+      if (shouldNotify) {
+        maybeNotifyOnExit(session, finalOutcome.status);
+      }
+    }
+    return finalOutcome;
   };
 
   const spawnSpec:
@@ -945,49 +991,32 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(
-        session,
-        exit.exitCode,
-        exit.exitSignal,
-        outcome.status,
-        exit.reason,
-        exit.noOutputTimedOut,
-      );
-      maybeNotifyOnExit(session, outcome.status);
-      if (!session.child && session.stdin) {
-        session.stdin.destroyed = true;
-      }
-      await finalizeSandboxExec({
-        status: outcome.status,
-        exitCode: exit.exitCode ?? null,
-        timedOut: exit.timedOut,
-      });
+      const finalOutcome = await finalizeAndSettleSession(outcome);
       emitExecProcessCompleted({
         command: opts.command,
         mode: usingPty ? "pty" : "child",
-        outcome,
+        outcome: finalOutcome,
         sessionKey: opts.sessionKey,
         target: diagnosticTarget,
       });
-      return outcome;
+      return finalOutcome;
     })
-    .catch((err: unknown): ExecProcessOutcome => {
+    .catch(async (err: unknown): Promise<ExecProcessOutcome> => {
       updatesDisabled = true;
-      markExited(session, null, null, "failed");
-      maybeNotifyOnExit(session, "failed");
       const outcome = buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
       });
+      const finalOutcome = await finalizeAndSettleSession(outcome);
       emitExecProcessCompleted({
         command: opts.command,
         mode: usingPty ? "pty" : "child",
-        outcome,
+        outcome: finalOutcome,
         sessionKey: opts.sessionKey,
         target: diagnosticTarget,
       });
-      return outcome;
+      return finalOutcome;
     });
 
   return {
@@ -1003,3 +1032,4 @@ export async function runExecProcess(opts: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

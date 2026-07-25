@@ -1,11 +1,11 @@
 // Provider discovery contract helpers define reusable discovery tests for provider plugins.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
+import { runProviderCatalog } from "../../plugins/provider-discovery.js";
 import {
   registerProviderPlugins as registerProviders,
   requireRegisteredProvider as requireProvider,
-  runProviderCatalog,
-} from "../testing.js";
+} from "../../test-utils/plugin-registration.js";
+import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());
@@ -912,3 +912,4 @@ export function describeCloudflareAiGatewayProviderDiscoveryContract(
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

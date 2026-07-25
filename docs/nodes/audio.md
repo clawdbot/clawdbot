@@ -23,18 +23,32 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
 1. **Active reply model**, when its provider supports audio understanding.
 2. **Configured provider auth** — any `models.providers.*` entry with auth available for a provider that supports audio transcription. This is checked before local CLIs, so a configured API key always wins over a local binary on `PATH`.
    Provider priority when multiple are configured: Groq, OpenAI, xAI, Deepgram, Google, SenseAudio, ElevenLabs, Mistral.
-3. **Local CLIs** (only if no provider auth resolved), checked in this order:
-   - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with `tokens.txt`, `encoder.onnx`, `decoder.onnx`, and `joiner.onnx`)
-   - `whisper-cli` (from `whisper-cpp`; uses `WHISPER_CPP_MODEL` or a bundled tiny model)
+3. **Local CLIs** (only if no provider auth resolved). OpenClaw builds an ordered fallback list:
+   - `whisper-cli`, before CPU defaults only when an earlier model invocation in the current process observed Metal or CUDA
+   - `sherpa-onnx-offline` on its default CPU provider (requires `SHERPA_ONNX_MODEL_DIR` with `tokens.txt`, `encoder.onnx`, `decoder.onnx`, and `joiner.onnx`)
+   - `whisper-cli` when Metal/CUDA is only build-capable or the selected backend is otherwise unobserved
+   - `parakeet-mlx` on Apple Silicon (MLX-capable; device use remains unobserved)
    - `whisper` (Python CLI; downloads models automatically)
+
+Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to probe a backend.
+Auto-detected whisper.cpp keeps its normal model-run logs enabled so OpenClaw can record the upstream `using … backend` line. Explicit CLI entries keep their configured output flags.
 
 Gemini CLI auto-detect for media understanding was replaced by a sandboxed Antigravity CLI (`agy`) fallback for image/video; audio does not use a CLI fallback beyond the local binaries above.
 
-To disable auto-detection, set `tools.media.audio.enabled: false`. To customize, set `tools.media.audio.models`.
+To disable auto-detection, set `tools.media.audio.enabled: false`. To customize, add capability-tagged entries to `tools.media.models`.
 
 <Note>
 Binary detection is best-effort across macOS/Linux/Windows. Make sure the CLI is on `PATH` (`~` is expanded), or set an explicit CLI model with a full command path.
 </Note>
+
+Inspect the local selection without transcribing audio:
+
+```bash
+openclaw capability audio providers
+openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-min info
+```
+
+The provider inventory reports the local fallback winner separately from global provider selection, plus capable, requested, and observed backend fields. After transcription runs, `/status` reports the requested or observed backend in the media line. Explicit audio-capable `tools.media.models` CLI entries still bypass auto-selection; use their backend-specific flags such as sherpa `--provider=cuda` or whisper.cpp `--no-gpu`/`--device`.
 
 ## Config examples
 
@@ -44,38 +58,17 @@ Binary detection is best-effort across macOS/Linux/Windows. Make sure the CLI is
 {
   tools: {
     media: {
-      audio: {
-        enabled: true,
-        maxBytes: 20971520,
-        models: [
-          { provider: "openai", model: "gpt-4o-transcribe" },
-          {
-            type: "cli",
-            command: "whisper",
-            args: ["--model", "base", "{{MediaPath}}"],
-            timeoutSeconds: 45,
-          },
-        ],
-      },
-    },
-  },
-}
-```
-
-### Provider-only with scope gating
-
-```json5
-{
-  tools: {
-    media: {
-      audio: {
-        enabled: true,
-        scope: {
-          default: "allow",
-          rules: [{ action: "deny", match: { chatType: "group" } }],
+      models: [
+        { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+        {
+          type: "cli",
+          command: "whisper",
+          args: ["--model", "base", "{{AttachmentPath}}"],
+          timeoutSeconds: 45,
+          capabilities: ["audio"],
         },
-        models: [{ provider: "openai", model: "gpt-4o-transcribe" }],
-      },
+      ],
+      audio: { enabled: true, preferredModel: "openai/gpt-4o-transcribe" },
     },
   },
 }
@@ -87,10 +80,8 @@ Binary detection is best-effort across macOS/Linux/Windows. Make sure the CLI is
 {
   tools: {
     media: {
-      audio: {
-        enabled: true,
-        models: [{ provider: "deepgram", model: "nova-3" }],
-      },
+      models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
+      audio: { enabled: true },
     },
   },
 }
@@ -102,10 +93,8 @@ Binary detection is best-effort across macOS/Linux/Windows. Make sure the CLI is
 {
   tools: {
     media: {
-      audio: {
-        enabled: true,
-        models: [{ provider: "mistral", model: "voxtral-mini-latest" }],
-      },
+      models: [{ provider: "mistral", model: "voxtral-mini-latest", capabilities: ["audio"] }],
+      audio: { enabled: true },
     },
   },
 }
@@ -117,10 +106,14 @@ Binary detection is best-effort across macOS/Linux/Windows. Make sure the CLI is
 {
   tools: {
     media: {
-      audio: {
-        enabled: true,
-        models: [{ provider: "senseaudio", model: "senseaudio-asr-pro-1.5-260319" }],
-      },
+      models: [
+        {
+          provider: "senseaudio",
+          model: "senseaudio-asr-pro-1.5-260319",
+          capabilities: ["audio"],
+        },
+      ],
+      audio: { enabled: true },
     },
   },
 }
@@ -134,9 +127,8 @@ Binary detection is best-effort across macOS/Linux/Windows. Make sure the CLI is
     media: {
       audio: {
         enabled: true,
-        echoTranscript: true, // default is false
-        echoFormat: '📝 "{transcript}"', // optional, supports {transcript}
-        models: [{ provider: "openai", model: "gpt-4o-transcribe" }],
+        echoTranscript: true,
+        echoFormat: '📝 "{transcript}"',
       },
     },
   },
@@ -150,17 +142,20 @@ Binary detection is best-effort across macOS/Linux/Windows. Make sure the CLI is
 - Deepgram picks up `DEEPGRAM_API_KEY` when `provider: "deepgram"` is used. Setup details: [Deepgram](/providers/deepgram).
 - Mistral setup details: [Mistral](/providers/mistral).
 - SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used. Setup details: [SenseAudio](/providers/senseaudio).
-- Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
-- Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
+- Audio providers can use defaults under `tools.media.audio` or override `baseUrl`, `headers`, `providerOptions`, and limits on their `tools.media.models[]` entry.
+- The built-in audio size cap is 20MB. An entry-level `maxBytes` override can change it; oversize audio is skipped for that model and the next entry is tried.
 - Audio files below 1024 bytes are skipped before provider/CLI transcription.
-- Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or a per-entry `maxChars` to trim output.
+- Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
 - OpenAI auto-detect default is `gpt-4o-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
-- Use `tools.media.audio.attachments` to process multiple voice notes (`mode: "all"` plus `maxAttachments`, default 1).
 - Transcript is available to templates as `{{Transcript}}`.
-- `tools.media.audio.echoTranscript` is off by default; enable it to send a transcript confirmation back to the originating chat before agent processing.
-- `tools.media.audio.echoFormat` customizes the echo text (placeholder: `{transcript}`; default `📝 "{transcript}"`).
+- `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
 - CLI stdout is capped at 5MB; keep CLI output concise.
-- CLI `args` should use `{{MediaPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.audio.models`).
+- CLI `args` should use `{{AttachmentPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`). `{{MediaPath}}` remains a deprecated compatibility alias.
+- `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.
+
+### Resident local STT
+
+Auto-detected local STT remains process-per-request. OpenClaw does not currently manage a resident whisper.cpp server because the standard Homebrew `whisper-cpp` package disables that server, while the upstream example has no configured bounded admission queue. A plugin-owned resident lifecycle needs a maintained packaged worker with health/startup, model residency, bounded queueing, cancellation/timeout, loopback-only no-auth operation, and no cloud fallback before it can be enabled safely.
 
 ### Proxy environment support
 

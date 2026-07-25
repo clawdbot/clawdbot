@@ -62,6 +62,7 @@ type DevicesRpcOpts = {
   device?: string;
   role?: string;
   scope?: string[];
+  name?: string;
 };
 
 type DeviceTokenSummary = {
@@ -89,6 +90,8 @@ type PairedDevice = {
   deviceId: string;
   publicKey?: string;
   displayName?: string;
+  operatorLabel?: string;
+  clientId?: string;
   role?: string;
   roles?: string[];
   scopes?: string[];
@@ -937,7 +940,9 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
           { key: "IP", header: "IP", minWidth: 12 },
         ],
         rows: list.paired.map((device) => ({
-          Device: sanitizeForLog(device.displayName || device.deviceId),
+          Device: sanitizeForLog(
+            device.operatorLabel || device.displayName || device.clientId || device.deviceId,
+          ),
           Roles: device.roles?.length
             ? device.roles.map((role) => sanitizeForLog(role)).join(", ")
             : "",
@@ -1160,6 +1165,26 @@ export async function runDevicesRejectCommand(
   defaultRuntime.log(`${theme.warn("Rejected")} ${theme.command(deviceId ?? "ok")}`);
 }
 
+export async function runDevicesRenameCommand(opts: DevicesRpcOpts): Promise<void> {
+  const deviceId = normalizeStringifiedOptionalString(opts.device) ?? "";
+  const label = normalizeStringifiedOptionalString(opts.name) ?? "";
+  if (!deviceId || !label) {
+    defaultRuntime.error(
+      `--device and --name are required. Run ${formatCliCommand("openclaw devices list")} to choose a paired device.`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+  const result = await callGatewayCli("device.pair.rename", opts, { deviceId, label });
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  defaultRuntime.log(
+    `${theme.success("Renamed")} ${theme.command(deviceId)} ${theme.muted("→")} ${sanitizeForLog(label)}`,
+  );
+}
+
 export async function runDevicesRotateCommand(opts: DevicesRpcOpts): Promise<void> {
   const required = resolveRequiredDeviceRole(opts);
   if (!required) {
@@ -1184,3 +1209,4 @@ export async function runDevicesRevokeCommand(opts: DevicesRpcOpts): Promise<voi
   });
   defaultRuntime.writeJson(result);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

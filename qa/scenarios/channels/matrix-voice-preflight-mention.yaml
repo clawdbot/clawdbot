@@ -1,0 +1,60 @@
+title: Matrix voice notes can trigger mention gating through transcription
+scenario:
+  id: matrix-voice-preflight-mention
+  surface: channels
+  coverage:
+    primary:
+      - matrix.media-and-rich-content
+  gatewayConfigPatch:
+    tools:
+      media:
+        models:
+          - provider: openai
+            model: gpt-4o-transcribe
+            capabilities: [audio]
+        audio:
+          enabled: true
+          echoTranscript: true
+          prompt: MATRIX_QA_VOICE_PREFLIGHT_TRIGGER
+    messages:
+      groupChat:
+        mentionPatterns:
+          - 'matrix\W+qa\W+voice\W+pre[ -]?flight\W+ok(?:ay)?'
+  execution:
+    profiles: { "matrix:all": 54, "matrix:media": 3 }
+    kind: flow
+    channel: matrix
+    providerMode: mock-openai
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixRequireCanary: true
+      matrixConfigOverrides:
+        mediaModels:
+          - provider: openai
+            model: gpt-4o-transcribe
+            capabilities: [audio]
+        audio:
+          enabled: true
+          echoTranscript: true
+          prompt: MATRIX_QA_VOICE_PREFLIGHT_TRIGGER
+        groupMentionPatterns:
+          - 'matrix\W+qa\W+voice\W+pre[ -]?flight\W+ok(?:ay)?'
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: media
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Media Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  call: runVoicePreflightMentionScenario
+  args:
+    - expr: "scenarioContext"

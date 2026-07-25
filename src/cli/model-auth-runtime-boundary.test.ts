@@ -8,7 +8,7 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("model auth runtime boundary", () => {
   it("keeps capability CLI command registration off the models auth runtime", () => {
-    const source = fs.readFileSync(path.join(repoRoot, "src/cli/capability-cli.ts"), "utf8");
+    const source = fs.readFileSync(path.join(repoRoot, "src/cli/capability-cli/model.ts"), "utf8");
 
     expect(source).not.toMatch(/\bfrom\s+["'][^"']*commands\/models\.js["']/);
     expect(source).not.toMatch(/\bfrom\s+["'][^"']*commands\/models\/auth\.js["']/);

@@ -51,6 +51,7 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
       headers: {},
     },
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",

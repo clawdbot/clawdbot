@@ -134,6 +134,10 @@ describe("collectStatusScanOverview", () => {
       useGatewayCallOverridesForChannelsStatus: true,
     });
 
+    expect(mocks.readBestEffortConfigSnapshot).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: undefined,
+    });
     expect(mocks.callGateway).toHaveBeenCalledOnce();
     const gatewayRequest = firstGatewayRequest();
     expect(gatewayRequest?.method).toBe("channels.status");

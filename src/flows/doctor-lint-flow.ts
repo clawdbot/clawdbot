@@ -18,7 +18,7 @@ export interface DoctorLintRunOptions {
   readonly includeAllChecks?: boolean;
 }
 
-export interface DoctorLintRunResult {
+interface DoctorLintRunResult {
   readonly findings: readonly HealthFinding[];
   readonly checksRun: number;
   readonly checksSkipped: number;

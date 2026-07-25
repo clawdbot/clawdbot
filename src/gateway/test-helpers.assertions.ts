@@ -1,13 +1,9 @@
 // Gateway test assertion helpers narrow unknown protocol payloads to records
 // and assert selected fields with useful labels.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
 
-/**
- * Record-shape assertion helpers for gateway tests.
- */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export { isRecord };
 
 /** Requires an unknown value to be a record and throws with a test label. */
 export function requireRecord(value: unknown, label: string): Record<string, unknown> {

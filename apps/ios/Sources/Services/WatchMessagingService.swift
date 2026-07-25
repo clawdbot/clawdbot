@@ -1,6 +1,33 @@
 import Foundation
 import OpenClawKit
 
+struct WatchMessagingStartupBuffer<Event> {
+    private let maxCount: Int
+    private var events: [Event] = []
+    private(set) var isReady = false
+
+    init(maxCount: Int) {
+        precondition(maxCount > 0)
+        self.maxCount = maxCount
+    }
+
+    mutating func receive(_ event: Event) -> [Event] {
+        guard !self.isReady else { return [event] }
+        if self.events.count == self.maxCount {
+            self.events.removeFirst()
+        }
+        self.events.append(event)
+        return []
+    }
+
+    mutating func markReady() -> [Event] {
+        guard !self.isReady else { return [] }
+        self.isReady = true
+        defer { self.events.removeAll(keepingCapacity: false) }
+        return self.events
+    }
+}
+
 enum WatchMessagingError: LocalizedError {
     case unsupported
     case notPaired
@@ -20,7 +47,19 @@ enum WatchMessagingError: LocalizedError {
 
 @MainActor
 final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
+    private enum StartupEvent {
+        case reply(WatchQuickReplyEvent)
+        case execApprovalResolve(WatchExecApprovalResolveEvent)
+        case execApprovalSnapshotRequest(WatchExecApprovalSnapshotRequestEvent)
+        case appSnapshotRequest(WatchAppSnapshotRequestEvent)
+        case appCommand(WatchAppCommandEvent)
+    }
+
+    private static let maxStartupEvents = 64
+
     private let transport: WatchConnectivityTransport
+    private var startupEvents = WatchMessagingStartupBuffer<StartupEvent>(
+        maxCount: WatchMessagingService.maxStartupEvents)
     private var statusHandler: (@Sendable (WatchMessagingStatus) -> Void)?
     private var lastEmittedStatus: WatchMessagingStatus?
     private var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
@@ -39,37 +78,34 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         }
         self.transport.setReplyHandler { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.emitReply(event)
+                self?.receiveStartupEvent(.reply(event))
             }
         }
         self.transport.setExecApprovalResolveHandler { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.emitExecApprovalResolve(event)
+                self?.receiveStartupEvent(.execApprovalResolve(event))
             }
         }
         self.transport.setExecApprovalSnapshotRequestHandler { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.emitExecApprovalSnapshotRequest(event)
+                self?.receiveStartupEvent(.execApprovalSnapshotRequest(event))
             }
         }
         self.transport.setAppSnapshotRequestHandler { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.emitAppSnapshotRequest(event)
+                self?.receiveStartupEvent(.appSnapshotRequest(event))
             }
         }
         self.transport.setAppCommandHandler { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.emitAppCommand(event)
+                self?.receiveStartupEvent(.appCommand(event))
             }
         }
+        self.transport.activate()
     }
 
     nonisolated static func isSupportedOnDevice() -> Bool {
         WatchConnectivityTransport.isSupportedOnDevice()
-    }
-
-    nonisolated static func currentStatusSnapshot() -> WatchMessagingStatus {
-        WatchConnectivityTransport.currentStatusSnapshot()
     }
 
     func status() async -> WatchMessagingStatus {
@@ -95,24 +131,29 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
 
     func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
         self.replyHandler = handler
+        self.finishStartupRegistrationIfReady()
     }
 
     func setExecApprovalResolveHandler(_ handler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?) {
         self.execApprovalResolveHandler = handler
+        self.finishStartupRegistrationIfReady()
     }
 
     func setExecApprovalSnapshotRequestHandler(
         _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
     {
         self.execApprovalSnapshotRequestHandler = handler
+        self.finishStartupRegistrationIfReady()
     }
 
     func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?) {
         self.appSnapshotRequestHandler = handler
+        self.finishStartupRegistrationIfReady()
     }
 
     func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?) {
         self.appCommandHandler = handler
+        self.finishStartupRegistrationIfReady()
     }
 
     func sendNotification(
@@ -217,5 +258,40 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
                 + "id=\(event.commandId) command=\(event.command.rawValue) "
                 + "transport=\(event.transport)")
         self.appCommandHandler?(event)
+    }
+
+    private func receiveStartupEvent(_ event: StartupEvent) {
+        for event in self.startupEvents.receive(event) {
+            self.dispatchStartupEvent(event)
+        }
+    }
+
+    private func finishStartupRegistrationIfReady() {
+        guard self.replyHandler != nil,
+              self.execApprovalResolveHandler != nil,
+              self.execApprovalSnapshotRequestHandler != nil,
+              self.appSnapshotRequestHandler != nil,
+              self.appCommandHandler != nil
+        else {
+            return
+        }
+        for event in self.startupEvents.markReady() {
+            self.dispatchStartupEvent(event)
+        }
+    }
+
+    private func dispatchStartupEvent(_ event: StartupEvent) {
+        switch event {
+        case let .reply(event):
+            self.emitReply(event)
+        case let .execApprovalResolve(event):
+            self.emitExecApprovalResolve(event)
+        case let .execApprovalSnapshotRequest(event):
+            self.emitExecApprovalSnapshotRequest(event)
+        case let .appSnapshotRequest(event):
+            self.emitAppSnapshotRequest(event)
+        case let .appCommand(event):
+            self.emitAppCommand(event)
+        }
     }
 }

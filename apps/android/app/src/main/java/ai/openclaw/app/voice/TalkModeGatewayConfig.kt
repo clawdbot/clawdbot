@@ -6,9 +6,11 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import java.util.Locale
 
 internal data class TalkModeGatewayConfigState(
   val mainSessionKey: String,
+  val speechLocale: String?,
   val interruptOnSpeech: Boolean?,
   val silenceTimeoutMs: Long,
 )
@@ -20,6 +22,7 @@ internal object TalkModeGatewayConfigParser {
     val sessionCfg = config?.get("session").asObjectOrNull()
     return TalkModeGatewayConfigState(
       mainSessionKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull()),
+      speechLocale = normalizeSpeechLocaleTag(talk?.get("speechLocale").asStringOrNull()),
       interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
     )
@@ -50,3 +53,39 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? {
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+internal fun normalizeSpeechLocaleTag(value: String?): String? {
+  val candidate =
+    value
+      ?.trim()
+      ?.replace('_', '-')
+      ?.takeIf(String::isNotEmpty)
+      ?: return null
+  val locale = Locale.forLanguageTag(candidate)
+  return locale
+    .toLanguageTag()
+    .takeIf { tag -> locale.language.isNotBlank() && tag != "und" }
+}
+
+internal fun realtimeTranscriptionLanguage(localeTag: String?): String? =
+  localeTag
+    ?.let(Locale::forLanguageTag)
+    ?.language
+    ?.lowercase(Locale.ROOT)
+    ?.takeIf { language ->
+      language.length == ISO_639_1_LANGUAGE_LENGTH &&
+        language.all { character -> character in 'a'..'z' }
+    }
+
+internal fun resolveRealtimeTranscriptionLanguageHint(
+  configuredLocaleTag: String?,
+  requestedLanguage: String?,
+  deviceLocaleTag: String?,
+): String? =
+  realtimeTranscriptionLanguage(
+    configuredLocaleTag
+      ?: requestedLanguage
+      ?: deviceLocaleTag,
+  )
+
+private const val ISO_639_1_LANGUAGE_LENGTH = 2

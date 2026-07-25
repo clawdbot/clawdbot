@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 vi.mock("../model-fallback.js", () => ({
+  resolveModelCandidateChain: (params: { provider: string; model: string }) => [
+    { provider: params.provider, model: params.model },
+  ],
   runWithModelFallback: vi.fn(async (params: Record<string, unknown>) => ({
     result: { ok: true, compacted: false, reason: "no-op" },
     provider: params.provider,
@@ -12,6 +15,26 @@ vi.mock("../model-fallback.js", () => ({
 }));
 
 vi.mock("./compact.queued.js", () => ({ compactEmbeddedAgentSession: vi.fn() }));
+
+vi.mock("../prepared-model-runtime.js", () => ({
+  acquireAgentRunPreparedModelRuntime: vi.fn(
+    async (input: {
+      config: OpenClawConfig;
+      agentId?: string;
+      agentDir: string;
+      workspaceDir?: string;
+    }) => ({
+      snapshot: {
+        config: input.config,
+        agentId: input.agentId,
+        agentDir: input.agentDir,
+        workspaceDir: input.workspaceDir,
+        createStores: () => ({}),
+      },
+      release: vi.fn(),
+    }),
+  ),
+}));
 
 import { runWithModelFallback } from "../model-fallback.js";
 import { compactEmbeddedAgentSessionDirect } from "./compact.js";

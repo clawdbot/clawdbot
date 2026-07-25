@@ -422,14 +422,37 @@ describe("browser client", () => {
     await browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" });
     await browserAct("http://127.0.0.1:18791", {
       kind: "wait",
-      timeMs: 70_000,
+      timeMs: 10_000,
+      text: "ready",
+      timeoutMs: 20_000,
     });
     await browserAct("http://127.0.0.1:18791", {
       kind: "wait",
+      text: "ready",
       timeoutMs: 45_000,
     });
+    await browserAct("http://127.0.0.1:18791", {
+      kind: "batch",
+      actions: [
+        { kind: "wait", timeMs: 30_000 },
+        {
+          kind: "batch",
+          actions: [
+            { kind: "wait", timeMs: 30_000 },
+            { kind: "wait", timeMs: 30_000 },
+          ],
+        },
+      ],
+    });
+    await browserAct(
+      "http://127.0.0.1:18791",
+      { kind: "wait", timeMs: 30_000 },
+      { timeoutMs: 12_345 },
+    );
 
-    expect(calls.map((call) => call.init?.timeoutMs)).toEqual([60_000, 75_000, 50_000]);
+    expect(calls.map((call) => call.init?.timeoutMs)).toEqual([
+      65_000, 35_000, 50_000, 95_000, 12_345,
+    ]);
   });
 
   it("clamps oversized browser action timeouts before forwarding", async () => {
@@ -444,14 +467,21 @@ describe("browser client", () => {
 
     await browserAct("http://127.0.0.1:18791", {
       kind: "wait",
+      text: "ready",
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
+    await browserAct(
+      "http://127.0.0.1:18791",
+      { kind: "wait", text: "ready" },
+      { timeoutMs: Number.MAX_SAFE_INTEGER },
+    );
     await browserScreenshotAction("http://127.0.0.1:18791", {
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
-    const act = calls.find((call) => call.url.endsWith("/act"));
-    expect(act?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    const actCalls = calls.filter((call) => call.url.endsWith("/act"));
+    expect(actCalls[0]?.init?.timeoutMs).toBe(125_000);
+    expect(actCalls[1]?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     const screenshot = calls.find((call) => call.url.endsWith("/screenshot"));
     expect(screenshot?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     const screenshotBody = JSON.parse(

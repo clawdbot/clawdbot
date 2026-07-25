@@ -102,7 +102,8 @@ function coerceSecretRef(value: unknown): SecretRef | null {
         : null;
     }
     const match = ENV_SECRET_TEMPLATE_RE.exec(trimmed) ?? ENV_SECRET_SHORTHAND_RE.exec(trimmed);
-    return match ? { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: match[1] } : null;
+    const id = match?.[1];
+    return id ? { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id } : null;
   }
   if (
     isRecord(value) &&

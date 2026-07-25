@@ -2,12 +2,14 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { streamSimple } from "../../stream.js";
 
 type MoonshotThinkingType = "enabled" | "disabled";
 type MoonshotThinkingKeep = "all";
 const MOONSHOT_THINKING_KEEP_MODEL_ID = "kimi-k2.6";
-const MOONSHOT_ALWAYS_THINKING_MODEL_ID = "kimi-k2.7-code";
+const MOONSHOT_PROVIDER_ID = "moonshot";
+const MOONSHOT_K2_7_CODE_MODEL_IDS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"] as const;
+const MOONSHOT_K3_MODEL_ID = "kimi-k3";
 const MOONSHOT_FIXED_SAMPLING_FIELDS = [
   "temperature",
   "top_p",
@@ -15,11 +17,11 @@ const MOONSHOT_FIXED_SAMPLING_FIELDS = [
   "presence_penalty",
   "frequency_penalty",
 ] as const;
-const llmRuntimeLoader = createLazyImportLoader(() => import("openclaw/plugin-sdk/llm"));
+type MoonshotK27CodeModel = (typeof MOONSHOT_K2_7_CODE_MODEL_IDS)[number];
+type MoonshotAlwaysThinkingModel = MoonshotK27CodeModel | "kimi-k3";
 
 async function loadDefaultStreamFn(): Promise<StreamFn> {
-  const runtime = await llmRuntimeLoader.load();
-  return runtime.streamSimple;
+  return streamSimple;
 }
 
 function normalizeMoonshotThinkingType(value: unknown): MoonshotThinkingType | undefined {
@@ -110,14 +112,45 @@ function sanitizeKimiK27Payload(payloadObj: Record<string, unknown>): void {
   }
 }
 
-function sanitizeKimiK27AfterCaller(
+function sanitizeKimiK3Payload(payloadObj: Record<string, unknown>): void {
+  delete payloadObj.thinking;
+  delete payloadObj.reasoningEffort;
+  payloadObj.reasoning_effort = "max";
+  for (const field of MOONSHOT_FIXED_SAMPLING_FIELDS) {
+    delete payloadObj[field];
+  }
+}
+
+function sanitizeAlwaysThinkingPayload(
+  payloadObj: Record<string, unknown>,
+  modelId: MoonshotAlwaysThinkingModel,
+): void {
+  if (modelId === MOONSHOT_K3_MODEL_ID) {
+    sanitizeKimiK3Payload(payloadObj);
+  } else {
+    sanitizeKimiK27Payload(payloadObj);
+  }
+}
+
+function sanitizeAlwaysThinkingAfterCaller(
   value: unknown,
   fallbackPayload: Record<string, unknown>,
+  modelId: MoonshotAlwaysThinkingModel,
 ): unknown {
   const finalPayload = asPayloadRecord(value) ?? fallbackPayload;
-  sanitizeKimiK27Payload(finalPayload);
+  sanitizeAlwaysThinkingPayload(finalPayload, modelId);
   ensureMoonshotToolCallReasoningContent(finalPayload);
   return value;
+}
+
+function resolveAlwaysThinkingModelId(
+  modelId: string,
+  directMoonshotModel: boolean,
+): MoonshotAlwaysThinkingModel | undefined {
+  if (MOONSHOT_K2_7_CODE_MODEL_IDS.includes(modelId as MoonshotK27CodeModel)) {
+    return modelId as MoonshotK27CodeModel;
+  }
+  return directMoonshotModel && modelId === MOONSHOT_K3_MODEL_ID ? MOONSHOT_K3_MODEL_ID : undefined;
 }
 
 function finalizeMoonshotPayloadAfterCaller(
@@ -163,9 +196,17 @@ export function createMoonshotThinkingWrapper(
     (underlying: StreamFn): StreamFn =>
     (model, context, options) => {
       const modelId = model.id.trim().toLowerCase();
-      const isKimiK27 = modelId === MOONSHOT_ALWAYS_THINKING_MODEL_ID;
-      const streamModel = isKimiK27 ? { ...model, reasoning: true } : model;
-      const streamOptions = isKimiK27 ? { ...options, reasoning: "low" as const } : options;
+      const directMoonshotModel =
+        normalizeOptionalLowercaseString(model.provider) === MOONSHOT_PROVIDER_ID;
+      const alwaysThinkingModel = resolveAlwaysThinkingModelId(modelId, directMoonshotModel);
+      const streamModel = alwaysThinkingModel ? { ...model, reasoning: true } : model;
+      const streamOptions = alwaysThinkingModel
+        ? {
+            ...options,
+            reasoning:
+              alwaysThinkingModel === MOONSHOT_K3_MODEL_ID ? ("max" as const) : ("low" as const),
+          }
+        : options;
       const originalOnPayload = streamOptions?.onPayload;
       return underlying(streamModel, context, {
         ...streamOptions,
@@ -183,17 +224,25 @@ export function createMoonshotThinkingWrapper(
             effectiveThinkingType = thinkingType;
           }
 
-          if (payloadModelId === MOONSHOT_ALWAYS_THINKING_MODEL_ID) {
-            // K2.7 Code always reasons, preserves reasoning, and fixes sampling.
-            // Reapply constraints after caller hooks so extra_body cannot restore them.
-            sanitizeKimiK27Payload(payloadObj);
+          const payloadAlwaysThinkingModel = resolveAlwaysThinkingModelId(
+            payloadModelId,
+            directMoonshotModel,
+          );
+          if (payloadAlwaysThinkingModel) {
+            // These models fix their reasoning and sampling contract. Reapply it
+            // after caller hooks so extra_body cannot restore rejected fields.
+            sanitizeAlwaysThinkingPayload(payloadObj, payloadAlwaysThinkingModel);
             const result = originalOnPayload?.(payload, payloadModel);
             if (result && typeof (result as Promise<unknown>).then === "function") {
               return Promise.resolve(result).then((resolved) =>
-                sanitizeKimiK27AfterCaller(resolved, payloadObj),
+                sanitizeAlwaysThinkingAfterCaller(resolved, payloadObj, payloadAlwaysThinkingModel),
               );
             }
-            return sanitizeKimiK27AfterCaller(result, payloadObj);
+            return sanitizeAlwaysThinkingAfterCaller(
+              result,
+              payloadObj,
+              payloadAlwaysThinkingModel,
+            );
           }
 
           if (

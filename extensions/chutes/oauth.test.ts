@@ -1,6 +1,10 @@
 // Chutes tests cover oauth plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loginChutes } from "./oauth.js";
+
+const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
+const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
+const REDIRECT_URI = "http://127.0.0.1:1456/oauth-callback";
 
 function boundedErrorResponse(
   body: string,
@@ -41,6 +45,58 @@ function boundedErrorResponse(
   return { response, cancel, releaseLock, text };
 }
 
+function fetchInputUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  return input.url;
+}
+
+function rejectWhenAborted(init?: RequestInit): Promise<Response> {
+  const signal = init?.signal;
+  if (!signal) {
+    return Promise.reject(new Error("missing OAuth request signal"));
+  }
+  return new Promise((_, reject) => {
+    const rejectWithReason = () =>
+      reject(signal.reason instanceof Error ? signal.reason : new Error("OAuth request aborted"));
+    if (signal.aborted) {
+      rejectWithReason();
+      return;
+    }
+    signal.addEventListener("abort", rejectWithReason, { once: true });
+  });
+}
+
+function useImmediateOAuthDeadline() {
+  return vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+    expect(delay).toBe(30_000);
+    return AbortSignal.abort(new DOMException("OAuth request timed out", "TimeoutError"));
+  });
+}
+
+function loginWithFetch(fetchFn: typeof fetch) {
+  return loginChutes({
+    app: {
+      clientId: "cid_test",
+      redirectUri: REDIRECT_URI,
+      scopes: ["openid"],
+    },
+    manual: true,
+    createState: () => "state_test",
+    onAuth: vi.fn(async () => {}),
+    onPrompt: vi.fn(async () => `${REDIRECT_URI}?code=code_test&state=state_test`),
+    fetchFn,
+  });
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("chutes plugin OAuth", () => {
   it("rejects unsafe token lifetimes before storing credentials", async () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
@@ -74,8 +130,9 @@ describe("chutes plugin OAuth", () => {
   });
 
   it("bounds token exchange error bodies without requiring response.text()", async () => {
+    const leakedClientSecret = "oauth-client-secret-1234567890";
     const errorResponse = boundedErrorResponse(
-      `${"chutes token unavailable ".repeat(1024)}tail-marker`,
+      `${`client_secret=${leakedClientSecret}&reason=unavailable `.repeat(1024)}tail-marker`,
       502,
     );
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
@@ -109,8 +166,11 @@ describe("chutes plugin OAuth", () => {
 
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
-    expect(message).toContain("Chutes token exchange failed: chutes token unavailable");
+    expect(error).toMatchObject({ name: "ProviderHttpError", status: 502 });
+    expect(message).toContain("Chutes token exchange failed (502): client_secret=");
+    expect(message).not.toContain(leakedClientSecret);
     expect(message).not.toContain("tail-marker");
+    expect((error as { errorBody?: string }).errorBody).not.toContain(leakedClientSecret);
     expect(errorResponse.text).not.toHaveBeenCalled();
     expect(errorResponse.cancel).toHaveBeenCalledTimes(1);
     expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
@@ -174,5 +234,111 @@ describe("chutes plugin OAuth", () => {
 
     expect(canceled).toBe(true);
     expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+  });
+
+  it("uses the fixed deadline for token exchange requests", async () => {
+    const timeoutSpy = useImmediateOAuthDeadline();
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      return await rejectWhenAborted(init);
+    });
+
+    await expect(loginWithFetch(fetchFn)).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(timeoutSpy).toHaveBeenCalledOnce();
+  });
+
+  it("keeps issued tokens when userinfo exceeds the fixed deadline", async () => {
+    const timeoutSpy = useImmediateOAuthDeadline();
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return new Response(
+          '{"access_token":"at_timeout","refresh_token":"rt_timeout","expires_in":3600}',
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === CHUTES_USERINFO_ENDPOINT) {
+        return await rejectWhenAborted(init);
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const credentials = await loginWithFetch(fetchFn);
+
+    expect(credentials).toMatchObject({ access: "at_timeout", refresh: "rt_timeout" });
+    expect(credentials.email).toBeUndefined();
+    expect(credentials.accountId).toBeUndefined();
+    expect(timeoutSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels the userinfo error response body when profile lookup fails", async () => {
+    let canceled = false;
+    let bytesPulled = 0;
+    const userInfoResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (bytesPulled > 0) {
+            controller.close();
+            return;
+          }
+          bytesPulled += 1;
+          controller.enqueue(new TextEncoder().encode("temporarily unavailable"));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 503 },
+    );
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = fetchInputUrl(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return new Response(
+          '{"access_token":"at_123","refresh_token":"rt_123","expires_in":3600}',
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === CHUTES_USERINFO_ENDPOINT) {
+        return userInfoResponse;
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const credentials = await loginWithFetch(fetchFn);
+
+    expect(canceled).toBe(true);
+    expect(credentials.access).toBe("at_123");
+    expect(credentials.email).toBeUndefined();
+    expect(credentials.accountId).toBeUndefined();
+  });
+
+  it("cancels authentication when the caller aborts during userinfo", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled by caller");
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return new Response(
+          '{"access_token":"at_cancel","refresh_token":"rt_cancel","expires_in":3600}',
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === CHUTES_USERINFO_ENDPOINT) {
+        controller.abort(reason);
+        return await rejectWhenAborted(init);
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      loginChutes({
+        app: { clientId: "cid_test", redirectUri: REDIRECT_URI, scopes: ["openid"] },
+        manual: true,
+        createState: () => "state_test",
+        onAuth: vi.fn(async () => {}),
+        onPrompt: vi.fn(async () => `${REDIRECT_URI}?code=code_test&state=state_test`),
+        fetchFn,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
   });
 });

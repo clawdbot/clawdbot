@@ -5,10 +5,10 @@ scenario:
   surface: control-ui
   coverage:
     primary:
-      - ui.control
-  objective: Link the Control UI chat-flow Playwright suite to the QA coverage inventory.
+      - control-ui.gateway-hosted-ui-control
+  objective: Smoke-test a Control UI chat turn through the hosted browser surface.
   successCriteria:
-    - Playwright covers the hosted Control UI chat surface.
+    - Playwright sends a chat turn and renders the final Gateway event.
   docsRefs:
     - docs/web/control-ui.md
   codeRefs:
@@ -16,4 +16,5 @@ scenario:
   execution:
     kind: playwright
     path: ui/src/e2e/chat-flow.e2e.test.ts
-    summary: Playwright coverage for the Control UI chat flow.
+    testNamePattern: sends a chat turn through the GUI and renders the final Gateway event
+    summary: Focused Playwright smoke coverage for the Control UI chat flow.

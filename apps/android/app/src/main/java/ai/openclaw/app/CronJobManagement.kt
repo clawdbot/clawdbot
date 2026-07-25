@@ -1,6 +1,9 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.Json
@@ -65,10 +68,17 @@ sealed interface GatewayCronActionState {
 
   data class Notice(
     val id: String,
-    val message: String,
+    val message: NativeText,
     val kind: GatewayCronNoticeKind,
     val deleted: Boolean = false,
-  ) : GatewayCronActionState
+  ) : GatewayCronActionState {
+    constructor(
+      id: String,
+      message: String,
+      kind: GatewayCronNoticeKind,
+      deleted: Boolean = false,
+    ) : this(id = id, message = nativeText(message), kind = kind, deleted = deleted)
+  }
 }
 
 /** Owns one queued manual run id per job so a stale tracker cannot clear a newer run. */
@@ -119,6 +129,33 @@ internal class PendingCronRunRegistry {
   }
 }
 
+internal fun nextCronJobsPageOffset(
+  page: JsonObject?,
+  requestedOffset: Int,
+  pageCount: Int,
+): Int? {
+  val responseOffset =
+    page
+      ?.long("offset")
+      ?.takeIf { it in 0L..Int.MAX_VALUE.toLong() }
+      ?.toInt()
+      ?: requestedOffset
+  val total = page?.long("total")?.takeIf { it >= 0 }
+  val hasMore =
+    (page?.get("hasMore") as? JsonPrimitive)?.booleanOrNull
+      ?: (total != null && responseOffset.toLong() + pageCount < total)
+  if (!hasMore) return null
+
+  val nextOffset =
+    page
+      ?.long("nextOffset")
+      ?.takeIf { it in 0L..Int.MAX_VALUE.toLong() }
+      ?.toInt()
+      ?: Math.addExact(responseOffset, pageCount)
+  require(nextOffset > requestedOffset) { "Gateway returned a non-advancing cron jobs page." }
+  return nextOffset
+}
+
 sealed interface GatewayCronScheduleEdit {
   data class At(
     val at: String,
@@ -155,6 +192,10 @@ sealed interface GatewayCronPayloadEdit {
   data class Command(
     val argvJson: String,
     val cwd: String,
+  ) : GatewayCronPayloadEdit
+
+  data class ReadOnlyScript(
+    val script: String,
   ) : GatewayCronPayloadEdit
 }
 
@@ -253,14 +294,26 @@ internal fun CronEditorDraftState.reconcileRestoredAction(
   return if (isConnected && retainedSaveState) this else saveAborted()
 }
 
-internal enum class GatewayCronRunSkipReason(
-  val message: String,
-) {
-  NotDue("Cron job is not due yet."),
-  AlreadyRunning("Cron job is already running."),
-  RestartRecoveryPending("Gateway restart recovery is still in progress."),
-  InvalidSpec("Cron job has an invalid configuration."),
-  Stopped("Cron scheduler is stopped."),
+internal enum class GatewayCronRunSkipReason {
+  NotDue,
+  AlreadyRunning,
+  RestartRecoveryPending,
+  InvalidSpec,
+  Stopped,
+  ;
+
+  val message: String
+    get() = messageText.resolveNativeText()
+
+  val messageText: NativeText
+    get() =
+      when (this) {
+        NotDue -> nativeText("Automation is not due yet.")
+        AlreadyRunning -> nativeText("Automation is already running.")
+        RestartRecoveryPending -> nativeText("Gateway restart recovery is still in progress.")
+        InvalidSpec -> nativeText("Automation has an invalid configuration.")
+        Stopped -> nativeText("Cron scheduler is stopped.")
+      }
 }
 
 internal sealed interface GatewayCronRunOutcome {
@@ -288,10 +341,10 @@ internal fun cronRunCompletionNotice(
 ): GatewayCronActionState.Notice {
   val (message, kind) =
     when (status) {
-      "ok" -> "Cron run finished." to GatewayCronNoticeKind.Success
-      "skipped" -> "Cron run skipped." to GatewayCronNoticeKind.Warning
-      "error" -> "Cron run failed." to GatewayCronNoticeKind.Error
-      else -> "Cron run finished with an unknown status." to GatewayCronNoticeKind.Warning
+      "ok" -> nativeText("Automation run finished.") to GatewayCronNoticeKind.Success
+      "skipped" -> nativeText("Automation run skipped.") to GatewayCronNoticeKind.Warning
+      "error" -> nativeText("Automation run failed.") to GatewayCronNoticeKind.Error
+      else -> nativeText("Automation run finished with an unknown status.") to GatewayCronNoticeKind.Warning
     }
   return GatewayCronActionState.Notice(id = jobId, message = message, kind = kind)
 }
@@ -342,6 +395,7 @@ internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
             argvJson = JsonArray(payloadCommandArgv.orEmpty().map(::JsonPrimitive)).toString(),
             cwd = payloadCommandCwd.orEmpty(),
           )
+        "script" -> GatewayCronPayloadEdit.ReadOnlyScript(script = payloadText.orEmpty())
         else -> error("Unsupported cron payload kind: $payloadKind")
       },
   )
@@ -351,7 +405,7 @@ internal fun buildCronUpdateParams(
   edit: GatewayCronJobEdit,
 ): String {
   val name = edit.name.trim()
-  require(name.isNotEmpty()) { "Cron job name is required." }
+  require(name.isNotEmpty()) { "Automation name is required." }
   val description = edit.description.trim()
   val sessionTarget = edit.sessionTarget.trim()
   require(
@@ -444,7 +498,7 @@ private fun buildCronSchedulePatch(
     is GatewayCronScheduleEdit.At -> {
       require(original.scheduleKind == "at") { "Changing schedule type is not supported here." }
       val at = edit.at.trim()
-      require(at.isNotEmpty()) { "One-time cron jobs need an ISO time." }
+      require(at.isNotEmpty()) { "One-time automations need an ISO time." }
       if (at == original.scheduleAt) {
         null
       } else {
@@ -495,7 +549,7 @@ private fun buildCronSchedulePatch(
     is GatewayCronScheduleEdit.OnExit -> {
       require(original.scheduleKind == "on-exit") { "Changing schedule type is not supported here." }
       val command = edit.command.trim()
-      require(command.isNotEmpty()) { "On-exit cron jobs need a command." }
+      require(command.isNotEmpty()) { "On-exit automations need a command." }
       val cwd = edit.cwd.trim().ifEmpty { null }
       if (command == original.scheduleCommand && cwd == original.scheduleCwd) {
         null
@@ -568,6 +622,12 @@ private fun buildCronPayloadPatch(
           if (cwd != original.payloadCommandCwd) put("cwd", JsonPrimitive(requireNotNull(cwd)))
         }
       }
+    }
+    is GatewayCronPayloadEdit.ReadOnlyScript -> {
+      require(original.payloadKind == "script" && edit.script == original.payloadText) {
+        "Script payloads are read-only on Android."
+      }
+      null
     }
   }
 

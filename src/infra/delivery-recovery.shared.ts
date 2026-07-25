@@ -1,9 +1,15 @@
+import { computeBackoffSchedule } from "../../packages/retry/src/index.js";
 import { sleep } from "../utils/sleep.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
+import {
+  isPlatformMessageNotDispatchedError,
+  isPlatformMessageRejectedError,
+  type PlatformMessageNotDispatchedError,
+} from "./outbound/deliver-types.js";
 import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
 
 const RECOVERY_BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
-export const RECOVERY_REPLAY_SPACING_MS = 250;
+const RECOVERY_REPLAY_SPACING_MS = 250;
 
 const PRE_CONNECT_ERROR_CODES = new Set([
   "ECONNREFUSED",
@@ -15,6 +21,11 @@ const PRE_CONNECT_ERROR_CODES = new Set([
 ]);
 const TRANSPORT_ERROR_CODE_RE =
   /^(?:E(?:AI_|CONN|NET|HOST|ADDR|PIPE|TIMEDOUT|SOCKET)|UND_ERR_|ERR_(?:NETWORK|HTTP2|QUIC|TLS|SSL))/;
+const UNPROVEN_ERROR_BRANCH = "unproven delivery error branch";
+
+function preserveProofBranches(branches: readonly unknown[] | undefined): unknown[] {
+  return branches?.map((branch) => branch ?? UNPROVEN_ERROR_BRANCH) ?? [];
+}
 
 function isProvenPreConnectCandidate(candidate: unknown): boolean {
   const code = extractErrorCode(candidate)?.trim().toUpperCase();
@@ -30,25 +41,28 @@ function isProvenPreConnectCandidate(candidate: unknown): boolean {
 
 function nestedErrorCandidates(current: Record<string, unknown>): unknown[] {
   const retryAttempts = getRetryAttemptErrors(current);
-  if (isProvenPreConnectCandidate(current)) {
-    return retryAttempts ? [...retryAttempts] : [];
+  const retryBranches = preserveProofBranches(retryAttempts);
+  // The explicit marker covers its cause: the provider owns the final dispatch
+  // boundary and proved that no recipient-visible send could have completed.
+  if (isPlatformMessageNotDispatchedError(current) || isProvenPreConnectCandidate(current)) {
+    return retryBranches;
   }
   const nested = [current.cause, current.original, current.error, current.reason];
-  if (Array.isArray(current.errors)) {
-    nested.push(...current.errors);
-  }
   const nestedObjects = nested.filter(
     (candidate) => candidate !== null && typeof candidate === "object",
   );
-  return retryAttempts ? [...retryAttempts, ...nestedObjects] : nestedObjects;
+  const aggregateBranches = Array.isArray(current.errors)
+    ? preserveProofBranches(current.errors)
+    : [];
+  return [...retryBranches, ...aggregateBranches, ...nestedObjects];
 }
 
-export function isPreConnectNetworkError(err: unknown): boolean {
-  let foundPreConnectProof = false;
+export function isProvenDeliveryNotSentError(err: unknown): boolean {
+  let foundNotSentProof = false;
   for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
     const code = extractErrorCode(candidate)?.trim().toUpperCase();
-    if (isProvenPreConnectCandidate(candidate)) {
-      foundPreConnectProof = true;
+    if (isPlatformMessageNotDispatchedError(candidate) || isProvenPreConnectCandidate(candidate)) {
+      foundNotSentProof = true;
       continue;
     }
     const nested =
@@ -73,18 +87,23 @@ export function isPreConnectNetworkError(err: unknown): boolean {
       return false;
     }
   }
-  return foundPreConnectProof;
+  return foundNotSentProof;
+}
+
+/** Finds a provider's permanent pre-dispatch rejection through delivery wrappers. */
+export function findPlatformMessageRejectedError(
+  err: unknown,
+): (PlatformMessageNotDispatchedError & { readonly retryable: false }) | undefined {
+  for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
+    if (isPlatformMessageRejectedError(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 export function computeBackoffMs(retryCount: number): number {
-  if (retryCount <= 0) {
-    return 0;
-  }
-  return (
-    RECOVERY_BACKOFF_MS[Math.min(retryCount - 1, RECOVERY_BACKOFF_MS.length - 1)] ??
-    RECOVERY_BACKOFF_MS.at(-1) ??
-    0
-  );
+  return computeBackoffSchedule(RECOVERY_BACKOFF_MS, retryCount);
 }
 
 export function getErrnoCode(err: unknown): string | null {

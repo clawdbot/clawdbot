@@ -16,7 +16,7 @@ import {
   shouldRetryTelegramTransportFallback,
   sleepWithAbort,
 } from "./delivery.resolve-media.runtime.js";
-import { resolveTelegramMediaPlaceholder } from "./helpers.js";
+import { resolveTelegramPrimaryMedia, type TelegramMediaKind } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
@@ -184,6 +184,8 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
 
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
+/** Maximum wait for Telegram media response headers (120 seconds). */
+const TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 function usesTrustedTelegramExplicitProxy(transport: TelegramTransport): boolean {
   return (
@@ -274,6 +276,7 @@ async function downloadAndSaveTelegramFile(params: {
   apiRoot?: string;
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
+  abortSignal?: AbortSignal;
 }) {
   const trustedLocalFile = resolveTrustedLocalTelegramRoot(
     params.filePath,
@@ -345,17 +348,12 @@ async function downloadAndSaveTelegramFile(params: {
     dispatcherAttempts: transport.dispatcherAttempts,
     trustExplicitProxyDns: usesTrustedTelegramExplicitProxy(transport),
     shouldRetryFetchError: shouldRetryTelegramTransportFallback,
-    retry: {
-      attempts: 3,
-      minDelayMs: 1000,
-      maxDelayMs: 4000,
-      jitter: 0.2,
-      label: "telegram:media-download",
-      onRetry: ({ attempt, maxAttempts }) =>
-        logVerbose(`telegram: media download retry ${attempt}/${maxAttempts}`),
-    },
+    // The update spool and best-effort album/reply callers own failure handling.
+    // Nested retries would multiply this header deadline before those owners act.
+    ...(params.abortSignal ? { requestInit: { signal: params.abortSignal } } : {}),
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
+    responseHeaderTimeoutMs: TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot, params.dangerouslyAllowPrivateNetwork),
     fallbackContentType: params.mimeType,
@@ -377,7 +375,7 @@ async function resolveStickerMedia(params: {
   | {
       path: string;
       contentType?: string;
-      placeholder: string;
+      kind: TelegramMediaKind;
       stickerMetadata?: StickerMetadata;
     }
   | null
@@ -409,6 +407,7 @@ async function resolveStickerMedia(params: {
     apiRoot: params.apiRoot,
     trustedLocalFileRoots: params.trustedLocalFileRoots,
     dangerouslyAllowPrivateNetwork: params.dangerouslyAllowPrivateNetwork,
+    abortSignal,
   });
 
   // Check sticker cache for existing description
@@ -430,7 +429,7 @@ async function resolveStickerMedia(params: {
     return {
       path: saved.path,
       contentType: saved.contentType,
-      placeholder: "<media:sticker>",
+      kind: "sticker",
       stickerMetadata: {
         emoji,
         setName,
@@ -445,7 +444,7 @@ async function resolveStickerMedia(params: {
   return {
     path: saved.path,
     contentType: saved.contentType,
-    placeholder: "<media:sticker>",
+    kind: "sticker",
     stickerMetadata: {
       emoji: sticker.emoji ?? undefined,
       setName: sticker.set_name ?? undefined,
@@ -467,7 +466,7 @@ export async function resolveMedia(params: {
 }): Promise<{
   path: string;
   contentType?: string;
-  placeholder: string;
+  kind: TelegramMediaKind;
   stickerMetadata?: StickerMetadata;
 } | null> {
   const {
@@ -516,9 +515,14 @@ export async function resolveMedia(params: {
     apiRoot,
     trustedLocalFileRoots,
     dangerouslyAllowPrivateNetwork,
+    abortSignal,
   });
-  const placeholder = saved.contentType?.startsWith("audio/")
-    ? "<media:audio>"
-    : (resolveTelegramMediaPlaceholder(msg) ?? "<media:document>");
-  return { path: saved.path, contentType: saved.contentType, placeholder };
+  const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
+  const kind =
+    nativeKind === "sticker"
+      ? nativeKind
+      : saved.contentType?.startsWith("audio/")
+        ? "audio"
+        : nativeKind;
+  return { path: saved.path, contentType: saved.contentType, kind };
 }

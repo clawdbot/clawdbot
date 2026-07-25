@@ -5,10 +5,10 @@ import type { MatrixAccountPatch } from "../config-update.js";
 import type { MatrixManagedDeviceInfo } from "../device-health.js";
 import type { MatrixProfileSyncResult } from "../profile.js";
 import type { MatrixOwnDeviceVerificationStatus } from "../sdk.js";
-import type { MatrixLegacyCryptoRestoreResult } from "./legacy-crypto-restore.js";
 import type { MatrixStartupVerificationOutcome } from "./startup-verification.js";
-import type { MatrixStartupMaintenanceDeps } from "./startup.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
+
+type MatrixStartupMaintenanceDeps = NonNullable<Parameters<typeof runMatrixStartupMaintenance>[1]>;
 
 function createVerificationStatus(
   overrides: Partial<MatrixOwnDeviceVerificationStatus> = {},
@@ -78,20 +78,10 @@ async function expectMatrixStartupAbort(promise: Promise<unknown>): Promise<void
   expect(error.message).toBe("Matrix startup aborted");
 }
 
-function createLegacyCryptoRestoreResult(
-  overrides: Partial<MatrixLegacyCryptoRestoreResult> = {},
-): MatrixLegacyCryptoRestoreResult {
-  return {
-    kind: "skipped",
-    ...overrides,
-  } as MatrixLegacyCryptoRestoreResult;
-}
-
 function createDeps(
   overrides: Partial<MatrixStartupMaintenanceDeps> = {},
 ): MatrixStartupMaintenanceDeps {
   return {
-    maybeRestoreLegacyMatrixBackup: vi.fn(async () => createLegacyCryptoRestoreResult()),
     summarizeMatrixDeviceHealth: vi.fn(() => ({
       currentDeviceId: null,
       staleOpenClawDevices: [] as MatrixManagedDeviceInfo[],
@@ -221,15 +211,6 @@ describe("runMatrixStartupMaintenance", () => {
     vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValue(
       createStartupVerificationOutcome("pending"),
     );
-    vi.mocked(deps.maybeRestoreLegacyMatrixBackup).mockResolvedValue(
-      createLegacyCryptoRestoreResult({
-        kind: "restored",
-        imported: 2,
-        total: 3,
-        localOnlyKeys: 1,
-      }),
-    );
-
     await runMatrixStartupMaintenance(params, deps);
 
     expect(params.logger.warn).toHaveBeenCalledWith(
@@ -240,12 +221,6 @@ describe("runMatrixStartupMaintenance", () => {
     );
     expect(params.logger.info).toHaveBeenCalledWith(
       "matrix: startup verification request is already pending; finish it in another Matrix client",
-    );
-    expect(params.logger.info).toHaveBeenCalledWith(
-      "matrix: restored 2/3 room key(s) from legacy encrypted-state backup",
-    );
-    expect(params.logger.warn).toHaveBeenCalledWith(
-      "matrix: 1 legacy local-only room key(s) were never backed up and could not be restored automatically",
     );
   });
 
@@ -286,6 +261,5 @@ describe("runMatrixStartupMaintenance", () => {
 
     await expectMatrixStartupAbort(runMatrixStartupMaintenance(params, deps));
     expect(deps.ensureMatrixStartupVerification).not.toHaveBeenCalled();
-    expect(deps.maybeRestoreLegacyMatrixBackup).not.toHaveBeenCalled();
   });
 });

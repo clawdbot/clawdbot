@@ -26,6 +26,7 @@
 --emptybraces no-space
 --nospaceoperators ...,..<
 --ranges no-space
+--semicolons never
 --someAny true
 --voidtype void
 
@@ -35,8 +36,8 @@
 --wrapcollections before-first
 --closingparen same-line
 
-# Preserve the established compact conditionals and SwiftUI groups across SwiftFormat releases.
---disable wrapIfStatementBodies,wrapIfExpressionBodies,redundantSwiftUIGroup
+# Preserve the established compact style for single-statement if bodies.
+--disable wrapIfStatementBodies
 
 # Organization
 --organizetypes class,struct,enum,extension
@@ -52,4 +53,4 @@
 --allman false
 
 # Exclusions
---exclude .build,.swiftpm,DerivedData,node_modules,dist,coverage,xcuserdata,Peekaboo,apps/swabble,apps/android,apps/ios,apps/shared
+--exclude .build,.swiftpm,DerivedData,node_modules,dist,coverage,xcuserdata,Peekaboo,apps/android,apps/ios,apps/shared

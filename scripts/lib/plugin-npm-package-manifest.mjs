@@ -138,7 +138,10 @@ function listConfiguredBundledDependencyNames(packageJson) {
   return [];
 }
 
-/** Resolve an npm command invocation for plugin package scripts. */
+/**
+ * Resolve an npm command invocation for plugin package scripts.
+ * @internal Directly tested script implementation detail.
+ */
 export function resolvePluginNpmCommand(args, params = {}) {
   return resolveNpmRunner({
     comSpec: params.comSpec,
@@ -295,7 +298,7 @@ function installMissingOptionalBundledDependencies(params) {
       {
         cwd: params.packageDir,
         env: process.env,
-        stdio: ["ignore", "inherit", "inherit"],
+        stdio: ["ignore", "ignore", "inherit"],
       },
     );
     if (result.error) {
@@ -407,7 +410,10 @@ function installPackageLocalBundledDependencies(params) {
   };
 }
 
-/** Build the package.json that should be used while packaging a plugin for npm. */
+/**
+ * Build the package.json that should be used while packaging a plugin for npm.
+ * @internal Directly tested script implementation detail.
+ */
 export function resolveAugmentedPluginNpmPackageJson(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -571,7 +577,10 @@ export function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) 
   };
 }
 
-/** Build the plugin manifest that should be used while packaging a plugin for npm. */
+/**
+ * Build the plugin manifest that should be used while packaging a plugin for npm.
+ * @internal Directly tested script implementation detail.
+ */
 export function resolveAugmentedPluginNpmManifest(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -601,7 +610,10 @@ export function resolveAugmentedPluginNpmManifest(params) {
   };
 }
 
-/** Temporarily write augmented manifest/package metadata while a packaging callback runs. */
+/**
+ * Temporarily write augmented manifest/package metadata while a packaging callback runs.
+ * @internal Directly tested script implementation detail.
+ */
 export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -694,6 +706,7 @@ function readRunPackageDir(argv) {
   return packageDir;
 }
 
+/** @internal Directly tested script implementation detail. */
 export function parseRunArgs(argv) {
   if (argv[0] === "--help" || argv[0] === "-h") {
     return { help: true, packageDir: "", command: "", args: [] };

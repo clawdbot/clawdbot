@@ -5,6 +5,7 @@ read_when:
   - You are building a plugin that needs before_tool_call, before_agent_reply, message hooks, or lifecycle hooks
   - You need to block, rewrite, or require approval for tool calls from a plugin
   - You are deciding between internal hooks and plugin hooks
+  - You are projecting OpenClaw cron wakes into an external host scheduler
 ---
 
 Plugin hooks are in-process extension points for OpenClaw plugins: inspect or
@@ -39,7 +40,6 @@ export default definePluginEntry({
             description: `Allow search query: ${String(event.params.query ?? "")}`,
             severity: "info",
             timeoutMs: 60_000,
-            timeoutBehavior: "deny",
           },
         };
       },
@@ -49,15 +49,18 @@ export default definePluginEntry({
 });
 ```
 
-Handlers run sequentially in descending `priority`; same-priority handlers
-keep registration order.
+Handlers that can return decisions or modifications run sequentially in
+descending `priority`; same-priority handlers keep registration order.
+Observation-only handlers run in parallel, and fire-and-forget observation
+dispatches can overlap with later events. Do not use priority to order
+observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option      | Effect                                                                                                                                                                                          |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `priority`  | Ordering; higher runs first.                                                                                                                                                                    |
-| `timeoutMs` | Per-hook budget. When set, the runner aborts that handler after the budget and moves on instead of blocking on the configured model timeout. Omit to use the runner's default per-hook timeout. |
+| Option      | Effect                                                                                                                                                                                            |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `priority`  | Ordering; higher runs first.                                                                                                                                                                      |
+| `timeoutMs` | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout. |
 
 Operators can set hook budgets without patching plugin code:
 
@@ -84,6 +87,23 @@ plugin-authored `api.on(..., { timeoutMs })` value. Each value must be a
 positive integer up to 600000 ms. Prefer per-hook overrides for known-slow
 hooks so one plugin does not get a longer budget everywhere.
 
+A timed-out handler promise continues running because hook callbacks do not
+receive a cancellation signal. The hook dispatch can release its Gateway
+admission while that plugin work is still in progress. Plugins that own
+long-running work must provide their own cancellation and shutdown lifecycle.
+
+Outbound modifying hooks `message_sending` and `reply_payload_sending` use a
+15-second default per handler. If one times out, OpenClaw logs the plugin error
+and continues with the latest payload so the serialized delivery lane can
+settle. Set a larger per-hook budget for plugins that intentionally do slower
+work before delivery.
+
+Channel plugins that use `createReplyDispatcher` can likewise declare a larger
+positive per-stage budget with `beforeDeliverOptions: { timeoutMs }`, or when
+appending work with `dispatcher.appendBeforeDeliver(handler, { timeoutMs })`.
+Without an owner-declared budget, those callbacks use the same 15-second
+default so a hung callback cannot retain the serialized delivery lane.
+
 Each hook receives `event.context.pluginConfig`, the resolved config for the
 plugin that registered that handler. OpenClaw injects it per handler without
 mutating the shared event object other plugins see.
@@ -101,7 +121,6 @@ observation-only.
 | `before_model_resolve`          | Override provider or model before session messages load                                  |
 | `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks      |
 | `before_prompt_build`           | Add dynamic context or system-prompt text before the model call                          |
-| `before_agent_start`            | Compatibility-only combined phase; prefer the two hooks above                            |
 | **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run |
 | **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                           |
 | **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                         |
@@ -147,6 +166,8 @@ observation-only.
 | `before_compaction` / `after_compaction` | Observe or annotate compaction cycles                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `before_reset`                           | Observe session-reset events (`/reset`, programmatic resets)                                                                                                                                                                                                                                                                                                                                                                                                     |
 
+For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`, a distinct child always receives `session_start`. Callers declare whether the parent also receives terminal `session_end` with `succeedsParent`: `true` means successor, `false` means parallel child. Omission preserves the legacy parent-rollover behavior. The `command:new` and `before_reset` hooks still describe the requested `/new` action in both cases.
+
 **Subagents**
 
 - `subagent_spawned` / `subagent_ended` - observe subagent launch and completion.
@@ -161,6 +182,7 @@ observation-only.
 | -------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `gateway_start` / `gateway_stop` | Start or stop plugin-owned services with the Gateway                                                 |
 | `deactivate`                     | Deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins                 |
+| `cron_reconciled`                | Reconcile against the complete Gateway cron state after startup or reload                            |
 | `cron_changed`                   | Observe Gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled) |
 | **`before_install`**             | Inspect staged skill or plugin install material from a loaded plugin runtime                         |
 
@@ -216,6 +238,10 @@ provider payloads, start the Gateway with `--raw-stream` and
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.runId`, `ctx.toolKind`, `ctx.toolInputKind`, and diagnostic `ctx.trace`
+- optional `ctx.requester`, the host-derived requester that initiated the current
+  message run. It can include `channel`, `accountId`, `senderId`,
+  `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
+  not false assurances; fail closed when policy requires them.
 
 It can return:
 
@@ -229,6 +255,7 @@ type BeforeToolCallResult = {
     description: string;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
+    /** @deprecated Unresolved approvals always deny. */
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
@@ -253,6 +280,131 @@ Guard behavior for typed lifecycle hooks:
   requested approval.
 - `onResolution` receives the resolved decision: `allow-once`, `allow-always`,
   `deny`, `timeout`, or `cancelled`.
+
+### Sender-aware policy in one file
+
+A standalone plugin file can keep deployment-specific policy in code instead
+of adding another configuration schema. This example gives owners every tool,
+lets configured maintainers use a conservative tool and message-action set,
+and exposes `/fix` to senders already authorized by the channel configuration:
+
+```typescript
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+const AGENT_ID = "maintenance-agent";
+const MAINTAINER_SCOPES = [
+  {
+    channel: "discord",
+    accountId: "operations",
+    senderIds: new Set(["maintainer-user-id"]),
+    roleIds: new Set(["maintainer-role-id"]),
+  },
+];
+const MAINTAINER_TOOLS = new Set(["read", "web_fetch", "web_search", "session_status", "message"]);
+const MAINTAINER_MESSAGE_ACTIONS = new Set(["react", "reply", "thread-create", "thread-reply"]);
+
+export default definePluginEntry({
+  id: "maintenance-access",
+  name: "Maintenance access",
+  description: "Apply sender-aware tool policy to the maintenance agent.",
+  register(api) {
+    api.on("before_tool_call", (event, ctx) => {
+      if (ctx.agentId !== AGENT_ID) {
+        return;
+      }
+
+      const requester = ctx.requester;
+      if (requester?.senderIsOwner === true) {
+        return;
+      }
+
+      const maintainerScope = requester
+        ? MAINTAINER_SCOPES.find(
+            (scope) =>
+              scope.channel === requester.channel && scope.accountId === requester.accountId,
+          )
+        : undefined;
+      const isMaintainer =
+        maintainerScope !== undefined &&
+        ((requester?.senderId !== undefined && maintainerScope.senderIds.has(requester.senderId)) ||
+          requester?.roleIds?.some((roleId) => maintainerScope.roleIds.has(roleId)) === true);
+      if (!isMaintainer) {
+        return { block: true, blockReason: "Maintainer access required." };
+      }
+
+      if (event.toolName === "message") {
+        const action = typeof event.params.action === "string" ? event.params.action : "";
+        if (MAINTAINER_MESSAGE_ACTIONS.has(action)) {
+          return;
+        }
+        return { block: true, blockReason: `Owner required for message.${action || "unknown"}.` };
+      }
+
+      if (MAINTAINER_TOOLS.has(event.toolName)) {
+        return;
+      }
+      return { block: true, blockReason: `Owner required for ${event.toolName}.` };
+    });
+
+    api.registerCommand({
+      name: "fix",
+      description: "Ask the maintenance agent to investigate and fix an issue.",
+      acceptsArgs: true,
+      requireAuth: true,
+      handler: async (ctx) =>
+        ctx.agentId === AGENT_ID
+          ? { continueAgent: true }
+          : { text: "This command is only available in the maintenance conversation." },
+    });
+  },
+});
+```
+
+Load the file directly and restart the Gateway:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "maintenance-agent",
+        workspace: "~/.openclaw/workspace-maintenance",
+      },
+    ],
+  },
+  bindings: [
+    {
+      agentId: "maintenance-agent",
+      match: {
+        channel: "discord",
+        accountId: "operations",
+        peer: { kind: "channel", id: "maintenance-channel-id" },
+      },
+    },
+  ],
+  plugins: {
+    load: { paths: ["~/.openclaw/policies/maintenance-access.ts"] },
+  },
+}
+```
+
+`AGENT_ID` must name the agent bound to the maintenance conversation. The
+binding selects that agent for normal messages and `/fix`; the standalone file
+remains the single owner of owner-versus-maintainer tool policy.
+
+`requireAuth: true` reuses each channel's existing sender admission. For
+Discord, a guild or channel `users`/`roles` allowlist can authorize the
+maintenance audience. Other channels can use stable sender ids. The hook then
+applies the finer per-tool decision on every tool call in the run, including
+Codex native `PreToolUse` calls. It can veto a tool the model sees, but cannot
+add a tool omitted by the host. Existing sandbox, exec approval, owner-only
+core-tool, and channel policies still apply; the hook cannot grant past them.
+
+Scope sender and role ids to an exact channel/account pair as shown; both are
+provider-local namespaces. Keep the allowlists conservative. Add write or
+execution tools only when the deployment's sandbox and approval policy make
+that safe. For automated or system runs, decide explicitly whether an absent
+`ctx.requester` should pass; the example denies it for the scoped agent.
 
 See [Plugin permission requests](/plugins/plugin-permission-requests) for
 approval routing, decision behavior, and when to use `requireApproval` instead
@@ -325,9 +477,6 @@ Use the phase-specific hooks for new plugins:
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
 
-`before_agent_start` remains for compatibility. Prefer the explicit hooks
-above so the plugin does not depend on a legacy combined phase.
-
 `before_agent_run` runs after prompt construction and before any model input,
 including prompt-local image loading and `llm_input` observation. It receives
 the current user input as `prompt`, plus loaded session history in `messages`
@@ -344,7 +493,7 @@ excluded from transcript, history, broadcast, log, and diagnostics payloads.
 Observability should use sanitized fields such as blocker id, outcome,
 timestamp, or a safe category.
 
-`before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
+Agent-turn hooks including `agent_end` include `event.runId` when OpenClaw can
 identify the active run; the same value is also on `ctx.runId`. Cron-driven
 runs also expose `ctx.jobId` (the originating cron job id) on the agent-turn
 context so hooks can scope metrics, side effects, or state to a specific
@@ -502,7 +651,8 @@ runtime generation.
 Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,
-  `messageId`, `senderId`, optional run/session correlation, and metadata.
+  `messageId`, `senderId`, optional run/session correlation, ordered `media`,
+  and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return
@@ -528,6 +678,20 @@ first-class fields before reading legacy metadata.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
+
+Inbound claim and message-received events expose `media?:
+PluginHookMediaFact[]` as the canonical attachment API. Each fact can carry
+`path`, `url`, `contentType`, `kind`, `transcribed`, `messageId`, and
+`workspaceDir`; array position is attachment identity. When a remote attachment
+has not been staged locally yet, `media` is omitted,
+`mediaStagingPending: true`, and `originalMedia` contains the provider-side
+facts. Do not treat `originalMedia.path` as locally readable until a later
+staged event supplies `media`.
+
+The singular/plural `mediaPath`, `mediaUrl`, `mediaType`, `mediaPaths`,
+`mediaUrls`, `mediaTypes`, and matching `originalMedia*` metadata properties are
+deprecated compatibility aliases. New hooks should use the typed top-level
+arrays.
 
 Decision rules:
 
@@ -570,13 +734,31 @@ failures block the install fail-closed.
 
 ## Gateway lifecycle
 
-Use `gateway_start` for plugin services that need Gateway-owned state. The
-context exposes `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for
-cron inspection and updates. Use `gateway_stop` to clean up long-running
-resources.
+Use `gateway_start` to start general plugin services and `gateway_stop` to
+clean up long-running resources. The cron scheduler can still be loading when
+`gateway_start` runs, so do not use it as the baseline signal for an external
+cron projection.
 
 Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
 services.
+
+`cron_reconciled` fires after the Gateway cron scheduler and its on-exit
+watchers have reconciled their durable state. It fires for both initial
+startup and scheduler replacement during config reload. The event reports
+`reason` (`startup` or `reload`) and the effective `enabled` state. Disabled
+cron still emits with `enabled: false`, allowing an external projection to
+clear stale wakes. Use `ctx.getCron?.()` for the exact scheduler instance that
+completed reconciliation; a later reload does not retarget that callback.
+`ctx.abortSignal` owns that same scheduler snapshot. The Gateway aborts it as
+soon as a newer scheduler is armed or shutdown starts. Pass it through every
+durable side effect and do not accept the snapshot after it aborts.
+This is a scheduler lifecycle signal, not a plugin-activation signal: a
+plugin-only hot reload does not replay it. A newly enabled consumer receives
+its first baseline on the next scheduler replacement or Gateway start.
+
+Like other observation hooks, `gateway_start` and `cron_reconciled` callbacks
+can overlap. If both handlers share plugin initialization, coordinate them
+with a plugin-local readiness promise rather than depending on callback order.
 
 `cron_changed` fires for Gateway-owned cron lifecycle events with a typed
 event payload covering `added`, `updated`, `removed`, `started`, `finished`,
@@ -584,10 +766,168 @@ and `scheduled` reasons. The event carries a `PluginHookGatewayCronJob`
 snapshot (including `state.nextRunAtMs`, `state.lastRunStatus`, and
 `state.lastError` when present) plus a `PluginHookGatewayCronDeliveryStatus`
 of `not-requested` | `delivered` | `not-delivered` | `unknown`. Removed events
-still carry the deleted job snapshot so external schedulers can reconcile
-state. Use `ctx.getCron?.()` and `ctx.config` from the runtime context when
-syncing external wake schedulers, and keep OpenClaw as the source of truth
-for due checks and execution.
+are post-commit: they fire only after durable deletion succeeds and still carry
+the deleted job snapshot so external schedulers can reconcile state.
+
+A `scheduled` event is post-commit: it fires only after a successful durable
+write changes an existing job's effective `nextRunAtMs`, excluding that job's
+explicit `added`, `updated`, or `removed` lifecycle event. The top-level
+`event.nextRunAtMs` is the committed next wake; when it is absent, the job has
+no next wake. Treat these events as reconciliation hints, not an ordered delta
+log. Use them as coalescible hints to reread the scheduler last captured by
+`cron_reconciled`; do not adopt the scheduler from a `cron_changed` context.
+Keep OpenClaw as the source of truth for due checks and execution.
+
+### Safe external cron projection
+
+Project a complete wake snapshot instead of forwarding cron event deltas. The
+external adapter's `replaceAll` operation must be atomic and idempotent, and it
+must resolve only after the host has durably accepted the snapshot. It must
+also honor the supplied abort signal: if the signal aborts before durable
+acceptance, the adapter must not accept that snapshot.
+
+This pattern keeps one latest-state worker in flight. Only `cron_reconciled`
+adopts a scheduler instance; `cron_changed` merely asks that worker to reread
+the authoritative instance, so a late hint cannot restore an older scheduler.
+A newer revision aborts the active host attempt before it can accept a stale
+snapshot.
+
+```typescript
+import { setTimeout as sleep } from "node:timers/promises";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+
+type ExternalWake = { jobId: string; runAtMs: number };
+
+type ExternalWakeHost = {
+  replaceAll(wakes: readonly ExternalWake[], options: { signal: AbortSignal }): Promise<void>;
+  close(): Promise<void>;
+};
+
+type CronReader = {
+  list(options: { includeDisabled: true }): Promise<
+    Array<{
+      id: string;
+      enabled?: boolean;
+      state?: { nextRunAtMs?: number };
+    }>
+  >;
+};
+
+export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWakeHost) {
+  const lifecycle = new AbortController();
+  let cron: CronReader | undefined;
+  let enabled = false;
+  let hasBaseline = false;
+  let reconciliationSignal: AbortSignal | undefined;
+  let requestedRevision = 0;
+  let appliedRevision = 0;
+  let worker = Promise.resolve();
+  let activeAttempt: AbortController | undefined;
+
+  const projectLatest = async () => {
+    let retryMs = 1_000;
+
+    while (!lifecycle.signal.aborted && appliedRevision < requestedRevision) {
+      const ownerSignal = reconciliationSignal;
+      if (!ownerSignal || ownerSignal.aborted) {
+        return;
+      }
+      const targetRevision = requestedRevision;
+      const attempt = new AbortController();
+      const signal = AbortSignal.any([lifecycle.signal, ownerSignal, attempt.signal]);
+      activeAttempt = attempt;
+
+      try {
+        const jobs = enabled && cron ? await cron.list({ includeDisabled: true }) : [];
+        if (signal.aborted || targetRevision !== requestedRevision) {
+          continue;
+        }
+        const wakes = jobs
+          .flatMap((job): ExternalWake[] => {
+            const runAtMs = job.enabled === false ? undefined : job.state?.nextRunAtMs;
+            return runAtMs === undefined ? [] : [{ jobId: job.id, runAtMs }];
+          })
+          .sort((a, b) => a.runAtMs - b.runAtMs || a.jobId.localeCompare(b.jobId));
+
+        await host.replaceAll(wakes, { signal });
+        if (signal.aborted || targetRevision !== requestedRevision) {
+          continue;
+        }
+        appliedRevision = targetRevision;
+        retryMs = 1_000;
+      } catch {
+        if (lifecycle.signal.aborted || ownerSignal.aborted) {
+          return;
+        }
+        if (attempt.signal.aborted) {
+          continue;
+        }
+        api.logger.warn(`external cron projection failed; retrying in ${retryMs}ms`);
+        try {
+          await sleep(retryMs, undefined, { signal });
+        } catch {
+          if (lifecycle.signal.aborted) {
+            return;
+          }
+          if (attempt.signal.aborted) {
+            continue;
+          }
+        }
+        retryMs = Math.min(retryMs * 2, 30_000);
+      } finally {
+        if (activeAttempt === attempt) {
+          activeAttempt = undefined;
+        }
+      }
+    }
+  };
+
+  const requestProjection = () => {
+    const targetRevision = ++requestedRevision;
+    activeAttempt?.abort();
+    worker = worker.then(async () => {
+      if (!lifecycle.signal.aborted && appliedRevision < targetRevision) {
+        await projectLatest();
+      }
+    });
+    return worker;
+  };
+
+  api.on("cron_reconciled", (event, ctx) => {
+    const reconciledCron = ctx.getCron?.();
+    if (event.enabled && !reconciledCron) {
+      api.logger.warn("cron reconciliation did not expose a scheduler");
+      return;
+    }
+    cron = reconciledCron;
+    enabled = event.enabled;
+    hasBaseline = true;
+    reconciliationSignal = ctx.abortSignal;
+    return requestProjection();
+  });
+
+  api.on("cron_changed", () => {
+    if (hasBaseline) {
+      return requestProjection();
+    }
+  });
+
+  api.on("gateway_stop", async () => {
+    lifecycle.abort();
+    await worker;
+    await host.close();
+  });
+}
+```
+
+When `cron_reconciled` reports `enabled: false`, the same path calls
+`replaceAll([])` and clears stale external wakes. Retry/backoff in this example
+is process-local and treats runtime adapter failures as transient; validate
+non-retryable configuration before registration. OpenClaw does not provide an
+outbox for plugin hook effects. If the process exits before durable acceptance,
+the next Gateway start emits a new authoritative `cron_reconciled` snapshot.
+`gateway_stop` aborts in-flight host work, waits for the worker to settle, then
+closes the adapter.
 
 ## Upcoming deprecations
 
@@ -598,9 +938,6 @@ before the next major release:
   handlers. Read `BodyForAgent` and the structured user-context blocks
   instead of parsing flat envelope text. See
   [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#active-deprecations).
-- **`before_agent_start`** remains for compatibility. New plugins should use
-  `before_model_resolve` and `before_prompt_build` instead of the combined
-  phase.
 - **`subagent_spawning`** remains for compatibility with older plugins, but
   new plugins should not return thread routing from it. Core prepares
   `thread: true` subagent bindings through channel session-binding adapters

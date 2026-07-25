@@ -11,7 +11,7 @@ type Timer = ReturnType<typeof setTimeout>;
 export type CodexAttemptTurnWatchTimeoutKind = "progress" | "completion" | "terminal";
 
 /** Structured timeout event emitted when a watch fires. */
-export type CodexAttemptTurnWatchTimeout = {
+type CodexAttemptTurnWatchTimeout = {
   kind: CodexAttemptTurnWatchTimeoutKind;
   idleMs: number;
   timeoutMs: number;

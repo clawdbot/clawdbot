@@ -1,156 +1,28 @@
-// Policy doctor check IDs and rule metadata.
-export const CHECK_IDS = {
-  policyAttestationMismatch: "policy/attestation-hash-mismatch",
-  policyDeniedChannelProvider: "policy/channels-denied-provider",
-  policyHashMismatch: "policy/policy-hash-mismatch",
-  policyInvalidFile: "policy/policy-jsonc-invalid",
-  policyMissingFile: "policy/policy-jsonc-missing",
-  policyDeniedMcpServer: "policy/mcp-denied-server",
-  policyUnapprovedMcpServer: "policy/mcp-unapproved-server",
-  policyDeniedModelProvider: "policy/models-denied-provider",
-  policyUnapprovedModelProvider: "policy/models-unapproved-provider",
-  policyPrivateNetworkAccess: "policy/network-private-access-enabled",
-  policyIngressDmPolicyUnapproved: "policy/ingress-dm-policy-unapproved",
-  policyIngressDmScopeUnapproved: "policy/ingress-dm-scope-unapproved",
-  policyIngressOpenGroupsDenied: "policy/ingress-open-groups-denied",
-  policyIngressGroupMentionRequired: "policy/ingress-group-mention-required",
-  policyGatewayNonLoopbackBind: "policy/gateway-non-loopback-bind",
-  policyGatewayAuthDisabled: "policy/gateway-auth-disabled",
-  policyGatewayRateLimitMissing: "policy/gateway-rate-limit-missing",
-  policyGatewayControlUiInsecure: "policy/gateway-control-ui-insecure",
-  policyGatewayTailscaleFunnel: "policy/gateway-tailscale-funnel",
-  policyGatewayRemoteEnabled: "policy/gateway-remote-enabled",
-  policyGatewayHttpEndpointEnabled: "policy/gateway-http-endpoint-enabled",
-  policyGatewayHttpUrlFetchUnrestricted: "policy/gateway-http-url-fetch-unrestricted",
-  policyGatewayNodeCommandDenied: "policy/gateway-node-command-denied",
-  policyAgentsWorkspaceAccessDenied: "policy/agents-workspace-access-denied",
-  policyAgentsToolNotDenied: "policy/agents-tool-not-denied",
-  policyToolsElevatedEnabled: "policy/tools-elevated-enabled",
-  policyToolsAlsoAllowMissing: "policy/tools-also-allow-missing",
-  policyToolsAlsoAllowUnexpected: "policy/tools-also-allow-unexpected",
-  policyToolsExecAskUnapproved: "policy/tools-exec-ask-unapproved",
-  policyToolsExecHostUnapproved: "policy/tools-exec-host-unapproved",
-  policyToolsExecSecurityUnapproved: "policy/tools-exec-security-unapproved",
-  policyToolsFsWorkspaceOnlyRequired: "policy/tools-fs-workspace-only-required",
-  policyToolsProfileUnapproved: "policy/tools-profile-unapproved",
-  policyToolsRequiredDenyMissing: "policy/tools-required-deny-missing",
-  policySandboxModeUnapproved: "policy/sandbox-mode-unapproved",
-  policySandboxBackendUnapproved: "policy/sandbox-backend-unapproved",
-  policySandboxContainerPostureUnobservable: "policy/sandbox-container-posture-unobservable",
-  policySandboxContainerHostNetworkDenied: "policy/sandbox-container-host-network-denied",
-  policySandboxContainerNamespaceJoinDenied: "policy/sandbox-container-namespace-join-denied",
-  policySandboxContainerMountModeRequired: "policy/sandbox-container-mount-mode-required",
-  policySandboxContainerRuntimeSocketMount: "policy/sandbox-container-runtime-socket-mount",
-  policySandboxContainerUnconfinedProfile: "policy/sandbox-container-unconfined-profile",
-  policySandboxBrowserCdpSourceRangeMissing: "policy/sandbox-browser-cdp-source-range-missing",
-  policyDataHandlingRedactionDisabled: "policy/data-handling-redaction-disabled",
-  policyDataHandlingTelemetryContentCapture: "policy/data-handling-telemetry-content-capture",
-  policyDataHandlingSessionRetentionNotEnforced:
-    "policy/data-handling-session-retention-not-enforced",
-  policyDataHandlingSessionTranscriptMemory:
-    "policy/data-handling-session-transcript-memory-enabled",
-  policySecretsUnmanagedProvider: "policy/secrets-unmanaged-provider",
-  policySecretsDeniedProviderSource: "policy/secrets-denied-provider-source",
-  policySecretsInsecureProvider: "policy/secrets-insecure-provider",
-  policyAuthProfileInvalidMetadata: "policy/auth-profile-invalid-metadata",
-  policyAuthProfileUnapprovedMode: "policy/auth-profile-unapproved-mode",
-  policyExecApprovalsMissing: "policy/exec-approvals-missing",
-  policyExecApprovalsInvalid: "policy/exec-approvals-invalid",
-  policyExecApprovalsDefaultSecurityUnapproved: "policy/exec-approvals-default-security-unapproved",
-  policyExecApprovalsAgentSecurityUnapproved: "policy/exec-approvals-agent-security-unapproved",
-  policyExecApprovalsAutoAllowSkillsEnabled: "policy/exec-approvals-auto-allow-skills-enabled",
-  policyExecApprovalsAllowlistMissing: "policy/exec-approvals-allowlist-missing",
-  policyExecApprovalsAllowlistUnexpected: "policy/exec-approvals-allowlist-unexpected",
-  policyMissingToolOwner: "policy/tools-missing-owner",
-  policyMissingToolRisk: "policy/tools-missing-risk-level",
-  policyMissingToolSensitivity: "policy/tools-missing-sensitivity-token",
-  policyUnknownToolRisk: "policy/tools-unknown-risk-level",
-  policyUnknownToolSensitivity: "policy/tools-unknown-sensitivity-token",
-} as const;
+// Policy doctor rule metadata.
+import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 
-export const POLICY_CHECK_IDS = [
-  CHECK_IDS.policyMissingFile,
-  CHECK_IDS.policyInvalidFile,
-  CHECK_IDS.policyHashMismatch,
-  CHECK_IDS.policyAttestationMismatch,
-  CHECK_IDS.policyDeniedChannelProvider,
-  CHECK_IDS.policyDeniedMcpServer,
-  CHECK_IDS.policyUnapprovedMcpServer,
-  CHECK_IDS.policyDeniedModelProvider,
-  CHECK_IDS.policyUnapprovedModelProvider,
-  CHECK_IDS.policyPrivateNetworkAccess,
-  CHECK_IDS.policyIngressDmPolicyUnapproved,
-  CHECK_IDS.policyIngressDmScopeUnapproved,
-  CHECK_IDS.policyIngressOpenGroupsDenied,
-  CHECK_IDS.policyIngressGroupMentionRequired,
-  CHECK_IDS.policyGatewayNonLoopbackBind,
-  CHECK_IDS.policyGatewayAuthDisabled,
-  CHECK_IDS.policyGatewayRateLimitMissing,
-  CHECK_IDS.policyGatewayControlUiInsecure,
-  CHECK_IDS.policyGatewayTailscaleFunnel,
-  CHECK_IDS.policyGatewayRemoteEnabled,
-  CHECK_IDS.policyGatewayHttpEndpointEnabled,
-  CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
-  CHECK_IDS.policyGatewayNodeCommandDenied,
-  CHECK_IDS.policyAgentsWorkspaceAccessDenied,
-  CHECK_IDS.policyAgentsToolNotDenied,
-  CHECK_IDS.policyToolsProfileUnapproved,
-  CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
-  CHECK_IDS.policyToolsExecSecurityUnapproved,
-  CHECK_IDS.policyToolsExecAskUnapproved,
-  CHECK_IDS.policyToolsExecHostUnapproved,
-  CHECK_IDS.policyToolsElevatedEnabled,
-  CHECK_IDS.policyToolsAlsoAllowMissing,
-  CHECK_IDS.policyToolsAlsoAllowUnexpected,
-  CHECK_IDS.policyToolsRequiredDenyMissing,
-  CHECK_IDS.policySandboxModeUnapproved,
-  CHECK_IDS.policySandboxBackendUnapproved,
-  CHECK_IDS.policySandboxContainerPostureUnobservable,
-  CHECK_IDS.policySandboxContainerHostNetworkDenied,
-  CHECK_IDS.policySandboxContainerNamespaceJoinDenied,
-  CHECK_IDS.policySandboxContainerMountModeRequired,
-  CHECK_IDS.policySandboxContainerRuntimeSocketMount,
-  CHECK_IDS.policySandboxContainerUnconfinedProfile,
-  CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
-  CHECK_IDS.policyDataHandlingRedactionDisabled,
-  CHECK_IDS.policyDataHandlingTelemetryContentCapture,
-  CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
-  CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
-  CHECK_IDS.policySecretsUnmanagedProvider,
-  CHECK_IDS.policySecretsDeniedProviderSource,
-  CHECK_IDS.policySecretsInsecureProvider,
-  CHECK_IDS.policyAuthProfileInvalidMetadata,
-  CHECK_IDS.policyAuthProfileUnapprovedMode,
-  CHECK_IDS.policyExecApprovalsMissing,
-  CHECK_IDS.policyExecApprovalsInvalid,
-  CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved,
-  CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved,
-  CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled,
-  CHECK_IDS.policyExecApprovalsAllowlistMissing,
-  CHECK_IDS.policyExecApprovalsAllowlistUnexpected,
-  CHECK_IDS.policyMissingToolRisk,
-  CHECK_IDS.policyUnknownToolRisk,
-  CHECK_IDS.policyMissingToolSensitivity,
-  CHECK_IDS.policyMissingToolOwner,
-  CHECK_IDS.policyUnknownToolSensitivity,
-] as const;
-
-export type PolicyStrictnessKind =
+type PolicyStrictnessKind =
   | "allowlist-subset"
   | "denylist-superset"
   | "ordered-string"
   | "requires-true"
   | "requires-false"
-  | "exact-list";
+  | "exact-list"
+  | "routing-probes";
 
-export type PolicyEmptyListSemantics = "disabled" | "meaningful";
+type PolicyEmptyListSemantics = "disabled" | "meaningful";
 
 export type PolicyScopeSelectorKind = "agentIds" | "channelIds";
 
 export type PolicyRuleMetadata = {
   readonly policyPath: readonly string[];
   readonly strictness: PolicyStrictnessKind;
-  readonly valueType: "boolean" | "channel-provider-deny-rules" | "string" | "string-list";
+  readonly valueType:
+    | "boolean"
+    | "channel-provider-deny-rules"
+    | "routing-probes"
+    | "string"
+    | "string-list";
   readonly checkIds: readonly (typeof POLICY_CHECK_IDS)[number][];
   readonly emptyList?: PolicyEmptyListSemantics;
   readonly allowedValues?: readonly string[];
@@ -266,6 +138,24 @@ export const POLICY_RULE_METADATA = [
     strictness: "requires-false",
     valueType: "boolean",
     checkIds: [CHECK_IDS.policyPrivateNetworkAccess],
+  },
+  {
+    policyPath: ["routing", "requireBindings"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyRoutingBindingsRequired],
+  },
+  {
+    policyPath: ["routing", "requireConfiguredChannels"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyRoutingBindingChannelUnconfigured],
+  },
+  {
+    policyPath: ["routing", "probes"],
+    strictness: "routing-probes",
+    valueType: "routing-probes",
+    checkIds: [CHECK_IDS.policyRoutingAgentMismatch, CHECK_IDS.policyRoutingMatchKindMismatch],
   },
   {
     policyPath: ["ingress", "session", "requireDmScope"],

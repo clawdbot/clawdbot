@@ -87,12 +87,49 @@ openclaw plugins install @openclaw/zai-provider
 | `zai-coding-global` | `https://api.z.ai/api/coding/paas/v4`         | `glm-5.2`     |
 | `zai-coding-cn`     | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.2`     |
 
+Z.AI also publishes the Anthropic-compatible Coding Plan base URL
+`https://api.z.ai/api/anthropic`. OpenClaw's Z.AI choices use the documented
+OpenAI Chat Completions endpoints above; the Anthropic URL is for clients that
+speak Anthropic Messages directly.
+
 `zai-api-key` auto-detects one of these four by probing your key against each
 endpoint's chat-completions API, checking general endpoints (`zai-global`,
 then `zai-cn`) before Coding Plan endpoints (`zai-coding-global`, then
 `zai-coding-cn`), and stopping at the first endpoint that accepts a request.
 Use an explicit `--auth-choice` to force a Coding Plan endpoint if your key
 works on both.
+
+## Rate limits and overloads
+
+Z.AI documents the Coding Plan and general-purpose agent tools as capacity
+managed services. In Z.AI's own docs:
+
+- [General-purpose agent tools](https://docs.z.ai/devpack/tool/others),
+  including OpenClaw, are served on a best-effort basis. During high inference
+  load, typically around 2-6 PM Singapore time, some requests may face temporary
+  rate limits.
+- [Coding Plan rate and concurrency limits](https://docs.z.ai/devpack/usage-policy)
+  are tied to the plan tier and can be adjusted dynamically based on resource
+  availability. Off-peak hours may have higher concurrency.
+- [API error code `1302`](https://docs.z.ai/api-reference/api-code) means "Rate
+  limit reached for requests". API error code `1305` means "The service may be
+  temporarily overloaded, please try again later".
+
+If you see a temporary `429` or `1305` response during a busy period, wait and
+retry the request. If failures are repeatable outside peak periods, or only
+occur for one endpoint, model, or request shape, check the configured endpoint
+and model first:
+
+```bash
+openclaw models list --all --provider zai
+openclaw config get models.providers.zai.baseUrl
+```
+
+Coding Plan keys should use a Coding Plan endpoint such as
+`https://api.z.ai/api/coding/paas/v4`; general API keys should use a general API
+endpoint such as `https://api.z.ai/api/paas/v4`. Persistent failures with the
+same key and endpoint can indicate a provider-side rejection or plan limitation,
+not ordinary peak-load throttling.
 
 ## Config example
 
@@ -128,25 +165,20 @@ openclaw models list --all --provider zai
 
 The manifest-backed catalog currently includes:
 
-| Model ref            | Notes                           |
-| -------------------- | ------------------------------- |
-| `zai/glm-5.2`        | Coding Plan default; 1M context |
-| `zai/glm-5.1`        | General API default             |
-| `zai/glm-5`          |                                 |
-| `zai/glm-5-turbo`    |                                 |
-| `zai/glm-5v-turbo`   |                                 |
-| `zai/glm-4.7`        |                                 |
-| `zai/glm-4.7-flash`  |                                 |
-| `zai/glm-4.7-flashx` |                                 |
-| `zai/glm-4.6`        |                                 |
-| `zai/glm-4.6v`       |                                 |
-| `zai/glm-4.5`        |                                 |
-| `zai/glm-4.5-air`    |                                 |
-| `zai/glm-4.5-flash`  |                                 |
-| `zai/glm-4.5v`       |                                 |
+| Model ref          | Notes                                             |
+| ------------------ | ------------------------------------------------- |
+| `zai/glm-5.2`      | Coding Plan default; 1M context                   |
+| `zai/glm-5-turbo`  | OpenClaw-optimized text model; 200K context       |
+| `zai/glm-5v-turbo` | Multimodal coding model; 200K context             |
+| `zai/glm-5.1`      | Deprecated; hidden unless configured; use GLM-5.2 |
+
+Catalog token-cost metadata follows Z.AI's current
+[pay-as-you-go pricing](https://docs.z.ai/guides/overview/pricing). Coding Plan
+subscriptions use plan quota instead of per-token billing; see the live
+[subscription page](https://z.ai/subscribe) for plan pricing and availability.
 
 <Tip>
-GLM models are available as `zai/<model>` (example: `zai/glm-5`).
+GLM models are available as `zai/<model>` (example: `zai/glm-5.2`).
 </Tip>
 
 <Note>

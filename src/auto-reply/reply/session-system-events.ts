@@ -17,6 +17,8 @@ import {
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
+import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
+import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 
 function isCronContextSystemEvent(event: SystemEvent): boolean {
   return event.contextKey?.startsWith("cron:") ?? false;
@@ -61,7 +63,7 @@ function compactSystemEvent(line: string): string | null {
 }
 
 function resolveSystemEventTimezone(cfg: OpenClawConfig) {
-  const raw = normalizeOptionalString(cfg.agents?.defaults?.envelopeTimezone);
+  const raw = normalizeOptionalString(cfg.agents?.defaults?.userTimezone);
   if (!raw) {
     return { mode: "local" as const };
   }
@@ -117,6 +119,14 @@ export async function drainFormattedSystemEvents(params: {
       suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents,
     }),
   );
+  const sessionStateTargets = queued
+    .map((event) =>
+      event.contextKey ? decodeSessionStateNoticeContextKey(event.contextKey) : undefined,
+    )
+    .filter((target): target is string => target !== undefined);
+  if (sessionStateTargets.length > 0) {
+    acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
+  }
   for (const event of queued) {
     const compacted = compactSystemEvent(event.text);
     if (!compacted) {

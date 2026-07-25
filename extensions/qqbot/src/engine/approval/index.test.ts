@@ -1,7 +1,7 @@
 // Qqbot tests cover index plugin behavior.
 import type { ExecApprovalPendingView } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { describe, expect, it } from "vitest";
-import { buildApprovalKeyboard, buildExecApprovalText } from "./index.js";
+import { buildApprovalKeyboard, buildExecApprovalText, parseApprovalButtonData } from "./index.js";
 
 function createExecView(commandText: string): ExecApprovalPendingView {
   return {
@@ -26,21 +26,62 @@ function readCommandBlock(text: string): { body: string; fence: string } {
 
 describe("buildApprovalKeyboard", () => {
   it("omits allow-always when the decision is unavailable", () => {
-    const keyboard = buildApprovalKeyboard("approval-123", ["allow-once", "deny"]);
+    const keyboard = buildApprovalKeyboard("approval-123", "exec", ["allow-once", "deny"]);
     const buttons = keyboard.content.rows[0]?.buttons ?? [];
 
     expect(buttons.map((button) => button.id)).toEqual(["allow", "deny"]);
     expect(buttons.map((button) => button.action.data)).toEqual([
-      "approve:approval-123:allow-once",
-      "approve:approval-123:deny",
+      "approve:v2:exec:approval-123:allow-once",
+      "approve:v2:exec:approval-123:deny",
+    ]);
+    expect(buttons.map((button) => button.render_data.visited_label)).toEqual([
+      "\u5df2\u5904\u7406",
+      "\u5df2\u5904\u7406",
     ]);
   });
 
   it("keeps all buttons when all decisions are allowed", () => {
-    const keyboard = buildApprovalKeyboard("approval-123", ["allow-once", "allow-always", "deny"]);
+    const keyboard = buildApprovalKeyboard("approval-123", "plugin", [
+      "allow-once",
+      "allow-always",
+      "deny",
+    ]);
     const buttons = keyboard.content.rows[0]?.buttons ?? [];
 
     expect(buttons.map((button) => button.id)).toEqual(["allow", "always", "deny"]);
+    expect(buttons.map((button) => button.render_data.visited_label)).toEqual([
+      "\u5df2\u5904\u7406",
+      "\u5df2\u5904\u7406",
+      "\u5df2\u5904\u7406",
+    ]);
+  });
+
+  it("round-trips an opaque id with an explicit kind", () => {
+    const keyboard = buildApprovalKeyboard("exec:looks-like-exec/1", "plugin", ["deny"]);
+    const data = keyboard.content.rows[0]?.buttons[0]?.action.data ?? "";
+
+    expect(parseApprovalButtonData(data)).toEqual({
+      approvalId: "exec:looks-like-exec/1",
+      approvalKind: "plugin",
+      decision: "deny",
+    });
+  });
+
+  it("rejects legacy button data without an explicit kind", () => {
+    expect(parseApprovalButtonData("approve:plugin:abc:deny")).toBeNull();
+  });
+
+  it.each([
+    "Approve:v2:exec:approval-123:deny",
+    "approve:V2:exec:approval-123:deny",
+    "approve:v2:EXEC:approval-123:deny",
+    "approve:v2:exec:approval-123:DENY",
+  ])("rejects non-canonical uppercase envelope tokens: %s", (buttonData) => {
+    expect(parseApprovalButtonData(buttonData)).toBeNull();
+  });
+
+  it("rejects data after an otherwise valid envelope", () => {
+    expect(parseApprovalButtonData("approve:v2:exec:approval-123:deny\n")).toBeNull();
   });
 });
 
@@ -56,9 +97,7 @@ describe("buildExecApprovalText", () => {
 
   it("wraps ASCII and double-width text after 24 graphemes", () => {
     const ascii = readCommandBlock(buildExecApprovalText(createExecView("x".repeat(25))));
-    const wide = readCommandBlock(
-      buildExecApprovalText(createExecView(`${"表".repeat(24)}😀`)),
-    );
+    const wide = readCommandBlock(buildExecApprovalText(createExecView(`${"表".repeat(24)}😀`)));
 
     expect(ascii.body).toBe(`${"x".repeat(24)}↩\nx`);
     expect(wide.body).toBe(`${"表".repeat(24)}↩\n😀`);
@@ -78,9 +117,7 @@ describe("buildExecApprovalText", () => {
       buildExecApprovalText(createExecView(`${oversizedGrapheme}; echo hidden`)),
     );
 
-    expect(body.replace(/[↩\n]/g, "")).toBe(
-      `${oversizedGrapheme.slice(0, 300)}…[truncated]`,
-    );
+    expect(body.replace(/[↩\n]/g, "")).toBe(`${oversizedGrapheme.slice(0, 300)}…[truncated]`);
   });
 
   it("marks a display wrap before a shell comment boundary", () => {

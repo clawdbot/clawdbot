@@ -11,7 +11,7 @@ import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/p
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 import { parseStrictInteger } from "../../infra/parse-finite-number.js";
 
-const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
+const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
@@ -186,10 +186,15 @@ export async function resolveAuthForTarget(
     return { token: tokenOverride, password: passwordOverride };
   }
 
-  return resolveGatewayProbeSurfaceAuth({
+  const resolved = await resolveGatewayProbeSurfaceAuth({
     config: cfg,
     surface: target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local",
   });
+  return {
+    token: resolved.token,
+    password: resolved.password,
+    ...(resolved.diagnostics ? { diagnostics: resolved.diagnostics } : {}),
+  };
 }
 
 /** Extracts the config fields displayed by `openclaw gateway status --deep`. */
@@ -291,7 +296,10 @@ export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
   if (probe.ok || probe.connectLatencyMs == null) {
     return false;
   }
-  return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
+  if (probe.missingScopeErrorDetails) {
+    return probe.missingScopeErrorDetails.missingScope === "operator.read";
+  }
+  return LEGACY_MISSING_SCOPE_PATTERN.test(probe.error ?? "");
 }
 
 /** Returns true when the gateway connection was established but a later probe failed. */

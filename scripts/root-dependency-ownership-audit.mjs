@@ -21,9 +21,6 @@ const DYNAMIC_CONSTANT_IMPORT_PATTERNS = [
   /\brequire\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/g,
   /\b(?:require|[_$A-Za-z][\w$]*require[\w$]*)\.resolve\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/gi,
 ];
-const PACKAGE_FILE_LOOKUP_PATTERNS = [
-  /\bresolvePackageFileForCommandExplanation\s*\(\s*["']([^"']+)["']/g,
-];
 const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
   [
     "@homebridge/ciao",
@@ -87,13 +84,6 @@ function sectionFor(relativePath) {
 export function collectModuleSpecifiers(source) {
   const specifiers = new Set();
   for (const pattern of IMPORT_PATTERNS) {
-    for (const match of source.matchAll(pattern)) {
-      if (match[1]) {
-        specifiers.add(match[1]);
-      }
-    }
-  }
-  for (const pattern of PACKAGE_FILE_LOOKUP_PATTERNS) {
     for (const match of source.matchAll(pattern)) {
       if (match[1]) {
         specifiers.add(match[1]);

@@ -34,7 +34,7 @@ import {
   getSlackExecApprovalApprovers,
   isSlackExecApprovalClientEnabled,
 } from "./exec-approvals.js";
-import { parseSlackTarget } from "./targets.js";
+import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 
 export type SlackApprovalKind = "exec" | "plugin";
 export type SlackNativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -56,8 +56,13 @@ const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
 const SLACK_DM_CHANNEL_ID_RE = /^D[A-Z0-9]{8,}$/i;
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{8,}$/i;
 
-export function resolveSlackApprovalKind(request: SlackNativeApprovalRequest): SlackApprovalKind {
-  return request.id.startsWith("plugin:") ? "plugin" : "exec";
+function resolveSlackApprovalKind(request: SlackNativeApprovalRequest): SlackApprovalKind {
+  const isExec = "command" in request.request;
+  const isPlugin = "title" in request.request && "description" in request.request;
+  if (isExec === isPlugin) {
+    throw new Error("Slack approval request payload does not identify exactly one owner");
+  }
+  return isExec ? "exec" : "plugin";
 }
 
 function isSlackApprovalTransportEnabled(params: {
@@ -152,14 +157,14 @@ export function resolveSlackFallbackOriginTarget(
   if (!sessionTarget) {
     return null;
   }
-  const parsed = parseSlackTarget(sessionTarget.id.toUpperCase(), {
+  const parsed = parseSlackTarget(sessionTarget.id, {
     defaultKind: "channel",
   });
   if (!parsed) {
     return null;
   }
   return {
-    to: `${parsed.kind}:${parsed.id}`,
+    to: `${parsed.kind}:${canonicalizeSlackApiTargetId(parsed.kind, parsed.id)}`,
     threadId: sessionTarget.threadId,
   };
 }

@@ -28,7 +28,6 @@ import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
-const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 // One budget covers all three prune walks (legacy-deps prepass, file listing,
 // empty-dir sweep). npm upgrades transiently hold old+new content-hashed dist
@@ -115,11 +114,6 @@ const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
 const NODE_COMPILE_CACHE_VERSION_DIR_RE = /^v\d+\.\d+\.\d+-/u;
 
 class InstalledDistScanLimitError extends Error {}
-
-function hasEnvFlag(env, key) {
-  const value = env?.[key]?.trim().toLowerCase();
-  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
-}
 
 function normalizeRelativePath(filePath) {
   return filePath.replace(/\\/g, "/");
@@ -829,14 +823,17 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
   const log = params.log ?? console;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const env = params.env ?? process.env;
+  const pathExists = params.existsSync ?? existsSync;
 
-  if (hasEnvFlag(env, DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV)) {
-    return { status: "disabled", migrated: false, reason: "disabled-env" };
+  // Registry migration belongs to installed-package upgrades. Source checkouts
+  // can contain stale dist from a different build and must not touch operator state.
+  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
+    return { status: "skipped", reason: "source-checkout" };
   }
 
   try {
     const migrationModule = await importInstalledDistModule(
-      params,
+      { ...params, existsSync: pathExists },
       "dist/commands/doctor/shared/plugin-registry-migration.js",
     );
     if (!migrationModule) {
@@ -850,9 +847,6 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
       env,
       packageRoot,
     });
-    for (const warning of result.preflight?.deprecationWarnings ?? []) {
-      log.warn(`[postinstall] ${warning}`);
-    }
     if (result.migrated) {
       log.log(
         `[postinstall] migrated plugin registry: ${result.current.plugins.length} plugin(s) indexed`,

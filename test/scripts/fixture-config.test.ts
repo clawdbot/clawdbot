@@ -142,7 +142,7 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
       expect(config.agents.defaults.model.primary).toBe("openai/gpt-5");
       expect(config.models.providers.openai).toMatchObject({
         api: "openai-responses",
-        baseUrl: "http://api.openai.com/v1",
+        baseUrl: "https://api.openai.com/v1",
         request: { allowPrivateNetwork: true },
       });
       expect(config.tools.web.search).toEqual({ enabled: true, maxResults: 3 });

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
@@ -85,6 +86,19 @@ describe("parallel web search provider", () => {
       throw new Error("expected Parallel plugin entry");
     }
     expect(pluginEntry.enabled).toBe(true);
+  });
+
+  it("advertises count as an integer from 1 to 40", () => {
+    const tool = createParallelWebSearchProvider().createTool({ config: {}, searchConfig: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const countParam = (
+      tool.parameters as {
+        properties: Record<string, { type?: string; minimum?: number; maximum?: number }>;
+      }
+    ).properties.count;
+    expect(countParam).toMatchObject({ type: "integer", minimum: 1, maximum: 40 });
   });
 
   it("keeps the lightweight contract surface aligned with provider metadata", () => {
@@ -321,10 +335,16 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelResults(null)).toEqual([]);
   });
 
-  it("clamps Parallel result counts to the documented 1-40 range", () => {
-    expect(testing.resolveParallelSearchCount(5)).toBe(5);
-    expect(testing.resolveParallelSearchCount(120)).toBe(40);
-    expect(testing.resolveParallelSearchCount(0)).toBe(1);
+  it("resolves configured counts while strictly validating the tool schema range", () => {
+    expect(testing.resolveParallelSearchCount({}, undefined)).toBe(5);
+    expect(testing.resolveParallelSearchCount({}, 120)).toBe(40);
+    expect(testing.resolveParallelSearchCount({}, 0)).toBe(1);
+    expect(testing.resolveParallelSearchCount({ count: 40 }, 5)).toBe(40);
+    for (const count of [0, 4.5, "3abc", 41]) {
+      expect(() => testing.resolveParallelSearchCount({ count }, 5)).toThrow(
+        "count must be an integer from 1 to 40.",
+      );
+    }
   });
 
   it("returns a stable missing-key payload that points at the real config path", () => {
@@ -420,6 +440,28 @@ describe("parallel web search provider", () => {
     expect(result).toMatchObject({ provider: "parallel" });
   });
 
+  it("rejects invalid counts before calling Parallel", async () => {
+    const provider = createParallelWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { parallel: { apiKey: "par-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    for (const count of [4.5, "3abc", 41]) {
+      await expect(
+        tool.execute({
+          objective: "Count validation",
+          search_queries: ["count validation"],
+          count,
+        }),
+      ).rejects.toThrow("count must be an integer from 1 to 40.");
+    }
+    expect(endpointMockState.calls).toHaveLength(0);
+  });
+
   it("prefers explicit objective+search_queries over the generic `query` fallback when all are present", async () => {
     endpointMockState.responses.push(
       new Response(JSON.stringify({ search_id: "x", session_id: "y", results: [] }), {
@@ -476,7 +518,7 @@ describe("parallel web search provider", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(1);
-    const [call] = endpointMockState.calls;
+    const call = expectDefined(endpointMockState.calls[0], "Parallel search endpoint call");
     expect(call.url).toBe("https://api.parallel.ai/v1/search");
     expect(call.timeoutSeconds).toBe(5);
     expect(readMockedBody(call)).toEqual({

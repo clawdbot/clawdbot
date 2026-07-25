@@ -1,7 +1,6 @@
 /** Converts ACP prompt and tool-event shapes into Gateway-friendly text, files, and metadata. */
 import type {
   ContentBlock,
-  ImageContent,
   ToolCallContent,
   ToolCallLocation,
   ToolKind,
@@ -254,11 +253,8 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
     let blockText: string | undefined;
     if (block.type === "text") {
       blockText = block.text;
-    } else if (block.type === "resource") {
-      const resource = block.resource as { text?: string } | undefined;
-      if (resource?.text) {
-        blockText = resource.text;
-      }
+    } else if (block.type === "resource" && "text" in block.resource && block.resource.text) {
+      blockText = block.resource.text;
     } else if (block.type === "resource_link") {
       const title = block.title ? ` (${escapeResourceTitle(block.title)})` : "";
       const uri = block.uri ? escapeInlineControlChars(block.uri) : "";
@@ -286,14 +282,13 @@ export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAtt
     if (block.type !== "image") {
       continue;
     }
-    const image = block as ImageContent;
-    if (!image.data || !image.mimeType) {
+    if (!block.data || !block.mimeType) {
       continue;
     }
     attachments.push({
       type: "image",
-      mimeType: image.mimeType,
-      content: image.data,
+      mimeType: block.mimeType,
+      content: block.data,
     });
   }
   return attachments;

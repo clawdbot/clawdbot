@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AuthProfileCredential } from "../src/agents/auth-profiles.js";
 import {
   parseBooleanEnv,
@@ -140,7 +141,7 @@ function summarizeText(text: string, max = 120): string {
   if (normalized.length <= max) {
     return normalized;
   }
-  return `${normalized.slice(0, max - 1)}…`;
+  return `${truncateUtf16Safe(normalized, max - 1)}…`;
 }
 
 function summarizeCapture(
@@ -212,17 +213,16 @@ function listSetupTokenProfiles(
   store: { profiles: Record<string, AuthProfileCredential> },
   normalizeProviderId: (provider: string) => string,
 ): Array<{ id: string; token: string }> {
-  return Object.entries(store.profiles)
-    .filter(([, cred]) => {
-      if (cred.type !== "token") {
-        return false;
-      }
-      if (normalizeProviderId(cred.provider) !== "anthropic") {
-        return false;
-      }
-      return isSetupToken(cred.token ?? "");
-    })
-    .map(([id, cred]) => ({ id, token: cred.token ?? "" }));
+  return Object.entries(store.profiles).flatMap(([id, cred]) => {
+    if (
+      cred.type !== "token" ||
+      normalizeProviderId(cred.provider) !== "anthropic" ||
+      !isSetupToken(cred.token ?? "")
+    ) {
+      return [];
+    }
+    return [{ id, token: cred.token ?? "" }];
+  });
 }
 
 function pickSetupTokenProfile(candidates: Array<{ id: string; token: string }>): {
@@ -367,7 +367,11 @@ function extractProxyCapture(rawBody: string, req: http.IncomingMessage): ProxyC
   };
 }
 
-async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: string }) {
+async function startAnthropicProxy(params: {
+  port: number;
+  upstreamBaseUrl: string;
+  timeoutMs: number;
+}) {
   let lastCapture: ProxyCapture | undefined;
   const sockets = new Set<import("node:net").Socket>();
   const server = http.createServer((req, res) => {
@@ -390,15 +394,17 @@ async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: stri
           }
           headers.set(key, Array.isArray(value) ? value.join(", ") : value);
         }
-        const upstreamRes = await fetch(upstreamUrl, {
+        const upstreamInit = {
           method,
           headers,
           body:
             method === "GET" || method === "HEAD" || requestBody.byteLength === 0
               ? undefined
-              : requestBody,
+              : Uint8Array.from(requestBody),
           duplex: "half",
-        });
+          signal: AbortSignal.timeout(params.timeoutMs),
+        } as RequestInit & { duplex: "half" };
+        const upstreamRes = await fetch(upstreamUrl, upstreamInit);
         const responseHeaders: Record<string, string> = {};
         for (const [key, value] of upstreamRes.headers.entries()) {
           const lower = key.toLowerCase();
@@ -421,6 +427,12 @@ async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: stri
         }
         res.end();
       } catch (error) {
+        // Once upstream headers are forwarded, a synthetic 502 is invalid.
+        // Close the downstream body so its reader fails instead of hanging.
+        if (res.headersSent) {
+          res.destroy();
+          return;
+        }
         res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
         res.end(redactForDevToolLog(`proxy error: ${String(error)}`));
       }
@@ -434,7 +446,12 @@ async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: stri
     server.once("error", reject);
     server.listen(params.port, "127.0.0.1", () => resolve());
   });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Anthropic capture proxy did not bind to a TCP port");
+  }
   return {
+    port: address.port,
     getLastCapture() {
       return lastCapture;
     },
@@ -469,11 +486,16 @@ async function runDirectPrompt(
     timeoutMs?: number;
   } = {},
 ): Promise<PromptResult> {
+  const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-probe-"));
   const proxyPort = ENABLE_CAPTURE ? await getFreePort() : undefined;
   const proxy =
     ENABLE_CAPTURE && proxyPort
-      ? await startAnthropicProxy({ port: proxyPort, upstreamBaseUrl: "https://api.anthropic.com" })
+      ? await startAnthropicProxy({
+          port: proxyPort,
+          upstreamBaseUrl: "https://api.anthropic.com",
+          timeoutMs,
+        })
       : undefined;
 
   try {
@@ -522,7 +544,7 @@ async function runDirectPrompt(
           void stopDirectChild("SIGKILL").finally(() => {
             resolve({ code: null, signal: "SIGKILL" });
           });
-        }, options.timeoutMs ?? TIMEOUT_MS);
+        }, timeoutMs);
       }),
     ]).finally(() => {
       if (timeoutTimer) {
@@ -810,7 +832,11 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
   const proxyPort = ENABLE_CAPTURE ? await getFreePort() : undefined;
   const proxy =
     ENABLE_CAPTURE && proxyPort
-      ? await startAnthropicProxy({ port: proxyPort, upstreamBaseUrl: "https://api.anthropic.com" })
+      ? await startAnthropicProxy({
+          port: proxyPort,
+          upstreamBaseUrl: "https://api.anthropic.com",
+          timeoutMs: GATEWAY_TIMEOUT_MS,
+        })
       : undefined;
   let gateway: Awaited<ReturnType<typeof startGatewayProcess>> | undefined;
 
@@ -926,19 +952,21 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
       mode: "cli",
     });
     const text = extractPayloadText(waitRes);
+    const waitStatus = typeof waitRes.status === "string" ? waitRes.status : undefined;
+    const waitError = typeof waitRes.error === "string" ? waitRes.error : undefined;
     const logTail = await readLogTail(logPath);
-    const matched400 = matchesExtraUsage400(waitRes.error, logTail, JSON.stringify(waitRes));
+    const matched400 = matchesExtraUsage400(waitError, logTail, JSON.stringify(waitRes));
     return {
       prompt,
-      ok: waitRes.status === "ok" && !matched400,
+      ok: waitStatus === "ok" && !matched400,
       transport: "gateway",
       promptMode: GATEWAY_PROMPT_MODE,
-      status: waitRes.status,
+      status: waitStatus,
       text: text || undefined,
       error:
-        waitRes.status === "ok"
+        waitStatus === "ok"
           ? undefined
-          : redactForDevToolLog(waitRes.error || logTail || "agent.wait failed"),
+          : redactForDevToolLog(waitError || logTail || "agent.wait failed"),
       matchedExtraUsage400: matched400,
       capture: summarizeCapture(proxy?.getLastCapture(), prompt),
       ...promptProbeTmpResult(tmpDir),
@@ -986,6 +1014,7 @@ export const testing = {
   readRequestBody,
   resolveAnthropicUpstreamUrl,
   runDirectPrompt,
+  startAnthropicProxy,
   stopGatewayPromptChild,
   summarizeCapture,
   summarizeText,

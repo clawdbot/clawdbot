@@ -51,6 +51,29 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Update restart")).toBe("failed · managed-service-handoff-failed");
   });
 
+  it("lists plugins quarantined as configured-unavailable", () => {
+    const rows = buildStatusCommandOverviewRows(
+      createStatusCommandOverviewRowsParams({
+        summary: {
+          ...createStatusCommandOverviewRowsParams().summary,
+          degradedPlugins: [
+            {
+              pluginId: "discord",
+              state: "configured-unavailable",
+              diagnostic: {
+                kind: "plugin-verification",
+                reason: "unreadable-package-json",
+                detail: "permission denied",
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
+  });
+
   it("builds status-all overview rows from the shared surface", () => {
     const rows = buildStatusAllOverviewRows({
       surface: {

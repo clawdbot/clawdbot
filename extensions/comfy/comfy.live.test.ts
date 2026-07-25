@@ -3,10 +3,11 @@ import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { beforeAll, describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { getComfyConfig, isComfyCapabilityConfigured } from "./workflow-runtime.js";
+import { getComfyConfigForTesting } from "./test-support.js";
+import { isComfyCapabilityConfigured } from "./workflow-runtime.js";
 
 const LIVE =
   isLiveTestEnabled(["COMFY_LIVE_TEST"]) && (process.env.COMFY_LIVE_TEST ?? "").trim() === "1";
@@ -123,7 +124,7 @@ describeLive("comfy live", () => {
   );
 
   it("documents the effective comfy config shape for live debugging", () => {
-    const comfyConfig = getComfyConfig(cfg as never);
+    const comfyConfig = getComfyConfigForTesting(cfg as never);
     expect(typeof comfyConfig).toBe("object");
   });
 });

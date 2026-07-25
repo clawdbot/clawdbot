@@ -7,6 +7,7 @@ import type { CodexAppServerAuthProfileLookup } from "./session-binding.js";
 
 type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & {
   agentDir: string;
+  authMode?: "prepared-api-key" | "profile";
 };
 
 type ClientRuntime = {
@@ -32,6 +33,9 @@ export function ensureCodexAppServerClientRuntime(
   client.addRequestHandler(async (request) => {
     if (request.method !== "account/chatgptAuthTokens/refresh") {
       return undefined;
+    }
+    if (runtime.context.authMode === "prepared-api-key") {
+      throw new Error("ChatGPT token refresh is unavailable for prepared Codex API-key auth.");
     }
     return (await refreshCodexAppServerAuthTokens({
       agentDir: runtime.context.agentDir,

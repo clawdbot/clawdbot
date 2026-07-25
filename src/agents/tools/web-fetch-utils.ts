@@ -4,7 +4,7 @@
  * Converts lightweight HTML into bounded markdown/text without pulling in a full renderer.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { decodeHtmlEntityAt } from "../utils/html.js";
+import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 
 /** Output mode requested by web_fetch extraction. */
@@ -51,33 +51,10 @@ type TagEndResult = {
   rawTextStart?: number;
 };
 
-// Decode entities through the canonical shared decoder (agents/utils/html.ts) so web_fetch and the
-// renderer share one entity contract — the divergent hand-rolled copy here was what truncated astral
-// entities. A single left-to-right pass also avoids double-decoding "&amp;#39;" into "'", because the
-// "&amp;" is consumed before its following "#39;" is ever seen as an entity.
 function decodeEntities(value: string): string {
-  if (!value.includes("&")) {
-    return value;
-  }
-  let out = "";
-  for (let i = 0; i < value.length; i += 1) {
-    if (value[i] === "&") {
-      // &nbsp; is not an escapable entity in the shared decoder; render it as a space.
-      if (value.slice(i, i + 6).toLowerCase() === "&nbsp;") {
-        out += " ";
-        i += 5;
-        continue;
-      }
-      const decoded = decodeHtmlEntityAt(value, i);
-      if (decoded) {
-        out += decoded.text;
-        i += decoded.length - 1;
-        continue;
-      }
-    }
-    out += value[i];
-  }
-  return out;
+  // Display extraction historically accepted mixed-case &nbsp; and treats non-breaking spaces as
+  // ordinary collapsible whitespace. Normalize it before the shared decoder to stay single-pass.
+  return decodeHtmlEntities(value.replace(/&nbsp;/gi, "\u00a0")).replaceAll("\u00a0", " ");
 }
 
 function isAsciiWhitespace(value: string): boolean {
@@ -161,7 +138,7 @@ function findTagEnd(html: string, start: number): TagEndResult {
   let afterEquals = false;
   let rawTextStartInQuote: number | undefined;
   for (let i = start + 1; i < html.length; i += 1) {
-    const ch = html[i];
+    const ch = html.charAt(i);
     if (quote) {
       if (rawTextStartInQuote === undefined && readRawTextOpenTagName(html, i)) {
         rawTextStartInQuote = i;
@@ -198,7 +175,7 @@ function isSelfClosingTagRaw(raw: string): boolean {
   if (!trimmed.endsWith("/")) {
     return false;
   }
-  const beforeSlash = trimmed[trimmed.length - 2];
+  const beforeSlash = trimmed.charAt(trimmed.length - 2);
   const tagBody = trimmed.slice(0, -1);
   let hasAttributeSeparator = false;
   for (const ch of tagBody) {
@@ -250,13 +227,13 @@ function readTagToken(html: string, start: number): ReadTagResult | null {
   }
 
   let pos = start + 1;
-  while (pos < end && isAsciiWhitespace(html[pos])) {
+  while (pos < end && isAsciiWhitespace(html.charAt(pos))) {
     pos += 1;
   }
   const closing = html[pos] === "/";
   if (closing) {
     pos += 1;
-    while (pos < end && isAsciiWhitespace(html[pos])) {
+    while (pos < end && isAsciiWhitespace(html.charAt(pos))) {
       pos += 1;
     }
   }
@@ -269,7 +246,7 @@ function readTagToken(html: string, start: number): ReadTagResult | null {
   }
 
   const nameStart = pos;
-  while (pos < end && isTagNameChar(html[pos])) {
+  while (pos < end && isTagNameChar(html.charAt(pos))) {
     pos += 1;
   }
   if (pos === nameStart || !isTagNameStartChar(html[nameStart] ?? "")) {
@@ -301,15 +278,18 @@ function readTagToken(html: string, start: number): ReadTagResult | null {
 function readAttributeValue(rawTag: string, name: string): string | undefined {
   const target = name.toLowerCase();
   let pos = 0;
-  while (pos < rawTag.length && !isAsciiWhitespace(rawTag[pos])) {
+  while (pos < rawTag.length && !isAsciiWhitespace(rawTag.charAt(pos))) {
     pos += 1;
   }
   while (pos < rawTag.length) {
-    while (pos < rawTag.length && (isAsciiWhitespace(rawTag[pos]) || rawTag[pos] === "/")) {
+    while (
+      pos < rawTag.length &&
+      (isAsciiWhitespace(rawTag.charAt(pos)) || rawTag.charAt(pos) === "/")
+    ) {
       pos += 1;
     }
     const attrStart = pos;
-    while (pos < rawTag.length && isTagNameChar(rawTag[pos])) {
+    while (pos < rawTag.length && isTagNameChar(rawTag.charAt(pos))) {
       pos += 1;
     }
     if (pos === attrStart) {
@@ -317,13 +297,13 @@ function readAttributeValue(rawTag: string, name: string): string | undefined {
       continue;
     }
     const attrName = rawTag.slice(attrStart, pos).toLowerCase();
-    while (pos < rawTag.length && isAsciiWhitespace(rawTag[pos])) {
+    while (pos < rawTag.length && isAsciiWhitespace(rawTag.charAt(pos))) {
       pos += 1;
     }
     let value = "";
     if (rawTag[pos] === "=") {
       pos += 1;
-      while (pos < rawTag.length && isAsciiWhitespace(rawTag[pos])) {
+      while (pos < rawTag.length && isAsciiWhitespace(rawTag.charAt(pos))) {
         pos += 1;
       }
       const quote = rawTag[pos];
@@ -341,7 +321,7 @@ function readAttributeValue(rawTag: string, name: string): string | undefined {
         const valueStart = pos;
         while (
           pos < rawTag.length &&
-          !isAsciiWhitespace(rawTag[pos]) &&
+          !isAsciiWhitespace(rawTag.charAt(pos)) &&
           rawTag[pos] !== '"' &&
           rawTag[pos] !== "'" &&
           rawTag[pos] !== "=" &&
@@ -363,8 +343,8 @@ function readAttributeValue(rawTag: string, name: string): string | undefined {
 
 function skipUnsupportedAttribute(rawTag: string, start: number): number {
   let pos = start;
-  while (pos < rawTag.length && !isAsciiWhitespace(rawTag[pos])) {
-    const quote = rawTag[pos];
+  while (pos < rawTag.length && !isAsciiWhitespace(rawTag.charAt(pos))) {
+    const quote = rawTag.charAt(pos);
     if (quote === '"' || quote === "'") {
       const valueEnd = rawTag.indexOf(quote, pos + 1);
       pos = valueEnd === -1 ? rawTag.length : valueEnd + 1;
@@ -513,7 +493,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
   const stack: RenderContext[] = [root];
   const state: { title?: string } = {};
 
-  for (let i = 0; i < html.length; ) {
+  for (let i = 0; i < html.length;) {
     const ch = html[i];
     if (ch !== "<") {
       const nextTag = html.indexOf("<", i);

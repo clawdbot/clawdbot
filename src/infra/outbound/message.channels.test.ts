@@ -1,7 +1,7 @@
 // Covers channel-specific outbound adapter behavior for message sends,
 // structured payloads, and channel capability interactions.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -234,9 +234,7 @@ describe("sendMessage replyToId threading", () => {
   });
 });
 
-function setDemoPollRegistry(
-  outboundOptions: Parameters<typeof createDemoAliasOutbound>[0] = {},
-) {
+function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasOutbound>[0] = {}) {
   setRegistry(
     createTestRegistry([
       {

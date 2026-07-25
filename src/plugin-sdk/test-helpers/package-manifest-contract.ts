@@ -4,7 +4,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isAtLeast, parseMinHostVersionRequirement, parseSemver } from "../testing.js";
+import { isAtLeast, parseSemver } from "../../infra/runtime-guard.js";
+import { parseMinHostVersionRequirement } from "../../plugins/min-host-version.js";
 
 type PackageManifest = {
   dependencies?: Record<string, string>;

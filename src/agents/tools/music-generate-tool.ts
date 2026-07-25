@@ -1,8 +1,4 @@
-/**
- * music_generate built-in tool.
- *
- * Resolves music providers/options, saves generated tracks, and supports detached background runs.
- */
+/** Runs music generation, persistence, and detached completion. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -40,6 +36,7 @@ import {
   buildMediaGenerationRequestKey,
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
@@ -55,6 +52,7 @@ import {
   applyMusicGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  createCapabilityProviderRuntimeDeps,
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
@@ -159,22 +157,23 @@ function resolveMusicGenerationModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.musicGenerationModel,
+    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.music,
     providers: () => listRuntimeMusicGenerationProviders({ config: params.cfg }),
   });
 }
 
 function hasExplicitMusicGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.musicGenerationModel));
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.music));
 }
 
 function resolveSelectedMusicGenerationProvider(params: {
   config?: OpenClawConfig;
+  providers?: MusicGenerationProvider[];
   musicGenerationModelConfig: ToolModelConfig;
   modelOverride?: string;
 }): MusicGenerationProvider | undefined {
   return resolveSelectedCapabilityProvider({
-    providers: listRuntimeMusicGenerationProviders({ config: params.config }),
+    providers: params.providers ?? listRuntimeMusicGenerationProviders({ config: params.config }),
     modelConfig: params.musicGenerationModelConfig,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
@@ -429,6 +428,7 @@ async function executeMusicGenerationJob(params: {
   autoProviderFallback?: boolean;
   timeoutMs?: number;
   timeoutNormalization?: MusicGenerationTimeoutNormalization;
+  providers?: MusicGenerationProvider[];
 }): Promise<ExecutedMusicGeneration> {
   if (params.taskHandle) {
     recordMusicGenerationTaskProgress({
@@ -436,19 +436,22 @@ async function executeMusicGenerationJob(params: {
       progressSummary: "Generating music",
     });
   }
-  const result = await generateMusic({
-    cfg: params.effectiveCfg,
-    prompt: params.prompt,
-    agentDir: params.agentDir,
-    modelOverride: params.model,
-    lyrics: params.lyrics,
-    instrumental: params.instrumental,
-    durationSeconds: params.durationSeconds,
-    format: params.format,
-    inputImages: params.loadedReferenceImages.map((entry) => entry.sourceImage),
-    autoProviderFallback: params.autoProviderFallback,
-    timeoutMs: params.timeoutMs,
-  });
+  const result = await generateMusic(
+    {
+      cfg: params.effectiveCfg,
+      prompt: params.prompt,
+      agentDir: params.agentDir,
+      modelOverride: params.model,
+      lyrics: params.lyrics,
+      instrumental: params.instrumental,
+      durationSeconds: params.durationSeconds,
+      format: params.format,
+      inputImages: params.loadedReferenceImages.map((entry) => entry.sourceImage),
+      autoProviderFallback: params.autoProviderFallback,
+      timeoutMs: params.timeoutMs,
+    },
+    createCapabilityProviderRuntimeDeps(params.providers),
+  );
   if (params.taskHandle) {
     recordMusicGenerationTaskProgress({
       handle: params.taskHandle,
@@ -578,20 +581,26 @@ export function createMusicGenerateTool(options?: {
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MusicGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
+  const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
+    ?.musicGenerationProviders
+    ? [...options.preparedModelRuntime.mediaCapabilityProviders.musicGenerationProviders]
+    : undefined;
   if (
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.musicGenerationModel,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.music,
       providerKey: "musicGenerationProviders",
+      providers: preparedProviders,
     })
   ) {
     return null;
@@ -612,7 +621,7 @@ export function createMusicGenerateTool(options?: {
     name: "music_generate",
     displaySummary: "Generate music",
     description:
-      'Create audio/music for song, jingle, beat, loop, soundtrack, anthem, instrumental requests. If user asks make/generate/create song/music, call music_generate; do not just write lyrics unless lyrics/text only. Prompt gets style/genre/mood/tempo/instruments/purpose. lyrics only exact sung words. Session chats: background task; do not call again for same request; wait completion, then report through the current visible-reply contract with generated media attached using structured media fields. "status" checks active task.',
+      "Create song/jingle/beat/loop/soundtrack/anthem/instrumental. Make/generate music => call; lyrics-only request => text only. prompt: style/genre/mood/tempo/instruments/purpose; lyrics: exact sung words. Session chat background: call once/request, await, then visible reply + structured media. status checks active task.",
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
@@ -680,6 +689,7 @@ export function createMusicGenerateTool(options?: {
       const selectedProvider = shouldResolveSelectedProvider
         ? resolveSelectedMusicGenerationProvider({
             config: effectiveCfg,
+            providers: preparedProviders,
             musicGenerationModelConfig,
             modelOverride: model,
           })
@@ -771,6 +781,7 @@ export function createMusicGenerateTool(options?: {
               autoProviderFallback: explicitModelConfig ? false : undefined,
               timeoutMs,
               timeoutNormalization: timeout.normalization,
+              providers: preparedProviders,
             }),
         });
 
@@ -829,6 +840,7 @@ export function createMusicGenerateTool(options?: {
           autoProviderFallback: explicitModelConfig ? false : undefined,
           timeoutMs,
           timeoutNormalization: timeout.normalization,
+          providers: preparedProviders,
         });
         completeMusicGenerationTaskRun({
           handle: taskHandle,
@@ -851,3 +863,4 @@ export function createMusicGenerateTool(options?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

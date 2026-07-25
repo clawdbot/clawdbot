@@ -1,7 +1,10 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 
-type PluginTabRef = { pluginId: string; id: string };
+type PluginTabRef = {
+  pluginId: string;
+  id: string;
+};
 
 /** Reads the plugin tab reference from a `/plugin?plugin=<pluginId>&id=<tab>` search string. */
 export function pluginTabRefFromSearch(search: string): PluginTabRef {
@@ -13,7 +16,7 @@ export function pluginTabRefFromSearch(search: string): PluginTabRef {
 }
 
 export function pluginTabSearch(ref: PluginTabRef): string {
-  return `?plugin=${encodeURIComponent(ref.pluginId)}&id=${encodeURIComponent(ref.id)}`;
+  return `?${new URLSearchParams({ plugin: ref.pluginId, id: ref.id }).toString()}`;
 }
 
 /** Stable key for one tab; ids are only unique per plugin, so both parts matter. */

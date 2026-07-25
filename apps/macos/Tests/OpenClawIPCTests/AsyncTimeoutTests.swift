@@ -57,9 +57,7 @@ private actor CancellationIgnoringOperation {
     }
 
     func waitUntilFinished() async {
-        if self.didFinish {
-            return
-        }
+        if self.didFinish { return }
         await withCheckedContinuation { continuation in
             self.finishWaiters.append(continuation)
         }
@@ -85,9 +83,7 @@ private actor AsyncTimeoutTestGate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     func wait() async {
-        if self.isOpen {
-            return
-        }
+        if self.isOpen { return }
         await withCheckedContinuation { continuation in
             self.waiters.append(continuation)
         }
@@ -171,12 +167,13 @@ struct AsyncTimeoutTests {
         }
     }
 
-    @Test func `caller cancellation returns before operation finishes`() async {
+    @Test(arguments: [0.0, 60.0])
+    func `caller cancellation returns before operation finishes`(seconds: Double) async {
         let operation = CancellationIgnoringOperation()
         let cancellation = CancellationProbe()
         let task = Task {
             try await AsyncTimeout.withTimeout(
-                seconds: 60,
+                seconds: seconds,
                 onTimeout: { ExpectedTimeout() },
                 operation: {
                     await withTaskCancellationHandler {

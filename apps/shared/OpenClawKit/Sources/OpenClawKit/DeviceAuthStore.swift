@@ -1,6 +1,6 @@
 import Foundation
 
-public struct DeviceAuthEntry: Codable, Sendable {
+public struct DeviceAuthEntry: Codable, Sendable, Equatable {
     public let token: String
     public let role: String
     public let scopes: [String]
@@ -16,7 +16,7 @@ public struct DeviceAuthEntry: Codable, Sendable {
     }
 }
 
-private struct DeviceAuthStoreFile: Codable {
+struct DeviceAuthStoreFile: Codable, Equatable {
     var version: Int
     var deviceId: String
     var tokens: [String: DeviceAuthEntry]
@@ -30,7 +30,8 @@ public enum DeviceAuthStore {
         profile: GatewayDeviceIdentityProfile = .primary) -> DeviceAuthEntry?
     {
         guard let store = readStore(profile: profile), store.deviceId == deviceId else { return nil }
-        return store.tokens[self.tokenKey(role: role, gatewayID: gatewayID)]
+        guard let key = self.tokenKey(role: role, gatewayID: gatewayID) else { return nil }
+        return store.tokens[key]
     }
 
     public static func storeToken(
@@ -78,20 +79,24 @@ public enum DeviceAuthStore {
         profile: GatewayDeviceIdentityProfile = .primary) -> (entry: DeviceAuthEntry, persisted: Bool)
     {
         let normalizedRole = self.normalizeRole(role)
-        var next = self.readStore(profile: profile)
-        if next?.deviceId != deviceId {
-            next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
-        }
+        let normalizedGatewayID = self.normalizeGatewayID(gatewayID)
         let entry = DeviceAuthEntry(
             token: token,
             role: normalizedRole,
             scopes: normalizeScopes(scopes),
             updatedAtMs: Int64(Date().timeIntervalSince1970 * 1000),
-            gatewayID: self.normalizeGatewayID(gatewayID))
+            gatewayID: normalizedGatewayID)
+        guard gatewayID == nil || normalizedGatewayID != nil,
+              let key = self.tokenKey(role: normalizedRole, gatewayID: normalizedGatewayID)
+        else { return (entry, false) }
+        var next = self.readStore(profile: profile)
+        if next?.deviceId != deviceId {
+            next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
+        }
         if next == nil {
             next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
         }
-        next?.tokens[self.tokenKey(role: normalizedRole, gatewayID: gatewayID)] = entry
+        next?.tokens[key] = entry
         let persisted = next.map { self.writeStore($0, profile: profile) } ?? false
         return (entry, persisted)
     }
@@ -109,7 +114,8 @@ public enum DeviceAuthStore {
                 self.normalizeRole(entry.role) != normalizedRole
             }
         } else {
-            store.tokens.removeValue(forKey: self.tokenKey(role: normalizedRole, gatewayID: gatewayID))
+            guard let key = self.tokenKey(role: normalizedRole, gatewayID: gatewayID) else { return }
+            store.tokens.removeValue(forKey: key)
         }
         self.writeStore(store, profile: profile)
     }
@@ -133,9 +139,10 @@ public enum DeviceAuthStore {
         else { return false }
 
         let normalizedRole = self.normalizeRole(role)
-        let legacyKey = self.tokenKey(role: normalizedRole, gatewayID: nil)
+        guard let legacyKey = self.tokenKey(role: normalizedRole, gatewayID: nil),
+              let scopedKey = self.tokenKey(role: normalizedRole, gatewayID: gatewayID)
+        else { return false }
         guard let entry = store.tokens[legacyKey], entry.gatewayID == nil else { return false }
-        let scopedKey = self.tokenKey(role: normalizedRole, gatewayID: gatewayID)
         if store.tokens[scopedKey] == nil {
             store.tokens[scopedKey] = DeviceAuthEntry(
                 token: entry.token,
@@ -168,14 +175,25 @@ public enum DeviceAuthStore {
     }
 
     private static func normalizeGatewayID(_ gatewayID: String?) -> String? {
-        let trimmed = gatewayID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        guard let gatewayID, !gatewayID.isEmpty else { return nil }
+        return gatewayID
     }
 
-    private static func tokenKey(role: String, gatewayID: String?) -> String {
+    private static func tokenKey(role: String, gatewayID: String?) -> String? {
         let normalizedRole = self.normalizeRole(role)
-        guard let gatewayID = self.normalizeGatewayID(gatewayID) else { return normalizedRole }
-        return "\(gatewayID)\u{1F}\(normalizedRole)"
+        guard !normalizedRole.isEmpty else { return nil }
+        guard let gatewayID else { return normalizedRole }
+        guard let gatewayID = self.normalizeGatewayID(gatewayID) else { return nil }
+        // Swift String dictionary keys apply canonical equivalence. ASCII-encode both
+        // byte sequences so distinct gateway owners cannot address the same token.
+        return "v2.\(self.storageComponent(gatewayID)).\(self.storageComponent(normalizedRole))"
+    }
+
+    private static func storageComponent(_ value: String) -> String {
+        Data(value.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     private static func normalizeScopes(_ scopes: [String]) -> [String] {
@@ -197,8 +215,37 @@ public enum DeviceAuthStore {
         guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data) else {
             return nil
         }
+        return self.normalizedStore(decoded)
+    }
+
+    static func normalizedStore(_ decoded: DeviceAuthStoreFile) -> DeviceAuthStoreFile? {
         guard decoded.version == 1 else { return nil }
-        return decoded
+        // Entries carry their owner, so reads and identity migration compare one canonical
+        // role/scope/owner map instead of raw JSON key order or legacy dictionary keys.
+        var tokens: [String: DeviceAuthEntry] = [:]
+        for entry in decoded.tokens.values {
+            let role = self.normalizeRole(entry.role)
+            let gatewayID = self.normalizeGatewayID(entry.gatewayID)
+            guard entry.gatewayID == nil || gatewayID != nil,
+                  let key = self.tokenKey(role: role, gatewayID: gatewayID)
+            else { continue }
+            let normalized = DeviceAuthEntry(
+                token: entry.token,
+                role: role,
+                scopes: self.normalizeScopes(entry.scopes),
+                updatedAtMs: entry.updatedAtMs,
+                gatewayID: gatewayID)
+            if let existing = tokens[key] {
+                if existing.updatedAtMs > normalized.updatedAtMs {
+                    continue
+                }
+                if existing.updatedAtMs == normalized.updatedAtMs, existing != normalized {
+                    return nil
+                }
+            }
+            tokens[key] = normalized
+        }
+        return DeviceAuthStoreFile(version: 1, deviceId: decoded.deviceId, tokens: tokens)
     }
 
     @discardableResult

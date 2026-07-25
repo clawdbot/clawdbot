@@ -1,21 +1,23 @@
 {
   "name": "@openclaw/qqbot",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/qqbot",
-      "version": "2026.6.11",
+      "version": "2026.7.2",
       "dependencies": {
-        "@tencent-connect/qqbot-connector": "1.1.0",
+        "@tencent-connect/qqbot-connector": "1.2.0",
         "mpg123-decoder": "1.0.3",
+        "p-map": "7.0.5",
+        "pretty-ms": "9.3.0",
         "silk-wasm": "3.7.1",
-        "ws": "8.21.0",
+        "ws": "8.21.1",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.11"
+        "openclaw": ">=2026.7.2"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -30,9 +32,9 @@
       "license": "Apache-2.0"
     },
     "node_modules/@tencent-connect/qqbot-connector": {
-      "version": "1.1.0",
-      "resolved": "https://registry.npmjs.org/@tencent-connect/qqbot-connector/-/qqbot-connector-1.1.0.tgz",
-      "integrity": "sha512-3nQ2mdyzPRKpBHjd3QiKZDwNzw1F7fBN+rSq8Xms2gg+JWZR4SY2Zdf+doqTyXdyVjG4Y0QM7IA4U42zT9xxzw==",
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/@tencent-connect/qqbot-connector/-/qqbot-connector-1.2.0.tgz",
+      "integrity": "sha512-FAOUCvgxP4M9UiYbHrtVgJ7BavSlh1CHJPjeEQuTAkP9MZ91lX4yATqv6I/lB9yp15nVq+G2DaGSSJwQTSoSsA==",
       "license": "UNLICENSED",
       "dependencies": {
         "qrcode-terminal": "^0.12"
@@ -64,6 +66,45 @@
         "url": "https://github.com/sponsors/eshaz"
       }
     },
+    "node_modules/p-map": {
+      "version": "7.0.5",
+      "resolved": "https://registry.npmjs.org/p-map/-/p-map-7.0.5.tgz",
+      "integrity": "sha512-e8vJF4XdVkzqqSHguEMz41mQO1wKwxKm5ENrUJQUu9kLDCtn83cxbyHZcszr4QC5zEA7WffRRC4gsTecC7J9oA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
+    "node_modules/parse-ms": {
+      "version": "4.0.0",
+      "resolved": "https://registry.npmjs.org/parse-ms/-/parse-ms-4.0.0.tgz",
+      "integrity": "sha512-TXfryirbmq34y8QBwgqCVLi+8oA3oWx2eAnSn62ITyEhEYaWRlVZ2DvMM9eZbMs/RfxPu/PK/aBLyGj4IrqMHw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
+    "node_modules/pretty-ms": {
+      "version": "9.3.0",
+      "resolved": "https://registry.npmjs.org/pretty-ms/-/pretty-ms-9.3.0.tgz",
+      "integrity": "sha512-gjVS5hOP+M3wMm5nmNOucbIrqudzs9v/57bWRHQWLYklXqoXKrVfYW2W9+glfGsqtPgpiz5WwyEEB+ksXIx3gQ==",
+      "license": "MIT",
+      "dependencies": {
+        "parse-ms": "^4.0.0"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
     "node_modules/qrcode-terminal": {
       "version": "0.12.0",
       "resolved": "https://registry.npmjs.org/qrcode-terminal/-/qrcode-terminal-0.12.0.tgz",
@@ -92,9 +133,9 @@
       }
     },
     "node_modules/ws": {
-      "version": "8.21.0",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
-      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
+      "version": "8.21.1",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.1.tgz",
+      "integrity": "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"

@@ -17,12 +17,15 @@ import type {
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { sleep } from "../../utils/sleep.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
+import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 
 const configModuleLoader = createLazyImportLoader(
@@ -49,6 +52,11 @@ const supportExportModuleLoader = createLazyImportLoader(
 const daemonStatusGatherModuleLoader = createLazyImportLoader(
   () => import("../daemon-cli/status.gather.js"),
 );
+
+const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
+const DEFAULT_USAGE_COST_TIMEOUT_MS = 5 * 60_000;
+const USAGE_COST_SETTLE_INITIAL_POLL_MS = 250;
+const USAGE_COST_SETTLE_MAX_POLL_MS = 5_000;
 
 function loadConfigModule() {
   return configModuleLoader.load();
@@ -90,12 +98,12 @@ function loadDaemonStatusGatherModule() {
   return daemonStatusGatherModuleLoader.load();
 }
 
-function gatewayCallOpts(cmd: Command): Command {
+function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", "10000")
+    .option("--timeout <ms>", "Timeout in ms", String(defaultTimeoutMs))
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
 }
@@ -103,6 +111,59 @@ function gatewayCallOpts(cmd: Command): Command {
 async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
   const mod = await import("./call.js");
   return mod.callGatewayCli(method, opts, params);
+}
+
+function parseGatewayCallParams(value = "{}"): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("--params must be valid JSON.");
+  }
+}
+
+async function loadSettledCostUsageSummary(
+  rpcOpts: GatewayRpcOpts,
+  params: { days: number; agentId?: string; agentScope?: "all" },
+): Promise<CostUsageSummary> {
+  const timeoutMs = parseTimeoutMsWithFallback(rpcOpts.timeout, DEFAULT_USAGE_COST_TIMEOUT_MS, {
+    invalidType: "error",
+  });
+  const deadline = Date.now() + timeoutMs;
+  let lastSummary: CostUsageSummary | undefined;
+  let pollMs = USAGE_COST_SETTLE_INITIAL_POLL_MS;
+  for (;;) {
+    const remainingBeforeCallMs = deadline - Date.now();
+    if (remainingBeforeCallMs <= 0) {
+      throw createUsageCostSettleTimeoutError(lastSummary);
+    }
+    const callOpts = {
+      ...rpcOpts,
+      timeout: String(Math.min(DEFAULT_GATEWAY_RPC_TIMEOUT_MS, remainingBeforeCallMs)),
+    };
+    const summary = (await callGatewayCli("usage.cost", callOpts, params)) as CostUsageSummary;
+    lastSummary = summary;
+    const status = summary.cacheStatus?.status;
+    if (!status || status === "fresh") {
+      return summary;
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw createUsageCostSettleTimeoutError(summary);
+    }
+    // The usage-cost timeout is the whole command budget. Each transport call
+    // remains capped separately so one unresponsive RPC cannot consume it all.
+    await sleep(Math.min(pollMs, remainingMs));
+    pollMs = Math.min(pollMs * 2, USAGE_COST_SETTLE_MAX_POLL_MS);
+  }
+}
+
+function createUsageCostSettleTimeoutError(summary?: CostUsageSummary): Error {
+  const cachedFiles = summary?.cacheStatus?.cachedFiles ?? 0;
+  const pendingFiles = summary?.cacheStatus?.pendingFiles ?? 0;
+  return new Error(
+    `Timed out waiting for usage cost cache refresh (${cachedFiles} cached, ${pendingFiles} pending)`,
+  );
 }
 
 async function runGatewayCommand(
@@ -203,6 +264,7 @@ async function renderCostUsageSummaryAsync(
   days: number,
   rich: boolean,
 ): Promise<string[]> {
+  const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
   const { formatTokenCount, formatUsd } = await loadUsageFormatModule();
   const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
   const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
@@ -213,7 +275,7 @@ async function renderCostUsageSummaryAsync(
 
   if (summary.totals.missingCostEntries > 0) {
     lines.push(
-      `${colorize(rich, theme.muted, "Missing entries:")} ${summary.totals.missingCostEntries}`,
+      `${colorize(rich, theme.muted, "Missing cost:")} ${formatMissingCostEntries(summary.totals)}`,
     );
   }
 
@@ -520,6 +582,7 @@ export function registerGatewayCli(program: Command) {
   addGatewayServiceCommands(gateway, {
     statusDescription: "Show gateway service status + probe connectivity/capability",
   });
+  addGatewayRestartHandoffCommands(gateway);
 
   gatewayCallOpts(
     gateway
@@ -531,7 +594,7 @@ export function registerGatewayCli(program: Command) {
         await runGatewayCommand(
           async () => {
             const rpcOpts = resolveGatewayRpcOptions(opts, command);
-            const params = JSON.parse(String(opts.params ?? "{}"));
+            const params = parseGatewayCallParams(String(opts.params ?? "{}"));
             const result = await callGatewayCli(method, rpcOpts, params);
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);
@@ -567,17 +630,16 @@ export function registerGatewayCli(program: Command) {
             if (agentId && opts.allAgents) {
               throw new Error("Use --agent or --all-agents, not both");
             }
-            const result = await callGatewayCli("usage.cost", rpcOpts, {
+            const summary = await loadSettledCostUsageSummary(rpcOpts, {
               days,
               ...(agentId ? { agentId } : {}),
               ...(opts.allAgents ? { agentScope: "all" } : {}),
             });
             if (rpcOpts.json) {
-              defaultRuntime.writeJson(result);
+              defaultRuntime.writeJson(summary);
               return;
             }
             const rich = isRich();
-            const summary = result as CostUsageSummary;
             for (const line of await renderCostUsageSummaryAsync(summary, days, rich)) {
               defaultRuntime.log(line);
             }
@@ -586,6 +648,7 @@ export function registerGatewayCli(program: Command) {
           { json: Boolean(opts.json) },
         );
       }),
+    DEFAULT_USAGE_COST_TIMEOUT_MS,
   );
 
   gatewayCallOpts(
@@ -873,3 +936,4 @@ export function registerGatewayCli(program: Command) {
       }, "gateway discover failed");
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

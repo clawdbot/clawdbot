@@ -74,6 +74,7 @@ async function fetchProviderUsageSnapshot(params: {
       authProfileId: params.auth.authProfileId,
       subscriptionType: params.auth.subscriptionType,
       rateLimitTier: params.auth.rateLimitTier,
+      email: params.auth.email,
       timeoutMs: params.timeoutMs,
       fetchFn: params.fetchFn,
     },

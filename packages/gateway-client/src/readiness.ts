@@ -21,7 +21,7 @@ export type GatewayClientStartReadinessOptions = {
   timeoutMs?: number;
   clientOptions?: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "env" | "preauthHandshakeTimeoutMs"
   >;
   signal?: AbortSignal;
 };
@@ -33,15 +33,7 @@ function resolveGatewayClientStartReadinessTimeoutMs(
     return options.timeoutMs;
   }
   const clientOptions = options.clientOptions ?? {};
-  const timeoutOverride =
-    typeof clientOptions.connectChallengeTimeoutMs === "number" &&
-    Number.isFinite(clientOptions.connectChallengeTimeoutMs)
-      ? clientOptions.connectChallengeTimeoutMs
-      : typeof clientOptions.connectDelayMs === "number" &&
-          Number.isFinite(clientOptions.connectDelayMs)
-        ? clientOptions.connectDelayMs
-        : undefined;
-  return resolveConnectChallengeTimeoutMs(timeoutOverride, {
+  return resolveConnectChallengeTimeoutMs(clientOptions.connectChallengeTimeoutMs, {
     env: clientOptions.env,
     configuredTimeoutMs: clientOptions.preauthHandshakeTimeoutMs,
   });

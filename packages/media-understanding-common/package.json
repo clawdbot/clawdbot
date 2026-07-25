@@ -6,14 +6,7 @@
     "dist"
   ],
   "type": "module",
-  "main": "./dist/index.mjs",
-  "types": "./dist/index.d.mts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.mts",
-      "import": "./dist/index.mjs",
-      "default": "./dist/index.mjs"
-    },
     "./active-model": {
       "types": "./dist/active-model.d.mts",
       "import": "./dist/active-model.mjs",
@@ -66,6 +59,6 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/active-model.ts src/defaults.ts src/errors.ts src/format.ts src/openai-compatible-video.ts src/output-extract.ts src/provider-id.ts src/provider-supports.ts src/types.ts src/video.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/active-model.ts src/defaults.ts src/errors.ts src/format.ts src/openai-compatible-video.ts src/output-extract.ts src/provider-id.ts src/provider-supports.ts src/types.ts src/video.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   }
 }

@@ -3,12 +3,12 @@ title: Active goal context on the next turn
 scenario:
   id: goal-context-next-turn
   surface: goals
-  category: session-memory-and-context-engine.context-engine
+  category: session-memory.context-engine
   coverage:
     primary:
-      - goals.context-injection
+      - session-memory.goal-continuance-context-injection
     secondary:
-      - goals.continuance
+      - session-memory.goal-continuance-continuance
   objective: Verify an active session goal is injected into the next unrelated turn sent to the model.
   successCriteria:
     - An authorized channel turn starts a session goal through the public `/goal start` command.
@@ -25,8 +25,8 @@ scenario:
   execution:
     kind: flow
     summary: Start a goal, send an unrelated next turn, and inspect the exact mock-provider request payload.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       requiredProviderMode: mock-openai
       conversationId: goal-context-next-turn
       senderId: qa-goal-operator
@@ -76,9 +76,9 @@ flow:
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: goalStartReply
-        - set: requestCountBeforeSecondTurn
+        - set: requestCursorBeforeSecondTurn
           value:
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - set: secondOutboundIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
@@ -97,7 +97,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforeSecondTurn).find((request) => String(request.prompt ?? '').includes(config.secondMessage))"
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeSecondTurn}`)).find((request) => String(request.prompt ?? '').includes(config.secondMessage))"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 100
         - waitForOutbound:
@@ -111,7 +111,6 @@ flow:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: secondReply
         - assert:
-            expr: "String(secondTurnRequest.prompt ?? '').includes(config.expectedGoalContext)"
-            message:
-              expr: "`second-turn provider prompt missed active goal context: ${String(secondTurnRequest.prompt ?? '')}`"
+            expr: "String(secondTurnRequest.allInputText ?? '').includes(config.expectedGoalContext)"
+            message: second-turn provider request input missed active goal context
       detailsExpr: "`goal start reply=${goalStartReply.text}; second reply=${secondReply.text}`"

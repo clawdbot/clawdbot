@@ -29,7 +29,7 @@ type SharedToolDisplayConfig = {
   tools?: Record<string, SharedToolDisplaySpec>;
 };
 
-export type ToolDisplay = {
+type ToolDisplay = {
   name: string;
   icon: ChatToolIconName;
   title: string;
@@ -180,6 +180,16 @@ function sanitizeCanvasEntryUrl(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * True when the preview entry URL points at a hosted Canvas document rather
+ * than an externally allowed embed URL. Prompt authority (widget sendPrompt)
+ * is granted only to internal Canvas documents.
+ */
+export function isInternalCanvasEntryUrl(entryUrl: string | undefined): boolean {
+  const rawEntryUrl = entryUrl?.trim();
+  return Boolean(rawEntryUrl && sanitizeCanvasEntryUrl(rawEntryUrl, false));
 }
 
 export function resolveCanvasIframeUrl(

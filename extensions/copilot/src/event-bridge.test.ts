@@ -1,5 +1,6 @@
-// Copilot tests cover event bridge plugin behavior.
 import type { SessionEvent } from "@github/copilot-sdk";
+// Copilot tests cover event bridge plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 
@@ -553,7 +554,11 @@ describe("attachEventBridge", () => {
         title: "Plan updated",
         source: "copilot-sdk",
         explanation: "Plan ready",
-        steps: ["# Plan", "inspect", "patch"],
+        steps: [
+          { step: "# Plan", status: "pending" },
+          { step: "inspect", status: "pending" },
+          { step: "patch", status: "pending" },
+        ],
         actions: ["approve", "edit"],
         requestId: "request-1",
         recommendedAction: "approve",
@@ -772,6 +777,34 @@ describe("attachEventBridge", () => {
 
     expect(calls).toEqual(["start", "complete:false", "start", "complete:true"]);
     expect(bridge.isCompacting()).toBe(false);
+  });
+
+  it("invalidates shared tool context synchronously after every successful compaction", () => {
+    const session = createFakeSession();
+    const onContextCompacted = vi.fn();
+    attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onContextCompacted,
+    });
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: false }),
+    );
+    expect(onContextCompacted).not.toHaveBeenCalled();
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: true }),
+    );
+    expect(onContextCompacted).toHaveBeenCalledTimes(1);
+
+    session.emit("session.compaction_complete", {
+      ...makeEvent("session.compaction_complete", { success: true }),
+      agentId: "subagent-1",
+    });
+    expect(onContextCompacted).toHaveBeenCalledTimes(2);
   });
 
   it("waits for an active compaction and its completion callback", async () => {
@@ -1105,7 +1138,10 @@ describe("attachEventBridge", () => {
 
     const first = bridge.snapshot();
     (first.assistantTexts as string[]).push("mutated");
-    (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0].toolName = "mutated";
+    expectDefined(
+      (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0],
+      "Copilot tool metadata",
+    ).toolName = "mutated";
     (first.usage as { input?: number }).input = 999;
 
     const second = bridge.snapshot();
@@ -1120,3 +1156,4 @@ describe("attachEventBridge", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

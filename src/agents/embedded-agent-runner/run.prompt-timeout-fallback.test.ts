@@ -9,6 +9,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  useOpenAIPlatformAuthFixture,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
@@ -22,6 +23,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    useOpenAIPlatformAuthFixture();
   });
 
   it("throws FailoverError for replay-safe harness-owned prompt timeouts when model fallbacks are configured", async () => {
@@ -29,8 +31,11 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        promptError: new Error("LLM request timed out."),
-        promptErrorSource: "prompt",
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("LLM request timed out."),
+        },
       }),
     );
 
@@ -61,8 +66,11 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        promptError: new Error("LLM request timed out."),
-        promptErrorSource: "prompt",
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("LLM request timed out."),
+        },
         promptTimeoutOutcome: {
           message: "Harness abandoned the timed-out turn after provider activity.",
           replayInvalid: true,

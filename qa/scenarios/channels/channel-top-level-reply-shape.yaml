@@ -5,9 +5,9 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.group-visible-replies
+      - channels.group-final-reply
     secondary:
-      - runtime.delivery
+      - channels.automatic-final-reply
   objective: Verify a top-level group prompt produces a top-level reply without thread or quote relation metadata.
   successCriteria:
     - The reply contains the exact marker.
@@ -19,6 +19,15 @@ scenario:
     - extensions/qa-lab/src/qa-transport.ts
     - extensions/qa-lab/src/runtime-api.ts
   execution:
+    profiles:
+      {
+        "matrix:adapter": 5,
+        "matrix:all": 5,
+        "matrix:fast": 3,
+        "matrix:transport": 4,
+        "slack:adapter": 3,
+        "whatsapp:adapter": 4,
+      }
     kind: flow
     summary: Assert portable top-level reply shape while native adapters normalize transport relations.
     transportPolicy:

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
+import { getPendingSubmitAcceptedRunId, type TuiPendingSubmit } from "./tui-submit-state.js";
 import type {
   AgentEvent,
   BtwEvent,
@@ -71,6 +72,14 @@ function requireFinalizedAssistantText(chatLog: MockChatLog, index = 0): string 
   return String(call[0]);
 }
 
+function sendingSubmit(runId: string, draftText = "pending"): TuiPendingSubmit {
+  return { phase: "sending", runId, draftText };
+}
+
+function acceptedSubmit(runId: string, draftText: string | null = "pending"): TuiPendingSubmit {
+  return { phase: "accepted", runId, draftText };
+}
+
 describe("tui-event-handlers: handleAgentEvent", () => {
   const makeState = (overrides?: Partial<TuiStateAccess>): TuiStateAccess => ({
     agentDefaultId: "main",
@@ -81,7 +90,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     currentSessionKey: "agent:main:main",
     currentSessionId: "session-1",
     activeChatRunId: "run-1",
-    pendingOptimisticUserMessage: false,
+    pendingSubmit: null,
     historyLoaded: true,
     sessionInfo: { verboseLevel: "on" },
     initialSessionApplied: true,
@@ -342,7 +351,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.dismissPendingSystem).toHaveBeenCalledWith("run-error");
     expect(chatLog.addSystem).toHaveBeenCalledWith("run error: provider exploded");
     expect(state.activeChatRunId).toBeNull();
-    expect(loadHistory).toHaveBeenCalled();
+    expect(loadHistory).not.toHaveBeenCalled();
     expect(tui.requestRender).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
@@ -510,7 +519,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const { state, tui, handleAgentEvent } = createHandlersHarness({
       state: {
         activeChatRunId: null,
-        pendingChatRunId: "run-pending",
+        pendingSubmit: acceptedSubmit("run-pending"),
         sessionInfo: {
           verboseLevel: "on",
           modelProvider: "llamaforge",
@@ -540,8 +549,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       {
         state: {
           activeChatRunId: null,
-          pendingChatRunId: "run-pending",
-          pendingOptimisticUserMessage: true,
+          pendingSubmit: acceptedSubmit("run-pending"),
         },
       },
     );
@@ -553,11 +561,29 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(state.activeChatRunId).toBe("run-pending");
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(isLocalRunId("run-pending")).toBe(true);
     expect(setActivityStatus).toHaveBeenCalledWith("finishing context");
     expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("does not claim another client's lifecycle event as the pending local run", () => {
+    const { state, handleAgentEvent, isLocalRunId } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        pendingSubmit: acceptedSubmit("run-pending"),
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-remote",
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingSubmit?.runId).toBe("run-pending");
+    expect(isLocalRunId("run-remote")).toBe(false);
   });
 
   it("does not reload history after lifecycle binds a gateway pending run", () => {
@@ -565,8 +591,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       createHandlersHarness({
         state: {
           activeChatRunId: null,
-          pendingChatRunId: "run-pending",
-          pendingOptimisticUserMessage: true,
+          pendingSubmit: acceptedSubmit("run-pending"),
         },
       });
 
@@ -583,8 +608,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(isLocalRunId("run-pending")).toBe(false);
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
     expect(loadHistory).not.toHaveBeenCalled();
@@ -596,8 +620,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         state: {
           currentSessionKey: "agent:main:initial",
           activeChatRunId: null,
-          pendingChatRunId: "run-pending",
-          pendingOptimisticUserMessage: true,
+          pendingSubmit: acceptedSubmit("run-pending"),
         },
       });
     noteLocalRunId("run-pending");
@@ -610,8 +633,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(isLocalRunId("run-pending")).toBe(false);
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
     expect(loadHistory).not.toHaveBeenCalled();
@@ -993,9 +1015,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
     noteLocalRunId("run-local");
     state.activeChatRunId = "run-stale";
-    state.pendingChatRunId = "run-pending";
-    state.pendingOptimisticUserMessage = true;
-    state.pendingSubmitDraft = { runId: "run-pending", text: "pending" };
+    state.pendingSubmit = acceptedSubmit("run-pending");
     state.activityStatus = "streaming";
     loadHistory.mockClear();
     refreshSessionInfo.mockClear();
@@ -1012,9 +1032,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     } satisfies SessionChangedEvent);
 
     expect(state.activeChatRunId).toBeNull();
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingSubmitDraft).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(state.activityStatus).toBe("idle");
     expect(state.currentSessionId).toBe("session-after");
     expect(state.sessionInfo.updatedAt).toBe(200);
@@ -1245,7 +1263,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   it("binds optimistic pending messages to the first gateway run id and skips history reload", () => {
     const { state, loadHistory, noteLocalRunId, isLocalRunId, handleChatEvent } =
       createHandlersHarness({
-        state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
+        state: { activeChatRunId: null, pendingSubmit: sendingSubmit("run-gateway") },
       });
     noteLocalRunId("run-gateway");
 
@@ -1256,7 +1274,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(state.activeChatRunId).toBeNull();
     expect(isLocalRunId("run-gateway")).toBe(false);
     expect(loadHistory).not.toHaveBeenCalled();
@@ -1271,7 +1289,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     };
     const { state, noteLocalRunId, handleChatEvent } = createHandlersHarness({
       chatLog: chatLog as unknown as HandlerChatLog,
-      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
+      state: {
+        activeChatRunId: null,
+        pendingSubmit: sendingSubmit("run-gateway", "queued hello"),
+      },
     });
     noteLocalRunId("run-gateway");
 
@@ -1282,14 +1303,14 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: "working" },
     });
 
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(chatLog.countPendingUsers()).toBe(1);
     expect(chatLog.render(120).join("\n")).toContain("queued hello");
   });
 
   it("does not bind unknown gateway run ids while an optimistic message is pending", () => {
     const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
+      state: { activeChatRunId: null, pendingSubmit: sendingSubmit("run-pending") },
     });
 
     handleChatEvent({
@@ -1299,7 +1320,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(state.pendingSubmit).toEqual(sendingSubmit("run-pending"));
     expect(state.activeChatRunId).toBeNull();
     expect(isLocalRunId("run-unknown")).toBe(false);
     expect(loadHistory).not.toHaveBeenCalled();
@@ -1309,8 +1330,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const { state, chatLog, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
       state: {
         activeChatRunId: "run-active",
-        pendingChatRunId: "run-pending",
-        pendingOptimisticUserMessage: true,
+        pendingSubmit: acceptedSubmit("run-pending"),
       },
     });
 
@@ -1321,8 +1341,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(state.activeChatRunId).toBe("run-active");
     expect(isLocalRunId("run-pending")).toBe(false);
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
@@ -1334,8 +1353,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       createHandlersHarness({
         state: {
           activeChatRunId: null,
-          pendingChatRunId: "run-pending",
-          pendingOptimisticUserMessage: true,
+          pendingSubmit: acceptedSubmit("run-pending"),
         },
       });
     noteLocalRunId("run-pending");
@@ -1347,8 +1365,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "other done" }] },
     });
 
-    expect(state.pendingChatRunId).toBe("run-pending");
-    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(getPendingSubmitAcceptedRunId(state)).toBe("run-pending");
     expect(isLocalRunId("run-other")).toBe(false);
     expect(loadHistory).not.toHaveBeenCalled();
 
@@ -1359,8 +1376,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-pending");
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
@@ -1370,8 +1386,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       createHandlersHarness({
         state: {
           activeChatRunId: "run-active",
-          pendingChatRunId: "run-pending",
-          pendingOptimisticUserMessage: true,
+          pendingSubmit: acceptedSubmit("run-pending"),
         },
       });
     noteLocalRunId("run-active");
@@ -1384,20 +1399,18 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "active done" }] },
     });
 
-    expect(state.pendingChatRunId).toBe("run-pending");
-    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(getPendingSubmitAcceptedRunId(state)).toBe("run-pending");
     expect(isLocalRunId("run-active")).toBe(false);
     expect(isLocalRunId("run-pending")).toBe(true);
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
-  it("binds an early final to the optimistic message before pendingChatRunId is assigned", () => {
+  it("binds an early final before submit acceptance is recorded", () => {
     const { state, chatLog, loadHistory, noteLocalRunId, isLocalRunId, handleChatEvent } =
       createHandlersHarness({
         state: {
           activeChatRunId: "run-active",
-          pendingChatRunId: null,
-          pendingOptimisticUserMessage: true,
+          pendingSubmit: sendingSubmit("run-early-final"),
         },
       });
     noteLocalRunId("run-early-final");
@@ -1409,20 +1422,18 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingSubmit).toBeNull();
     expect(state.activeChatRunId).toBe("run-active");
     expect(isLocalRunId("run-early-final")).toBe(false);
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-early-final");
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
-  it("clears pendingChatRunId when an event for that runId arrives", () => {
+  it("clears the accepted pending submit when its event arrives", () => {
     const { state, handleChatEvent } = createHandlersHarness({
       state: {
         activeChatRunId: null,
-        pendingOptimisticUserMessage: true,
-        pendingChatRunId: "run-pending",
+        pendingSubmit: acceptedSubmit("run-pending"),
       },
     });
 
@@ -1433,7 +1444,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: "hi" },
     });
 
-    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingSubmit).toBeNull();
     expect(state.activeChatRunId).toBe("run-pending");
   });
 
@@ -1682,8 +1693,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
-  it("renders malformed streaming fragment text for chat error events", () => {
-    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+  it("renders malformed streaming fragment text for chat error events without reloading", () => {
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
     });
 
@@ -1697,6 +1708,45 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledWith(
       "run error: LLM streaming response contained a malformed fragment. Please try again.",
     );
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("restores a terminal error when another run delays a history reload", async () => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-error" },
+    });
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "still running" },
+    });
+    noteLocalRunId("run-local-empty");
+    handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+    handleChatEvent({
+      runId: "run-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "provider exploded",
+    });
+
+    expect(state.activeChatRunId).toBe("run-other");
+    expect(loadHistory).not.toHaveBeenCalled();
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    await vi.waitFor(() => expect(chatLog.addSystem).toHaveBeenCalledTimes(2));
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).toHaveBeenLastCalledWith("run error: provider exploded");
   });
 
   it("shows a concise /auth hint for local auth failures", () => {
@@ -2246,7 +2296,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     currentSessionKey: "agent:main:main",
     currentSessionId: "session-1",
     activeChatRunId: null,
-    pendingOptimisticUserMessage: false,
+    pendingSubmit: null,
     historyLoaded: true,
     sessionInfo: { verboseLevel: "on" },
     initialSessionApplied: true,
@@ -2680,3 +2730,4 @@ describe("tui-event-handlers: streaming watchdog", () => {
     handlers.dispose?.();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

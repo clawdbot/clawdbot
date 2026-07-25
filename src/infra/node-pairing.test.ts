@@ -1,17 +1,25 @@
 // Tests node capability-surface approvals stored on paired device records.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { approveDevicePairing, requestDevicePairing } from "./device-pairing.js";
+import { createDeferred } from "../test-utils/deferred.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+  resolveNodePairingGeneration,
+  withPairedDeviceRecords,
+} from "./device-pairing.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
   finalizeNodePairingCleanupClaim,
   listNodePairing,
+  recordPairedNodeConnection,
   releaseNodePairingCleanupClaim,
   renamePairedNode,
   requestNodePairing,
   reusePendingNodePairingForReconnect,
-  updatePairedNodeMetadata,
+  updatePairedNodeBins,
 } from "./node-pairing.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
@@ -568,20 +576,176 @@ describe("node surface approvals", () => {
     });
   });
 
-  test("updates node runtime metadata and reports missing nodes", async () => {
+  test("updates remote skill bins and reports missing nodes", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const generation = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
+      if (!generation) {
+        throw new Error("expected node pairing generation");
+      }
+
+      await expect(recordPairedNodeConnection("node-1", 1_234, baseDir)).resolves.toEqual({
+        recorded: true,
+        firstConnection: true,
+      });
+      await expect(updatePairedNodeBins("node-1", ["ffmpeg"], generation, baseDir)).resolves.toBe(
+        true,
+      );
+      await expect(updatePairedNodeBins("missing", ["ffmpeg"], generation, baseDir)).resolves.toBe(
+        false,
+      );
+
+      const pairedNode = await findPairedNode("node-1", baseDir);
+      expect(pairedNode?.lastConnectedAtMs).toBe(1_234);
+      expect(pairedNode?.bins).toEqual(["ffmpeg"]);
+    });
+  });
+
+  test("rejects retired-generation bins after node-surface reapproval", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const previousGeneration = resolveNodePairingGeneration(
+        await getPairedDevice("node-1", baseDir),
+      );
+      if (!previousGeneration) {
+        throw new Error("expected previous node pairing generation");
+      }
+      await expect(
+        updatePairedNodeBins("node-1", ["retired-bin"], previousGeneration, baseDir),
+      ).resolves.toBe(true);
+
+      const pending = await requestNodePairing(
+        { nodeId: "node-1", platform: "darwin", commands: ["system.run", "system.which"] },
+        baseDir,
+      );
+      await approveNodePairing(
+        pending.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+
+      const currentGeneration = resolveNodePairingGeneration(
+        await getPairedDevice("node-1", baseDir),
+      );
+      if (!currentGeneration) {
+        throw new Error("expected current node pairing generation");
+      }
+      expect(currentGeneration.key).not.toBe(previousGeneration.key);
+      expect((await findPairedNode("node-1", baseDir))?.bins).toBeUndefined();
+      await expect(
+        updatePairedNodeBins("node-1", ["stale-write"], previousGeneration, baseDir),
+      ).resolves.toBe(false);
+      await expect(
+        updatePairedNodeBins("node-1", ["current-bin"], currentGeneration, baseDir),
+      ).resolves.toBe(true);
+      expect((await findPairedNode("node-1", baseDir))?.bins).toEqual(["current-bin"]);
+    });
+  });
+
+  test("atomically grants one first-connection claim across concurrent handshakes", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
 
-      await expect(
-        updatePairedNodeMetadata("node-1", { lastConnectedAtMs: 1234, bins: ["ffmpeg"] }, baseDir),
-      ).resolves.toBe(true);
-      await expect(
-        updatePairedNodeMetadata("missing", { lastConnectedAtMs: 1 }, baseDir),
-      ).resolves.toBe(false);
+      const claims = await Promise.all([
+        recordPairedNodeConnection("node-1", 1_000, baseDir),
+        recordPairedNodeConnection("node-1", 2_000, baseDir),
+      ]);
 
-      const pairedNode = await findPairedNode("node-1", baseDir);
-      expect(pairedNode?.lastConnectedAtMs).toBe(1234);
-      expect(pairedNode?.bins).toEqual(["ffmpeg"]);
+      expect(claims.filter((claim) => claim.recorded && claim.firstConnection)).toHaveLength(1);
+      expect(claims.every((claim) => claim.recorded)).toBe(true);
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(2_000);
+      await expect(recordPairedNodeConnection("node-1", 1_500, baseDir)).resolves.toEqual({
+        recorded: true,
+        firstConnection: false,
+      });
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(2_000);
+      await expect(recordPairedNodeConnection("node-1", 3_000, baseDir)).resolves.toEqual({
+        recorded: true,
+        firstConnection: false,
+      });
+      await expect(recordPairedNodeConnection("missing", 4_000, baseDir)).resolves.toEqual({
+        recorded: false,
+      });
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(3_000);
+    });
+  });
+
+  test("serializes connection metadata with locked node-surface mutations", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+
+      const snapshotLoaded = createDeferred();
+      const releaseMutation = createDeferred();
+      const lockedMutation = withPairedDeviceRecords(baseDir, async (pairedByDeviceId) => {
+        const device = pairedByDeviceId["node-1"];
+        if (!device?.nodeSurface) {
+          throw new Error("expected paired node surface");
+        }
+        device.nodeSurface = { ...device.nodeSurface, bins: ["ffmpeg"] };
+        snapshotLoaded.resolve();
+        await releaseMutation.promise;
+        return { value: true, persist: true };
+      });
+      await snapshotLoaded.promise;
+
+      let connectionSettled = false;
+      const connection = recordPairedNodeConnection("node-1", 1_234, baseDir).then((result) => {
+        connectionSettled = true;
+        return result;
+      });
+      await Promise.resolve();
+      expect(connectionSettled).toBe(false);
+
+      releaseMutation.resolve();
+      await expect(lockedMutation).resolves.toBe(true);
+      await expect(connection).resolves.toEqual({ recorded: true, firstConnection: true });
+      expect(await findPairedNode("node-1", baseDir)).toMatchObject({
+        bins: ["ffmpeg"],
+        lastConnectedAtMs: 1_234,
+      });
+    });
+  });
+
+  test("rejects connection metadata from a retired pairing generation", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const previousGeneration = resolveNodePairingGeneration(
+        await getPairedDevice("node-1", baseDir),
+      );
+      if (!previousGeneration) {
+        throw new Error("expected initial node pairing generation");
+      }
+
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+      await approveNodePairing(
+        pending.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin", "operator.write"] },
+        baseDir,
+      );
+      const currentGeneration = resolveNodePairingGeneration(
+        await getPairedDevice("node-1", baseDir),
+      );
+      if (!currentGeneration) {
+        throw new Error("expected replacement node pairing generation");
+      }
+      expect(currentGeneration.key).not.toBe(previousGeneration.key);
+
+      await expect(
+        recordPairedNodeConnection("node-1", 1_000, baseDir, previousGeneration),
+      ).resolves.toEqual({ recorded: false });
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBeUndefined();
+
+      await expect(
+        recordPairedNodeConnection("node-1", 2_000, baseDir, currentGeneration),
+      ).resolves.toEqual({ recorded: true, firstConnection: true });
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(2_000);
     });
   });
 

@@ -1,8 +1,8 @@
 // Google tests cover web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing, createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
+import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 type TestModelProviderConfig = NonNullable<
   NonNullable<OpenClawConfig["models"]>["providers"]
@@ -104,28 +104,6 @@ describe("google web search provider", () => {
     });
   });
 
-  it("falls back to GEMINI_API_KEY from the environment", () => {
-    withEnv({ GEMINI_API_KEY: "AIza-env-test" }, () => {
-      expect(testing.resolveGeminiApiKey()).toBe("AIza-env-test");
-    });
-  });
-
-  it("prefers configured api keys over env fallbacks", () => {
-    withEnv({ GEMINI_API_KEY: "AIza-env-test" }, () => {
-      expect(testing.resolveGeminiApiKey({ apiKey: "AIza-configured-test" })).toBe(
-        "AIza-configured-test",
-      );
-    });
-  });
-
-  it("uses provider api keys only after env fallbacks", () => {
-    withEnv({ GEMINI_API_KEY: "AIza-env-test" }, () => {
-      expect(testing.resolveGeminiApiKey({ providerApiKey: "AIza-provider-test" })).toBe(
-        "AIza-env-test",
-      );
-    });
-  });
-
   it("stores configured credentials at the canonical plugin config path", () => {
     const provider = createGeminiWebSearchProvider();
     const config = {} as OpenClawConfig;
@@ -134,39 +112,6 @@ describe("google web search provider", () => {
 
     expect(provider.credentialPath).toBe("plugins.entries.google.config.webSearch.apiKey");
     expect(provider.getConfiguredCredentialValue?.(config)).toBe("AIza-plugin-test");
-  });
-
-  it("keeps model-provider fallback config runtime-only when Gemini config was injected", () => {
-    const searchConfig = Object.defineProperty({ provider: "gemini" }, "gemini", {
-      value: { apiKey: "AIza-plugin-test" },
-      enumerable: false,
-      configurable: true,
-      writable: true,
-    });
-
-    const merged = testing.withGoogleModelProviderFallbacks(searchConfig, {
-      models: {
-        providers: {
-          google: createGoogleModelProviderConfig({
-            apiKey: "AIza-provider-test",
-            baseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
-          }),
-        },
-      },
-    });
-
-    expect(merged?.gemini).toEqual({
-      apiKey: "AIza-plugin-test",
-      providerApiKey: "AIza-provider-test",
-      providerBaseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
-    });
-    expect(Object.keys(merged ?? {})).toEqual(["provider"]);
-    expect(Object.getOwnPropertyDescriptor(merged, "gemini")?.enumerable).toBe(false);
-  });
-
-  it("defaults the Gemini web search model and trims explicit overrides", () => {
-    expect(testing.resolveGeminiModel()).toBe("gemini-2.5-flash");
-    expect(testing.resolveGeminiModel({ model: "  gemini-2.5-pro  " })).toBe("gemini-2.5-pro");
   });
 
   it("routes Gemini web search through plugin webSearch.baseUrl", async () => {
@@ -701,11 +646,5 @@ describe("google web search provider", () => {
         "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
     });
     expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("normalizes Gemini shorthand base URLs", () => {
-    expect(
-      testing.resolveGeminiBaseUrl({ baseUrl: "https://generativelanguage.googleapis.com" }),
-    ).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 });

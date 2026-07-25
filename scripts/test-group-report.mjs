@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import pMap from "p-map";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   buildGroupedTestComparison,
@@ -980,19 +981,15 @@ export async function runReportPlans(params) {
   const concurrency = resolveRunPlanConcurrency(params.args, params.runPlans.length);
   const runSpecs = resolveReportRunSpecs(params.args, params.runPlans, { concurrency });
   const runVitest = params.runVitestJsonReport ?? runVitestJsonReport;
-  const results = [];
-  results.length = runSpecs.length;
-  const runs = [];
-  runs.length = runSpecs.length;
-  let nextIndex = 0;
   let failed = false;
   let exitCode = 0;
 
-  async function worker() {
-    while (nextIndex < runSpecs.length && exitCode === 0) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const plan = runSpecs[index];
+  const results = await pMap(
+    runSpecs,
+    async (plan) => {
+      if (exitCode !== 0) {
+        return null;
+      }
       const slug = sanitizePathSegment(plan.label);
       const run = await runVitest({
         config: plan.config,
@@ -1006,7 +1003,6 @@ export async function runReportPlans(params) {
         killGraceMs: params.args.killGraceMs,
         vitestArgs: plan.vitestArgs,
       });
-      runs[index] = run;
       printRunLine(run);
       let includeEntry = true;
       if (run.status !== 0) {
@@ -1035,24 +1031,19 @@ export async function runReportPlans(params) {
         }
       }
       const entry = includeEntry ? { config: plan.label, reportPath: run.reportPath, run } : null;
-      results[index] = entry;
       if (entry) {
         printSlowTestsForRun(entry, params.args.maxTestMs);
       }
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: concurrency }, async () => {
-      await worker();
-    }),
+      return { entry, run };
+    },
+    { concurrency, stopOnError: true },
   );
 
   return {
     failed,
     exitCode,
-    runEntries: results.filter(Boolean),
-    runs: runs.filter(Boolean),
+    runEntries: results.flatMap((result) => (result?.entry ? [result.entry] : [])),
+    runs: results.flatMap((result) => (result ? [result.run] : [])),
   };
 }
 

@@ -9,7 +9,7 @@ import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
 /** Core directive handler inputs that do not depend on the inbound message shape. */
-export type HandleDirectiveOnlyCoreParams = {
+type HandleDirectiveOnlyCoreParams = {
   cfg: OpenClawConfig;
   directives: InlineDirectives;
   sessionEntry: SessionEntry;
@@ -23,9 +23,10 @@ export type HandleDirectiveOnlyCoreParams = {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
+  policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
+    ReturnType<typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog>
   >;
   thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
@@ -67,8 +68,9 @@ export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams 
     resolveThinkingCatalog: () => Promise<ModelCatalogEntry[] | undefined>;
     allowedModelKeys: Set<string>;
     allowedModelCatalog: Awaited<
-      ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
+      ReturnType<typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog>
     >;
+    policyAliasIndex?: ModelAliasIndex;
     resetModelOverride: boolean;
   };
 };

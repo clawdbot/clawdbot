@@ -1,6 +1,6 @@
 // Filesystem primitives used by legacy state migration code.
 import fs from "node:fs";
-import JSON5 from "json5";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 /** Minimal session-store entry shape needed by state migration ordering and repair logic. */
 export type SessionEntryLike = {
@@ -27,7 +27,7 @@ export function existsDir(dir: string): boolean {
 }
 
 /** Creates a directory tree for migration targets. */
-export function ensureDir(dir: string) {
+export function ensureMigrationDir(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -38,17 +38,6 @@ export function fileExists(p: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Matches legacy WhatsApp auth shard names that should move into the channel auth dir. */
-export function isLegacyWhatsAppAuthFile(name: string): boolean {
-  if (name === "creds.json" || name === "creds.json.bak") {
-    return true;
-  }
-  if (!name.endsWith(".json")) {
-    return false;
-  }
-  return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
 }
 
 /** Reads a session store from disk, accepting JSON first and JSON5 as legacy/operator input. */
@@ -71,15 +60,7 @@ export function parseSessionStoreJson5(raw: string): {
   ok: boolean;
 } {
   try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return { store: parsed as Record<string, SessionEntryLike>, ok: true };
-    }
-  } catch {
-    // Fall through to JSON5 for legacy/operator-edited stores.
-  }
-  try {
-    const parsed = JSON5.parse(raw);
+    const parsed = parseJsonWithJson5Fallback(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return { store: parsed as Record<string, SessionEntryLike>, ok: true };
     }

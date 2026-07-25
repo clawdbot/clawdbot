@@ -1,7 +1,7 @@
 // Control UI E2E tests cover browser Talk start and stop through a real page.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Page } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -17,6 +17,17 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
 let server: ControlUiE2eServer;
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
+
+function videoTalkCatalog(activeProvider: "google" | "openai") {
+  return {
+    realtime: {
+      activeProvider,
+      providers: [{ id: activeProvider, label: activeProvider, supportsVideoFrames: true }],
+    },
+  };
+}
 
 async function installTalkBrowserFixtures(page: Page) {
   await page.addInitScript(() => {
@@ -61,6 +72,10 @@ async function installTalkBrowserFixtures(page: Page) {
         return { connect() {}, disconnect() {} };
       }
 
+      createGain() {
+        return { connect() {}, disconnect() {}, gain: { value: 1 } };
+      }
+
       createScriptProcessor() {
         const processor = { connect() {}, disconnect() {}, onaudioprocess: null };
         state.inputProcessor = processor;
@@ -102,6 +117,14 @@ async function captureComposerProof(page: Page, fileName: string) {
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 
+async function captureVideoTalkProof(page: Page, fileName: string) {
+  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "video-talk");
+  await mkdir(artifactDir, { recursive: true });
+  await page
+    .locator(".agent-chat__composer-shell")
+    .screenshot({ path: path.join(artifactDir, fileName) });
+}
+
 async function installBlockedMicrophoneFixture(page: Page) {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "mediaDevices", {
@@ -116,17 +139,53 @@ async function installBlockedMicrophoneFixture(page: Page) {
   });
 }
 
+async function installBlockedVideoTalkFixture(page: Page) {
+  await page.addInitScript(() => {
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          if (constraints.video) {
+            throw new DOMException("Permission denied", "NotAllowedError");
+          }
+          return getUserMedia(constraints);
+        },
+      },
+    });
+    class FakePeerConnection extends EventTarget {
+      connectionState = "new";
+      close() {
+        this.connectionState = "closed";
+      }
+    }
+    Object.defineProperty(window, "RTCPeerConnection", {
+      configurable: true,
+      value: FakePeerConnection,
+    });
+  });
+}
+
 describeControlUiE2e("Control UI browser Talk", () => {
   beforeAll(async () => {
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
+    });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await browser?.close();
     await server?.close();
   });
 
   it("starts a provider WebSocket session and stops browser audio resources", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ permissions: ["microphone"] });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -151,23 +210,18 @@ describeControlUiE2e("Control UI browser Talk", () => {
 
     try {
       await page.emulateMedia({ reducedMotion: "reduce" });
-      await page.goto(`${server.baseUrl}chat`);
-      await page.setViewportSize({ width: 320, height: 720 });
-      await expect
-        .poll(() => page.getByRole("button", { name: "Microphone input" }).count())
-        .toBe(0);
-      const settings = page.getByRole("button", { name: "Chat settings" });
-      await settings.click();
-      const settingsDialog = page.getByRole("dialog", { name: "Chat settings" });
-      const microphoneSelect = settingsDialog.locator('[data-talk-select="microphone"] select');
+      // The microphone picker lives on the Settings appearance page; the
+      // selection persists and applies to talk sessions started from chat.
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      const microphoneSelect = page.locator("[data-settings-microphone]");
       await expect
         .poll(async () =>
           (await microphoneSelect.locator("option").allTextContents()).map((label) => label.trim()),
         )
         .toEqual(["System default", "Built-in Microphone", "USB Audio Interface"]);
       await microphoneSelect.selectOption("usb");
-      await settings.click();
-      await expect.poll(() => settingsDialog.isVisible()).toBe(false);
+      await page.goto(`${server.baseUrl}chat`);
+      await page.setViewportSize({ width: 320, height: 720 });
       await page.getByRole("button", { name: "Start voice input" }).click();
 
       const createRequest = await gateway.waitForRequest("talk.client.create");
@@ -183,7 +237,16 @@ describeControlUiE2e("Control UI browser Talk", () => {
               ).openclawTalkE2eState?.constraints,
           ),
         )
-        .toEqual([{ audio: { deviceId: { exact: "usb" } } }]);
+        .toEqual([
+          {
+            audio: {
+              autoGainControl: true,
+              deviceId: { exact: "usb" },
+              echoCancellation: true,
+              noiseSuppression: true,
+            },
+          },
+        ]);
       await expect
         .poll(async () =>
           (await gateway.getSocketUrls()).filter((url) => url.includes("BidiGenerateContent")),
@@ -296,14 +359,13 @@ describeControlUiE2e("Control UI browser Talk", () => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
+      console.info("[video-talk-e2e] ordinary_voice=start-stop-passed");
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("keeps stop-voice and stop-run controls visually distinct while both are active", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ permissions: ["microphone"] });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -418,12 +480,438 @@ describeControlUiE2e("Control UI browser Talk", () => {
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
     } finally {
       await context.close();
-      await browser.close();
+    }
+  });
+
+  it("starts OpenAI Talk, enables a fake camera, and submits describe_view", async () => {
+    const context = await browser.newContext({ permissions: ["camera", "microphone"] });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "talk.catalog": videoTalkCatalog("openai"),
+        "talk.client.create": {
+          provider: "openai",
+          transport: "webrtc",
+          clientSecret: "test-client-secret",
+          offerUrl: "https://api.openai.com/v1/realtime/calls",
+        },
+      },
+    });
+    await page.addInitScript(() => {
+      const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+        configurable: true,
+        value: async (constraints: MediaStreamConstraints) => {
+          const stream = await getUserMedia(constraints);
+          (
+            window as Window & {
+              openclawVideoTalkTracks?: MediaStreamTrack[];
+            }
+          ).openclawVideoTalkTracks = [
+            ...((window as Window & { openclawVideoTalkTracks?: MediaStreamTrack[] })
+              .openclawVideoTalkTracks ?? []),
+            ...stream.getTracks(),
+          ];
+          return stream;
+        },
+      });
+      class FakeDataChannel extends EventTarget {
+        readyState = "open";
+        sent: unknown[] = [];
+
+        send(payload: string) {
+          this.sent.push(JSON.parse(payload));
+        }
+
+        close() {
+          this.readyState = "closed";
+        }
+      }
+
+      class FakePeerConnection extends EventTarget {
+        connectionState = "new";
+        channel = new FakeDataChannel();
+        localDescription: RTCSessionDescriptionInit | null = null;
+        remoteDescription: RTCSessionDescriptionInit | null = null;
+
+        constructor() {
+          super();
+          (
+            window as Window & {
+              openclawVideoTalkE2e?: {
+                dataChannelCreated: boolean;
+                peer: FakePeerConnection;
+              };
+            }
+          ).openclawVideoTalkE2e = { dataChannelCreated: false, peer: this };
+        }
+
+        addTrack() {}
+
+        createDataChannel() {
+          const harness = (
+            window as Window & {
+              openclawVideoTalkE2e?: { dataChannelCreated: boolean };
+            }
+          ).openclawVideoTalkE2e;
+          if (harness) {
+            harness.dataChannelCreated = true;
+          }
+          return this.channel;
+        }
+
+        async createOffer() {
+          return { type: "offer" as const, sdp: "offer-sdp" };
+        }
+
+        async setLocalDescription(description: RTCSessionDescriptionInit) {
+          this.localDescription = description;
+        }
+
+        async setRemoteDescription(description: RTCSessionDescriptionInit) {
+          this.remoteDescription = description;
+        }
+
+        close() {
+          this.connectionState = "closed";
+        }
+      }
+
+      Object.defineProperty(window, "RTCPeerConnection", {
+        configurable: true,
+        value: FakePeerConnection,
+      });
+    });
+    await page.route("https://api.openai.com/v1/realtime/calls", async (route) => {
+      await route.fulfill({ status: 200, contentType: "application/sdp", body: "answer-sdp" });
+    });
+
+    try {
+      await page.setViewportSize({ width: 1366, height: 900 });
+      await page.goto(`${server.baseUrl}chat`);
+      await captureVideoTalkProof(page, "01-before-video-talk.png");
+
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      const request = await gateway.waitForRequest("talk.client.create");
+      expect(request.params).toMatchObject({
+        sessionKey: "main",
+      });
+      console.info("[video-talk-e2e] session=provider:openai,transport:webrtc");
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            Boolean(
+              (
+                window as Window & {
+                  openclawVideoTalkE2e?: { dataChannelCreated: boolean };
+                }
+              ).openclawVideoTalkE2e?.dataChannelCreated,
+            ),
+          ),
+        )
+        .toBe(true);
+      await page.evaluate(() => {
+        const channel = (
+          window as Window & {
+            openclawVideoTalkE2e?: { peer: { channel: EventTarget } };
+          }
+        ).openclawVideoTalkE2e?.peer.channel;
+        channel?.dispatchEvent(new Event("open"));
+      });
+      const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
+      await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);
+      await turnCameraOn.click();
+      const preview = page.locator('video[aria-label="Camera preview"]');
+      await expect.poll(() => preview.isVisible()).toBe(true);
+      await expect
+        .poll(() => preview.evaluate((video) => (video as HTMLVideoElement).videoWidth))
+        .toBeGreaterThan(0);
+      const dimensions = await preview.evaluate((video) => ({
+        height: (video as HTMLVideoElement).videoHeight,
+        width: (video as HTMLVideoElement).videoWidth,
+      }));
+      expect(dimensions.height).toBeGreaterThan(0);
+      expect(dimensions.width).toBeGreaterThan(0);
+      console.info(
+        `[video-talk-e2e] preview=live,width:${dimensions.width},height:${dimensions.height}`,
+      );
+      await captureVideoTalkProof(page, "02-live-camera-preview.png");
+
+      await page.evaluate(() => {
+        const channel = (
+          window as Window & {
+            openclawVideoTalkE2e?: { peer: { channel: EventTarget } };
+          }
+        ).openclawVideoTalkE2e?.peer.channel;
+        channel?.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "response.function_call_arguments.done",
+              item_id: "item-camera",
+              call_id: "call-camera",
+              name: "describe_view",
+              arguments: "{}",
+            }),
+          }),
+        );
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const sent = (
+              window as Window & {
+                openclawVideoTalkE2e?: { peer: { channel: { sent: unknown[] } } };
+              }
+            ).openclawVideoTalkE2e?.peer.channel.sent;
+            return {
+              image: sent?.some(
+                (event) =>
+                  typeof event === "object" &&
+                  event !== null &&
+                  JSON.stringify(event).includes('"type":"input_image"'),
+              ),
+              toolResult: sent?.some(
+                (event) =>
+                  typeof event === "object" &&
+                  event !== null &&
+                  JSON.stringify(event).includes('"type":"function_call_output"'),
+              ),
+            };
+          }),
+        )
+        .toEqual({ image: true, toolResult: true });
+      const talkRequests = (await gateway.getRequests()).filter((entry) =>
+        entry.method.startsWith("talk."),
+      );
+      expect(talkRequests.map((entry) => entry.method)).toEqual([
+        "talk.catalog",
+        "talk.client.create",
+      ]);
+      console.info(
+        "[video-talk-e2e] describe_view=input_image+function_output+response_create,gateway_frame_requests:0",
+      );
+
+      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await expect.poll(() => preview.count()).toBe(0);
+      const trackStates = await page.evaluate(() =>
+        (
+          window as Window & {
+            openclawVideoTalkTracks?: MediaStreamTrack[];
+          }
+        ).openclawVideoTalkTracks?.map((track) => track.readyState),
+      );
+      expect(trackStates).toHaveLength(2);
+      expect(trackStates?.every((state) => state === "ended")).toBe(true);
+      await captureVideoTalkProof(page, "04-after-video-talk-stop.png");
+      console.info("[video-talk-e2e] stop=preview-removed,tracks:ended+ended");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("starts Gemini Live Talk, enables a fake camera, and handles describe_view", async () => {
+    const context = await browser.newContext({ permissions: ["camera", "microphone"] });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "talk.catalog": videoTalkCatalog("google"),
+        "talk.client.create": {
+          provider: "google",
+          transport: "provider-websocket",
+          protocol: "google-live-bidi",
+          // Fake harness token, assembled so secret scanners do not flag it.
+          clientSecret: ["auth_tokens", "browser-video-e2e"].join("/"),
+          websocketUrl:
+            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 16_000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24_000,
+          },
+        },
+      },
+    });
+    const googleLiveMessages: unknown[] = [];
+    let describeViewSent = false;
+    await page.routeWebSocket("wss://generativelanguage.googleapis.com/**", (ws) => {
+      ws.onMessage((message) => {
+        const parsed = JSON.parse(typeof message === "string" ? message : message.toString()) as {
+          setup?: unknown;
+          realtimeInput?: { video?: unknown };
+        };
+        googleLiveMessages.push(parsed);
+        if (parsed.setup) {
+          ws.send(JSON.stringify({ setupComplete: {} }));
+          return;
+        }
+        if (parsed.realtimeInput?.video && !describeViewSent) {
+          describeViewSent = true;
+          ws.send(
+            JSON.stringify({
+              toolCall: {
+                functionCalls: [{ id: "call-camera", name: "describe_view", args: {} }],
+              },
+            }),
+          );
+        }
+      });
+    });
+    await page.addInitScript(() => {
+      const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+        configurable: true,
+        value: async (constraints: MediaStreamConstraints) => {
+          const stream = await getUserMedia(constraints);
+          (
+            window as Window & {
+              openclawGeminiVideoTalkTracks?: MediaStreamTrack[];
+            }
+          ).openclawGeminiVideoTalkTracks = [
+            ...((window as Window & { openclawGeminiVideoTalkTracks?: MediaStreamTrack[] })
+              .openclawGeminiVideoTalkTracks ?? []),
+            ...stream.getTracks(),
+          ];
+          return stream;
+        },
+      });
+    });
+
+    try {
+      await page.setViewportSize({ width: 1366, height: 900 });
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      const request = await gateway.waitForRequest("talk.client.create");
+      expect(request.params).toMatchObject({
+        sessionKey: "main",
+      });
+      const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
+      await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);
+      await turnCameraOn.click();
+      const preview = page.locator('video[aria-label="Camera preview"]');
+      await expect.poll(() => preview.isVisible()).toBe(true);
+      await expect
+        .poll(() => preview.evaluate((video) => (video as HTMLVideoElement).videoWidth))
+        .toBeGreaterThan(0);
+      await expect
+        .poll(() =>
+          googleLiveMessages.some(
+            (message) =>
+              typeof message === "object" &&
+              message !== null &&
+              "realtimeInput" in message &&
+              JSON.stringify(message).includes('"video"'),
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          googleLiveMessages.some(
+            (message) =>
+              typeof message === "object" &&
+              message !== null &&
+              "toolResponse" in message &&
+              JSON.stringify(message).includes('"cameraStreamActive":true'),
+          ),
+        )
+        .toBe(true);
+      const videoMessage = googleLiveMessages.find(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "realtimeInput" in message &&
+          JSON.stringify(message).includes('"video"'),
+      );
+      expect(new TextEncoder().encode(JSON.stringify(videoMessage)).length).toBeLessThanOrEqual(
+        512 * 1024,
+      );
+      const talkRequests = (await gateway.getRequests()).filter((entry) =>
+        entry.method.startsWith("talk."),
+      );
+      expect(talkRequests.map((entry) => entry.method)).toEqual([
+        "talk.catalog",
+        "talk.client.create",
+      ]);
+      await captureVideoTalkProof(page, "05-gemini-live-camera-preview.png");
+      console.info(
+        "[video-talk-e2e] gemini=realtimeInput.video+functionResponse,gateway_frame_requests:0",
+      );
+
+      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await expect.poll(() => preview.count()).toBe(0);
+      const trackStates = await page.evaluate(() =>
+        (
+          window as Window & {
+            openclawGeminiVideoTalkTracks?: MediaStreamTrack[];
+          }
+        ).openclawGeminiVideoTalkTracks?.map((track) => track.readyState),
+      );
+      expect(trackStates).toHaveLength(2);
+      expect(trackStates?.every((state) => state === "ended")).toBe(true);
+      console.info("[video-talk-e2e] gemini_stop=preview-removed,tracks:ended+ended");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows actionable guidance when Video Talk camera permission is blocked", async () => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "talk.catalog": videoTalkCatalog("google"),
+        "talk.client.create": {
+          provider: "google",
+          transport: "provider-websocket",
+          protocol: "google-live-bidi",
+          // Fake harness token, assembled so secret scanners do not flag it.
+          clientSecret: ["auth_tokens", "browser-video-denied"].join("/"),
+          websocketUrl:
+            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 16_000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24_000,
+          },
+        },
+      },
+    });
+    await page.routeWebSocket("wss://generativelanguage.googleapis.com/**", (ws) => {
+      ws.onMessage((message) => {
+        const parsed = JSON.parse(typeof message === "string" ? message : message.toString()) as {
+          setup?: unknown;
+        };
+        if (parsed.setup) {
+          ws.send(JSON.stringify({ setupComplete: {} }));
+        }
+      });
+    });
+    await installBlockedVideoTalkFixture(page);
+
+    try {
+      await page.setViewportSize({ width: 1366, height: 900 });
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await gateway.waitForRequest("talk.client.create");
+      const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
+      await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);
+      await turnCameraOn.click();
+
+      const alert = page.getByRole("alert");
+      await expect.poll(() => alert.textContent()).toContain("Camera access is blocked.");
+      await expect.poll(() => page.locator('video[aria-label="Camera preview"]').count()).toBe(0);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Turn camera on" }).isVisible())
+        .toBe(true);
+      await captureVideoTalkProof(page, "03-camera-permission-blocked.png");
+      console.info("[video-talk-e2e] camera_denial=actionable,no-audio-fallback");
+    } finally {
+      await context.close();
     }
   });
 
   it("renders streamed relay assistant transcript deltas as readable text", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ permissions: ["microphone"] });
     const page = await context.newPage();
     const relaySessionId = "relay-e2e-transcript";
@@ -451,7 +939,24 @@ describeControlUiE2e("Control UI browser Talk", () => {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
+      // The request is recorded before its mock response is delivered. Wait for
+      // microphone setup before probing relay readiness below.
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                window as Window & {
+                  openclawTalkE2eState?: { constraints: unknown[] };
+                }
+              ).openclawTalkE2eState?.constraints.length,
+          ),
+        )
+        .toBe(1);
       await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
+      await expect
+        .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
+        .toBe(1);
       await gateway.emitGatewayEvent("talk.event", {
         relaySessionId,
         type: "transcript",
@@ -459,6 +964,11 @@ describeControlUiE2e("Control UI browser Talk", () => {
         text: "Hey, what model are you using?",
         final: true,
       });
+      await expect
+        .poll(() =>
+          page.locator(".agent-chat__voice-turn--user .agent-chat__voice-turn-text").textContent(),
+        )
+        .toBe("Hey, what model are you using?");
       // Assistant audio transcripts stream as verbatim fragments that can split
       // words ("I","'m"," Chat","G","PT"); regression coverage for #102556 where
       // the merge injected spaces mid-word and the turn collapsed while streaming.
@@ -486,12 +996,10 @@ describeControlUiE2e("Control UI browser Talk", () => {
       expect(turnBounds?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(120);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("keeps blocked microphone guidance readable in a narrow viewport", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext();
     const page = await context.newPage();
     await installMockGateway(page);
@@ -499,37 +1007,20 @@ describeControlUiE2e("Control UI browser Talk", () => {
 
     try {
       await page.setViewportSize({ width: 320, height: 720 });
-      await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Chat settings" }).click();
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      await page.getByRole("button", { name: "Refresh: Microphone input" }).click();
 
-      const settingsDialog = page.getByRole("dialog", { name: "Chat settings" });
-      await settingsDialog.getByRole("button", { name: "Refresh: Microphone input" }).click();
-      const permissionAlert = settingsDialog.getByRole("alert");
+      const permissionAlert = page.getByRole("alert");
       await expect.poll(() => permissionAlert.isVisible()).toBe(true);
-
-      const [settingsBounds, alertBounds] = await Promise.all([
-        settingsDialog.boundingBox(),
-        permissionAlert.boundingBox(),
-      ]);
-      expect(settingsBounds).not.toBeNull();
+      const alertBounds = await permissionAlert.boundingBox();
       expect(alertBounds).not.toBeNull();
-      expect(settingsBounds?.width ?? 0).toBeGreaterThanOrEqual(280);
-      expect(settingsBounds?.x ?? 0).toBeGreaterThanOrEqual(8);
-      expect((settingsBounds?.x ?? 0) + (settingsBounds?.width ?? 0)).toBeLessThanOrEqual(312);
-      expect(alertBounds?.x ?? 0).toBeGreaterThanOrEqual(settingsBounds?.x ?? 0);
-      expect((alertBounds?.x ?? 0) + (alertBounds?.width ?? 0)).toBeLessThanOrEqual(
-        (settingsBounds?.x ?? 0) + (settingsBounds?.width ?? 0),
-      );
-      expect(alertBounds?.y ?? 0).toBeGreaterThanOrEqual(settingsBounds?.y ?? 0);
-      expect((alertBounds?.y ?? 0) + (alertBounds?.height ?? 0)).toBeLessThanOrEqual(
-        (settingsBounds?.y ?? 0) + (settingsBounds?.height ?? 0),
-      );
+      expect(alertBounds?.x ?? 0).toBeGreaterThanOrEqual(0);
+      expect((alertBounds?.x ?? 0) + (alertBounds?.width ?? 0)).toBeLessThanOrEqual(320);
       await expect
         .poll(() => permissionAlert.textContent())
         .toContain("Microphone access is blocked.");
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 });

@@ -15,7 +15,7 @@ OpenClaw ships three installer scripts, served from `openclaw.ai`.
 | [`install-cli.sh`](#install-clish) | macOS / Linux / WSL  | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) via npm or git. No root required. |
 | [`install.ps1`](#installps1)       | Windows (PowerShell) | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.       |
 
-All three support Node **22.19+, 23.11+, or 24+**; Node 24 is the default target for fresh installs.
+All three support Node **22.22.3+, 24.15+, or 25.9+**; Node 24 is the default target for fresh installs.
 
 ## Quick commands
 
@@ -73,8 +73,8 @@ Recommended for most interactive installs on macOS/Linux/WSL.
     Supports macOS and Linux (including WSL).
   </Step>
   <Step title="Ensure Node.js 24 by default">
-    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 22.19+ and 23.11+ remain supported for compatibility.
-    On Alpine/musl Linux, the installer uses apk packages instead of NodeSource; the configured Alpine repositories must provide a supported Node version (Alpine 3.21 or newer at the time of writing).
+    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 22.22.3+, Node 24.15+, and Node 25.9+ are supported; Node 23 is unsupported.
+    On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:24-alpine` container or a glibc-based host instead.
   </Step>
   <Step title="Ensure Git">
     Installs Git if missing using the detected package manager, including Homebrew on macOS and apk on Alpine.
@@ -197,8 +197,9 @@ by default, plus git-checkout installs under the same prefix flow.
 
 <Steps>
   <Step title="Install local Node runtime">
-    Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently, default `22.22.0`) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
-    On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk` and links that runtime into the prefix wrapper path. The Alpine repositories must provide a supported Node version (22.19+, 23.11+, or 24+); use Alpine 3.21 or newer if older repositories only provide Node 20 or 21.
+    Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently, default `24.15.0`) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
+    Linux ARMv7 uses Node `22.22.3` because official Node 24+ ARMv7 binaries are unavailable.
+    On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk`, then verifies both Node and the actual linked SQLite library. Current stable Alpine package streams may still link vulnerable SQLite even with a new-enough Node; use an official `node:24-alpine` container or a glibc-based host when the safety check rejects the package.
   </Step>
   <Step title="Ensure Git">
     If Git is missing, attempts install via apt/dnf/yum/apk on Linux or Homebrew on macOS.
@@ -210,8 +211,8 @@ by default, plus git-checkout installs under the same prefix flow.
   </Step>
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs
-    `openclaw gateway install --force`, then `openclaw gateway restart`, and
-    probes gateway health best-effort.
+    `openclaw gateway install --force`, which activates the replacement service,
+    and then probes gateway health best-effort.
   </Step>
 </Steps>
 
@@ -256,7 +257,7 @@ by default, plus git-checkout installs under the same prefix flow.
 | `--git \| --github`                     | Shortcut for git method                                                         |
 | `--git-dir \| --dir <path>`             | Git checkout directory (default: `~/openclaw`)                                  |
 | `--version <ver>`                       | OpenClaw version or dist-tag (default: `latest`)                                |
-| `--node-version <ver>`                  | Node version (default: `22.22.0`)                                               |
+| `--node-version <ver>`                  | Node version (default: `24.15.0`; `22.22.3` on Linux ARMv7)                     |
 | `--json`                                | Emit NDJSON events                                                              |
 | `--onboard`                             | Run `openclaw onboard` after install                                            |
 | `--no-onboard`                          | Skip onboarding (default)                                                       |
@@ -299,7 +300,7 @@ by default, plus git-checkout installs under the same prefix flow.
     Requires PowerShell 5+.
   </Step>
   <Step title="Ensure Node.js 24 by default">
-    If missing, attempts install via winget, then Chocolatey, then Scoop. If no package manager is available, the script downloads the official Node.js 24 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 22.19+ and 23.11+ remain supported for compatibility.
+    If missing, attempts install via winget, then Chocolatey, then Scoop. If no package manager is available, the script downloads the official Node.js 24 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 22.22.3+, Node 24.15+, and Node 25.9+ are supported; Node 23 is unsupported.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using the selected `-Tag`, launched from a writable installer temp directory so shells opened in protected folders such as `C:\` still work

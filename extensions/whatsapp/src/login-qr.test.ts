@@ -47,7 +47,6 @@ vi.mock("./active-listener.js", () => ({
 }));
 
 vi.mock("./qr-image.js", () => ({
-  renderQrPngBase64: vi.fn(async () => "base64"),
   renderQrPngDataUrl: vi.fn(async (input: string) => `data:image/png;base64,encoded:${input}`),
 }));
 
@@ -122,6 +121,12 @@ function waitForever() {
 async function flushTasks() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function waitForNextTask() {
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function waitMs(ms: number) {
@@ -570,10 +575,10 @@ describe("login-qr", () => {
     });
     expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
 
-    await waitMs(50);
-    await flushTasks();
+    await waitForQrRenderCallCount(2);
     resolveLogin();
-    await flushTasks();
+    await vi.waitFor(() => expect(readWebAuthExistsForDecisionMock).toHaveBeenCalledTimes(2));
+    await waitForNextTask();
 
     await expect(
       waitForWebLogin({

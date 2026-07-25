@@ -2,13 +2,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+
+type LocalAudioSelection = Awaited<ReturnType<typeof inspectLocalAudioSelection>>;
 
 const mocks = vi.hoisted(() => ({
   runtime: {
@@ -147,6 +151,10 @@ const mocks = vi.hoisted(() => ({
   ]),
   listEmbeddingProviders: vi.fn(() => []),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
+  inspectLocalAudioSelection: vi.fn<() => Promise<LocalAudioSelection>>(async () => ({
+    candidates: [],
+    entries: [],
+  })),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
@@ -239,9 +247,9 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentModelFallbacksOverride: () => [],
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog:
-    mocks.loadModelCatalog as typeof import("../agents/model-catalog.js").loadModelCatalog,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog:
+    mocks.loadModelCatalog as typeof import("../agents/prepared-model-catalog.js").loadPreparedModelCatalog,
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
@@ -312,6 +320,10 @@ vi.mock("../media-understanding/runtime.js", () => ({
 vi.mock("../media-understanding/provider-registry.js", () => ({
   buildMediaUnderstandingRegistry:
     mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
+}));
+
+vi.mock("../media-understanding/local-audio.js", () => ({
+  inspectLocalAudioSelection: mocks.inspectLocalAudioSelection,
 }));
 
 vi.mock("../media/media-services.js", async (importOriginal) => {
@@ -522,6 +534,7 @@ describe("capability cli", () => {
     mocks.resolveExplicitTtsOverrides.mockClear();
     mocks.getProviderEnvVars.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
+    mocks.inspectLocalAudioSelection.mockReset().mockResolvedValue({ candidates: [], entries: [] });
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
     mocks.listMemoryEmbeddingProviders
@@ -1273,24 +1286,18 @@ describe("capability cli", () => {
     expect(outputs[0]?.kind).toBe("image.description");
   });
 
-  it("keeps image describe HTTP URLs as URLs", async () => {
+  it("keeps encoded image describe HTTP URLs intact", async () => {
+    const mediaUrl = "https://cdn.example.com/clip%2Emp4?download=1#preview";
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
-      argv: [
-        "capability",
-        "image",
-        "describe",
-        "--file",
-        "https://httpbin.org/image/png",
-        "--json",
-      ],
+      argv: ["capability", "image", "describe", "--file", mediaUrl, "--json"],
     });
 
     const describeCall = imageDescribeCall();
-    expect(describeCall?.filePath).toBe("https://httpbin.org/image/png");
+    expect(describeCall).toMatchObject({ filePath: mediaUrl, mediaUrl });
     const output = firstJsonOutput();
     const outputs = output?.outputs as Array<Record<string, unknown>>;
-    expect(outputs[0]?.path).toBe("https://httpbin.org/image/png");
+    expect(outputs[0]?.path).toBe(mediaUrl);
   });
 
   it("passes image describe prompts through media understanding", async () => {
@@ -2136,6 +2143,86 @@ describe("capability cli", () => {
     expect(outputs[0]?.size).toBe(11);
   });
 
+  it("blocks private-network url-only generated video downloads by default", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "http://127.0.0.2:40123/private-video.mp4?sig=secret-presigned-token",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(Buffer.from("video-bytes"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expectRuntimeErrorContains("Blocked hostname or private/internal/special-use IP address");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("secret-presigned-token");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("/private-video.mp4");
+  });
+
+  it("allows private-network generated video downloads when the provider request opts in", async () => {
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          vydra: {
+            request: { allowPrivateNetwork: true },
+          },
+        },
+      },
+    });
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "http://127.0.0.2:40123/private-video.mp4",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(Buffer.from("video-bytes"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+    });
+
+    const fetchCalls = fetchMock.mock.calls as unknown as Array<[string]>;
+    expect(fetchCalls[0]?.[0]).toBe("http://127.0.0.2:40123/private-video.mp4");
+    const output = firstJsonOutput();
+    expect(output?.capability).toBe("video.generate");
+    expect(output?.provider).toBe("vydra");
+    expect(output?.outputs as Array<Record<string, unknown>>).toHaveLength(1);
+  });
+
   it("passes video generation parameters through to runtime", async () => {
     mocks.generateVideo.mockResolvedValue({
       provider: "minimax",
@@ -2537,9 +2624,12 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
-        "models.providers.*.apiKey",
-      ),
+      (
+        expectDefined(
+          firstCommandConfigResolutionCall(),
+          "firstCommandConfigResolutionCall() test invariant",
+        ).targetIds as Set<string>
+      ).has("models.providers.*.apiKey"),
     ).toBe(true);
     expect(firstAudioTranscriptionCall()?.cfg).toBe(resolvedConfig);
   });
@@ -2575,7 +2665,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
     expectRuntimeErrorContains("No audio transcription provider is configured or ready");
-    expectRuntimeErrorContains("tools.media.audio.models");
+    expectRuntimeErrorContains("tools.media.models");
   });
 
   it("surfaces the underlying transcription failure for audio transcribe", async () => {
@@ -2646,7 +2736,7 @@ describe("capability cli", () => {
   });
 
   it("hydrates local TTS provider config from API-key auth profiles", async () => {
-    const rawConfig = { messages: { tts: { providers: { openai: { voice: "coral" } } } } };
+    const rawConfig = { tts: { providers: { openai: { voice: "coral" } } } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-key",
@@ -2676,9 +2766,9 @@ describe("capability cli", () => {
       }),
     );
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string; voice?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string; voice?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.openai).toMatchObject({
+    expect(cfg.tts?.providers?.openai).toMatchObject({
       apiKey: "profile-openai-key",
       voice: "coral",
     });
@@ -2686,7 +2776,7 @@ describe("capability cli", () => {
   });
 
   it("hydrates local TTS default provider config from API-key auth profiles", async () => {
-    const rawConfig = { messages: { tts: { provider: "openai" } } };
+    const rawConfig = { tts: { provider: "openai" } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-key",
@@ -2707,9 +2797,9 @@ describe("capability cli", () => {
       }),
     );
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.openai).toMatchObject({
+    expect(cfg.tts?.providers?.openai).toMatchObject({
       apiKey: "profile-openai-key",
     });
   });
@@ -2733,9 +2823,9 @@ describe("capability cli", () => {
       expect.objectContaining({ channelId: "discord" }),
     );
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.openai).toMatchObject({
+    expect(cfg.tts?.providers?.openai).toMatchObject({
       apiKey: "profile-openai-key",
     });
   });
@@ -2766,19 +2856,19 @@ describe("capability cli", () => {
       channels?: {
         discord?: { tts?: { openai?: { apiKey?: string; speakerVoice?: string } } };
       };
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
     expect(cfg.channels?.discord?.tts?.openai).toMatchObject({
       apiKey: "profile-openai-key",
       speakerVoice: "nova",
     });
-    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+    expect(cfg.tts?.providers?.openai).toBeUndefined();
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(cfg);
   });
 
   it("does not override inherited local TTS channel provider API keys", async () => {
     const rawConfig = {
-      messages: { tts: { providers: { openai: { apiKey: "config-key" } } } },
+      tts: { providers: { openai: { apiKey: "config-key" } } },
       channels: {
         discord: {
           tts: {
@@ -2803,18 +2893,18 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
       channels?: {
         discord?: { tts?: { providers?: { openai?: { apiKey?: string; speakerVoice?: string } } } };
       };
     };
-    expect(cfg.messages?.tts?.providers?.openai?.apiKey).toBe("config-key");
+    expect(cfg.tts?.providers?.openai?.apiKey).toBe("config-key");
     expect(cfg.channels?.discord?.tts?.providers?.openai).toEqual({ speakerVoice: "nova" });
     expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
   it("does not hydrate local TTS provider config from token auth profiles", async () => {
-    const rawConfig = { messages: { tts: { provider: "openai" } } };
+    const rawConfig = { tts: { provider: "openai" } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-token",
@@ -2828,13 +2918,13 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.openai?.apiKey).toBeUndefined();
+    expect(cfg.tts?.providers?.openai?.apiKey).toBeUndefined();
   });
 
   it("does not override existing TTS provider API keys with different casing", async () => {
-    const rawConfig = { messages: { tts: { providers: { OpenAI: { apiKey: "config-key" } } } } };
+    const rawConfig = { tts: { providers: { OpenAI: { apiKey: "config-key" } } } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-key",
@@ -2857,16 +2947,14 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: {
-        tts?: { providers?: { openai?: { apiKey?: string }; OpenAI?: { apiKey?: string } } };
-      };
+      tts?: { providers?: { openai?: { apiKey?: string }; OpenAI?: { apiKey?: string } } };
     };
-    expect(cfg.messages?.tts?.providers?.OpenAI?.apiKey).toBe("config-key");
-    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+    expect(cfg.tts?.providers?.OpenAI?.apiKey).toBe("config-key");
+    expect(cfg.tts?.providers?.openai).toBeUndefined();
   });
 
   it("does not override existing direct TTS provider API keys", async () => {
-    const rawConfig = { messages: { tts: { openai: { apiKey: "config-key" } } } };
+    const rawConfig = { tts: { openai: { apiKey: "config-key" } } };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-key",
@@ -2889,15 +2977,13 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: {
-        tts?: {
-          openai?: { apiKey?: string };
-          providers?: { openai?: { apiKey?: string } };
-        };
+      tts?: {
+        openai?: { apiKey?: string };
+        providers?: { openai?: { apiKey?: string } };
       };
     };
-    expect(cfg.messages?.tts?.openai?.apiKey).toBe("config-key");
-    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+    expect(cfg.tts?.openai?.apiKey).toBe("config-key");
+    expect(cfg.tts?.providers?.openai).toBeUndefined();
   });
 
   it("disables TTS fallback when explicit provider or voice/model selection is requested", async () => {
@@ -3005,9 +3091,12 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
-        "models.providers.*.apiKey",
-      ),
+      (
+        expectDefined(
+          firstCommandConfigResolutionCall(),
+          "firstCommandConfigResolutionCall() test invariant",
+        ).targetIds as Set<string>
+      ).has("models.providers.*.apiKey"),
     ).toBe(true);
     expect(firstPreparedModelParams()?.cfg).toBe(resolvedConfig);
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig);
@@ -3273,6 +3362,70 @@ describe("capability cli", () => {
         id: "groq",
         capabilities: ["audio"],
         defaultModels: { audio: "whisper-large-v3-turbo" },
+      },
+    ]);
+  });
+
+  it("distinguishes the local STT fallback winner from global provider selection", async () => {
+    vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "deepgram",
+          {
+            id: "deepgram",
+            capabilities: ["audio"],
+            defaultModels: { audio: "nova-3" },
+          },
+        ],
+      ]),
+    );
+    const candidate = {
+      id: "whisper-cli" as const,
+      command: "whisper-cli",
+      resolvedCommand: "/opt/homebrew/bin/whisper-cli",
+      available: true,
+      ready: true,
+      capableBackend: "metal" as const,
+      evidence: "Apple Silicon Homebrew whisper-cpp runtime with Metal support",
+      selected: true,
+      entry: {
+        type: "cli" as const,
+        command: "whisper-cli",
+        args: ["{{MediaPath}}"],
+      },
+    };
+    mocks.inspectLocalAudioSelection.mockResolvedValueOnce({
+      candidates: [candidate],
+      entries: [candidate.entry],
+      selected: candidate,
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "audio", "providers", "--json"],
+    });
+
+    expect(firstJsonOutput()).toEqual([
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        id: "deepgram",
+        capabilities: ["audio"],
+        defaultModels: { audio: "nova-3" },
+      },
+      {
+        available: true,
+        configured: true,
+        selected: false,
+        localFallbackSelected: true,
+        id: "local/whisper-cli",
+        transport: "local-cli",
+        command: "whisper-cli",
+        capableBackend: "metal",
+        observedBackend: "unknown",
+        evidence: "Apple Silicon Homebrew whisper-cpp runtime with Metal support",
       },
     ]);
   });
@@ -3767,3 +3920,4 @@ describe("capability cli", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

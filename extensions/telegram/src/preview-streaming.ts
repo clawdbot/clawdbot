@@ -6,7 +6,6 @@ import {
 
 export function resolveTelegramPreviewStreamMode(
   params: {
-    streamMode?: unknown;
     streaming?: unknown;
   } = {},
 ): StreamingMode {

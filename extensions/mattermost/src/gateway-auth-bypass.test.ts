@@ -1,16 +1,21 @@
 // Mattermost tests cover gateway auth bypass plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  collectMattermostSlashCallbackPaths,
-  resolveMattermostGatewayAuthBypassPaths,
-} from "./gateway-auth-bypass.js";
+import { resolveMattermostGatewayAuthBypassPaths } from "./gateway-auth-bypass.js";
 
 describe("Mattermost gateway auth bypass paths", () => {
   it("normalizes slash callback paths and callback URL paths", () => {
     expect(
-      collectMattermostSlashCallbackPaths({
-        callbackPath: "api/channels/mattermost/command",
-        callbackUrl: "https://gateway.example.com/api/channels/mattermost/custom",
+      resolveMattermostGatewayAuthBypassPaths({
+        cfg: {
+          channels: {
+            mattermost: {
+              commands: {
+                callbackPath: "api/channels/mattermost/command",
+                callbackUrl: "https://gateway.example.com/api/channels/mattermost/custom",
+              },
+            },
+          },
+        },
       }),
     ).toEqual(["/api/channels/mattermost/command", "/api/channels/mattermost/custom"]);
   });
@@ -18,16 +23,18 @@ describe("Mattermost gateway auth bypass paths", () => {
   it("keeps only Mattermost channel callback paths", () => {
     expect(
       resolveMattermostGatewayAuthBypassPaths({
-        channels: {
-          mattermost: {
-            commands: {
-              callbackPath: "/api/channels/mattermost/command",
-              callbackUrl: "https://gateway.example.com/api/channels/nostr/default/profile",
-            },
-            accounts: {
-              work: {
-                commands: {
-                  callbackPath: "/api/channels/mattermost/work",
+        cfg: {
+          channels: {
+            mattermost: {
+              commands: {
+                callbackPath: "/api/channels/mattermost/command",
+                callbackUrl: "https://gateway.example.com/api/channels/nostr/default/profile",
+              },
+              accounts: {
+                work: {
+                  commands: {
+                    callbackPath: "/api/channels/mattermost/work",
+                  },
                 },
               },
             },

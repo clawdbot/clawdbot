@@ -2,24 +2,34 @@
 import type { Block, KnownBlock } from "@slack/web-api";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
-  reduceInteractiveReply,
-  renderMessagePresentationChartFallbackText,
-  resolveMessagePresentationControlValue,
+  reduceLegacyInteractiveReply,
+  resolveMessagePresentationButtonAction,
+  resolveMessagePresentationOptionAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
-  InteractiveReply,
+  LegacyInteractiveReply,
   MessagePresentation,
+  MessagePresentationAction,
   MessagePresentationButtonsBlock,
   MessagePresentationChartBlock,
   MessagePresentationSelectBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { encodeSlackApprovalAction } from "./approval-actions.js";
+import {
+  buildSlackDataTableBlock,
+  countSlackDataTableBlocksCellCharacters,
+  countSlackDataTableCellCharacters,
+  SLACK_DATA_TABLE_CELL_CHARACTERS_MAX,
+} from "./data-table.js";
 import {
   buildSlackDataVisualizationBlock,
   canRenderSlackDataVisualization,
   hasSlackDataVisualizationBlock,
   SLACK_DATA_VISUALIZATION_BLOCKS_MAX,
 } from "./data-visualization.js";
+import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 import {
   SLACK_ACTION_BLOCK_ELEMENTS_MAX,
   SLACK_ACTION_LABEL_MAX,
@@ -29,10 +39,16 @@ import {
   SLACK_SECTION_TEXT_MAX,
   SLACK_STATIC_SELECT_OPTIONS_MAX,
 } from "./presentation.js";
+import { encodeSlackQuestionAction } from "./question-actions.js";
 import {
+  SLACK_APPROVAL_BUTTON_ACTION_ID,
+  SLACK_APPROVAL_SELECT_ACTION_ID,
+  SLACK_CALLBACK_BUTTON_ACTION_ID,
+  SLACK_CALLBACK_SELECT_ACTION_ID,
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_LINK_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
+  SLACK_QUESTION_BUTTON_ACTION_ID,
 } from "./reply-action-ids.js";
 import { truncateSlackText } from "./truncate.js";
 
@@ -40,8 +56,9 @@ const SLACK_BUTTON_URL_MAX = 3000;
 
 export type SlackBlock = Block | KnownBlock;
 
-type SlackBlockRenderOptions = {
+export type SlackBlockRenderOptions = {
   buttonIndexOffset?: number;
+  dataTableCellCharacterCountOffset?: number;
   dataVisualizationCountOffset?: number;
   selectIndexOffset?: number;
 };
@@ -58,6 +75,26 @@ function buildSlackReplySelectActionId(selectIndex: number): string {
   return `${SLACK_REPLY_SELECT_ACTION_ID}:${String(selectIndex)}`;
 }
 
+function buildSlackApprovalButtonActionId(buttonIndex: number, choiceIndex: number): string {
+  return `${SLACK_APPROVAL_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
+}
+
+function buildSlackApprovalSelectActionId(selectIndex: number): string {
+  return `${SLACK_APPROVAL_SELECT_ACTION_ID}:${String(selectIndex)}`;
+}
+
+function buildSlackCallbackButtonActionId(buttonIndex: number, choiceIndex: number): string {
+  return `${SLACK_CALLBACK_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
+}
+
+function buildSlackCallbackSelectActionId(selectIndex: number): string {
+  return `${SLACK_CALLBACK_SELECT_ACTION_ID}:${String(selectIndex)}`;
+}
+
+function buildSlackQuestionButtonActionId(buttonIndex: number, choiceIndex: number): string {
+  return `${SLACK_QUESTION_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
+}
+
 function resolveSlackButtonStyle(
   style: "primary" | "secondary" | "success" | "danger" | undefined,
 ) {
@@ -70,19 +107,80 @@ function resolveSlackButtonStyle(
   return undefined;
 }
 
-function resolveSlackControlValue(control: {
-  action?: { type: "command"; command: string } | { type: "callback"; value: string };
-  value?: string;
-}): string | undefined {
-  if (control.action?.type === "command") {
-    const command = normalizeOptionalString(control.action.command);
-    if (command && parseExecApprovalCommandText(command)) {
-      return command;
-    }
-    const legacyValue = normalizeOptionalString(control.value);
-    return legacyValue && parseExecApprovalCommandText(legacyValue) ? legacyValue : undefined;
+type SlackActionTarget =
+  | { kind: "approval"; value: string }
+  | { kind: "callback"; value: string }
+  | { kind: "link"; url: string }
+  | { kind: "question"; value: string }
+  | { kind: "reply"; value: string };
+
+function resolveSlackActionTarget(
+  action: MessagePresentationAction | undefined,
+  optionIndex?: number,
+): SlackActionTarget | undefined {
+  if (!action) {
+    return undefined;
   }
-  return resolveMessagePresentationControlValue(control);
+  if (action.type === "approval") {
+    return { kind: "approval", value: encodeSlackApprovalAction(action) };
+  }
+  if (action.type === "question") {
+    const value =
+      optionIndex === undefined
+        ? undefined
+        : encodeSlackQuestionAction({ questionId: action.questionId, optionIndex });
+    return value ? { kind: "question", value } : undefined;
+  }
+  if (action.type === "url" || action.type === "web-app") {
+    const url = normalizeOptionalString(action.url);
+    return url ? { kind: "link", url } : undefined;
+  }
+  if (action.type === "callback") {
+    const value = normalizeOptionalString(action.value);
+    return value ? { kind: "callback", value } : undefined;
+  }
+  const command = normalizeOptionalString(action.command);
+  // Command-backed approvals are a shipped legacy input with no trustworthy
+  // owner field. Keep them on the kind-specific compatibility resolver.
+  return command && parseExecApprovalCommandText(command)
+    ? { kind: "reply", value: command }
+    : undefined;
+}
+
+function resolveSlackButtonTarget(
+  button: MessagePresentationButtonsBlock["buttons"][number],
+  optionIndex?: number,
+): SlackActionTarget | undefined {
+  if (button.action !== undefined) {
+    const action = resolveMessagePresentationButtonAction(button);
+    return action ? resolveSlackActionTarget(action, optionIndex) : undefined;
+  }
+
+  // Legacy buttons could carry both a URL and callback fallback. Preserve the
+  // callback when Slack cannot accept the URL; typed actions stay authoritative.
+  const legacyUrl = normalizeOptionalString(
+    button.url ?? button.webApp?.url ?? button.web_app?.url,
+  );
+  if (legacyUrl && isWithinSlackLimit(legacyUrl, SLACK_BUTTON_URL_MAX)) {
+    return { kind: "link", url: legacyUrl };
+  }
+  const legacyValue = normalizeOptionalString(button.value);
+  if (legacyValue) {
+    return { kind: "reply", value: legacyValue };
+  }
+  return legacyUrl ? { kind: "link", url: legacyUrl } : undefined;
+}
+
+function resolveSlackOptionTarget(
+  option: MessagePresentationSelectBlock["options"][number],
+): Exclude<SlackActionTarget, { kind: "link" } | { kind: "question" }> | undefined {
+  if (option.action !== undefined) {
+    const action = resolveMessagePresentationOptionAction(option);
+    const target = action ? resolveSlackActionTarget(action) : undefined;
+    return target?.kind === "link" || target?.kind === "question" ? undefined : target;
+  }
+  const value = normalizeOptionalString(option.value);
+  return value ? { kind: "reply", value } : undefined;
 }
 
 function isWithinSlackLimit(value: string, maxLength: number): boolean {
@@ -90,10 +188,11 @@ function isWithinSlackLimit(value: string, maxLength: number): boolean {
 }
 
 function isRenderableSlackOption(option: {
+  kind: "approval" | "callback" | "reply";
   label: string;
-  value: string | undefined;
-}): option is { label: string; value: string } {
-  return option.value !== undefined && isWithinSlackLimit(option.value, SLACK_OPTION_VALUE_MAX);
+  value: string;
+}): boolean {
+  return isWithinSlackLimit(option.value, SLACK_OPTION_VALUE_MAX);
 }
 
 function readSlackBlockId(block: SlackBlock): string | undefined {
@@ -109,9 +208,11 @@ function readSlackOpenClawBlockIndex(blockId: string, prefix: string): number | 
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-/** Resolve existing Block Kit indexes and native chart count before appending portable blocks. */
+/** Resolve existing Block Kit indexes and native-data budgets before appending portable blocks. */
 export function resolveSlackBlockOffsets(blocks?: readonly SlackBlock[]): SlackBlockRenderOptions {
   let buttonIndexOffset = 0;
+  const dataTableCellCharacterCountOffset =
+    countSlackDataTableBlocksCellCharacters(blocks) ?? SLACK_DATA_TABLE_CELL_CHARACTERS_MAX + 1;
   let dataVisualizationCountOffset = 0;
   let selectIndexOffset = 0;
   for (const block of blocks ?? []) {
@@ -131,14 +232,19 @@ export function resolveSlackBlockOffsets(blocks?: readonly SlackBlock[]): SlackB
       readSlackOpenClawBlockIndex(blockId, "openclaw_reply_select_") ?? 0,
     );
   }
-  return { buttonIndexOffset, dataVisualizationCountOffset, selectIndexOffset };
+  return {
+    buttonIndexOffset,
+    dataTableCellCharacterCountOffset,
+    dataVisualizationCountOffset,
+    selectIndexOffset,
+  };
 }
 
 /**
  * @deprecated Use buildSlackPresentationBlocks with MessagePresentation.
  */
 export function buildSlackInteractiveBlocks(
-  interactive?: InteractiveReply,
+  interactive?: LegacyInteractiveReply,
   options: SlackBlockRenderOptions = {},
 ): SlackBlock[] {
   const initialState = {
@@ -146,7 +252,7 @@ export function buildSlackInteractiveBlocks(
     buttonIndex: options.buttonIndexOffset ?? 0,
     selectIndex: options.selectIndexOffset ?? 0,
   };
-  return reduceInteractiveReply(interactive, initialState, (state, block) => {
+  return reduceLegacyInteractiveReply(interactive, initialState, (state, block) => {
     if (block.type === "text") {
       const trimmed = block.text.trim();
       if (!trimmed) {
@@ -162,35 +268,39 @@ export function buildSlackInteractiveBlocks(
       return state;
     }
     if (block.type === "buttons") {
+      // Index is position in the question's options; core emits one buttons block in option order.
       const elements = block.buttons
         .flatMap((button, choiceIndex) => {
-          const callbackData = resolveSlackControlValue(button);
-          const value =
-            callbackData && isWithinSlackLimit(callbackData, SLACK_BUTTON_VALUE_MAX)
-              ? callbackData
-              : undefined;
-          const url =
-            button.url && isWithinSlackLimit(button.url, SLACK_BUTTON_URL_MAX)
-              ? button.url
-              : undefined;
-          if (!value && !url) {
+          const target = resolveSlackButtonTarget(button, choiceIndex);
+          if (
+            !target ||
+            (target.kind === "link"
+              ? !isWithinSlackLimit(target.url, SLACK_BUTTON_URL_MAX)
+              : !isWithinSlackLimit(target.value, SLACK_BUTTON_VALUE_MAX))
+          ) {
             return [];
           }
-          const target = url ? { url } : { value };
           const style = resolveSlackButtonStyle(button.style);
           return [
             {
               type: "button" as const,
               // Slack emits block_actions even for URL buttons; link-only actions must be ignored.
-              action_id: url
-                ? buildSlackReplyLinkActionId(state.buttonIndex + 1, choiceIndex)
-                : buildSlackReplyButtonActionId(state.buttonIndex + 1, choiceIndex),
+              action_id:
+                target.kind === "link"
+                  ? buildSlackReplyLinkActionId(state.buttonIndex + 1, choiceIndex)
+                  : target.kind === "approval"
+                    ? buildSlackApprovalButtonActionId(state.buttonIndex + 1, choiceIndex)
+                    : target.kind === "callback"
+                      ? buildSlackCallbackButtonActionId(state.buttonIndex + 1, choiceIndex)
+                      : target.kind === "question"
+                        ? buildSlackQuestionButtonActionId(state.buttonIndex + 1, choiceIndex)
+                        : buildSlackReplyButtonActionId(state.buttonIndex + 1, choiceIndex),
               text: {
                 type: "plain_text" as const,
                 text: truncateSlackText(button.label, SLACK_ACTION_LABEL_MAX),
                 emoji: true,
               },
-              ...target,
+              ...(target.kind === "link" ? { url: target.url } : { value: target.value }),
               ...(style ? { style } : {}),
             },
           ];
@@ -207,13 +317,14 @@ export function buildSlackInteractiveBlocks(
       return state;
     }
     const optionsLocal = block.options
-      .map((option) => ({
-        label: option.label,
-        value: resolveSlackControlValue(option),
-      }))
+      .flatMap((option) => {
+        const target = resolveSlackOptionTarget(option);
+        return target ? [{ label: option.label, ...target }] : [];
+      })
       .filter(isRenderableSlackOption)
       .slice(0, SLACK_STATIC_SELECT_OPTIONS_MAX);
-    if (optionsLocal.length === 0) {
+    const optionKinds = new Set(optionsLocal.map((option) => option.kind));
+    if (optionsLocal.length === 0 || optionKinds.size !== 1) {
       return state;
     }
     state.blocks.push({
@@ -222,7 +333,12 @@ export function buildSlackInteractiveBlocks(
       elements: [
         {
           type: "static_select",
-          action_id: buildSlackReplySelectActionId(state.selectIndex),
+          action_id:
+            optionsLocal[0]?.kind === "approval"
+              ? buildSlackApprovalSelectActionId(state.selectIndex)
+              : optionsLocal[0]?.kind === "callback"
+                ? buildSlackCallbackSelectActionId(state.selectIndex)
+                : buildSlackReplySelectActionId(state.selectIndex),
           placeholder: {
             type: "plain_text",
             text: truncateSlackText(
@@ -254,6 +370,7 @@ export function buildSlackPresentationBlocks(
   if (!presentation) {
     return [];
   }
+  const renderTablesNatively = canRenderSlackPresentationTables(presentation, options);
   const blocks: SlackBlock[] = [];
   if (presentation.title) {
     blocks.push({
@@ -266,6 +383,7 @@ export function buildSlackPresentationBlocks(
     });
   }
   let buttonIndex = options.buttonIndexOffset ?? 0;
+  let dataTableCellCharacterCount = options.dataTableCellCharacterCountOffset ?? 0;
   let dataVisualizationCount = options.dataVisualizationCountOffset ?? 0;
   let selectIndex = options.selectIndexOffset ?? 0;
   for (const block of presentation.blocks) {
@@ -277,7 +395,13 @@ export function buildSlackPresentationBlocks(
       if (block.type === "context") {
         blocks.push({
           type: "context",
-          elements: [{ type: "mrkdwn", text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX) }],
+          elements: [
+            {
+              type: "mrkdwn",
+              text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX),
+              verbatim: true,
+            },
+          ],
         });
       } else {
         blocks.push({
@@ -308,18 +432,28 @@ export function buildSlackPresentationBlocks(
         dataVisualizationCount += 1;
         blocks.push(rendered);
       } else {
-        blocks.push({
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: truncateSlackText(
-                renderMessagePresentationChartFallbackText(block),
-                SLACK_SECTION_TEXT_MAX,
-              ),
-            },
-          ],
-        });
+        const fallback = renderSlackMessagePresentationChartFallbackText(block);
+        blocks.push(
+          ...chunkTextForOutbound(fallback, SLACK_SECTION_TEXT_MAX).map(
+            (text): SlackBlock => ({
+              type: "context",
+              elements: [{ type: "mrkdwn", text, verbatim: true }],
+            }),
+          ),
+        );
+      }
+      continue;
+    }
+    if (block.type === "table") {
+      if (!renderTablesNatively) {
+        continue;
+      }
+      const rendered = buildSlackDataTableBlock(block, {
+        cellCharacterCountOffset: dataTableCellCharacterCount,
+      });
+      if (rendered) {
+        dataTableCellCharacterCount += countSlackDataTableCellCharacters(rendered);
+        blocks.push(rendered);
       }
       continue;
     }
@@ -346,8 +480,13 @@ function buildSlackPresentationButtonBlock(
 ): SlackBlock | undefined {
   const elements = block.buttons
     .flatMap((button, choiceIndex) => {
-      const target = resolveSlackPresentationButtonTarget(button);
-      if (!target) {
+      const target = resolveSlackButtonTarget(button, choiceIndex);
+      if (
+        !target ||
+        (target.kind === "link"
+          ? !isWithinSlackLimit(target.url, SLACK_BUTTON_URL_MAX)
+          : !isWithinSlackLimit(target.value, SLACK_BUTTON_VALUE_MAX))
+      ) {
         return [];
       }
       const style = resolveSlackButtonStyle(button.style);
@@ -355,15 +494,22 @@ function buildSlackPresentationButtonBlock(
         {
           type: "button" as const,
           // Slack emits block_actions even for URL buttons; link-only actions must be ignored.
-          action_id: target.url
-            ? buildSlackReplyLinkActionId(buttonIndex, choiceIndex)
-            : buildSlackReplyButtonActionId(buttonIndex, choiceIndex),
+          action_id:
+            target.kind === "link"
+              ? buildSlackReplyLinkActionId(buttonIndex, choiceIndex)
+              : target.kind === "approval"
+                ? buildSlackApprovalButtonActionId(buttonIndex, choiceIndex)
+                : target.kind === "callback"
+                  ? buildSlackCallbackButtonActionId(buttonIndex, choiceIndex)
+                  : target.kind === "question"
+                    ? buildSlackQuestionButtonActionId(buttonIndex, choiceIndex)
+                    : buildSlackReplyButtonActionId(buttonIndex, choiceIndex),
           text: {
             type: "plain_text" as const,
             text: truncateSlackText(button.label, SLACK_ACTION_LABEL_MAX),
             emoji: true,
           },
-          ...target,
+          ...(target.kind === "link" ? { url: target.url } : { value: target.value }),
           ...(style ? { style } : {}),
         },
       ];
@@ -378,50 +524,99 @@ function buildSlackPresentationButtonBlock(
     : undefined;
 }
 
-function resolveSlackPresentationButtonTarget(
-  button: MessagePresentationButtonsBlock["buttons"][number],
-): { value?: string; url?: string } | undefined {
-  const callbackData = resolveSlackControlValue(button);
-  const value =
-    callbackData && isWithinSlackLimit(callbackData, SLACK_BUTTON_VALUE_MAX)
-      ? callbackData
-      : undefined;
-  const rawUrl = button.url ?? button.webApp?.url ?? button.web_app?.url;
-  const url = rawUrl && isWithinSlackLimit(rawUrl, SLACK_BUTTON_URL_MAX) ? rawUrl : undefined;
-  return url ? { url } : value ? { value } : undefined;
+/** True when every portable table fits Slack's native per-message table budget. */
+function canRenderSlackPresentationTables(
+  presentation: MessagePresentation,
+  options: SlackBlockRenderOptions = {},
+): boolean {
+  let cellCharacterCount = options.dataTableCellCharacterCountOffset ?? 0;
+  for (const block of presentation.blocks) {
+    if (block.type !== "table") {
+      continue;
+    }
+    const rendered = buildSlackDataTableBlock(block, {
+      cellCharacterCountOffset: cellCharacterCount,
+    });
+    if (!rendered) {
+      return false;
+    }
+    cellCharacterCount += countSlackDataTableCellCharacters(rendered);
+  }
+  return true;
 }
 
 /** True when native Slack rendering preserves every portable control. */
-export function canRenderSlackPresentation(presentation: MessagePresentation): boolean {
+export function canRenderSlackPresentation(
+  presentation: MessagePresentation,
+  options: SlackBlockRenderOptions = {},
+): boolean {
   if (presentation.title && !isWithinSlackLimit(presentation.title.trim(), SLACK_HEADER_TEXT_MAX)) {
     return false;
   }
-  return presentation.blocks.every((block) => {
+  if (!canRenderSlackPresentationTables(presentation, options)) {
+    return false;
+  }
+  let dataVisualizationCount = options.dataVisualizationCountOffset ?? 0;
+  for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
-      return isWithinSlackLimit(block.text.trim(), SLACK_SECTION_TEXT_MAX);
+      if (!isWithinSlackLimit(block.text.trim(), SLACK_SECTION_TEXT_MAX)) {
+        return false;
+      }
+      continue;
     }
     if (block.type === "buttons") {
-      return (
+      const allButtonsRenderable =
         block.buttons.length <= SLACK_ACTION_BLOCK_ELEMENTS_MAX &&
-        block.buttons.every((button) => resolveSlackPresentationButtonTarget(button) !== undefined)
-      );
+        block.buttons.every((button, choiceIndex) => {
+          if (!isWithinSlackLimit(button.label, SLACK_ACTION_LABEL_MAX)) {
+            return false;
+          }
+          const target = resolveSlackButtonTarget(button, choiceIndex);
+          return target
+            ? target.kind === "link"
+              ? isWithinSlackLimit(target.url, SLACK_BUTTON_URL_MAX)
+              : isWithinSlackLimit(target.value, SLACK_BUTTON_VALUE_MAX)
+            : false;
+        });
+      if (!allButtonsRenderable) {
+        return false;
+      }
+      continue;
     }
     if (block.type === "select") {
-      return (
+      const placeholder = normalizeOptionalString(block.placeholder) ?? "Choose an option";
+      const allOptionsRenderable =
+        isWithinSlackLimit(placeholder, SLACK_ACTION_LABEL_MAX) &&
         block.options.length <= SLACK_STATIC_SELECT_OPTIONS_MAX &&
-        block.options.every((option) =>
-          isRenderableSlackOption({
-            label: option.label,
-            value: resolveSlackControlValue(option),
-          }),
-        )
-      );
+        (!block.placeholder || isWithinSlackLimit(block.placeholder, SLACK_ACTION_LABEL_MAX)) &&
+        block.options.every((option) => {
+          if (!isWithinSlackLimit(option.label, SLACK_ACTION_LABEL_MAX)) {
+            return false;
+          }
+          const target = resolveSlackOptionTarget(option);
+          return target ? isRenderableSlackOption({ label: option.label, ...target }) : false;
+        }) &&
+        new Set(block.options.map((option) => resolveSlackOptionTarget(option)?.kind)).size === 1;
+      if (!allOptionsRenderable) {
+        return false;
+      }
+      continue;
     }
     if (block.type === "chart") {
-      return canRenderSlackDataVisualization(block);
+      if (
+        dataVisualizationCount >= SLACK_DATA_VISUALIZATION_BLOCKS_MAX ||
+        !canRenderSlackDataVisualization(block)
+      ) {
+        return false;
+      }
+      dataVisualizationCount += 1;
+      continue;
     }
-    return true;
-  });
+    if (block.type === "table") {
+      continue;
+    }
+  }
+  return true;
 }
 
 function buildSlackPresentationSelectBlock(
@@ -429,20 +624,26 @@ function buildSlackPresentationSelectBlock(
   selectIndex: number,
 ): SlackBlock | undefined {
   const options = block.options
-    .map((option) => ({
-      label: option.label,
-      value: resolveSlackControlValue(option),
-    }))
+    .flatMap((option) => {
+      const target = resolveSlackOptionTarget(option);
+      return target ? [{ label: option.label, ...target }] : [];
+    })
     .filter(isRenderableSlackOption)
     .slice(0, SLACK_STATIC_SELECT_OPTIONS_MAX);
-  return options.length > 0
+  const optionKinds = new Set(options.map((option) => option.kind));
+  return options.length > 0 && optionKinds.size === 1
     ? {
         type: "actions",
         block_id: `openclaw_reply_select_${selectIndex}`,
         elements: [
           {
             type: "static_select",
-            action_id: buildSlackReplySelectActionId(selectIndex),
+            action_id:
+              options[0]?.kind === "approval"
+                ? buildSlackApprovalSelectActionId(selectIndex)
+                : options[0]?.kind === "callback"
+                  ? buildSlackCallbackSelectActionId(selectIndex)
+                  : buildSlackReplySelectActionId(selectIndex),
             placeholder: {
               type: "plain_text",
               text: truncateSlackText(

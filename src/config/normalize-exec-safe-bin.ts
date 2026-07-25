@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 /**
  * Config normalization for exec safe-bin policy before materialized config is consumed.
  * Keep this limited to persisted global/per-agent config shape; runtime trust decisions live in infra.
@@ -36,8 +37,7 @@ export function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void 
 
   // Safe-bin config can be set globally or overridden per agent; normalize both persisted scopes.
   normalizeExec(cfg.tools?.exec);
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
+  for (const agent of listAgentEntries(cfg)) {
     normalizeExec(agent?.tools?.exec);
   }
 }

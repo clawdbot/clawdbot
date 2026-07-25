@@ -131,17 +131,13 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   if (model) {
     normalized.model = model;
   }
-  const voice = normalizeOptionalString(source.voice);
-  const speakerVoice = normalizeOptionalString(source.speakerVoice) ?? voice;
+  const speakerVoice = normalizeOptionalString(source.speakerVoice);
   const speakerVoiceId = normalizeOptionalString(source.speakerVoiceId);
   if (speakerVoice) {
     normalized.speakerVoice = speakerVoice;
   }
   if (speakerVoiceId) {
     normalized.speakerVoiceId = speakerVoiceId;
-  }
-  if (voice) {
-    normalized.voice = voice;
   }
   const instructions = normalizeOptionalString(source.instructions);
   if (instructions) {
@@ -214,6 +210,10 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
 
   const source = value as Record<string, unknown>;
   const normalized: TalkConfig = {};
+  const agentId = normalizeOptionalString(source.agentId);
+  if (agentId) {
+    normalized.agentId = agentId;
+  }
   const speechLocale = normalizeOptionalString(source.speechLocale);
   if (speechLocale) {
     normalized.speechLocale = speechLocale;
@@ -306,6 +306,9 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   }
 
   const payload: TalkConfigResponse = {};
+  if (typeof normalized?.agentId === "string") {
+    payload.agentId = normalized.agentId;
+  }
   if (typeof normalized?.interruptOnSpeech === "boolean") {
     payload.interruptOnSpeech = normalized.interruptOnSpeech;
   }

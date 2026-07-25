@@ -13,6 +13,7 @@ type Pair = {
 
 const PROFILE = "release";
 const TARGET = "local-build:/work/openclaw";
+const MODEL = "gpt-5.6";
 const INCLUDE_FILTERS = ["scenario:scenario-a", "scenario:scenario-b"];
 const FIRST_PAIR: Pair = { scenario: "scenario-a", state: "state-a" };
 const PAIRS: Pair[] = [FIRST_PAIR, { scenario: "scenario-b", state: "state-b" }];
@@ -60,6 +61,7 @@ function record(pair: Pair, repeatIndex: number, repeat: number, authMode: "live
             available: true,
             environmentDependent: true,
             requestCount: 1,
+            models: [{ value: MODEL, count: 1 }],
             source: "openclaw-timeline",
           }
         : {
@@ -107,7 +109,12 @@ function report({
 function validate(
   lanePlan: JsonObject,
   laneReport: JsonObject,
-  options: { authMode?: "live" | "mock"; includeFilters?: string[]; repeat?: number } = {},
+  options: {
+    authMode?: "live" | "mock";
+    expectedModel?: string;
+    includeFilters?: string[];
+    repeat?: number;
+  } = {},
 ) {
   return validateKovaWorkflowEvidence({
     plan: lanePlan,
@@ -117,6 +124,7 @@ function validate(
     repeat: options.repeat ?? 2,
     includeFilters: options.includeFilters ?? INCLUDE_FILTERS,
     authMode: options.authMode ?? "mock",
+    expectedModel: options.expectedModel ?? MODEL,
   });
 }
 
@@ -162,6 +170,8 @@ function runCli({
     repeat,
     "--include",
     INCLUDE_FILTERS.join(","),
+    "--model",
+    MODEL,
   ];
   if (includeAuth) {
     args.push("--auth", "mock");
@@ -244,6 +254,75 @@ describe("Kova workflow evidence", () => {
       recordCount: 1,
       repeat: 1,
     });
+  });
+
+  it("rejects live evidence for a different provider model", () => {
+    const liveFilters = ["scenario:scenario-a"];
+    const lanePlan = plan([FIRST_PAIR], 1, liveFilters);
+    const laneReport = report({
+      authMode: "live",
+      includeFilters: liveFilters,
+      pairs: [FIRST_PAIR],
+      repeat: 1,
+    });
+    (firstRecordOf(laneReport).providerEvidence as JsonObject).models = [
+      { value: "gpt-5.5", count: 1 },
+    ];
+
+    expect(() =>
+      validate(lanePlan, laneReport, {
+        authMode: "live",
+        includeFilters: liveFilters,
+        repeat: 1,
+      }),
+    ).toThrow("live record scenario-a/state-a provider model did not match gpt-5.6");
+  });
+
+  it("rejects mixed live provider models", () => {
+    const liveFilters = ["scenario:scenario-a"];
+    const lanePlan = plan([FIRST_PAIR], 1, liveFilters);
+    const laneReport = report({
+      authMode: "live",
+      includeFilters: liveFilters,
+      pairs: [FIRST_PAIR],
+      repeat: 1,
+    });
+    const providerEvidence = firstRecordOf(laneReport).providerEvidence as JsonObject;
+    providerEvidence.requestCount = 2;
+    providerEvidence.models = [
+      { value: MODEL, count: 1 },
+      { value: "gpt-5.5", count: 1 },
+    ];
+
+    expect(() =>
+      validate(lanePlan, laneReport, {
+        authMode: "live",
+        includeFilters: liveFilters,
+        repeat: 1,
+      }),
+    ).toThrow("live record scenario-a/state-a provider model evidence was not exact");
+  });
+
+  it("rejects live provider model count drift", () => {
+    const liveFilters = ["scenario:scenario-a"];
+    const lanePlan = plan([FIRST_PAIR], 1, liveFilters);
+    const laneReport = report({
+      authMode: "live",
+      includeFilters: liveFilters,
+      pairs: [FIRST_PAIR],
+      repeat: 1,
+    });
+    (firstRecordOf(laneReport).providerEvidence as JsonObject).models = [
+      { value: MODEL, count: 2 },
+    ];
+
+    expect(() =>
+      validate(lanePlan, laneReport, {
+        authMode: "live",
+        includeFilters: liveFilters,
+        repeat: 1,
+      }),
+    ).toThrow("live record scenario-a/state-a provider model count did not match request count");
   });
 
   it("rejects plan and report schema drift", () => {

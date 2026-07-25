@@ -1,6 +1,7 @@
 // Browser tests cover target id plugin behavior.
 import { describe, expect, it } from "vitest";
-import { resolveTargetIdFromTabs } from "./target-id.js";
+import type { ProfileRuntimeState } from "./server-context.types.js";
+import { assignTabAlias, resolveTargetIdFromTabs } from "./target-id.js";
 
 const tabs = [
   {
@@ -15,6 +16,24 @@ const tabs = [
     tabId: "t2",
   },
 ];
+
+describe("assignTabAlias", () => {
+  it("rejects invalid labels without initializing alias state", () => {
+    const profileState: ProfileRuntimeState = {
+      profile: {} as ProfileRuntimeState["profile"],
+      running: null,
+    };
+
+    expect(() =>
+      assignTabAlias({
+        profileState,
+        tab: { targetId: "TARGET", title: "", url: "about:blank", type: "page" },
+        label: "not allowed",
+      }),
+    ).toThrow(/tab label/i);
+    expect(profileState.tabAliases).toBeUndefined();
+  });
+});
 
 describe("resolveTargetIdFromTabs", () => {
   it("resolves friendly tab references before falling back to raw target prefixes", () => {

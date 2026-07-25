@@ -50,16 +50,22 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token-fallback
         continue-on-error: true
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
       - name: Mark stale unassigned issues and pull requests (primary)
         id: stale-primary
         continue-on-error: true
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
@@ -92,7 +98,7 @@ jobs:
       - name: Mark stale assigned issues (primary)
         id: assigned-issue-stale-primary
         continue-on-error: true
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 30
@@ -116,7 +122,7 @@ jobs:
       - name: Mark stale assigned pull requests (primary)
         id: assigned-stale-primary
         continue-on-error: true
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: -1
@@ -163,7 +169,7 @@ jobs:
             }
       - name: Mark stale unassigned issues and pull requests (fallback)
         if: (steps.stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
@@ -195,7 +201,7 @@ jobs:
             That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Mark stale assigned issues (fallback)
         if: (steps.assigned-issue-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 30
@@ -218,7 +224,7 @@ jobs:
           close-issue-reason: not_planned
       - name: Mark stale assigned pull requests (fallback)
         if: (steps.assigned-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: -1
@@ -252,6 +258,9 @@ jobs:
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-metadata: read
+          permission-pull-requests: write
       - name: Backfill stale closures
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
@@ -489,6 +498,7 @@ jobs:
             }
 
   lock-closed-issues:
+    needs: stale
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
     permissions:
       issues: write
@@ -499,94 +509,51 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - name: Lock closed issues after 48h of no comments
+          permission-issues: write
+          permission-metadata: read
+      - name: Lock closed issues after 48h of no activity
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const lockAfterHours = 48;
             const lockAfterMs = lockAfterHours * 60 * 60 * 1000;
-            const perPage = 100;
+            const maxLocksPerRun = 50;
+            const mutationDelayMs = 1100;
             const cutoffMs = Date.now() - lockAfterMs;
             const { owner, repo } = context.repo;
 
-            let locked = 0;
-            let inspected = 0;
-            let cursor = null;
+            const cutoff = new Date(cutoffMs).toISOString();
+            const query = [
+              `repo:${owner}/${repo}`,
+              "is:issue",
+              "is:closed",
+              "is:unlocked",
+              `updated:<${cutoff}`,
+            ].join(" ");
+            const { data } = await github.rest.search.issuesAndPullRequests({
+              q: query,
+              sort: "updated",
+              order: "asc",
+              per_page: maxLocksPerRun,
+            });
+            const candidates = data.items.filter(issue => {
+              const updatedAtMs = Date.parse(issue.updated_at);
+              return Number.isFinite(updatedAtMs) && updatedAtMs <= cutoffMs;
+            });
 
-            while (true) {
-              const result = await github.graphql(
-                `query ClosedIssuesForLocking(
-                  $owner: String!
-                  $repo: String!
-                  $cursor: String
-                  $perPage: Int!
-                ) {
-                  repository(owner: $owner, name: $repo) {
-                    issues(
-                      first: $perPage
-                      after: $cursor
-                      states: CLOSED
-                      orderBy: { field: CREATED_AT, direction: ASC }
-                    ) {
-                      nodes {
-                        number
-                        locked
-                        closedAt
-                        comments(last: 1) {
-                          nodes {
-                            createdAt
-                          }
-                        }
-                      }
-                      pageInfo {
-                        hasNextPage
-                        endCursor
-                      }
-                    }
-                  }
-                }`,
-                {
-                  owner,
-                  repo,
-                  cursor,
-                  perPage,
-                },
-              );
-              const issues = result.repository.issues;
-
-              for (const issue of issues.nodes) {
-                if (issue.locked || !issue.closedAt) {
-                  continue;
-                }
-
-                inspected += 1;
-                const closedAtMs = Date.parse(issue.closedAt);
-                if (!Number.isFinite(closedAtMs) || closedAtMs > cutoffMs) {
-                  continue;
-                }
-
-                const lastComment = issue.comments.nodes[0];
-                const lastCommentMs = lastComment ? Date.parse(lastComment.createdAt) : 0;
-                const lastActivityMs = Math.max(closedAtMs, lastCommentMs || 0);
-                if (lastActivityMs > cutoffMs) {
-                  continue;
-                }
-
-                await github.rest.issues.lock({
-                  owner,
-                  repo,
-                  issue_number: issue.number,
-                  lock_reason: "resolved",
-                });
-
-                locked += 1;
+            for (const [index, issue] of candidates.entries()) {
+              await github.rest.issues.lock({
+                owner,
+                repo,
+                issue_number: issue.number,
+                lock_reason: "resolved",
+              });
+              if (index < candidates.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, mutationDelayMs));
               }
-
-              if (!issues.pageInfo.hasNextPage || !issues.pageInfo.endCursor) {
-                break;
-              }
-              cursor = issues.pageInfo.endCursor;
             }
 
-            core.info(`Inspected ${inspected} closed issues; locked ${locked}.`);
+            core.info(
+              `Found ${data.total_count} unlocked issues inactive for 48h; locked ${candidates.length}.`,
+            );

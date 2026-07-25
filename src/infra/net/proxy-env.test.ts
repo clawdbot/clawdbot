@@ -164,6 +164,18 @@ describe("matchesNoProxy", () => {
       expected: false,
     },
     {
+      name: "lets blank lower-case no_proxy shadow upper-case NO_PROXY",
+      url: "https://api.openai.com",
+      env: { no_proxy: "", NO_PROXY: "*" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "does not treat a whitespace-wrapped wildcard as global bypass",
+      url: "https://api.openai.com",
+      env: { NO_PROXY: " * " } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
       name: "matches wildcard",
       url: "https://api.openai.com/v1/chat",
       env: { NO_PROXY: "*" } as NodeJS.ProcessEnv,

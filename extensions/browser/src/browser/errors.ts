@@ -5,9 +5,9 @@
  * by route handlers, clients, and Gateway proxy code.
  */
 /** Stable message for blocked CDP endpoint configuration. */
-export const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
+const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
 /** Stable message for blocked page navigation targets. */
-export const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
+const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 
 /** Stable machine-readable browser error reasons. */
 export const BROWSER_ERROR_REASONS = {
@@ -30,7 +30,7 @@ export type BrowserNoDisplayErrorMetadata = {
 
 type WithNoDisplayMetadata<T> = T | (T & BrowserNoDisplayErrorMetadata);
 export type BrowserErrorResponse = WithNoDisplayMetadata<{ status: number; message: string }>;
-export type BrowserErrorPayload = WithNoDisplayMetadata<{ error: string }>;
+type BrowserErrorPayload = WithNoDisplayMetadata<{ error: string }>;
 
 /** Base browser error carrying an HTTP status code. */
 export class BrowserError extends Error {

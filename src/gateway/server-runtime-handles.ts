@@ -14,6 +14,7 @@ import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach
 export type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
   hotReloadStatus?: () => GatewayHotReloadStatus;
+  notifyPluginMetadataChanged: () => void;
 };
 
 /** Mutable handles owned by a running gateway server process. */
@@ -75,7 +76,10 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     channelHealthMonitor: null as ChannelHealthMonitor | null,
     stopModelPricingRefresh: () => {},
     mcpServer: undefined as { port: number; close: () => Promise<void> } | undefined,
-    configReloader: { stop: async () => {} } satisfies GatewayConfigReloaderHandle,
+    configReloader: {
+      stop: async () => {},
+      notifyPluginMetadataChanged: () => {},
+    } satisfies GatewayConfigReloaderHandle,
     agentUnsub: null as (() => Promise<void> | void) | null,
     heartbeatUnsub: null as (() => void) | null,
     transcriptUnsub: null as (() => void) | null,

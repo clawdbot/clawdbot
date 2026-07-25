@@ -63,25 +63,6 @@ function getPackageDir(): string {
   return currentDir;
 }
 
-function getPackageSourceOrDistDir(): string {
-  const packageDir = getPackageDir();
-  const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
-  return join(packageDir, srcOrDist);
-}
-
-/**
- * Get path to built-in themes directory (shipped with package)
- * - For Bun binary: theme/ next to executable
- * - For Node.js (dist/): dist/agents/modes/interactive/theme/
- * - For tsx (src/): src/agents/modes/interactive/theme/
- */
-export function getThemesDir(): string {
-  if (isBunBinary) {
-    return join(getPackageDir(), "theme");
-  }
-  return join(getPackageSourceOrDistDir(), "agents", "modes", "interactive", "theme");
-}
-
 /** Get path to package.json */
 function getPackageJsonPath(): string {
   return join(getPackageDir(), "package.json");
@@ -147,17 +128,7 @@ export function getAgentDir(): string {
   return join(homedir(), CONFIG_DIR_NAME, "agent");
 }
 
-/** Get path to user's custom themes directory */
-export function getCustomThemesDir(): string {
-  return join(getAgentDir(), "themes");
-}
-
 /** Get path to managed binaries directory (fd, rg) */
 export function getBinDir(): string {
   return join(getAgentDir(), "bin");
-}
-
-/** Get path to sessions directory */
-export function getSessionsDir(): string {
-  return join(getAgentDir(), "sessions");
 }

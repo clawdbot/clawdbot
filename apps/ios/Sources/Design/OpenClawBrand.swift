@@ -74,6 +74,11 @@ final class AppAppearanceModel {
 }
 
 enum OpenClawBrand {
+    // Carapace semantic palette: these tokens are shared by voice surfaces that
+    // need the web system's quieter ink/paper hierarchy in native SwiftUI.
+    static let carapaceElevated = Color(red: 32 / 255.0, green: 32 / 255.0, blue: 36 / 255.0)
+    static let carapaceCoral = Color(red: 245 / 255.0, green: 101 / 255.0, blue: 74 / 255.0)
+    static let carapaceSea = Color(red: 79 / 255.0, green: 200 / 255.0, blue: 174 / 255.0)
     // Accent fills stay dark enough for white content; foreground accents adapt
     // separately so small labels retain 4.5:1 contrast on dark surfaces and tinted pills.
     static let uiAccent = adaptiveUIColor(light: (183, 56, 51), dark: (198, 62, 56))
@@ -88,6 +93,11 @@ enum OpenClawBrand {
     static let uiWarn = adaptiveUIColor(light: (154, 87, 0), dark: (255, 214, 10))
     static let uiDanger = adaptiveUIColor(light: (185, 28, 28), dark: (252, 165, 165))
     static let uiInfo = adaptiveUIColor(light: (0, 91, 196), dark: (100, 168, 255))
+    // Carapace status foreground tokens. Keep these separate from the broader
+    // app feedback palette so compact state indicators match the web system.
+    static let uiStatusSuccess = adaptiveUIColor(light: (22, 163, 74), dark: (34, 197, 94))
+    static let uiStatusWarning = adaptiveUIColor(light: (217, 119, 6), dark: (251, 191, 36))
+    static let uiStatusError = adaptiveUIColor(light: (220, 38, 38), dark: (239, 68, 68))
 
     static let accent = Color(uiColor: Self.uiAccent)
     static let accentForeground = Color(uiColor: Self.uiAccentForeground)
@@ -101,6 +111,9 @@ enum OpenClawBrand {
     static let ok = Color(uiColor: Self.uiOK)
     static let warn = Color(uiColor: Self.uiWarn)
     static let info = Color(uiColor: Self.uiInfo)
+    static let statusSuccess = Color(uiColor: Self.uiStatusSuccess)
+    static let statusWarning = Color(uiColor: Self.uiStatusWarning)
+    static let statusError = Color(uiColor: Self.uiStatusError)
     static let graphite = void
     static let graphiteElevated = obsidian
     static let activationCanvas = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (18, 14, 15)))
@@ -208,11 +221,30 @@ enum OpenClawBrand {
     }
 }
 
+extension TalkWaveformPalette {
+    /// iOS app branding for shared voice contours. This lives with the palette
+    /// owner so removing a presentation surface cannot remove the app theme.
+    static let openClawBrand = TalkWaveformPalette(
+        active: [
+            OpenClawBrand.carapaceCoral,
+            OpenClawBrand.carapaceSea,
+            OpenClawBrand.accent,
+        ],
+        inactive: [
+            Color(uiColor: .systemGray2),
+            Color(uiColor: .systemGray3),
+            Color(uiColor: .systemGray4),
+        ])
+}
+
 struct OpenClawActivationGlyph: View {
     let size: CGFloat
+    var mood: OpenClawMascotMood = .idle
+    /// Opt-in tap Easter eggs; leave off when the glyph sits inside a control.
+    var interactive = false
 
     var body: some View {
-        OpenClawMascotView(floats: false)
+        OpenClawMascotView(floats: false, mood: self.mood, interactive: self.interactive)
             .frame(width: self.size, height: self.size)
             .shadow(
                 color: OpenClawBrand.activationGlow.opacity(0.18),
@@ -268,7 +300,6 @@ private struct OpenClawCraftSurfaceModifier: ViewModifier {
 struct OpenClawPrimaryActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var height: CGFloat = 54
-    var cornerRadius: CGFloat = 18
 
     private var resolvedCornerRadius: CGFloat {
         self.height / 2
@@ -347,7 +378,6 @@ struct OpenClawPrimaryActionButtonStyle: ButtonStyle {
 struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var height: CGFloat = 50
-    var cornerRadius: CGFloat = 18
     var shadowOpacity: Double = 0.035
 
     private var resolvedCornerRadius: CGFloat {

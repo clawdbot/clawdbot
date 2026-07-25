@@ -1,5 +1,11 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
+import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import {
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionStoreEntryProtected,
+} from "../../sessions/agent-harness-session-key.js";
 import { mintAttachGrant, revokeAttachGrant } from "../mcp-grant-store.js";
 import { ensureMcpLoopbackServer } from "../mcp-http.js";
 import {
@@ -25,6 +31,22 @@ function readPositiveNumber(params: Record<string, unknown>, key: string): numbe
 export const attachHandlers: GatewayRequestHandlers = {
   "attach.grant": async ({ params, respond, context }) => {
     const grantParams = paramRecord(params);
+    const cfg = context.getRuntimeConfig();
+    const sessionKey = readString(grantParams, "sessionKey") ?? resolveMainSessionKey(cfg);
+    const harnessEntry = isAgentHarnessSessionKey(sessionKey)
+      ? resolveSessionEntryAccessTarget({ cfg, sessionKey }).entry
+      : undefined;
+    if (
+      isAgentHarnessSessionKey(sessionKey) &&
+      (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, harnessEntry))
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE),
+      );
+      return;
+    }
     await ensureMcpLoopbackServer();
     const runtime = getActiveMcpLoopbackRuntime();
     if (!runtime) {
@@ -35,8 +57,6 @@ export const attachHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const sessionKey =
-      readString(grantParams, "sessionKey") ?? resolveMainSessionKey(context.getRuntimeConfig());
     const grant = mintAttachGrant({ sessionKey, ttlMs: readPositiveNumber(grantParams, "ttlMs") });
     respond(true, {
       sessionKey: grant.sessionKey,

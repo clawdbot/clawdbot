@@ -228,7 +228,7 @@ describe("deliverReplies", () => {
     sendMessageIMessageMock.mockResolvedValueOnce({
       messageId: "imsg-media-1",
       sentText: "",
-      echoText: "<media:image>",
+      echoMedia: { contentType: "image/jpeg", kind: "image" },
     });
 
     await deliverReplies({
@@ -243,7 +243,7 @@ describe("deliverReplies", () => {
     });
 
     expect(remember).toHaveBeenCalledWith("acct-4:chat_id:40", {
-      text: "<media:image>",
+      media: { contentType: "image/jpeg", kind: "image" },
       messageId: "imsg-media-1",
     });
   });

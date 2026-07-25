@@ -1,6 +1,25 @@
 // Tests for surrogate-safe UTF-16 string slicing helpers.
 import { describe, expect, it } from "vitest";
-import { sliceUtf16Safe, truncateUtf16Safe } from "./utf16-slice.js";
+import {
+  avoidTrailingHighSurrogateBreak,
+  sliceUtf16Safe,
+  truncateUtf16Safe,
+} from "./utf16-slice.js";
+
+describe("avoidTrailingHighSurrogateBreak", () => {
+  it("keeps ordinary and terminal boundaries unchanged", () => {
+    expect(avoidTrailingHighSurrogateBreak("hello", 0, 3)).toBe(3);
+    expect(avoidTrailingHighSurrogateBreak("hello", 0, 5)).toBe(5);
+  });
+
+  it("moves a split before a surrogate pair when room remains", () => {
+    expect(avoidTrailingHighSurrogateBreak("a🤖b", 0, 2)).toBe(1);
+  });
+
+  it("includes the full pair when a one-unit chunk starts with it", () => {
+    expect(avoidTrailingHighSurrogateBreak("🤖b", 0, 1)).toBe(2);
+  });
+});
 
 describe("sliceUtf16Safe", () => {
   it("slices ASCII string normally", () => {

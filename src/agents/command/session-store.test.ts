@@ -3,25 +3,29 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionStore } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  listSessionEntries,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   clearCliSessionInStore,
+  consumeCliSessionForkInStore,
+  persistCliSessionForkSuccessorInStore,
+  restoreCliSessionForkInStore,
   recordCliCompactionInStore,
   updateSessionStoreAfterAgentRun,
 } from "./session-store.js";
 import { resolveSession } from "./session.js";
 
-const sessionStoreMocks = vi.hoisted(() => ({
-  updateSessionStore: vi.fn(),
-}));
-
 vi.mock("../model-selection.js", () => ({
-  isCliProvider: (provider: string, cfg?: OpenClawConfig) =>
-    Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
+  isCliProvider: (provider: string, _cfg?: OpenClawConfig) =>
+    ["claude-cli", "codex-cli", "google-gemini-cli"].includes(provider.trim().toLowerCase()),
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
@@ -71,80 +75,6 @@ vi.mock("../../utils/usage-format.js", () => ({
   },
 }));
 
-vi.mock("../../config/sessions.js", async () => {
-  const fsSync = await import("node:fs");
-  const fsLocal = await import("node:fs/promises");
-  const pathLocal = await import("node:path");
-  const readStore = async (storePath: string): Promise<Record<string, SessionEntry>> => {
-    try {
-      return JSON.parse(await fsLocal.readFile(storePath, "utf8")) as Record<string, SessionEntry>;
-    } catch {
-      return {};
-    }
-  };
-  const writeStore = async (storePath: string, store: Record<string, SessionEntry>) => {
-    await fsLocal.mkdir(pathLocal.dirname(storePath), { recursive: true });
-    await fsLocal.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
-  };
-  sessionStoreMocks.updateSessionStore.mockImplementation(
-    async <T>(
-      storePath: string,
-      mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
-    ) => {
-      const store = await readStore(storePath);
-      const previousAcpByKey = new Map(
-        Object.entries(store)
-          .filter(
-            (entry): entry is [string, SessionEntry & { acp: NonNullable<SessionEntry["acp"]> }] =>
-              Boolean(entry[1]?.acp),
-          )
-          .map(([key, entry]) => [key, entry.acp]),
-      );
-      const result = await mutator(store);
-      // The mocked store keeps ACP metadata sticky to preserve the production
-      // merge behavior that protects persistent ACP session handles.
-      for (const [key, acp] of previousAcpByKey) {
-        const next = store[key];
-        if (next && !next.acp) {
-          next.acp = acp;
-        }
-      }
-      await writeStore(storePath, store);
-      return result;
-    },
-  );
-  return {
-    mergeSessionEntry: (existing: SessionEntry | undefined, patch: Partial<SessionEntry>) => ({
-      ...existing,
-      ...patch,
-      sessionId: patch.sessionId ?? existing?.sessionId ?? "mock-session",
-      updatedAt: Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now()),
-    }),
-    setSessionRuntimeModel: (entry: SessionEntry, runtime: { provider: string; model: string }) => {
-      entry.modelProvider = runtime.provider;
-      entry.model = runtime.model;
-      return true;
-    },
-    updateSessionStore: sessionStoreMocks.updateSessionStore,
-    loadSessionStore: (storePath: string) => {
-      try {
-        return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
-      } catch {
-        return {};
-      }
-    },
-    canonicalizeAbsoluteSessionFilePath: (filePath: string) => pathLocal.resolve(filePath),
-    rewriteSessionFileForNewSessionId: (params: {
-      sessionFile?: string;
-      previousSessionId: string;
-      nextSessionId: string;
-    }) => params.sessionFile?.replace(params.previousSessionId, params.nextSessionId),
-    resolveSessionFilePathOptions: (params: unknown) => params,
-    resolveSessionFilePath: (sessionId: string, entry?: SessionEntry) =>
-      entry?.sessionFile ?? pathLocal.join("/tmp", `${sessionId}.jsonl`),
-  };
-});
-
 function acpMeta() {
   return {
     backend: "acpx",
@@ -159,17 +89,119 @@ function acpMeta() {
 async function withTempSessionStore<T>(
   run: (params: { dir: string; storePath: string }) => Promise<T>,
 ): Promise<T> {
-  // Session-store tests exercise real JSON persistence, but each case gets an
-  // isolated file so mutation order remains deterministic.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
   try {
     return await run({ dir, storePath: path.join(dir, "sessions.json") });
   } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+    closeOpenClawAgentDatabasesForTest();
+    // SQLite teardown can race fixture removal on loaded CI hosts. Keep the
+    // retries bounded so persistent cleanup failures still surface.
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 }
 
+async function seedSessionStore(
+  storePath: string,
+  entries: Record<string, SessionEntry>,
+): Promise<void> {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+  }
+}
+
+function loadPersistedSessionStore(storePath: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
+function loadPersistedSessionEntry(
+  storePath: string,
+  sessionKey: string,
+): SessionEntry | undefined {
+  return loadSessionEntry({ storePath, sessionKey }) ?? undefined;
+}
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+});
+
 describe("updateSessionStoreAfterAgentRun", () => {
+  it("clears the durable replay-safe recovery guard after the recovery run terminates", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:restart-recovery";
+      const sessionId = "restart-recovery-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          restartRecoveryForceSafeTools: true,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        clearRestartRecoveryForceSafeTools: true,
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.restartRecoveryForceSafeTools).toBeUndefined();
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.restartRecoveryForceSafeTools,
+      ).toBeUndefined();
+    });
+  });
+
+  it("keeps the durable replay-safe recovery guard when the recovery run is aborted", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:aborted-restart-recovery";
+      const sessionId = "aborted-restart-recovery-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          restartRecoveryForceSafeTools: true,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        clearRestartRecoveryForceSafeTools: true,
+        result: {
+          meta: {
+            durationMs: 1,
+            aborted: true,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.restartRecoveryForceSafeTools).toBe(true);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.restartRecoveryForceSafeTools).toBe(
+        true,
+      );
+    });
+  });
+
   it("preserves a concurrent rename and unpin during final accounting", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-management-race";
@@ -195,12 +227,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       delete concurrentEntry.elevatedLevel;
       delete concurrentEntry.inheritedToolAllow;
       delete concurrentEntry.pinnedAt;
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: concurrentEntry,
-        }),
-      );
+      await seedSessionStore(storePath, { [sessionKey]: concurrentEntry });
 
       await updateSessionStoreAfterAgentRun({
         cfg: {} as OpenClawConfig,
@@ -227,14 +254,11 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.elevatedLevel).toBeUndefined();
       expect(sessionStore[sessionKey]?.inheritedToolAllow).toBeUndefined();
       expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
-      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(
-        sessionStore[sessionKey],
-      );
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(sessionStore[sessionKey]);
     });
   });
 
   it("passes resolved maintenance config to the gateway turn store write", async () => {
-    sessionStoreMocks.updateSessionStore.mockClear();
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         session: {
@@ -262,7 +286,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           ]),
         ),
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
       const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
@@ -285,7 +309,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true });
+      const persisted = loadPersistedSessionStore(storePath);
       expect(Object.keys(persisted)).toHaveLength(42);
       expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
       expect(persisted["agent:main:stale:44"]).toBeUndefined();
@@ -303,7 +327,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
       const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
@@ -328,7 +352,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.agentHarnessId).toBe("codex");
-      expect(loadSessionStore(storePath)[sessionKey]?.agentHarnessId).toBe("codex");
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.agentHarnessId).toBe("codex");
     });
   });
 
@@ -346,7 +370,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -392,7 +416,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -418,7 +442,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
-      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(400_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(400_000);
     });
   });
 
@@ -441,7 +465,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -467,7 +491,52 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
-      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(272_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(272_000);
+    });
+  });
+
+  it("persists the prepared claude-cli context budget", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {},
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-claude-cli-configured-context";
+      const sessionId = "test-claude-cli-configured-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          contextTokens: 1_048_576,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              contextTokens: 100_000,
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(100_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(100_000);
     });
   });
 
@@ -475,13 +544,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-harness-pin-cli";
@@ -493,7 +556,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           agentHarnessId: "codex",
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -519,7 +582,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.agentHarnessId).toBeUndefined();
-      expect(loadSessionStore(storePath)[sessionKey]?.agentHarnessId).toBeUndefined();
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.agentHarnessId).toBeUndefined();
     });
   });
 
@@ -527,13 +590,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-claude-cli";
@@ -544,7 +601,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -579,7 +636,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
       expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "cli-session-123",
       });
@@ -593,13 +650,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-clear-unflushed-cli";
@@ -624,7 +675,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           claudeCliSessionId: "stale-cli-session",
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -658,7 +709,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.cliSessionIds?.["codex-cli"]).toBe("codex-session");
       expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
-      const persisted = loadSessionStore(storePath, { skipCache: true });
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
       expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
       expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
@@ -675,7 +726,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         updatedAt: Date.now(),
         acp: acpMeta(),
       };
-      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: existing }, null, 2), "utf8");
+      await seedSessionStore(storePath, { [sessionKey]: existing });
 
       const staleInMemory: Record<string, SessionEntry> = {
         [sessionKey]: {
@@ -705,7 +756,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as never,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadPersistedSessionEntry(storePath, sessionKey);
       expect(persisted?.acp?.backend).toBe("acpx");
       expect(persisted?.acp?.agent).toBe("codex");
       expect(persisted?.acp?.runtimeSessionName).toBe("runtime-1");
@@ -728,7 +779,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         endedAt: 1_900,
         runtimeMs: 900,
       };
-      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: terminalEntry }, null, 2));
+      await seedSessionStore(storePath, { [sessionKey]: terminalEntry });
 
       const staleInMemory: Record<string, SessionEntry> = {
         [sessionKey]: {
@@ -759,7 +810,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as never,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadPersistedSessionEntry(storePath, sessionKey);
       expect(persisted?.status).toBe("done");
       expect(persisted?.startedAt).toBe(1_000);
       expect(persisted?.endedAt).toBe(1_900);
@@ -781,7 +832,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: Date.now(),
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+      await seedSessionStore(storePath, sessionStore);
 
       const report = {
         source: "run" as const,
@@ -821,7 +872,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as never,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadPersistedSessionEntry(storePath, sessionKey);
       expect(persisted?.systemPromptReport?.bootstrapTruncation?.warningSignaturesSeen).toEqual([
         "sig-a",
         "sig-b",
@@ -840,11 +891,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           mainKey: "main",
         },
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as never;
 
@@ -891,7 +938,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         authEpoch: "auth-epoch-1",
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[first.sessionKey!];
+      const persisted = loadPersistedSessionEntry(storePath, first.sessionKey!);
       expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "claude-cli-session-1",
         authEpoch: "auth-epoch-1",
@@ -904,23 +951,16 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const sessionKey = "agent:main:explicit:terminal-cli-session";
       const existingSessionId = "terminal-cli-session-old";
       const now = Date.now();
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: existingSessionId,
-              updatedAt: now,
-              status: "done",
-              startedAt: now - 1_000,
-              endedAt: now - 100,
-              runtimeMs: 900,
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: now,
+          status: "done",
+          startedAt: now - 1_000,
+          endedAt: now - 100,
+          runtimeMs: 900,
+        },
+      });
 
       const result = resolveSession({
         cfg: {
@@ -954,7 +994,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -981,7 +1021,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.totalTokens).toBe(21225);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.totalTokens).toBe(21225);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
     });
@@ -1000,7 +1040,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -1051,7 +1091,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         contextTokenBudget: 32_000,
       });
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(18_000);
     });
   });
@@ -1088,7 +1128,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -1116,7 +1156,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.model).toBe("MiniMax-M2.7");
       expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
     });
   });
@@ -1125,11 +1165,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-cli-cumulative-usage";
@@ -1142,7 +1178,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1178,6 +1214,59 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("uses non-CLI last-call usage when promptTokens is unavailable", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-responses-cumulative-usage";
+      const sessionId = "test-responses-cumulative-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "custom-openai",
+        defaultModel: "responses-model",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "custom-openai",
+              model: "responses-model",
+              usage: {
+                input: 497_720,
+                output: 7_485,
+                cacheRead: 1_323_520,
+                cacheWrite: 0,
+                total: 1_828_725,
+              },
+              lastCallUsage: {
+                input: 38_333,
+                output: 66,
+                cacheRead: 120_320,
+                cacheWrite: 0,
+                total: 158_719,
+              },
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(158_653);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.totalTokens).toBe(158_653);
+    });
+  });
+
   it("uses the compaction snapshot when non-CLI last-call context is unavailable", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-unavailable-context";
@@ -1190,7 +1279,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await replaceSessionEntry({ storePath, sessionKey }, sessionStore[sessionKey]!);
 
       await updateSessionStoreAfterAgentRun({
         cfg: {} as OpenClawConfig,
@@ -1238,11 +1327,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-cli-last-call-usage";
@@ -1253,7 +1338,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1291,8 +1376,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]?.totalTokens).toBe(50_006);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
-      expect(loadSessionStore(storePath)[sessionKey]?.totalTokens).toBe(50_006);
-      expect(loadSessionStore(storePath)[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.totalTokens).toBe(50_006);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.totalTokensFresh).toBe(true);
     });
   });
 
@@ -1307,7 +1392,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -1337,7 +1422,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.totalTokens).toBe(21_225);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
     });
@@ -1360,7 +1445,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           cacheWrite: 33_047,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1405,7 +1490,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("prefers fresh usage over positive compaction tokensAfter", async () => {
+  it("prefers fresh last-call usage over positive compaction tokensAfter", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-positive-compaction-with-usage";
@@ -1418,7 +1503,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1452,7 +1537,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as EmbeddedAgentRunResult,
       });
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(120_000);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(95_000);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
       expect(sessionStore[sessionKey]?.inputTokens).toBe(100_000);
       expect(sessionStore[sessionKey]?.outputTokens).toBe(3_000);
@@ -1496,7 +1581,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1544,7 +1629,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1603,7 +1688,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       // Simulate a run with 10k input + 5k output tokens
       // Cost = (10000 * 10 + 5000 * 30) / 1e6 = $0.25
@@ -1653,7 +1738,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       // After second persist with same usage, cost should STILL be $0.25 (not $0.50)
       expect(sessionStore[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
     });
   });
@@ -1673,7 +1758,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           lastInteractionAt,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1717,7 +1802,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           lastActivityAt,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await replaceSessionEntry({ storePath, sessionKey }, sessionStore[sessionKey]!);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1759,7 +1844,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           lastInteractionAt,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1782,6 +1867,205 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.lastInteractionAt).toBeGreaterThan(lastInteractionAt);
+    });
+  });
+
+  it("clears main recovery markers after settled background progress", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-clear-recovery-state";
+      const sessionId = "test-clear-recovery-state-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          abortedLastRun: true,
+          restartRecoveryRuns: [
+            { runId: "initial-wedged-run", lifecycleGeneration: "gen-1" },
+            { runId: "recovery-run-1", lifecycleGeneration: "gen-2" },
+            { runId: "recovery-run-2", lifecycleGeneration: "gen-3" },
+            { runId: "recovery-run-3", lifecycleGeneration: "gen-4" },
+          ],
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 3,
+            chargedAttempts: 2,
+          },
+          subagentRecovery: {
+            automaticAttempts: 2,
+            lastAttemptAt: 3,
+            wedgedAt: 4,
+            wedgedReason: "automatic_attempt_budget_exceeded",
+          },
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        touchInteraction: false,
+        touchActivity: false,
+        preserveRuntimeModel: true,
+        result: {
+          meta: {
+            durationMs: 1,
+            aborted: false,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.5",
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.abortedLastRun).toBe(false);
+      expect(sessionStore[sessionKey]?.restartRecoveryRuns).toBeUndefined();
+      expect(sessionStore[sessionKey]?.mainRestartRecovery).toBeUndefined();
+      expect(sessionStore[sessionKey]?.subagentRecovery).toEqual({
+        automaticAttempts: 2,
+        lastAttemptAt: 3,
+        wedgedAt: 4,
+        wedgedReason: "automatic_attempt_budget_exceeded",
+      });
+      const persisted = loadPersistedSessionEntry(storePath, sessionKey);
+      expect(persisted?.abortedLastRun).toBe(false);
+      expect(persisted?.restartRecoveryRuns).toBeUndefined();
+      expect(persisted).not.toHaveProperty("mainRestartRecovery");
+      expect(persisted?.subagentRecovery).toEqual({
+        automaticAttempts: 2,
+        lastAttemptAt: 3,
+        wedgedAt: 4,
+        wedgedReason: "automatic_attempt_budget_exceeded",
+      });
+    });
+  });
+
+  it("preserves a replacement recovery cycle from an older healthy finalizer", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-recovery-finalizer-aba";
+      const sessionId = "test-recovery-finalizer-aba-session";
+      const staleEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 1,
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-old",
+          revision: 2,
+          chargedAttempts: 1,
+        },
+      };
+      const sessionStore = { [sessionKey]: staleEntry };
+      const replacementEntry: SessionEntry = {
+        ...staleEntry,
+        updatedAt: 2,
+        restartRecoveryRuns: [{ runId: "replacement-run", lifecycleGeneration: "gen-new" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-new",
+          revision: 1,
+          chargedAttempts: 0,
+        },
+      };
+      await seedSessionStore(storePath, { [sessionKey]: replacementEntry });
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            aborted: false,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      const persisted = loadPersistedSessionEntry(storePath, sessionKey);
+      expect(persisted).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "replacement-run", lifecycleGeneration: "gen-new" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-new",
+          revision: 1,
+          chargedAttempts: 0,
+        },
+      });
+      expect(sessionStore[sessionKey]).toEqual(persisted);
+    });
+  });
+
+  it("preserves a concurrent restart marker when a stale run settles healthy", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-restart-finalizer-race";
+      const sessionId = "test-restart-finalizer-race-session";
+      const initialEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 1,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "run-1", lifecycleGeneration: "generation-1" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 0,
+          foregroundClaims: {
+            lifecycleGeneration: "generation-1",
+            tokens: ["owner-1"],
+          },
+        },
+      };
+      const sessionStore = { [sessionKey]: initialEntry };
+      const concurrentEntry: SessionEntry = {
+        ...structuredClone(initialEntry),
+        updatedAt: 2,
+        restartRecoveryRuns: [
+          ...(initialEntry.restartRecoveryRuns ?? []),
+          { runId: "run-1", lifecycleGeneration: "generation-2" },
+        ],
+        mainRestartRecovery: {
+          ...initialEntry.mainRestartRecovery!,
+          revision: 3,
+        },
+      };
+      await seedSessionStore(storePath, { [sessionKey]: concurrentEntry });
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            aborted: false,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      for (const entry of [
+        sessionStore[sessionKey],
+        loadPersistedSessionEntry(storePath, sessionKey),
+      ]) {
+        expect(entry?.abortedLastRun).toBe(true);
+        expect(entry?.restartRecoveryRuns).toEqual(concurrentEntry.restartRecoveryRuns);
+        expect(entry?.mainRestartRecovery).toEqual(concurrentEntry.mainRestartRecovery);
+      }
     });
   });
 
@@ -1826,7 +2110,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       // Heartbeat turn uses a different model
       const result: EmbeddedAgentRunResult = {
@@ -1885,7 +2169,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionId: "existing-cli-session",
       });
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(persisted[sessionKey]?.modelProvider).toBe("anthropic");
       expect(persisted[sessionKey]?.agentHarnessId).toBe("openclaw");
@@ -1902,11 +2186,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
         },
       } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-preserve-user-facing-run-state";
@@ -1933,7 +2213,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           compactionCount: 7,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
       const freshVisibleEntry: SessionEntry = {
         sessionId: "fresh-visible-session-id",
         updatedAt: 2,
@@ -1956,7 +2236,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
         compactionCount: 9,
       };
-      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: freshVisibleEntry }, null, 2));
+      await seedSessionStore(storePath, { [sessionKey]: freshVisibleEntry });
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -2015,10 +2295,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it.each([
-    ["normal", false],
-    ["user-facing state preserving", true],
-  ])("does not recreate a missing persisted row after a %s run", async (_mode, preserve) => {
+  it("does not recreate a missing persisted row while preserving user-facing state", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:main:explicit:missing-visible-row";
@@ -2031,7 +2308,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
           model: "gpt-5.5",
         },
       };
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -2041,7 +2317,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionStore,
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
-        preserveUserFacingSessionModelState: preserve,
+        preserveUserFacingSessionModelState: true,
         result: {
           meta: {
             durationMs: 1,
@@ -2060,7 +2336,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         modelProvider: "openai",
         model: "gpt-5.5",
       });
-      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toBeUndefined();
     });
   });
 
@@ -2070,7 +2346,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const sessionKey = "agent:main:explicit:new-normal-row";
       const sessionId = "new-normal-row-session";
       const sessionStore: Record<string, SessionEntry> = {};
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -2093,9 +2368,54 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]).toMatchObject({ sessionId });
-      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toMatchObject({
         sessionId,
       });
+    });
+  });
+
+  it("does not recreate a missing persisted row after a normal run with a preloaded entry", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:deleted-normal-row";
+      const sessionId = "deleted-normal-row-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: 100, output: 20 },
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]).toEqual({
+        sessionId,
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+      });
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toBeUndefined();
     });
   });
 
@@ -2107,6 +2427,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const replacementEntry: SessionEntry = {
         sessionId: "replacement-session-id",
         updatedAt: 2,
+        delivery: { kind: "none" },
         modelProvider: "openai",
         model: "gpt-5.5",
       };
@@ -2118,7 +2439,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           model: "claude-sonnet-4-6",
         },
       };
-      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: replacementEntry }, null, 2));
+      await seedSessionStore(storePath, { [sessionKey]: replacementEntry });
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -2140,9 +2461,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       });
 
-      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(
-        replacementEntry,
-      );
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(replacementEntry);
     });
   });
 
@@ -2160,7 +2479,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           // contextTokens intentionally missing — older session without cached context
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       // Heartbeat turn uses a different, smaller model
       const result: EmbeddedAgentRunResult = {
@@ -2206,7 +2525,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -2252,7 +2571,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           // modelProvider intentionally missing
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       // Heartbeat turn uses a different provider
       const result: EmbeddedAgentRunResult = {
@@ -2283,7 +2602,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(sessionStore[sessionKey]?.modelProvider).toBeUndefined();
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(persisted[sessionKey]?.modelProvider).toBeUndefined();
     });
@@ -2303,7 +2622,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           contextTokens: 1_000_000,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -2380,7 +2699,7 @@ describe("recordCliCompactionInStore", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
         provider: "codex",
@@ -2390,7 +2709,7 @@ describe("recordCliCompactionInStore", () => {
         tokensAfter: 0,
       });
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
@@ -2442,7 +2761,7 @@ describe("recordCliCompactionInStore", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
         provider: "codex",
@@ -2451,7 +2770,7 @@ describe("recordCliCompactionInStore", () => {
         storePath,
       });
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.totalTokens).toBe(37_000);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
@@ -2479,7 +2798,7 @@ describe("recordCliCompactionInStore", () => {
           sessionFile: path.join(dir, `${sessionId}.jsonl`),
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
         provider: "codex",
@@ -2495,7 +2814,7 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
       expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual([sessionId, nextSessionId]);
 
-      const persisted = loadSessionStore(storePath);
+      const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.sessionId).toBe(nextSessionId);
       expect(persisted[sessionKey]?.sessionFile).toBe(nextSessionFile);
     });
@@ -2527,7 +2846,6 @@ describe("recordCliCompactionInStore", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
       await recordCliCompactionInStore({
         provider: "codex",
@@ -2537,7 +2855,7 @@ describe("recordCliCompactionInStore", () => {
         tokensAfter: 42,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadPersistedSessionEntry(storePath, sessionKey);
       expect(sessionStore[sessionKey]?.sessionId).toBe(sessionId);
       expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
       expect(sessionStore[sessionKey]?.model).toBe("gpt-5.5");
@@ -2566,7 +2884,6 @@ describe("recordCliCompactionInStore", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
       const result = await recordCliCompactionInStore({
         provider: "codex",
@@ -2578,7 +2895,132 @@ describe("recordCliCompactionInStore", () => {
       });
 
       expect(result).toEqual(sessionStore[sessionKey]);
-      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toBeUndefined();
+    });
+  });
+});
+
+describe("consumeCliSessionForkInStore", () => {
+  it("clears the one-shot marker while preserving the bound source id", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:catalog-adopt:claude:test";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-source-session",
+            forceReuse: true,
+            forkNextResume: true,
+          },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await seedSessionStore(storePath, sessionStore);
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { ...entry, label: "concurrent update" },
+      );
+      const consumed = await consumeCliSessionForkInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+      });
+      expect(consumed?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "claude-source-session",
+        forceReuse: true,
+      });
+      expect(consumed?.label).toBe("concurrent update");
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
+      ).toEqual({ sessionId: "claude-source-session", forceReuse: true });
+      await expect(
+        consumeCliSessionForkInStore({
+          provider: "claude-cli",
+          sessionKey,
+          sessionStore,
+          storePath,
+          expectedCliSessionId: "claude-source-session",
+        }),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it("re-arms a claimed marker after a failed turn", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:plugin:anthropic:catalog-adopt:claude:test";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-source-session", forceReuse: true },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await seedSessionStore(storePath, sessionStore);
+
+      const restored = await restoreCliSessionForkInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+      });
+
+      expect(restored?.cliSessionBindings?.["claude-cli"]?.forkNextResume).toBe(true);
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"]
+          ?.forkNextResume,
+      ).toBe(true);
+    });
+  });
+
+  it("persists the fork successor before turn finalization", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:plugin:anthropic:catalog-adopt:claude:test";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-source-session",
+            forceReuse: true,
+            authProfileId: "claude:work",
+            authEpoch: "epoch-1",
+            authEpochVersion: 3,
+          },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await seedSessionStore(storePath, sessionStore);
+
+      const persisted = await persistCliSessionForkSuccessorInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+        successorCliSessionId: "claude-fork-session",
+      });
+
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "claude-fork-session",
+        forceReuse: true,
+        authProfileId: "claude:work",
+        authEpoch: "epoch-1",
+        authEpochVersion: 3,
+      });
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
+      ).toEqual({
+        sessionId: "claude-fork-session",
+        forceReuse: true,
+        authProfileId: "claude:work",
+        authEpoch: "epoch-1",
+        authEpochVersion: 3,
+      });
     });
   });
 });
@@ -2606,7 +3048,7 @@ describe("clearCliSessionInStore", () => {
         claudeCliSessionId: "claude-session-1",
       };
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+      await seedSessionStore(storePath, sessionStore);
 
       const cleared = await clearCliSessionInStore({
         provider: "claude-cli",
@@ -2624,7 +3066,7 @@ describe("clearCliSessionInStore", () => {
       expect(cleared?.claudeCliSessionId).toBeUndefined();
       expect(sessionStore[sessionKey]).toEqual(cleared);
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadPersistedSessionEntry(storePath, sessionKey);
       expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
       expect(persisted?.cliSessionBindings?.["codex-cli"]).toEqual({
         sessionId: "codex-session-1",
@@ -2645,7 +3087,7 @@ describe("clearCliSessionInStore", () => {
           claudeCliSessionId: "claude-session-1",
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+      await seedSessionStore(storePath, sessionStore);
 
       const cleared = await clearCliSessionInStore({
         provider: "claude-cli",
@@ -2656,9 +3098,9 @@ describe("clearCliSessionInStore", () => {
 
       expect(cleared).toBeUndefined();
       expect(sessionStore[existingKey]?.claudeCliSessionId).toBe("claude-session-1");
-      expect(
-        loadSessionStore(storePath, { skipCache: true })[existingKey]?.claudeCliSessionId,
-      ).toBe("claude-session-1");
+      expect(loadPersistedSessionEntry(storePath, existingKey)?.claudeCliSessionId).toBe(
+        "claude-session-1",
+      );
     });
   });
 
@@ -2686,7 +3128,6 @@ describe("clearCliSessionInStore", () => {
         claudeCliSessionId: "claude-session-1",
       };
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
       const cleared = await clearCliSessionInStore({
         provider: "claude-cli",
@@ -2695,7 +3136,7 @@ describe("clearCliSessionInStore", () => {
         storePath,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadPersistedSessionEntry(storePath, sessionKey);
       expect(cleared?.sessionId).toBe("openclaw-session-1");
       expect(cleared?.modelProvider).toBe("anthropic");
       expect(cleared?.model).toBe("claude-opus-4-6");
@@ -2727,7 +3168,6 @@ describe("clearCliSessionInStore", () => {
           claudeCliSessionId: "claude-session-1",
         },
       };
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
       await clearCliSessionInStore({
         provider: "claude-cli",
@@ -2737,7 +3177,8 @@ describe("clearCliSessionInStore", () => {
         expectedSessionId: sessionId,
       });
 
-      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toBeUndefined();
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

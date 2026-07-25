@@ -324,8 +324,8 @@ async function main(): Promise<void> {
     },
   );
 
-  let childStdout = Buffer.alloc(0);
-  let childStderr = Buffer.alloc(0);
+  let childStdout: Buffer = Buffer.alloc(0);
+  let childStderr: Buffer = Buffer.alloc(0);
   let restored = false;
   let mirrorOffset = 0;
   let mirrorFilterPending = "";

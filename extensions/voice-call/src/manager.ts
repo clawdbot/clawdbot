@@ -1,7 +1,5 @@
 // Voice Call plugin module implements manager behavior.
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
@@ -26,6 +24,7 @@ import {
 import { resolveVoiceCallSecondsTimerDelayMs } from "./manager/timer-delays.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
 import {
   TerminalStates,
   type CallId,
@@ -61,17 +60,7 @@ function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): s
   if (rawOverride) {
     return resolveUserPath(rawOverride);
   }
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
-  const candidates = [preferred].map((dir) => resolveUserPath(dir));
-  const existing =
-    candidates.find((dir) => {
-      try {
-        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
-      } catch {
-        return false;
-      }
-    }) ?? resolveUserPath(preferred);
-  return existing;
+  return resolveDefaultVoiceCallStoreDir();
 }
 
 /**

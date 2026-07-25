@@ -196,16 +196,10 @@ change:
   "aliases": { "<table>": { "<value>": "<label>" } },
   "output": {
     "sep": "", // joins surviving pieces
-    "default": [
-      /* pieces */
-    ], // fallback for any surface
+    "default": [/* pieces */], // fallback for any surface
     "surfaces": {
-      "discord": [
-        /* pieces */
-      ],
-      "telegram": [
-        /* pieces */
-      ],
+      "discord": [/* pieces */],
+      "telegram": [/* pieces */],
     },
   },
 }
@@ -252,12 +246,18 @@ Pipe a value through verbs left to right; a non-verb segment is the fallback.
 | Verb            | Effect                                | Example                           |
 | --------------- | ------------------------------------- | --------------------------------- |
 | `num`           | compact count                         | `272000 -> 272k`                  |
-| `fixed:N`       | N decimals (default 2)                | `0.0377`                          |
+| `fixed:N`       | N decimals (`0..100`, default 2)      | `0.0377`                          |
 | `dur`           | seconds to duration                   | `14820 -> 4h07m`                  |
 | `pct`           | append `%`                            | `96 -> 96%`                       |
 | `inv`           | `100 - x`                             | for used to remaining             |
 | `alias:TABLE`   | lookup in `aliases`, echo if unlisted | `medium -> 🌗`                    |
 | `meter:W:SCALE` | W-cell glyph bar over a 0-100 value   | `[⣿⣿⠐⠐⠐]` (`meter:1` = one glyph) |
+
+`fixed:N` accepts only a complete decimal integer from 0 through 100. Invalid
+precision arguments make that interpolation empty.
+
+`meter:W:SCALE` accepts only a complete decimal integer width from 1 through 100. Leave the width blank to use the default 5 (`meter::braille`); invalid
+widths make that interpolation empty.
 
 ### Piece forms
 

@@ -1,13 +1,15 @@
 /**
  * Node connect reconciliation tests.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { NodePairingPairedNode, NodePairingRequestInput } from "../infra/node-pairing.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 
 function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParams {
@@ -64,6 +66,10 @@ function expectNodePairingRequest(
 }
 
 describe("reconcileNodePairingOnConnect", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
   it("includes declared permissions in pending node pairing requests", async () => {
     const requestPairing = makePendingPairingRequest("req-1");
 
@@ -79,6 +85,39 @@ describe("reconcileNodePairingOnConnect", () => {
     expectNodePairingRequest(requestPairing, {
       permissions: { camera: true, notifications: false },
     });
+  });
+
+  it("marks the first-surface request silent when device pairing was non-interactive", async () => {
+    const requestPairing = makePendingPairingRequest("req-silent");
+
+    await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams(),
+      pairedNode: null,
+      initialSurfaceSilent: true,
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledWith(expect.objectContaining({ silent: true }));
+  });
+
+  it("keeps surface upgrade requests interactive even when the device paired silently", async () => {
+    const requestPairing = makePendingPairingRequest("req-upgrade-loud");
+
+    await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        caps: ["camera", "screen"],
+        commands: [],
+      }),
+      pairedNode: makePairedNode({ caps: ["camera"], commands: [] }),
+      initialSurfaceSilent: true,
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledOnce();
+    const input = requestPairing.mock.calls[0]?.[0];
+    expect(input?.silent).toBeUndefined();
   });
 
   it("keeps first-time pending node surfaces declared but not effective", async () => {
@@ -180,7 +219,7 @@ describe("reconcileNodePairingOnConnect", () => {
     });
     const requestPairing = vi.fn();
 
-    // No allowCommands entry (unarmed): the previously approved dangerous
+    // No commands.allow entry (unarmed): the previously approved dangerous
     // surface must reconcile cleanly instead of demanding a pairing upgrade
     // on every reconnect.
     const result = await reconcileNodePairingOnConnect({
@@ -230,6 +269,53 @@ describe("reconcileNodePairingOnConnect", () => {
     );
     expect(result.effectiveCommands).toEqual(["screen.snapshot"]);
     expect(result.pendingPairing?.request.requestId).toBe("req-computer");
+  });
+
+  it("keeps registry-bound node plugin tool commands in first-time pairing", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "remote",
+        pluginName: "Remote",
+        source: "/extensions/remote/index.ts",
+        rootDir: "/extensions/remote",
+        command: {
+          command: "remote.echo",
+          agentTool: {
+            name: "remote_echo",
+            description: "Echo from a node host",
+            defaultPlatforms: ["macos"],
+          },
+          handle: async () => "{}",
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const requestPairing = makePendingPairingRequest("req-plugin-tool");
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "macos",
+          deviceFamily: "Mac",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+        commands: ["remote.echo"],
+      }),
+      pairedNode: null,
+      requestPairing,
+    });
+
+    expect(result.declaredCommands).toEqual(["remote.echo"]);
+    expect(result.effectiveCommands).toEqual([]);
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands: ["remote.echo"],
+      }),
+    );
   });
 
   it.each([

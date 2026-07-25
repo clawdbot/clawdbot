@@ -78,6 +78,25 @@ function requireSkillEntry(entry: SkillEntry | undefined, name: string): SkillEn
 }
 
 describe("buildWorkspaceSkillStatus", () => {
+  it("keeps config-disabled skills visible in status when eligibility is passed", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills"),
+      name: "hot-reload-probe",
+      description: "Lifecycle probe",
+    });
+
+    // Regression: skills.status passes eligibility (node-skill merge); the
+    // loader must stay unfiltered so disabled skills still report with flags.
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      config: { skills: { entries: { "hot-reload-probe": { enabled: false } } } },
+      eligibility: { nodeSkills: { canExec: false } },
+    });
+    const skill = requireReportedSkill(report, "hot-reload-probe");
+
+    expect(skill.disabled).toBe(true);
+  });
+
   it("reports missing requirements and install options", () => {
     const entry = makeEntry({
       name: "status-skill",

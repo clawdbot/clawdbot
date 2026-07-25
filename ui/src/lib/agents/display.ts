@@ -14,10 +14,24 @@ import type {
   ToolCatalogProfile,
   ToolsCatalogResult,
 } from "../../api/types.ts";
-import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
+import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildQualifiedChatModelValue } from "../chat/model-ref.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
+
+type AgentRosterEntry = {
+  id: string;
+  kind?: "agent" | "system";
+};
+
+/** Ordinary agent targets; system rows remain available to diagnostic surfaces. */
+export function listSelectableAgents<T extends AgentRosterEntry>(agents: readonly T[]): T[] {
+  return agents.filter((agent) => agent.kind !== "system");
+}
+
+export function selectableAgentsList(agentsList: AgentsListResult): AgentsListResult {
+  return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
+}
 
 export type AgentToolEntry = {
   id: string;
@@ -37,95 +51,178 @@ export type AgentToolSection = {
   tools: AgentToolEntry[];
 };
 
-const FALLBACK_TOOL_SECTIONS: AgentToolSection[] = [
+type FallbackToolEntry = Omit<AgentToolEntry, "description"> & {
+  descriptionKey: string;
+};
+
+type FallbackToolSection = Omit<AgentToolSection, "label" | "tools"> & {
+  labelKey: string;
+  tools: FallbackToolEntry[];
+};
+
+const FALLBACK_TOOL_SECTIONS: FallbackToolSection[] = [
   {
     id: "fs",
-    label: "Files",
+    labelKey: "agents.toolCatalog.groups.files",
     tools: [
-      { id: "read", label: "read", description: "Read file contents" },
-      { id: "write", label: "write", description: "Create or overwrite files" },
-      { id: "edit", label: "edit", description: "Make precise edits" },
-      { id: "apply_patch", label: "apply_patch", description: "Patch files (OpenAI)" },
+      { id: "read", label: "read", descriptionKey: "agents.toolCatalog.descriptions.read" },
+      { id: "write", label: "write", descriptionKey: "agents.toolCatalog.descriptions.write" },
+      { id: "edit", label: "edit", descriptionKey: "agents.toolCatalog.descriptions.edit" },
+      {
+        id: "apply_patch",
+        label: "apply_patch",
+        descriptionKey: "agents.toolCatalog.descriptions.applyPatch",
+      },
     ],
   },
   {
     id: "runtime",
-    label: "Runtime",
+    labelKey: "agents.toolCatalog.groups.runtime",
     tools: [
-      { id: "exec", label: "exec", description: "Run shell commands" },
-      { id: "process", label: "process", description: "Manage background processes" },
+      { id: "exec", label: "exec", descriptionKey: "agents.toolCatalog.descriptions.exec" },
+      {
+        id: "process",
+        label: "process",
+        descriptionKey: "agents.toolCatalog.descriptions.process",
+      },
     ],
   },
   {
     id: "web",
-    label: "Web",
+    labelKey: "agents.toolCatalog.groups.web",
     tools: [
-      { id: "web_search", label: "web_search", description: "Search the web" },
-      { id: "web_fetch", label: "web_fetch", description: "Fetch web content" },
+      {
+        id: "web_search",
+        label: "web_search",
+        descriptionKey: "agents.toolCatalog.descriptions.webSearch",
+      },
+      {
+        id: "web_fetch",
+        label: "web_fetch",
+        descriptionKey: "agents.toolCatalog.descriptions.webFetch",
+      },
     ],
   },
   {
     id: "memory",
-    label: "Memory",
+    labelKey: "agents.toolCatalog.groups.memory",
     tools: [
-      { id: "memory_search", label: "memory_search", description: "Semantic search" },
-      { id: "memory_get", label: "memory_get", description: "Read memory files" },
+      {
+        id: "memory_search",
+        label: "memory_search",
+        descriptionKey: "agents.toolCatalog.descriptions.memorySearch",
+      },
+      {
+        id: "memory_get",
+        label: "memory_get",
+        descriptionKey: "agents.toolCatalog.descriptions.memoryGet",
+      },
     ],
   },
   {
     id: "sessions",
-    label: "Sessions",
+    labelKey: "agents.toolCatalog.groups.sessions",
     tools: [
-      { id: "sessions_list", label: "sessions_list", description: "List sessions" },
-      { id: "sessions_history", label: "sessions_history", description: "Session history" },
-      { id: "sessions_send", label: "sessions_send", description: "Send to session" },
-      { id: "sessions_spawn", label: "sessions_spawn", description: "Spawn sub-agent" },
-      { id: "session_status", label: "session_status", description: "Session status" },
+      {
+        id: "sessions_list",
+        label: "sessions_list",
+        descriptionKey: "agents.toolCatalog.descriptions.sessionsList",
+      },
+      {
+        id: "sessions_history",
+        label: "sessions_history",
+        descriptionKey: "agents.toolCatalog.descriptions.sessionsHistory",
+      },
+      {
+        id: "sessions_send",
+        label: "sessions_send",
+        descriptionKey: "agents.toolCatalog.descriptions.sessionsSend",
+      },
+      {
+        id: "sessions_spawn",
+        label: "sessions_spawn",
+        descriptionKey: "agents.toolCatalog.descriptions.sessionsSpawn",
+      },
+      {
+        id: "session_status",
+        label: "session_status",
+        descriptionKey: "agents.toolCatalog.descriptions.sessionStatus",
+      },
     ],
   },
   {
     id: "ui",
-    label: "UI",
+    labelKey: "agents.toolCatalog.groups.ui",
     tools: [
-      { id: "browser", label: "browser", description: "Control web browser" },
-      { id: "canvas", label: "canvas", description: "Control canvases" },
+      {
+        id: "browser",
+        label: "browser",
+        descriptionKey: "agents.toolCatalog.descriptions.browser",
+      },
+      {
+        id: "canvas",
+        label: "canvas",
+        descriptionKey: "agents.toolCatalog.descriptions.canvas",
+      },
     ],
   },
   {
     id: "messaging",
-    label: "Messaging",
-    tools: [{ id: "message", label: "message", description: "Send messages" }],
+    labelKey: "agents.toolCatalog.groups.messaging",
+    tools: [
+      {
+        id: "message",
+        label: "message",
+        descriptionKey: "agents.toolCatalog.descriptions.message",
+      },
+    ],
   },
   {
     id: "automation",
-    label: "Automation",
+    labelKey: "agents.toolCatalog.groups.automation",
     tools: [
-      { id: "cron", label: "cron", description: "Schedule tasks" },
-      { id: "gateway", label: "gateway", description: "Gateway control" },
+      { id: "cron", label: "cron", descriptionKey: "agents.toolCatalog.descriptions.cron" },
+      {
+        id: "gateway",
+        label: "gateway",
+        descriptionKey: "agents.toolCatalog.descriptions.gateway",
+      },
     ],
   },
   {
     id: "nodes",
-    label: "Nodes",
-    tools: [{ id: "nodes", label: "nodes", description: "Nodes + devices" }],
+    labelKey: "agents.toolCatalog.groups.nodes",
+    tools: [
+      { id: "nodes", label: "nodes", descriptionKey: "agents.toolCatalog.descriptions.nodes" },
+    ],
   },
   {
     id: "agents",
-    label: "Agents",
-    tools: [{ id: "agents_list", label: "agents_list", description: "List agents" }],
+    labelKey: "agents.toolCatalog.groups.agents",
+    tools: [
+      {
+        id: "agents_list",
+        label: "agents_list",
+        descriptionKey: "agents.toolCatalog.descriptions.agentsList",
+      },
+    ],
   },
   {
     id: "media",
-    label: "Media",
-    tools: [{ id: "image", label: "image", description: "Image understanding" }],
+    labelKey: "agents.toolCatalog.groups.media",
+    tools: [
+      { id: "image", label: "image", descriptionKey: "agents.toolCatalog.descriptions.image" },
+    ],
   },
 ];
 
-const PROFILE_OPTIONS = [
-  { id: "minimal", label: "Minimal" },
-  { id: "coding", label: "Coding" },
-  { id: "messaging", label: "Messaging" },
-  { id: "full", label: "Full" },
+// Canonical UI tool-profile list; Security and Agents surfaces share it so
+// labels stay translated and consistent.
+export const PROFILE_OPTIONS = [
+  { id: "minimal", labelKey: "agents.toolCatalog.profiles.minimal" },
+  { id: "coding", labelKey: "agents.toolCatalog.profiles.coding" },
+  { id: "messaging", labelKey: "agents.toolCatalog.profiles.messaging" },
+  { id: "full", labelKey: "agents.toolCatalog.profiles.full" },
 ] as const;
 
 export function resolveToolSections(
@@ -148,16 +245,27 @@ export function resolveToolSections(
       })),
     }));
   }
-  return FALLBACK_TOOL_SECTIONS;
+  return FALLBACK_TOOL_SECTIONS.map((section) => ({
+    id: section.id,
+    label: t(section.labelKey),
+    tools: section.tools.map((tool) => ({
+      id: tool.id,
+      label: tool.label,
+      description: t(tool.descriptionKey),
+    })),
+  }));
 }
 
 export function resolveToolProfileOptions(
   toolsCatalogResult: ToolsCatalogResult | null,
-): readonly ToolCatalogProfile[] | typeof PROFILE_OPTIONS {
+): readonly ToolCatalogProfile[] | ReadonlyArray<{ id: string; label: string }> {
   if (toolsCatalogResult?.profiles?.length) {
     return toolsCatalogResult.profiles;
   }
-  return PROFILE_OPTIONS;
+  return PROFILE_OPTIONS.map((profile) => ({
+    id: profile.id,
+    label: t(profile.labelKey),
+  }));
 }
 
 type ToolPolicy = {
@@ -204,10 +312,6 @@ export function normalizeAgentLabel(agent: {
   );
 }
 
-export function assistantAvatarFallbackUrl(basePath: string): string {
-  return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
-}
-
 export function resolveAgentTextAvatar(
   agent: { identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,
@@ -228,7 +332,7 @@ export function resolveAgentTextAvatar(
 }
 
 export function agentBadgeText(agentId: string, defaultId: string | null) {
-  return defaultId && agentId === defaultId ? "default" : null;
+  return defaultId && agentId === defaultId ? t("agents.default") : null;
 }
 
 export function formatBytes(bytes?: number) {
@@ -303,7 +407,9 @@ export function buildAgentContext(
     runtime,
     identityName,
     identityAvatar,
-    skillsLabel: skillFilter ? `${skillCount} selected` : "all skills",
+    skillsLabel: skillFilter
+      ? t("agents.overview.selectedSkills", { count: String(skillCount) })
+      : t("agents.overview.allSkills"),
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
 }
@@ -336,7 +442,7 @@ export function resolveModelLabel(model?: unknown): string {
 
 export function normalizeModelValue(label: string): string {
   const match = label.match(/^(.+) \(\+\d+ fallback\)$/);
-  return match ? match[1] : label;
+  return match?.[1] ?? label;
 }
 
 export function resolveModelPrimary(model?: unknown): string | null {

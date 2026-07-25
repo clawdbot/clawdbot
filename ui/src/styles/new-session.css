@@ -1,0 +1,588 @@
+/* Full-page new-session draft: the start-screen welcome centers in the pane
+   with the draft block (clean target row + composer) between the hero and the
+   recent chats, so the draft reads as the start screen plus "where to start"
+   controls. */
+openclaw-new-session-page {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.new-session-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
+   drag band (see the scroll container's mousedown handler). */
+.new-session-page__scroll {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
+}
+
+/* The shared welcome stretches (flex: 1) and centers via justify-content,
+   which clips overflow above the scroll origin once the draft content is
+   taller than the pane (short window, open folder browser). Content-size it
+   here; its margin: auto still centers whenever there is spare room. */
+.new-session-page .agent-chat__welcome {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: none;
+  min-height: auto;
+  box-sizing: border-box;
+}
+
+/* Draft block inside the centered welcome column; the welcome centers text,
+   so reset alignment for the controls and composer. */
+.new-session-page__draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+  text-align: left;
+}
+
+.new-session-page__incognito {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.new-session-page__incognito:hover:not(:disabled),
+.new-session-page__incognito--active {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.new-session-page__incognito--active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
+  font-weight: 650;
+}
+
+.new-session-page__incognito:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.new-session-page__incognito svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+}
+
+/* Quiet chip row directly above the composer: the agent and place pickers
+   share one trigger treatment so the row reads as a single control
+   strip. Web Awesome owns popup/listbox behavior. */
+.new-session-page__triggers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px 2px;
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.new-session-page__select {
+  position: relative;
+}
+
+.new-session-page__select--agent openclaw-agent-select {
+  width: auto;
+  max-width: min(40vw, 260px);
+}
+
+.agent-select--compact .agent-select__trigger,
+:root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
+  width: auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.agent-select--compact .agent-select__trigger:hover:not(:disabled),
+.agent-select--compact .agent-select__trigger[aria-expanded="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.agent-select--compact .agent-select__avatar {
+  width: 18px;
+  height: 18px;
+}
+
+.agent-select--compact .agent-select__label {
+  max-width: min(32vw, 220px);
+}
+
+.new-session-page__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-family: inherit;
+}
+
+.new-session-page__trigger::-webkit-details-marker {
+  display: none;
+}
+
+.new-session-page__trigger:hover:not(:disabled),
+.new-session-page__trigger[aria-expanded="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.new-session-page__trigger:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.new-session-page__draft-toggle {
+  gap: 6px;
+  cursor: pointer;
+}
+
+.new-session-page__draft-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.new-session-page__draft-toggle:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Keep the anchor focusable while Web Awesome finishes its hide animation. */
+.new-session-page__trigger--hiding {
+  pointer-events: none;
+}
+
+.new-session-page__runtime {
+  color: var(--text);
+  cursor: default;
+}
+
+.new-session-page__runtime:hover {
+  background: transparent;
+}
+
+.new-session-page__catalog-unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.new-session-page__trigger-label {
+  max-width: min(40vw, 260px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session-page__trigger-chevron {
+  display: inline-flex;
+  color: inherit;
+}
+
+/* Icon templates only carry paths; without an explicit stroke rule the SVGs
+   render as solid black fills (invisible-blob chips in dark mode). */
+.new-session-page__trigger-chevron svg,
+.new-session-page__target-icon svg,
+.new-session-page__browser-nav svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.new-session-page__trigger-chevron svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Menu panel anchored under its trigger; item rows reuse the shared
+   .session-menu__* styles so every menu in the app reads the same. */
+wa-popover.new-session-page__select {
+  --max-width: min(320px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__select::part(body) {
+  min-width: 224px;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.new-session-page__menu-title {
+  padding: 4px 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.new-session-page__menu-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.new-session-page__menu-field span {
+  flex: 0 0 auto;
+}
+
+.new-session-page__menu-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.new-session-page__menu-field input:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+/* Context line inside a picker menu, e.g. which repo syncs to a cloud worker. */
+.new-session-page__menu-note {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* Place browsing uses the same shell as its root menu, with inset root rows. */
+wa-popover.new-session-page__place-popover {
+  --max-width: min(420px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__place-popover::part(body) {
+  width: min(420px, calc(100vw - 24px));
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* part(body) hides overflow for the browser view's square corners, so the
+   root menu needs its own scroll region or long place lists become unreachable. */
+.new-session-page__place-root {
+  max-height: min(420px, 60vh);
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.new-session-page__menu-chevron {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.new-session-page__menu-chevron svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The chip row already spaces itself; keep the composer snug beneath it. */
+.new-session-page__composer.agent-chat__composer-shell {
+  position: relative;
+  margin-top: 0;
+  border-radius: var(--radius-md);
+}
+
+.new-session-page__composer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.new-session-page__composer[data-attachment-drop-active]::after {
+  opacity: 0.1;
+}
+
+.new-session-page__composer > * {
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.new-session-page__composer[data-attachment-drop-active] > * {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-session-page__composer::after,
+  .new-session-page__composer > * {
+    transition-duration: 0ms;
+  }
+}
+
+.new-session-page__target-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.new-session-page__browser-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.new-session-page__browser-nav:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.new-session-page__browser-nav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The menu panel already draws the border/background chrome. */
+.new-session-page__browser {
+  overflow: hidden;
+}
+
+.new-session-page__browser-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Editable path (input) or the pick-a-root hint (span). */
+.new-session-page__browser-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  color: var(--text);
+  outline: none;
+}
+
+.new-session-page__browser-loading {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.new-session-page__browser-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  padding: 4px;
+  overflow-y: auto;
+}
+
+.new-session-page__browser-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.new-session-page__browser-entry:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.new-session-page__browser-entry:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.new-session-page__browser-entry:disabled:hover {
+  background: transparent;
+}
+
+.new-session-page__browser-entry--hidden {
+  color: var(--muted);
+}
+
+.new-session-page__browser-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.new-session-page__browser-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.new-session-page__browser > .new-session-page__error {
+  padding: 8px 10px 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.new-session-page__alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: fit-content;
+  max-width: min(48rem, calc(100% - 36px));
+  margin: 4px auto 2px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  text-align: left;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.new-session-page__alert-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.new-session-page__alert-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.new-session-page__alert-message {
+  min-width: 0;
+  padding-top: 3px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.new-session-page__browser-use {
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.new-session-page__browser-use:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Phones (and short landscape): match the chat thread's mobile inset, and
+   anchor menus to the trigger row instead of their trigger — a near
+   viewport-wide panel under a non-leftmost trigger would otherwise run past
+   the right edge. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page__scroll {
+    padding: 12px 8px;
+  }
+
+  .new-session-page__triggers {
+    position: relative;
+    gap: 4px 2px;
+  }
+
+  .new-session-page__select {
+    position: static;
+  }
+
+  wa-popover.new-session-page__select::part(body) {
+    width: auto;
+    max-width: none;
+  }
+}

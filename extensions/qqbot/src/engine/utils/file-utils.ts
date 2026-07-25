@@ -65,10 +65,12 @@ const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
   "*.tencentcos.com",
 ];
 
-export const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
+const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
   hostnameAllowlist: QQBOT_MEDIA_HOSTNAME_ALLOWLIST,
   allowRfc2544BenchmarkRange: true,
 };
+
+const QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 /** Result of local file-size validation. */
 interface FileSizeCheckResult {
@@ -183,6 +185,7 @@ export async function downloadFile(
       url: parsedUrl.toString(),
       filePathHint: originalFilename,
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
+      responseHeaderTimeoutMs: QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     });
 
     let filename = normalizeOptionalString(originalFilename) ?? "";

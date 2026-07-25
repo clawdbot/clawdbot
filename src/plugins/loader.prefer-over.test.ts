@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
+import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 const tempDirs: string[] = [];

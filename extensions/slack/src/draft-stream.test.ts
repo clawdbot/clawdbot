@@ -32,6 +32,7 @@ function createDraftStreamHarness(
     maxChars?: number;
     send?: DraftSendFn;
     edit?: DraftEditFn;
+    eventScope?: DraftStreamParams["eventScope"];
     remove?: DraftRemoveFn;
     warn?: DraftWarnFn;
   } = {},
@@ -46,6 +47,7 @@ function createDraftStreamHarness(
     token: "xoxb-test",
     throttleMs: 250,
     maxChars: params.maxChars,
+    eventScope: params.eventScope,
     send,
     edit,
     remove,
@@ -70,6 +72,37 @@ describe("createSlackDraftStream", () => {
       token: "xoxb-test",
       accountId: undefined,
     });
+  });
+
+  it("uses the enterprise event client for draft writes", async () => {
+    const client = {} as NonNullable<DraftStreamParams["eventScope"]>["client"];
+    const eventScope = {
+      apiAppId: "A_TEST",
+      enterpriseId: "E_TEST",
+      isEnterpriseInstall: true as const,
+      teamId: "T_TEST",
+      client,
+    };
+    const { stream, send, edit, remove } = createDraftStreamHarness({ eventScope });
+
+    stream.update("hello");
+    await stream.flush();
+    stream.update("hello world");
+    await stream.flush();
+    await stream.clear();
+
+    expect(send).toHaveBeenCalledWith(
+      "channel:C123",
+      "hello",
+      expect.objectContaining({ client, enterpriseEventScope: eventScope }),
+    );
+    expect(edit).toHaveBeenCalledWith(
+      "C123",
+      "111.222",
+      "hello world",
+      expect.objectContaining({ client }),
+    );
+    expect(remove).toHaveBeenCalledWith("C123", "111.222", expect.objectContaining({ client }));
   });
 
   it("sends and edits rich draft blocks with text fallback", async () => {

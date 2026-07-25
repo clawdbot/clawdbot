@@ -156,6 +156,13 @@ function matchesAny(target: string, patterns: string[]): boolean {
   return false;
 }
 
+function matchesAnyDeny(target: string, patterns: string[]): boolean {
+  if (matchesAny(target, patterns)) {
+    return true;
+  }
+  return matchesAny(`${target.replace(/[\\/]+$/u, "")}/`, patterns);
+}
+
 function resolveNodePolicy(
   config: FilePolicyConfig,
   nodeId: string,
@@ -262,7 +269,7 @@ export function evaluateFilePolicy(input: {
 
   // 1. Deny patterns always win.
   const denyPatterns = normalizeGlobs(nodeConfig.denyPaths);
-  if (matchesAny(input.path, denyPatterns)) {
+  if (matchesAnyDeny(input.path, denyPatterns)) {
     return {
       ok: false,
       code: "POLICY_DENIED",
@@ -367,12 +374,18 @@ export async function persistAllowAlways(input: {
       );
       // Use hasOwnProperty so a node with displayName "constructor" doesn't
       // accidentally hit Object.prototype.constructor and pretend to match.
-      let key = candidates.find((c) => Object.hasOwn(fileTransfer, c));
-      if (!key) {
-        key = assertSafeConfigKey(input.nodeDisplayName ?? input.nodeId);
-        fileTransfer[key] = {};
+      let entry: NodeFilePolicyConfig | undefined;
+      for (const candidate of candidates) {
+        entry = Object.entries(fileTransfer).find(([key]) => key === candidate)?.[1];
+        if (entry) {
+          break;
+        }
       }
-      const entry = fileTransfer[key];
+      if (!entry) {
+        const key = assertSafeConfigKey(input.nodeDisplayName ?? input.nodeId);
+        entry = {};
+        fileTransfer[key] = entry;
+      }
       const list = Array.isArray(entry[field]) ? entry[field] : [];
       if (!list.includes(input.path)) {
         list.push(input.path);

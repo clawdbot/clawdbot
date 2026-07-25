@@ -1,11 +1,15 @@
-// Covers heartbeat scheduling within active hours.
+// Covers heartbeat active-hours scheduling (#75487). Interval cadence is
+// owned by system cron monitor jobs; these tests poke the wake queue with
+// `source: "interval"` and assert the runner's `nextDueMs` seek defers
+// quiet-hours pokes and admits in-window ones.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
-import { resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import { requestHeartbeat } from "./heartbeat-wake.js";
 
-/** Verifies that the scheduler seeks to in-window phase slots (#75487). */
 describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
   const TEST_SCHEDULER_SEED = "heartbeat-ah-schedule-test-seed";
@@ -13,6 +17,18 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   function useFakeHeartbeatTime(startMs: number) {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(startMs));
+  }
+
+  // Stand-in for a system cron monitor tick: the cron job pokes the wake
+  // queue; the runner decides via `nextDueMs` whether the agent is due.
+  async function pokeIntervalWake() {
+    requestHeartbeat({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
   }
 
   function heartbeatConfig(overrides?: {
@@ -46,12 +62,11 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   }
 
   afterEach(() => {
-    resetHeartbeatWakeStateForTests();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("skips quiet-hours slots and fires at the first in-window phase slot", async () => {
+  it("defers quiet-hours pokes and admits the first in-window phase slot", async () => {
     // 09:00–17:00 UTC, 4h interval. Start at 16:30 — raw due is after 17:00.
     const startMs = Date.parse("2026-06-15T16:30:00.000Z");
     useFakeHeartbeatTime(startMs);
@@ -74,15 +89,22 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
 
     const rawDueMs = resolveDueFromNow(startMs, intervalMs, "main");
 
-    // Advance past the raw due — should NOT fire (quiet hours).
+    // Poke past the raw due slot — still quiet hours, so nextDueMs was
+    // seeked into tomorrow's window and the poke must defer.
     await vi.advanceTimersByTimeAsync(rawDueMs - startMs + 1);
+    await pokeIntervalWake();
+    expect(runSpy).not.toHaveBeenCalled();
 
-    // Advance to end of next day's window — should fire within 09:00–17:00.
-    const safeEndOfWindow = Date.parse("2026-06-16T17:00:00.000Z");
-    await vi.advanceTimersByTimeAsync(safeEndOfWindow - Date.now());
+    // Poke inside the next day's window, past the seeked slot (4h spacing
+    // puts the first in-window slot no later than 13:00) — must fire.
+    const inWindowMs = Date.parse("2026-06-16T16:00:00.000Z");
+    await vi.advanceTimersByTimeAsync(inWindowMs - Date.now());
+    await pokeIntervalWake();
 
     expect(runSpy).toHaveBeenCalled();
-    const firstCallHourUTC = new Date(callTimes[0]).getUTCHours();
+    const firstCallHourUTC = new Date(
+      expectDefined(callTimes[0], "callTimes[0] test invariant"),
+    ).getUTCHours();
     expect(firstCallHourUTC).toBeGreaterThanOrEqual(9);
     expect(firstCallHourUTC).toBeLessThan(17);
 
@@ -107,49 +129,10 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
 
     const rawDueMs = resolveDueFromNow(startMs, intervalMs, "main");
     await vi.advanceTimersByTimeAsync(rawDueMs - startMs + 1);
+    await pokeIntervalWake();
 
     expect(runSpy).toHaveBeenCalledTimes(1);
     runner.stop();
-  });
-
-  it("runs a bounded real scheduler with active-hours enabled", async () => {
-    const startedAt = Date.now();
-    let resolveRun: (() => void) | undefined;
-    const ran = new Promise<void>((resolve) => {
-      resolveRun = resolve;
-    });
-    const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
-      resolveRun?.();
-      return { status: "ran", durationMs: 1 };
-    });
-    const runner = startHeartbeatRunner({
-      cfg: heartbeatConfig({
-        every: "50ms",
-        activeHours: { start: "00:00", end: "24:00", timezone: "UTC" },
-      }),
-      runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-
-    try {
-      await Promise.race([
-        ran,
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("real heartbeat scheduler did not fire")),
-            2_000,
-          );
-        }),
-      ]);
-      expect(runSpy).toHaveBeenCalled();
-      expect(Date.now() - startedAt).toBeLessThan(2_000);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      runner.stop();
-    }
   });
 
   it("seeks forward correctly with a non-UTC timezone (e.g. America/New_York)", async () => {
@@ -173,49 +156,23 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
-    await vi.advanceTimersByTimeAsync(48 * 60 * 60_000);
+    // Quiet-hours poke shortly after start must defer.
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await pokeIntervalWake();
+    expect(runSpy).not.toHaveBeenCalled();
+
+    // Poke inside the next ET window (first in-window slot is no later than
+    // 17:00 UTC given 4h spacing from the 13:00 UTC window start).
+    const inWindowMs = Date.parse("2026-06-16T17:00:00.000Z");
+    await vi.advanceTimersByTimeAsync(inWindowMs - Date.now());
+    await pokeIntervalWake();
 
     expect(runSpy).toHaveBeenCalled();
-    const firstCallHourUTC = new Date(callTimes[0]).getUTCHours();
+    const firstCallHourUTC = new Date(
+      expectDefined(callTimes[0], "callTimes[0] test invariant"),
+    ).getUTCHours();
     expect(firstCallHourUTC).toBeGreaterThanOrEqual(13);
     expect(firstCallHourUTC).toBeLessThan(21);
-
-    runner.stop();
-  });
-
-  it("advances to in-window slot after a quiet-hours skip during interval runs", async () => {
-    // 09:00–17:00 UTC, 4h interval. Verify ALL fires over 48h stay in-window.
-    const startMs = Date.parse("2026-06-15T09:00:00.000Z");
-    useFakeHeartbeatTime(startMs);
-
-    const callTimes: number[] = [];
-    const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
-      callTimes.push(Date.now());
-      return { status: "ran", durationMs: 1 };
-    });
-
-    const runner = startHeartbeatRunner({
-      cfg: heartbeatConfig({
-        every: "4h",
-        activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
-      }),
-      runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
-
-    await vi.advanceTimersByTimeAsync(48 * 60 * 60_000);
-
-    expect(callTimes.length).toBeGreaterThan(0);
-    for (const t of callTimes) {
-      const hour = new Date(t).getUTCHours();
-      expect(
-        hour,
-        `fire at ${new Date(t).toISOString()} is outside active window`,
-      ).toBeGreaterThanOrEqual(9);
-      expect(hour, `fire at ${new Date(t).toISOString()} is outside active window`).toBeLessThan(
-        17,
-      );
-    }
 
     runner.stop();
   });
@@ -236,15 +193,24 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
+    // Past any 30m slot: the poke reaches runOnce (the runtime guard owns
+    // the quiet-hours skip when seek cannot find an active slot).
     await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
+    await pokeIntervalWake();
+    expect(runSpy).toHaveBeenCalledTimes(1);
 
-    expect(runSpy).toHaveBeenCalled();
+    // Non-retryable skip advanced the cadence — an immediate second poke
+    // must defer instead of hot-looping runOnce.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pokeIntervalWake();
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
     runner.stop();
   });
 
   it("recomputes schedule when activeHours config changes via hot reload", async () => {
     // Narrow window pushes nextDueMs to tomorrow; widening via updateConfig
-    // must recompute from `now` so the timer fires today.
+    // must recompute from `now` so a poke today is admitted.
     const startMs = Date.parse("2026-06-15T14:00:00.000Z");
     useFakeHeartbeatTime(startMs);
 
@@ -264,6 +230,7 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     });
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await pokeIntervalWake();
     expect(runSpy).not.toHaveBeenCalled();
 
     // Widen window — scheduler must recompute, not keep stale tomorrow slot.
@@ -274,12 +241,14 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       }),
     );
 
+    // The recomputed slot lands no later than 19:00 today (4h spacing from
+    // 15:00), so a poke this evening must fire today — not tomorrow.
     await vi.advanceTimersByTimeAsync(8 * 60 * 60_000);
+    await pokeIntervalWake();
     expect(runSpy).toHaveBeenCalled();
-    const firstCallHour = new Date(callTimes[0]).getUTCHours();
-    expect(firstCallHour).toBeGreaterThanOrEqual(8);
-    expect(firstCallHour).toBeLessThan(20);
-    expect(new Date(callTimes[0]).getUTCDate()).toBe(15); // today, not tomorrow
+    expect(new Date(expectDefined(callTimes[0], "callTimes[0] test invariant")).getUTCDate()).toBe(
+      15,
+    ); // today, not tomorrow
 
     runner.stop();
   });
@@ -306,6 +275,7 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     });
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await pokeIntervalWake();
     expect(runSpy).not.toHaveBeenCalled();
 
     runner.updateConfig(
@@ -316,12 +286,15 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       }),
     );
 
+    // With UTC the seed's slot falls inside today's 16:00–17:00 window; a
+    // poke at window end must be admitted today. Under the stale ET slot
+    // (tomorrow 20:00 UTC) it would still defer.
     const endOfUtcWindow = Date.parse("2026-06-15T17:00:00.000Z");
     await vi.advanceTimersByTimeAsync(endOfUtcWindow - Date.now());
+    await pokeIntervalWake();
 
     expect(runSpy).toHaveBeenCalled();
-    const firstCall = new Date(callTimes[0]);
-    expect(firstCall.getUTCHours()).toBe(16);
+    const firstCall = new Date(expectDefined(callTimes[0], "callTimes[0] test invariant"));
     expect(firstCall.getUTCDate()).toBe(15);
 
     runner.stop();
@@ -345,7 +318,16 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
-    await vi.advanceTimersByTimeAsync(16 * 60 * 60_000 + 60_000);
+    // Quiet-hours poke long before tomorrow's window must defer.
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
+    await pokeIntervalWake();
+    expect(runSpy).not.toHaveBeenCalled();
+
+    // 30s spacing puts a slot no later than 09:00:30 inside the one-minute
+    // window; a poke there must fire within the window.
+    const inWindowMs = Date.parse("2026-06-16T09:00:30.000Z");
+    await vi.advanceTimersByTimeAsync(inWindowMs - Date.now());
+    await pokeIntervalWake();
 
     expect(callTimes.length).toBeGreaterThan(0);
     for (const callTime of callTimes) {

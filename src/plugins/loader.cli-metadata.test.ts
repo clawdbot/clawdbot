@@ -127,10 +127,10 @@ describe("plugin loader CLI metadata", () => {
   it("passes validated plugin config into non-activating CLI metadata loads", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
-      id: "config-cli",
+      id: "Config-Cli",
       filename: "config-cli.cjs",
       body: `module.exports = {
-  id: "config-cli",
+  id: "Config-Cli",
   register(api) {
     if (!api.pluginConfig || api.pluginConfig.token !== "ok") {
       throw new Error("missing plugin config");
@@ -151,7 +151,7 @@ describe("plugin loader CLI metadata", () => {
       path.join(plugin.dir, "openclaw.plugin.json"),
       JSON.stringify(
         {
-          id: "config-cli",
+          id: "Config-Cli",
           configSchema: {
             type: "object",
             additionalProperties: false,
@@ -184,7 +184,7 @@ describe("plugin loader CLI metadata", () => {
     });
 
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("cfg");
-    expect(registry.plugins.find((entry) => entry.id === "config-cli")?.status).toBe("loaded");
+    expect(registry.plugins.find((entry) => entry.id === "Config-Cli")?.status).toBe("loaded");
   });
 
   it("uses the real channel entry in cli-metadata mode for CLI metadata capture", async () => {
@@ -1085,3 +1085,4 @@ module.exports = {
     expect(memory?.error ?? "").toContain('memory slot set to "memory-other"');
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

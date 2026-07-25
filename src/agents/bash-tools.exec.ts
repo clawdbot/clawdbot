@@ -24,10 +24,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
-import {
-  parseOpenClawChannelsLoginShellCommand,
-  rejectUnsafeExecControlShellCommand,
-} from "../infra/exec-control-command-guard.js";
+import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -52,6 +49,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -74,6 +72,11 @@ import {
   runExecProcess,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
+import {
+  type BackgroundExecTaskHandle,
+  createBackgroundExecTask,
+  finalizeBackgroundExecTask,
+} from "./bash-tools.exec-task-tracking.js";
 import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   type ExecWorkdirResolution,
@@ -397,7 +400,7 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
     return argv;
   }
   let idx = 0;
-  while (idx < argv.length && isShellEnvAssignmentToken(argv[idx])) {
+  while (idx < argv.length && isShellEnvAssignmentToken(argv.at(idx) ?? "")) {
     idx += 1;
   }
   if (!isEnvExecutableToken(argv[idx])) {
@@ -405,7 +408,10 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
   }
   idx += 1;
   while (idx < argv.length) {
-    const token = argv[idx];
+    const token = argv.at(idx);
+    if (token === undefined) {
+      break;
+    }
     if (token === "--") {
       idx += 1;
       break;
@@ -418,7 +424,8 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
       break;
     }
     idx += 1;
-    const option = token.split("=", 1)[0];
+    const equalsIndex = token.indexOf("=");
+    const option = token.includes("=") ? token.slice(0, equalsIndex) : token;
     if (
       PREFLIGHT_ENV_OPTIONS_WITH_VALUES.has(option) &&
       !token.includes("=") &&
@@ -433,10 +440,13 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
 function findFirstPythonScriptArg(tokens: string[]): string | null {
   const optionsWithSeparateValue = new Set(["-W", "-X", "-Q", "--check-hash-based-pycs"]);
   for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i];
+    const token = tokens.at(i);
+    if (token === undefined) {
+      break;
+    }
     if (token === "--") {
-      const next = tokens[i + 1];
-      return normalizeLowercaseStringOrEmpty(next).endsWith(".py") ? next : null;
+      const next = tokens.at(i + 1);
+      return next && normalizeLowercaseStringOrEmpty(next).endsWith(".py") ? next : null;
     }
     if (token === "-") {
       return null;
@@ -465,11 +475,14 @@ function findNodeScriptArgs(tokens: string[]): string[] {
   let entryScript: string | null = null;
   let hasInlineEvalOrPrint = false;
   for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i];
+    const token = tokens.at(i);
+    if (token === undefined) {
+      break;
+    }
     if (token === "--") {
       if (!hasInlineEvalOrPrint && !entryScript) {
-        const next = tokens[i + 1];
-        if (normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
+        const next = tokens.at(i + 1);
+        if (next && normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
           entryScript = next;
         }
       }
@@ -491,8 +504,8 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       continue;
     }
     if (optionsWithSeparateValue.has(token)) {
-      const next = tokens[i + 1];
-      if (normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
+      const next = tokens.at(i + 1);
+      if (next && normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
         preloadScripts.push(next);
       }
       i += 1;
@@ -537,10 +550,13 @@ function extractInterpreterScriptTargetFromArgv(
     return null;
   }
   let commandIdx = 0;
-  while (commandIdx < argv.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx])) {
+  while (
+    commandIdx < argv.length &&
+    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv.at(commandIdx) ?? "")
+  ) {
     commandIdx += 1;
   }
-  const executable = normalizeOptionalLowercaseString(argv[commandIdx]);
+  const executable = normalizeOptionalLowercaseString(argv.at(commandIdx));
   if (!executable) {
     return null;
   }
@@ -956,16 +972,19 @@ function extractShellWrappedCommandPayload(
   }
   const shortOptionsWithSeparateValue = new Set(["-O", "-o"]);
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = args.at(i);
+    if (arg === undefined) {
+      break;
+    }
     if (arg === "--") {
       return null;
     }
     if (arg === "-c") {
-      return args[i + 1] ?? null;
+      return args.at(i + 1) ?? null;
     }
     if (/^-[A-Za-z]+$/u.test(arg)) {
       if (arg.includes("c")) {
-        return args[i + 1] ?? null;
+        return args.at(i + 1) ?? null;
       }
       if (shortOptionsWithSeparateValue.has(arg)) {
         i += 1;
@@ -974,7 +993,7 @@ function extractShellWrappedCommandPayload(
     }
     if (/^--[A-Za-z0-9][A-Za-z0-9-]*(?:=.*)?$/u.test(arg)) {
       if (!arg.includes("=")) {
-        const next = args[i + 1];
+        const next = args.at(i + 1);
         if (next && next !== "--" && !next.startsWith("-")) {
           i += 1;
         }
@@ -1287,9 +1306,7 @@ function resolveExecReviewerDefaults(params: { defaults?: ExecToolDefaults; agen
   }
   const cfg = params.defaults?.config;
   const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-  const agentExec = agentId
-    ? cfg?.agents?.list?.find((entry) => normalizeAgentId(entry.id) === agentId)?.tools?.exec
-    : undefined;
+  const agentExec = agentId && cfg ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
 }
 
@@ -1344,7 +1361,9 @@ export function createExecTool(
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
-  const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
+  const notifySessionKey = normalizeOptionalString(
+    defaults?.notifySessionKey ?? defaults?.sessionKey,
+  );
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
     to: defaults?.currentChannelId,
@@ -1423,6 +1442,7 @@ export function createExecTool(
       host,
       workdir: params.workdir,
       defaultCwd: defaults?.cwd,
+      nodeCwd: defaults?.nodeCwd,
       sandbox: defaults?.sandbox,
     });
     return markResolvedExecWorkdirPrepared(params, {
@@ -1562,7 +1582,8 @@ export function createExecTool(
       }
       return execParams;
     },
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      signal?.throwIfAborted();
       let params = stripMalformedXmlArgValueSuffixFromKeys(
         args as ExecToolArgs,
         XML_ARG_VALUE_EXEC_PARAM_KEYS,
@@ -1631,10 +1652,12 @@ export function createExecTool(
             contextParts.push(`session=${sessionKey}`);
           }
           if (!elevatedDefaults?.enabled) {
-            gates.push("enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)");
+            gates.push(
+              "enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)",
+            );
           } else {
             gates.push(
-              "allowFrom (tools.elevated.allowFrom.<provider> / agents.list[].tools.elevated.allowFrom.<provider>)",
+              "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
             );
           }
           throw new Error(
@@ -1645,8 +1668,8 @@ export function createExecTool(
               "Fix-it keys:",
               "- tools.elevated.enabled",
               "- tools.elevated.allowFrom.<provider>",
-              "- agents.list[].tools.elevated.enabled",
-              "- agents.list[].tools.elevated.allowFrom.<provider>",
+              "- agents.entries.*.tools.elevated.enabled",
+              "- agents.entries.*.tools.elevated.allowFrom.<provider>",
             ]
               .filter(Boolean)
               .join("\n"),
@@ -1740,6 +1763,7 @@ export function createExecTool(
               host,
               workdir: params.workdir,
               defaultCwd: defaults?.cwd,
+              nodeCwd: defaults?.nodeCwd,
               sandbox,
             });
       if (workdirResolution.kind === "unavailable") {
@@ -1766,6 +1790,8 @@ export function createExecTool(
         workdir = workdirResolution.remoteCwd;
       }
       let run: ExecProcessHandle;
+      let backgroundTask: BackgroundExecTaskHandle | null = null;
+      let settledOutcome: ExecProcessOutcome | null = null;
       let effectiveTimeout: number;
       try {
         if (elevatedRequested) {
@@ -1860,6 +1886,7 @@ export function createExecTool(
         if (host === "node") {
           return executeNodeHostCommand({
             command: params.command,
+            toolCallId,
             workdir,
             env,
             requestedEnv,
@@ -1870,6 +1897,7 @@ export function createExecTool(
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+            nonInteractiveApproval: defaults?.nonInteractiveApproval,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
@@ -1879,6 +1907,7 @@ export function createExecTool(
             ask,
             autoReview,
             autoReviewer,
+            signal,
             strictInlineEval: defaults?.strictInlineEval,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
@@ -1911,6 +1940,7 @@ export function createExecTool(
             ask,
             autoReview,
             autoReviewer,
+            signal,
             safeBins,
             safeBinProfiles,
             strictInlineEval: defaults?.strictInlineEval,
@@ -1918,10 +1948,13 @@ export function createExecTool(
             trigger: defaults?.trigger,
             agentId,
             sessionKey: defaults?.sessionKey,
+            runId: defaults?.runId,
+            toolCallId,
             sessionId: defaults?.sessionId,
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+            nonInteractiveApproval: defaults?.nonInteractiveApproval,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
@@ -1943,6 +1976,7 @@ export function createExecTool(
           if (gatewayResult.deniedResult) {
             return gatewayResult.deniedResult;
           }
+          signal?.throwIfAborted();
           execCommandOverride = gatewayResult.execCommandOverride;
           if (gatewayResult.allowWithoutEnforcedCommand) {
             execCommandOverride = undefined;
@@ -1968,6 +2002,7 @@ export function createExecTool(
           });
         }
 
+        signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,
@@ -1990,6 +2025,10 @@ export function createExecTool(
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,
           onUpdate,
+          onSettledBeforeNotify: (outcome) => {
+            settledOutcome = outcome;
+            finalizeBackgroundExecTask({ handle: backgroundTask, outcome });
+          },
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
@@ -2062,8 +2101,27 @@ export function createExecTool(
           if (yielded) {
             return;
           }
+          if (settledOutcome) {
+            cleanupToolRunListeners();
+            resolve(
+              buildExecForegroundResult({
+                outcome: settledOutcome,
+                cwd: run.session.cwd,
+                warningText: getWarningText(),
+              }),
+            );
+            return;
+          }
           yielded = true;
           markBackgrounded(run.session);
+          // Only the guarded yield transition owns task registration. A process
+          // that settles before this timer fires must stay out of the task ledger.
+          backgroundTask = createBackgroundExecTask({
+            processSessionId: run.session.id,
+            sessionKey: notifySessionKey,
+            agentId,
+            startedAt: run.startedAt,
+          });
           resolveRunning();
         };
 
@@ -2072,12 +2130,7 @@ export function createExecTool(
             onYieldNow();
           } else {
             yieldTimer = setTimeout(() => {
-              if (yielded) {
-                return;
-              }
-              yielded = true;
-              markBackgrounded(run.session);
-              resolveRunning();
+              onYieldNow();
             }, yieldWindow);
           }
         }
@@ -2110,10 +2163,4 @@ export function createExecTool(
 
 /** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();
-
-/** Test-only seams for parser/preflight helpers. */
-export const testing = {
-  parseOpenClawChannelsLoginShellCommand,
-  validateScriptFileForShellBleed,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

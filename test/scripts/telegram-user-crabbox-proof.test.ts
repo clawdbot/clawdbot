@@ -5,10 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COMMAND_TIMEOUT_MS,
+  createCrabboxWarmupArgs,
   createOpenClawGatewaySpawnSpec,
   parseArgs,
   readLogTail,
@@ -19,11 +22,13 @@ import {
   renderRemoteProbe,
   renderRemoteSetup,
   renderSelectDesktopChat,
+  renderTailscaleSshProxy,
   runCommand,
   signalCommandTree,
   stageFullSessionArtifacts,
   startLocalSut,
   waitForLog,
+  writeSutConfig,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
@@ -75,7 +80,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
@@ -192,6 +197,136 @@ describe("telegram user Crabbox proof log polling", () => {
     );
   });
 
+  it("enables the pinned MCP App fixture only when explicitly requested", () => {
+    expect(parseArgs(["start", "--mcp-app-fixture"]).mcpAppFixture).toBe(true);
+    expect(parseArgs([]).mcpAppFixture).toBe(false);
+
+    const ordinaryArgs = createCrabboxWarmupArgs(parseArgs([]));
+    const fixtureArgs = createCrabboxWarmupArgs(parseArgs(["start", "--mcp-app-fixture"]));
+    expect(ordinaryArgs).not.toContain("--tailscale");
+    expect(fixtureArgs).toContain("--tailscale");
+    expect(() => parseArgs(["--mcp-app-fixture"])).toThrow(
+      "--mcp-app-fixture is available only for start sessions.",
+    );
+    expect(() => parseArgs(["start", "--mcp-app-fixture", "--id", "cbx_reused"])).toThrow(
+      "--mcp-app-fixture requires a fresh lifecycle-owned Crabbox lease.",
+    );
+  });
+
+  it("writes an isolated Funnel and official MCP App fixture config", () => {
+    const configRoot = writeSutConfig({
+      gatewayPort: 19042,
+      groupId: "group",
+      mcpAppFixture: true,
+      mockPort: 19043,
+      outputDir: makeTempDir(),
+      repoRoot: "/repo",
+      testerId: "tester",
+    });
+    tempDirs.push(configRoot.tempRoot);
+    const config = JSON.parse(fs.readFileSync(configRoot.configPath, "utf8"));
+
+    expect(config.gateway).toMatchObject({
+      auth: {
+        mode: "password",
+        password: { id: "OPENCLAW_GATEWAY_PASSWORD", source: "env" },
+      },
+      tailscale: { mode: "funnel", resetOnExit: true },
+    });
+    expect(config.mcp.servers.fixture).toEqual({
+      args: ["/repo/scripts/e2e/mcp-app-conformance-server.mjs"],
+      command: process.execPath,
+    });
+    expect(JSON.stringify(config)).not.toContain("companion-called");
+    expect(JSON.stringify(config)).not.toContain("resource-ok");
+  });
+
+  it("pins the browser fixture SDK and exposes only the required app capabilities", () => {
+    const fixture = fs.readFileSync("scripts/e2e/mcp-app-conformance-server.mjs", "utf8");
+    const uiPackage = JSON.parse(fs.readFileSync("ui/package.json", "utf8"));
+
+    expect(uiPackage.dependencies["@modelcontextprotocol/ext-apps"]).toBe("1.7.4");
+    expect(fixture).toContain(
+      `@modelcontextprotocol/ext-apps@${uiPackage.dependencies["@modelcontextprotocol/ext-apps"]}`,
+    );
+    expect(fixture).toContain('server.tool("app_companion"');
+    expect(fixture).toContain('visibility: ["app"]');
+    expect(fixture).toContain('"data://conformance/value"');
+    expect(fixture).toContain('text: "resource-ok"');
+  });
+
+  it("serves the fixture view, app-only tool, and resource over official MCP stdio", async () => {
+    const transport = new StdioClientTransport({
+      args: ["scripts/e2e/mcp-app-conformance-server.mjs"],
+      command: process.execPath,
+      cwd: process.cwd(),
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "telegram-proof-fixture-test", version: "1.0.0" });
+    try {
+      await client.connect(transport);
+      const tools = await client.listTools();
+      expect(tools.tools.find((tool) => tool.name === "show")?._meta).toMatchObject({
+        ui: { resourceUri: "ui://conformance/app" },
+      });
+      expect(tools.tools.find((tool) => tool.name === "app_companion")?._meta).toMatchObject({
+        ui: { visibility: ["app"] },
+      });
+      expect(await client.callTool({ arguments: {}, name: "app_companion" })).toMatchObject({
+        structuredContent: { value: "companion-called" },
+      });
+      expect(await client.readResource({ uri: "data://conformance/value" })).toMatchObject({
+        contents: [{ text: "resource-ok" }],
+      });
+    } finally {
+      await Promise.allSettled([client.close(), transport.close()]);
+    }
+  });
+
+  posixIt("limits the Funnel bridge proxy to the Gateway lifecycle commands", () => {
+    const root = makeTempDir();
+    const sshPath = path.join(root, "ssh");
+    const argvPath = path.join(root, "ssh-argv.json");
+    const proxyPath = path.join(root, "tailscale");
+    writeExecutable(
+      sshPath,
+      `#!/usr/bin/env node\nimport fs from "node:fs";\nfs.writeFileSync(process.env.ARGV_PATH, JSON.stringify(process.argv.slice(2)));\n`,
+    );
+    writeExecutable(
+      proxyPath,
+      renderTailscaleSshProxy({
+        gatewayPort: 19042,
+        inspect: {
+          host: "proof.example",
+          sshKey: "/tmp/proof-key",
+          sshPort: "2222",
+          sshUser: "proof",
+        },
+      }),
+    );
+    const env = {
+      ...process.env,
+      ARGV_PATH: argvPath,
+      PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+    };
+
+    const allowed = spawnSync(proxyPath, ["funnel", "--bg", "--yes", "19042"], {
+      encoding: "utf8",
+      env,
+    });
+    expect(allowed.status).toBe(0);
+    expect(JSON.parse(fs.readFileSync(argvPath, "utf8"))).toContain(
+      "'tailscale' 'funnel' '--bg' '--yes' '19042'",
+    );
+
+    const rejected = spawnSync(proxyPath, ["serve", "--bg", "19042"], {
+      encoding: "utf8",
+      env,
+    });
+    expect(rejected.status).toBe(64);
+    expect(rejected.stderr).toContain("unsupported proof Tailscale command");
+  });
+
   it("reads only the requested log tail", () => {
     const logPath = path.join(makeTempDir(), "gateway.log");
     fs.writeFileSync(logPath, `${"old\n".repeat(2000)}ready\n`, "utf8");
@@ -290,7 +425,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const stagedDir = stageFullSessionArtifacts(outputDir);
 
     expect(stagedDir).toBe(publishDir);
-    expect(fs.readdirSync(stagedDir).sort()).toEqual([
+    expect(fs.readdirSync(stagedDir).toSorted()).toEqual([
       "probe-2026-06-20T16-47-48-123Z.json",
       "probe.json",
       "status.json",
@@ -523,13 +658,13 @@ const descendant = spawn(process.execPath, [
   "--eval",
   ${JSON.stringify(
     `import { writeFileSync } from "node:fs";
-writeFileSync(${JSON.stringify(readyPath)}, "ready");
 process.on("SIGTERM", () => {
   setTimeout(() => {
     writeFileSync(${JSON.stringify(donePath)}, "done");
     process.exit(0);
   }, 75);
 });
+writeFileSync(${JSON.stringify(readyPath)}, "ready");
 setInterval(() => {}, 1000);`,
   )},
 ], { stdio: "ignore" });
@@ -575,11 +710,11 @@ const descendant = spawn(process.execPath, [
   "-e",
   ${JSON.stringify(
     `const fs = require("node:fs");
-fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(descendantTermPath)}, "terminated");
   process.exit(0);
 });
+fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));
 setInterval(() => {}, 1000);`,
   )},
 ], { stdio: "ignore" });
@@ -612,9 +747,16 @@ setInterval(() => {}, 1000);
       stdio: "ignore",
     });
     try {
-      await waitFor(() => fs.existsSync(descendantPidPath));
-      descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
-      expect(isProcessAlive(descendantPid)).toBe(true);
+      await waitFor(() => {
+        if (!fs.existsSync(descendantPidPath)) {
+          return false;
+        }
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        return (
+          Number.isInteger(descendantPid) && descendantPid > 1 && isProcessAlive(descendantPid)
+        );
+      });
+      expect(Number.isInteger(descendantPid)).toBe(true);
       await waitFor(() => fs.existsSync(commandSettledPath));
       if (!runner.pid) {
         throw new Error("runner did not start");
@@ -647,12 +789,14 @@ setInterval(() => {}, 1000);
       `
 import fs from "node:fs";
 
-fs.writeFileSync(${JSON.stringify(mockPidPath)}, String(process.pid));
-process.stdout.write("mock-openai listening\\n");
+// Handler before the readiness line: SIGTERM arrives once the gateway spawn
+// fails, and a late-registered handler can lose it to the default disposition.
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(mockTermPath)}, "terminated");
   process.exit(0);
 });
+fs.writeFileSync(${JSON.stringify(mockPidPath)}, String(process.pid));
+process.stdout.write("mock-openai listening\\n");
 setInterval(() => {}, 1000);
 `,
     );
@@ -684,6 +828,8 @@ process.exit(2);
           }),
           drainUpdates: async () => ({
             drained: 0,
+            pendingAfter: undefined,
+            pendingBefore: undefined,
             webhookUrlSet: false,
           }),
         },
@@ -747,6 +893,8 @@ process.exit(2);
             }),
             drainUpdates: async () => ({
               drained: 0,
+              pendingAfter: undefined,
+              pendingBefore: undefined,
               webhookUrlSet: false,
             }),
             waitForOutputReady: async (child, _pattern, output, label) => {
@@ -754,11 +902,19 @@ process.exit(2);
                 await waitFor(() => output().includes("mock-openai listening"));
                 return;
               }
-              await waitFor(() => fs.existsSync(gatewayGrandchildPidPath));
-              gatewayGrandchildPid = Number.parseInt(
-                fs.readFileSync(gatewayGrandchildPidPath, "utf8"),
-                10,
-              );
+              // Parse inside the poll: existsSync can observe writeFileSync's
+              // 0-byte open-truncate window, and a NaN pid would skip both the
+              // dead-check and the finally-block SIGKILL cleanup.
+              await waitFor(() => {
+                if (!fs.existsSync(gatewayGrandchildPidPath)) {
+                  return false;
+                }
+                gatewayGrandchildPid = Number.parseInt(
+                  fs.readFileSync(gatewayGrandchildPidPath, "utf8"),
+                  10,
+                );
+                return Number.isInteger(gatewayGrandchildPid) && gatewayGrandchildPid > 1;
+              });
               if (child.exitCode === null && child.signalCode === null) {
                 await new Promise<void>((resolve) => {
                   child.once("exit", () => resolve());
@@ -788,11 +944,15 @@ process.exit(2);
       `#!/usr/bin/env node
 import fs from "node:fs";
 
-fs.writeFileSync(${JSON.stringify(recorderPidPath)}, String(process.pid));
+// Arm the SIGTERM handler before publishing the pid file: the probe throws as
+// soon as the pid file exists and recordProbeVideo SIGTERMs the recorder in
+// its finally, so a handler installed after publish can lose that signal to
+// the default disposition and recorder.term is never written.
 process.on("SIGTERM", () => {
   fs.writeFileSync(${JSON.stringify(recorderTermPath)}, "terminated");
   process.exit(0);
 });
+fs.writeFileSync(${JSON.stringify(recorderPidPath)}, String(process.pid));
 setInterval(() => {}, 1000);
 `,
     );
@@ -850,7 +1010,7 @@ fs.writeFileSync(${JSON.stringify(recorderExitPath)}, "exited");
             startDelayMs: 0,
             target: "linux",
           }),
-          delay(500).then(() => {
+          delay(500, undefined, { ref: false }).then(() => {
             throw new Error("recordProbeVideo hung after the recorder had already exited");
           }),
         ]),

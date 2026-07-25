@@ -26,6 +26,7 @@ function parseArgs(argv) {
     "tag-dir",
     "release-json",
     "full-release-validation-run-id",
+    "full-release-validation-run-attempt",
     "release-publish-run-id",
     "rollback-drill-id",
     "rollback-drill-date",
@@ -64,10 +65,14 @@ function main() {
     releaseTagSha: gitSha(tagDir),
     mainSha: gitSha(mainDir),
     fullReleaseValidationRunId: args["full-release-validation-run-id"],
+    fullReleaseValidationRunAttempt: args["full-release-validation-run-attempt"],
     releasePublishRunId: args["release-publish-run-id"],
     rollbackDrillId: args["rollback-drill-id"],
     rollbackDrillDate: args["rollback-drill-date"],
     allowStaleRollbackDrill: args["allow-stale-rollback-drill"] === "true",
+    requireCompletePlatformAssets: args["require-complete-platform-assets"] === "true",
+    windowsNodeReleaseRunId: args["windows-node-release-run-id"],
+    windowsNodeInstallerDigests: args["windows-node-installer-digests"],
     nowMs: Date.now(),
   });
   if (result.errors.length > 0 || !result.manifest) {

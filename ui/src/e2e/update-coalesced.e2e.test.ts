@@ -9,6 +9,8 @@ import {
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
+const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT = "openclaw:native-update-availability-changed";
+
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
@@ -62,7 +64,7 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
         },
       });
 
-      await page.getByRole("button", { name: "Update now" }).click();
+      await page.getByRole("button", { name: /Update Gateway/ }).click();
       await page
         .getByText(
           "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
@@ -71,9 +73,77 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
         .waitFor();
 
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      expect(await page.getByRole("button", { name: "Update now" }).isEnabled()).toBe(true);
+      expect(await page.getByRole("button", { name: /Update Gateway/ }).isEnabled()).toBe(true);
       expect(pageErrors).toEqual([]);
       await page.screenshot({ path: path.join(artifactDir, "coalesced-restart-banner.png") });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows and routes the update target from live Mac app ownership", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-ownership");
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    await context.addInitScript(() => {
+      const nativeWindow = window as unknown as {
+        openClawUpdateMessages: unknown[];
+        webkit: {
+          messageHandlers: { openclawUpdate: { postMessage: (message: unknown) => void } };
+        };
+      };
+      nativeWindow.openClawUpdateMessages = [];
+      nativeWindow.webkit = {
+        messageHandlers: {
+          openclawUpdate: {
+            postMessage: (message) => nativeWindow.openClawUpdateMessages.push(message),
+          },
+        },
+      };
+    });
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "update.run": {
+          ok: true,
+          restart: null,
+          result: { after: { version: "2.0.0" }, status: "ok" },
+        },
+      },
+    });
+
+    try {
+      expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.emitGatewayEvent("update.available", {
+        updateAvailable: {
+          channel: "stable",
+          currentVersion: "1.0.0",
+          latestVersion: "2.0.0",
+        },
+      });
+
+      await page.getByRole("button", { name: /Update Mac app \+ Gateway/ }).click();
+      expect(
+        await page.evaluate(
+          () => (window as unknown as { openClawUpdateMessages: unknown[] }).openClawUpdateMessages,
+        ),
+      ).toEqual([{ type: "start-update" }]);
+      expect(await gateway.getRequests("update.run")).toHaveLength(0);
+
+      await page.evaluate((eventName) => {
+        Reflect.deleteProperty(window, "webkit");
+        window.dispatchEvent(new CustomEvent(eventName));
+      }, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT);
+      await page.getByRole("button", { name: /Update Gateway/ }).click();
+
+      expect(await gateway.getRequests("update.run")).toHaveLength(1);
+      expect(pageErrors).toEqual([]);
+      await page.screenshot({ path: path.join(artifactDir, "gateway-update-target.png") });
     } finally {
       await context.close();
     }

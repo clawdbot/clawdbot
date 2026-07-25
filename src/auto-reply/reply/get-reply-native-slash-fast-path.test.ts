@@ -2,9 +2,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
+import {
+  loadExactSessionEntry,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
-import { markCompleteReplyConfig } from "./get-reply-fast-path.js";
+import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
 import * as sessionPersistence from "./session-entry-persistence.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
@@ -251,7 +256,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       reply: expect.objectContaining({ text: "You are not authorized to use this command." }),
     });
     expect(handleCommandsMock).toHaveBeenCalledOnce();
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+    expect(loadExactSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
   it("marks deleted-session initialization conflicts for delivery", async () => {
@@ -349,16 +354,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   it("adopts a supported legacy alias before native command initialization", async () => {
     const storePath = path.join(tempDirs.make("openclaw-native-slash-alias-"), "sessions.json");
     const sessionKey = "agent:main:main";
-    await saveSessionStore(
-      storePath,
-      {
-        "Agent:main:main": {
-          sessionId: "legacy-session",
-          updatedAt: 1,
-        },
-      },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey: "Agent:main:main", storePath }, {
+      sessionId: "legacy-session",
+      updatedAt: 1,
+    } as SessionEntry);
     handleCommandsMock.mockImplementationOnce(async (params: { sessionEntry?: unknown }) => {
       expect(params.sessionEntry).toMatchObject({ sessionId: "legacy-session" });
       return { shouldContinue: false, reply: { text: "ok" } };
@@ -410,8 +409,8 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       archivedAt: 2,
       channel: "telegram",
     };
-    await saveSessionStore(storePath, { [sessionKey]: archivedEntry }, { skipMaintenance: true });
-    const persistedArchivedEntry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    await replaceSessionEntry({ sessionKey, storePath }, archivedEntry as SessionEntry);
+    const persistedArchivedEntry = loadExactSessionEntry({ sessionKey, storePath })?.entry;
 
     const result = await maybeResolveNativeSlashCommandFastReply({
       ctx: buildTestCtx({
@@ -448,28 +447,20 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       reply: expect.objectContaining({ text: expect.stringContaining("is archived") }),
     });
     expect(handleCommandsMock).not.toHaveBeenCalled();
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(
-      persistedArchivedEntry,
-    );
+    expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).toEqual(persistedArchivedEntry);
   });
 
   it("persists fast-path session initialization before command mutation", async () => {
     const storePath = path.join(tempDirs.make("openclaw-native-slash-init-"), "sessions.json");
     const sessionKey = "agent:main:main";
-    await saveSessionStore(
-      storePath,
-      {
-        [sessionKey]: {
-          sessionId: "session-1",
-          updatedAt: 1,
-          lastInteractionAt: 1,
-          channel: "old-channel",
-        },
-      },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      sessionId: "session-1",
+      updatedAt: 1,
+      lastInteractionAt: 1,
+      channel: "old-channel",
+    } as SessionEntry);
     handleCommandsMock.mockImplementationOnce(async (params: { sessionEntry?: unknown }) => {
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadSessionEntry({ sessionKey, storePath });
       expect(params.sessionEntry).toMatchObject({
         sessionId: "session-1",
         updatedAt: 100,

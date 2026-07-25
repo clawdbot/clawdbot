@@ -3,10 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
+const { crablineRuntimeLoads, runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
+  crablineRuntimeLoads: vi.fn(),
   runQaFlowSuite: vi.fn(),
   runQaTestFileScenarios: vi.fn(),
 }));
+
+vi.mock("@openclaw/crabline", async (importOriginal) => {
+  crablineRuntimeLoads();
+  return await importOriginal<typeof import("@openclaw/crabline")>();
+});
 
 vi.mock("./suite.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./suite.js")>()),
@@ -41,6 +47,28 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
     await fs.writeFile(pathLocal, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
   }
   return evidence;
+}
+
+function trackMaxActiveFlowRuns() {
+  const run = runQaFlowSuite.getMockImplementation();
+  if (!run) {
+    throw new Error("expected default QA flow suite mock implementation");
+  }
+  let active = 0;
+  let maxActive = 0;
+  runQaFlowSuite.mockImplementation(async (params) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+    try {
+      return await run(params);
+    } finally {
+      active -= 1;
+    }
+  });
+  return () => maxActive;
 }
 
 describe("qa suite runtime launcher", () => {
@@ -108,6 +136,20 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+  it("keeps Crabline out of unrelated live transport startup", async () => {
+    expect(crablineRuntimeLoads).not.toHaveBeenCalled();
+
+    await runQaSuite({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      channelId: "telegram",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(crablineRuntimeLoads).not.toHaveBeenCalled();
+  });
+
   it("routes selected flow scenarios to the flow suite engine", async () => {
     const result = await runQaSuite({
       repoRoot: process.cwd(),
@@ -130,6 +172,367 @@ describe("qa suite runtime launcher", () => {
       }),
     );
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
+  it("partitions flow-only suites that request isolated workers", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-flow-only-isolated-");
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/flow-only-isolated",
+      concurrency: 1,
+      runtimePair: ["openclaw", "codex"],
+      scenarioIds: ["channel-chat-baseline", "matrix-allowlist-hot-reload"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "flow-only-isolated");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated-1"),
+        concurrency: 1,
+        runtimePair: ["openclaw", "codex"],
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated-2"),
+        concurrency: 1,
+        runtimePair: ["openclaw", "codex"],
+        scenarioIds: ["matrix-allowlist-hot-reload"],
+      }),
+    );
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
+  it("runs runtime-specific channel scenarios in dedicated workers", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-live-runtime-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/live-runtime",
+      channelDriver: "live",
+      channelId: "slack",
+      concurrency: 4,
+      scenarioIds: ["slack-canary", "slack-codex-approval-exec-native"],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "live-runtime", "flow");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "isolated"),
+        forcedRuntime: undefined,
+        scenarioIds: ["slack-canary"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "runtime-codex-1"),
+        forcedRuntime: "codex",
+        scenarioIds: ["slack-codex-approval-exec-native"],
+      }),
+    );
+  });
+
+  it("partitions portable scenarios by channel for a pluggable driver", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-channels-");
+    const adapterFactories = [
+      {
+        id: "portable-driver",
+        matches: vi.fn(),
+        create: vi.fn(),
+      },
+    ];
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-channels",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories,
+      scenarioIds: ["channel-chat-baseline", "telegram-help-command", "matrix-restart-resume"],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "pluggable-channels");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(3);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: undefined,
+        outputDir: path.join(outputDir, "flow"),
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "telegram",
+        outputDir: path.join(outputDir, "flow", "telegram"),
+        scenarioIds: ["telegram-help-command"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "matrix",
+        outputDir: path.join(outputDir, "flow", "matrix"),
+        scenarioIds: ["matrix-restart-resume"],
+      }),
+    );
+  });
+
+  it("runs distinct pluggable-driver channels within the global concurrency budget", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-channel-concurrency-");
+    const maxActive = trackMaxActiveFlowRuns();
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-channel-concurrency",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [{ id: "portable-driver", matches: vi.fn(), create: vi.fn() }],
+      concurrency: 2,
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    expect(maxActive()).toBe(2);
+  });
+
+  it("runs isolated same-channel adapter instances at suite concurrency", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
+    const maxActive = trackMaxActiveFlowRuns();
+
+    const scenarioIds = [
+      "matrix-approval-channel-target-both",
+      "matrix-approval-deny-reaction",
+      "matrix-approval-exec-metadata-chunked",
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-approval-plugin-metadata-single-event",
+      "matrix-approval-thread-target",
+    ];
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [
+        {
+          id: "matrix",
+          isolatesInstances: true,
+          matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+          create: vi.fn(),
+        },
+      ],
+      concurrency: 6,
+      scenarioIds,
+    });
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
+    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual(
+      scenarioIds.map((scenarioId) => [scenarioId]),
+    );
+    expect(maxActive()).toBe(6);
+  });
+
+  it("binds one portable channel scenario without an explicit channel override", async () => {
+    const adapterFactories = [
+      {
+        id: "portable-driver",
+        matches: vi.fn(),
+        create: vi.fn(),
+      },
+    ];
+
+    const result = await runQaSuite({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories,
+      scenarioIds: ["telegram-help-command"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "telegram",
+        scenarioIds: ["telegram-help-command"],
+      }),
+    );
+  });
+
+  it("partitions mixed Crabline flow channels into one aggregate suite", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-crabline-channels-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementation(async (params) => {
+      const result = await defaultFlowImplementation(params);
+      const scenarioIds: readonly string[] = params?.scenarioIds ?? [];
+      result.evidence = {
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-06-14T00:00:00.000Z",
+        evidenceMode: "full",
+        entries: scenarioIds.map((scenarioId) => ({
+          test: {
+            kind: "qa-scenario",
+            id: scenarioId,
+            title: scenarioId,
+          },
+          coverage: [],
+          execution: {
+            runner: "host",
+            environment: {
+              ref: null,
+              os: "linux",
+              nodeVersion: "v24.0.0",
+            },
+            provider: {
+              id: "mock-openai",
+              live: false,
+              model: {
+                name: "gpt-5.6-luna",
+                ref: "mock-openai/gpt-5.6-luna",
+              },
+              fixture: "mock-openai",
+            },
+            channel: {
+              id: params?.channelDriverSelection?.channel ?? "qa-channel",
+              live: false,
+              driver: "crabline",
+            },
+            packageSource: {
+              kind: "source-checkout",
+            },
+            artifacts: [
+              {
+                kind: "report",
+                path: "qa-suite-report.md",
+                source: "qa-suite",
+              },
+            ],
+          },
+          result: {
+            status: "pass",
+          },
+        })),
+      };
+      return result;
+    });
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/crabline-channels",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "crabline-channels");
+    expect(result).toMatchObject({
+      executionKind: "suite",
+      result: {
+        evidencePath: path.join(outputDir, "qa-evidence.json"),
+        summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+      },
+    });
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "telegram"),
+        channelDriverSelection: expect.objectContaining({ channel: "telegram" }),
+        scenarioIds: ["telegram-help-command"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "matrix"),
+        channelDriverSelection: expect.objectContaining({ channel: "matrix" }),
+        scenarioIds: ["matrix-restart-resume"],
+      }),
+    );
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
+    ) as { run?: { channel?: unknown; channelDriver?: unknown; scenarioIds?: unknown } };
+    expect(summary.run?.channelDriver).toBe("crabline");
+    expect(summary.run?.channel).toBeNull();
+    expect(summary.run?.scenarioIds).toEqual(["telegram-help-command", "matrix-restart-resume"]);
+    const evidence = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-evidence.json"), "utf8"),
+    ) as {
+      entries?: Array<{ execution?: { artifacts?: Array<{ path?: unknown }> } }>;
+    };
+    expect(evidence.entries?.map((entry) => entry.execution?.artifacts?.[0]?.path)).toEqual([
+      ".artifacts/qa-e2e/crabline-channels/flow/telegram/qa-suite-report.md",
+      ".artifacts/qa-e2e/crabline-channels/flow/matrix/qa-suite-report.md",
+    ]);
+  });
+
+  it("preserves runtime parity options across mixed Crabline flow channels", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-crabline-runtime-pair-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/crabline-runtime-pair",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      runtimePair: ["openclaw", "codex"],
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    for (const call of runQaFlowSuite.mock.calls) {
+      expect(call[0]).toEqual(
+        expect.objectContaining({
+          runtimePair: ["openclaw", "codex"],
+        }),
+      );
+    }
+    const summary = JSON.parse(
+      await fs.readFile(
+        path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "crabline-runtime-pair",
+          "qa-suite-summary.json",
+        ),
+        "utf8",
+      ),
+    ) as { run?: { runtimePair?: unknown } };
+    expect(summary.run?.runtimePair).toEqual(["openclaw", "codex"]);
+    await expect(
+      fs.access(
+        path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "crabline-runtime-pair",
+          "flow",
+          "telegram",
+          "qa-evidence.json",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.access(
+        path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "crabline-runtime-pair",
+          "flow",
+          "matrix",
+          "qa-evidence.json",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("routes selected Playwright scenarios to the Playwright scenario runner", async () => {
@@ -166,7 +569,7 @@ describe("qa suite runtime launcher", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-test", "playwright"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
     });
     expect(
       call.scenarios.map((scenario: { id: string; execution: { kind: string } }) => ({
@@ -725,7 +1128,13 @@ describe("qa suite runtime launcher", () => {
     const testFileBlocked = new Promise<void>((resolve) => {
       releaseTestFile = resolve;
     });
-    runQaFlowSuite.mockRejectedValueOnce(new Error("flow partition failed"));
+    runQaFlowSuite.mockRejectedValueOnce(
+      new Error("flow partition failed", {
+        cause: Object.assign(new Error("unrelated capacity failure"), {
+          code: "POOL_EXHAUSTED",
+        }),
+      }),
+    );
     runQaTestFileScenarios.mockImplementationOnce(
       async (params: {
         outputDir: string;
@@ -767,6 +1176,55 @@ describe("qa suite runtime launcher", () => {
     releaseTestFile();
     await expect(runPromise).rejects.toThrow("flow partition failed");
     expect(rejected).toBe(true);
+  });
+
+  it("reuses unavailable channel credential evidence across serial partitions", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-credential-unavailable-");
+    const poolError = Object.assign(new Error("no WhatsApp credential is available"), {
+      code: "POOL_EXHAUSTED",
+    });
+    runQaFlowSuite.mockRejectedValueOnce(
+      new Error("failed to create QA transport live:whatsapp: credential acquire failed", {
+        cause: new Error("credential acquire timed out", { cause: poolError }),
+      }),
+    );
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/credential-unavailable",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [{ id: "whatsapp", matches: () => true, create: vi.fn() }],
+      scenarioIds: [
+        "whatsapp-status-command",
+        "whatsapp-access-control-dm-open",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(result.result.scenarios.slice(0, 2)).toMatchObject([
+      { status: "fail", details: expect.stringContaining("channel credential unavailable") },
+      { status: "fail", details: expect.stringContaining("channel credential unavailable") },
+    ]);
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries?: Array<{
+        execution?: { channel?: { id?: string } };
+        result?: { status?: string };
+        test?: { id?: string };
+      }>;
+    };
+    for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
+      const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
+      expect(blocked).toMatchObject({
+        execution: { channel: { id: "whatsapp", driver: "live", live: true } },
+        result: { status: "blocked" },
+      });
+    }
   });
 
   it("shares ordinary flow scenarios and isolates flow scenarios with config patches", async () => {
@@ -987,3 +1445,4 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -16,14 +16,16 @@ struct DeepLinkAgentPromptAlert: ViewModifier {
             Alert(
                 title: Text("Run OpenClaw agent?")
                     .font(OpenClawType.headline),
-                message: Text(
-                    """
+                message: Text(verbatim: String(
+                    format: String(localized: """
                     Message:
-                    \(prompt.messagePreview)
+                    %1$@
 
                     URL:
-                    \(prompt.urlPreview)
-                    """)
+                    %2$@
+                    """),
+                    prompt.messagePreview,
+                    prompt.urlPreview))
                     .font(OpenClawType.subhead),
                 primaryButton: .cancel(
                     Text("Cancel")

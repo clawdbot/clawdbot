@@ -8,16 +8,18 @@ import { loadAgentIdentity } from "../commands/agents.config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
+  AVATAR_MAX_DATA_URL_CHARS,
+  isRenderableAvatarImageDataUrl,
+} from "../shared/avatar-limits.js";
+import {
+  hasAvatarUriScheme,
   isAvatarHttpUrl,
-  isAvatarImageDataUrl,
+  isWindowsAbsolutePath,
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
 
 const ASSISTANT_IDENTITY_LIMITS = {
   name: 50,
-  // Image-bearing avatars must round-trip without truncation. This matches
-  // MAX_LOCAL_USER_IMAGE_AVATAR / AVATAR_MAX_BYTES expansion.
-  avatar: 2_000_000,
   emoji: 16,
 } as const;
 type AssistantIdentityField = keyof typeof ASSISTANT_IDENTITY_LIMITS;
@@ -44,22 +46,27 @@ function normalizeIdentityValue(
 }
 
 function isAvatarUrl(value: string): boolean {
-  return isAvatarHttpUrl(value) || isAvatarImageDataUrl(value);
+  return isAvatarHttpUrl(value) || isRenderableAvatarImageDataUrl(value);
 }
 
-// Candidates are already trimmed and field-bounded by normalizeIdentityValue.
 function normalizeAvatarValue(value: string | undefined): string | undefined {
-  if (!value) {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed || trimmed.length > AVATAR_MAX_DATA_URL_CHARS) {
     return undefined;
   }
-  if (isAvatarUrl(value)) {
-    return value;
+  if (isAvatarUrl(trimmed)) {
+    return trimmed;
   }
-  if (looksLikeAvatarPath(value)) {
-    return value;
+  // URI-like values are not local paths. Reject unsupported schemes before
+  // the slash heuristic so a bad high-priority value cannot shadow a fallback.
+  if (hasAvatarUriScheme(trimmed) && !isWindowsAbsolutePath(trimmed)) {
+    return undefined;
   }
-  if (!/\s/.test(value) && value.length <= 4) {
-    return value;
+  if (looksLikeAvatarPath(trimmed)) {
+    return trimmed;
+  }
+  if (!/\s/.test(trimmed) && trimmed.length <= 4) {
+    return trimmed;
   }
   return undefined;
 }
@@ -78,7 +85,11 @@ function normalizeEmojiValue(value: string | undefined): string | undefined {
   if (!hasNonAscii) {
     return undefined;
   }
-  if (isAvatarUrl(value) || looksLikeAvatarPath(value)) {
+  if (
+    isAvatarUrl(value) ||
+    (hasAvatarUriScheme(value) && !isWindowsAbsolutePath(value)) ||
+    looksLikeAvatarPath(value)
+  ) {
     return undefined;
   }
   return value;
@@ -105,19 +116,17 @@ export function resolveAssistantIdentity(params: {
     (isDefaultAgent ? (uiName ?? agentName ?? fileName) : (agentName ?? fileName ?? uiName)) ??
     DEFAULT_ASSISTANT_IDENTITY.name;
 
-  const uiAvatar = normalizeIdentityValue("avatar", configAssistant?.avatar);
+  const uiAvatar = normalizeAvatarValue(configAssistant?.avatar);
   const agentAvatarCandidates = [
-    normalizeIdentityValue("avatar", agentIdentity?.avatar),
-    normalizeIdentityValue("avatar", agentIdentity?.emoji),
-    normalizeIdentityValue("avatar", fileIdentity?.avatar),
-    normalizeIdentityValue("avatar", fileIdentity?.emoji),
+    normalizeAvatarValue(agentIdentity?.avatar),
+    normalizeAvatarValue(agentIdentity?.emoji),
+    normalizeAvatarValue(fileIdentity?.avatar),
+    normalizeAvatarValue(fileIdentity?.emoji),
   ];
   const avatarCandidates = isDefaultAgent
     ? [uiAvatar, ...agentAvatarCandidates]
     : [...agentAvatarCandidates, uiAvatar];
-  const avatar =
-    avatarCandidates.map((candidate) => normalizeAvatarValue(candidate)).find(Boolean) ??
-    DEFAULT_ASSISTANT_IDENTITY.avatar;
+  const avatar = avatarCandidates.find(Boolean) ?? DEFAULT_ASSISTANT_IDENTITY.avatar;
 
   const emojiCandidates = [
     normalizeIdentityValue("emoji", agentIdentity?.emoji),

@@ -12,10 +12,8 @@ type DiscordInboundJobRuntimeField =
   | "abortSignal"
   | "guildHistories"
   | "client"
+  | "turnAdoptionLifecycle"
   | "threadBindings"
-  // Function-backed feedback stays runtime-only; payload must remain
-  // materializable data so queued jobs cannot accidentally serialize it.
-  | "replyTypingFeedback"
   | "discordRestFetch";
 
 type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
@@ -26,12 +24,15 @@ export type DiscordInboundJob = {
   queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayKeys?: string[];
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+  };
 };
 
-export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
-  // This key is both the run-queue serialization key and the typing prestart
-  // dedupe key, so keep it aligned with the eventual session route.
+function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
+  // Serialize work by the eventual session route so one conversation cannot
+  // race itself when Discord channel and session identifiers differ.
   const sessionKey = ctx.route.sessionKey?.trim();
   if (sessionKey) {
     return sessionKey;
@@ -45,15 +46,15 @@ export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightCon
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayKeys?: readonly string[] },
+  options?: { ingressSettlement?: DiscordInboundJob["ingressSettlement"] },
 ): DiscordInboundJob {
   const {
     runtime,
     abortSignal,
     guildHistories,
     client,
+    turnAdoptionLifecycle,
     threadBindings,
-    replyTypingFeedback,
     discordRestFetch,
     message,
     data,
@@ -78,11 +79,11 @@ export function buildDiscordInboundJob(
       abortSignal,
       guildHistories,
       client,
+      turnAdoptionLifecycle,
       threadBindings,
-      replyTypingFeedback,
       discordRestFetch,
     },
-    replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
+    ingressSettlement: options?.ingressSettlement,
   };
 }
 

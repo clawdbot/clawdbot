@@ -5,17 +5,11 @@ import {
   encodeGraphShareId,
   extractInlineImageCandidates,
   isDownloadableAttachment,
-  isGraphSharedLinkUrl,
   isLikelyImageAttachment,
-  isPrivateOrReservedIP,
   isUrlAllowed,
   normalizeContentType,
-  resolveAndValidateIP,
   resolveAttachmentFetchPolicy,
-  resolveAllowedHosts,
-  resolveAuthAllowedHosts,
   resolveMediaSsrfPolicy,
-  safeFetch,
   safeFetchWithPolicy,
   tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";
@@ -25,6 +19,30 @@ const privateResolve = (ip: string) => async () => ({ address: ip });
 const failingResolve = async () => {
   throw new Error("DNS failure");
 };
+
+const resolveAllowedHosts = (input?: string[]) =>
+  resolveAttachmentFetchPolicy({ allowHosts: input }).allowHosts;
+const resolveAuthAllowedHosts = (input?: string[]) =>
+  resolveAttachmentFetchPolicy({ authAllowHosts: input }).authAllowHosts;
+const isGraphSharedLinkUrl = (url: string) =>
+  tryBuildGraphSharesUrlForSharedLink(url) !== undefined;
+
+type SafeFetchParams = Omit<Parameters<typeof safeFetchWithPolicy>[0], "policy"> & {
+  allowHosts: string[];
+  authorizationAllowHosts?: string[];
+};
+
+async function safeFetch(params: SafeFetchParams) {
+  const { allowHosts, authorizationAllowHosts, ...request } = params;
+  return await safeFetchWithPolicy({
+    ...request,
+    policy: {
+      allowHosts,
+      authAllowHosts: authorizationAllowHosts ?? [],
+    },
+    resolveFn: request.resolveFn ?? publicResolve,
+  });
+}
 
 function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = "ok") {
   return vi.fn(async (url: string, init?: RequestInit) => {
@@ -111,56 +129,6 @@ describe("msteams attachment allowlists", () => {
       hostnameAllowlist: ["sharepoint.com", "*.sharepoint.com"],
     });
     expect(resolveMediaSsrfPolicy(["*"])).toBeUndefined();
-  });
-
-  it.each([
-    ["999.999.999.999", true],
-    ["256.0.0.1", true],
-    ["10.0.0.256", true],
-    ["-1.0.0.1", false],
-    ["1.2.3.4.5", false],
-    ["0:0:0:0:0:0:0:1", true],
-  ] as const)("malformed/expanded %s → %s (SDK fails closed)", (ip, expected) => {
-    expect(isPrivateOrReservedIP(ip)).toBe(expected);
-  });
-});
-
-// ─── resolveAndValidateIP ────────────────────────────────────────────────────
-
-describe("resolveAndValidateIP", () => {
-  it("accepts a hostname resolving to a public IP", async () => {
-    const ip = await resolveAndValidateIP("teams.sharepoint.com", publicResolve);
-    expect(ip).toBe("13.107.136.10");
-  });
-
-  it("rejects a hostname resolving to 10.x.x.x", async () => {
-    await expect(resolveAndValidateIP("evil.test", privateResolve("10.0.0.1"))).rejects.toThrow(
-      "private/reserved IP",
-    );
-  });
-
-  it("rejects a hostname resolving to 169.254.169.254", async () => {
-    await expect(
-      resolveAndValidateIP("evil.test", privateResolve("169.254.169.254")),
-    ).rejects.toThrow("private/reserved IP");
-  });
-
-  it("rejects a hostname resolving to loopback", async () => {
-    await expect(resolveAndValidateIP("evil.test", privateResolve("127.0.0.1"))).rejects.toThrow(
-      "private/reserved IP",
-    );
-  });
-
-  it("rejects a hostname resolving to IPv6 loopback", async () => {
-    await expect(resolveAndValidateIP("evil.test", privateResolve("::1"))).rejects.toThrow(
-      "private/reserved IP",
-    );
-  });
-
-  it("throws on DNS resolution failure", async () => {
-    await expect(resolveAndValidateIP("nonexistent.test", failingResolve)).rejects.toThrow(
-      "DNS resolution failed",
-    );
   });
 });
 
@@ -632,7 +600,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
-    expect(out).toStrictEqual([]);
+    expect(out).toStrictEqual([{ kind: "unavailable" }]);
   });
 
   it("accepts inline data images within limit", () => {
@@ -659,7 +627,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
-    expect(out).toStrictEqual([]);
+    expect(out).toStrictEqual([{ kind: "unavailable" }]);
   });
 
   it("enforces cumulative inline size limit across attachments", () => {
@@ -677,8 +645,9 @@ describe("msteams inline image limits", () => {
       maxInlineBytes: 10,
       maxInlineTotalBytes: 6,
     });
-    expect(out.length).toBe(1);
+    expect(out.length).toBe(2);
     expect(out[0]?.kind).toBe("data");
+    expect(out[1]).toStrictEqual({ kind: "unavailable" });
   });
 });
 

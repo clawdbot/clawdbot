@@ -13,9 +13,10 @@ import {
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 import {
   encodePluginModelCatalogRelativePath,
-  PLUGIN_MODEL_CATALOG_FILE,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
 } from "./plugin-model-catalog.js";
+
+const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 const planOpenClawModelsJsonMock = vi.fn();
 const writePrivateStoreTextWriteMock = vi.fn();

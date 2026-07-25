@@ -1,5 +1,6 @@
 // Coverage for timeout-triggered compaction and retry routing.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -13,6 +14,7 @@ import {
   mockedRunPostCompactionSideEffects,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  useOpenAIPlatformAuthFixture,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
@@ -21,6 +23,7 @@ let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 const useTwoAuthProfiles = () => {
   // Auth rotation assertions need deterministic profile order and API key
   // resolution across timeout compaction retries.
+  vi.stubEnv("ANTHROPIC_API_KEY", "");
   mockedResolveAuthProfileOrder.mockReturnValue(["profile-a", "profile-b"]);
   mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
     apiKey: `test-key-${profileId ?? "profile-a"}`,
@@ -54,6 +57,9 @@ type CompactRuntimeContext = {
   currentMessageId?: string;
   senderId?: string;
   authProfileId?: string;
+  provider?: string;
+  model?: string;
+  modelSelectionLocked?: boolean;
 };
 
 type CompactParams = {
@@ -164,7 +170,7 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactParams = compactCallAt(0);
     expect(compactParams.sessionId).toBe("test-session");
-    expect(compactParams.sessionFile).toBe("/tmp/session.json");
+    expect(compactParams.sessionFile).toBeUndefined();
     expect(compactParams.tokenBudget).toBe(200000);
     expect(compactParams.force).toBe(true);
     expect(compactParams.compactionTarget).toBe("budget");
@@ -180,6 +186,75 @@ describe("timeout-triggered compaction", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error).toBeUndefined();
     expect(result.meta.agentMeta?.compactionTokensAfter).toBe(80_000);
+  });
+
+  it("does not compact for a caller-owned timeout before attempt flags settle", async () => {
+    const controller = new AbortController();
+    const timeoutError = new Error("caller deadline elapsed");
+    timeoutError.name = "TimeoutError";
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      controller.abort(timeoutError);
+      return makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          usage: { input: 150000 },
+        } as never,
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      abortSignal: controller.signal,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.at(-1)?.text).toContain("timed out");
+  });
+
+  it("leaves timeout recovery to a forced unlocked Codex compaction owner", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({
+        timedOut: true,
+        lastAssistant: {
+          usage: { input: 150_000 },
+        } as never,
+      }),
+    );
+    const nativeCompact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      authBootstrap: "harness",
+      runAttempt: pluginRunAttempt,
+      compact: nativeCompact,
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      config: {
+        agents: { defaults: { agentRuntime: { id: "codex" } } },
+      },
+      runId: "forced-unlocked-codex-timeout-owner",
+    }).finally(() => {
+      clearAgentHarnesses();
+    });
+
+    expect(pluginRunAttempt).toHaveBeenCalledOnce();
+    expect(pluginRunAttempt.mock.calls[0]?.[0]).toMatchObject({ agentHarnessId: "codex" });
+    expect(pluginRunAttempt.mock.calls[0]?.[0].modelSelectionLocked).not.toBe(true);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(nativeCompact).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
   it("retries the prompt after successful timeout compaction", async () => {
@@ -223,6 +298,7 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("passes channel, thread, message, and sender context into timeout compaction", async () => {
+    useOpenAIPlatformAuthFixture();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -242,6 +318,8 @@ describe("timeout-triggered compaction", () => {
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
       messageChannel: "slack",
       messageProvider: "slack",
       agentAccountId: "acct-1",
@@ -249,6 +327,11 @@ describe("timeout-triggered compaction", () => {
       currentThreadTs: "thread-1",
       currentMessageId: "message-1",
       senderId: "sender-1",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
+      config: {
+        agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+      },
     });
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
@@ -260,6 +343,9 @@ describe("timeout-triggered compaction", () => {
     expect(compactParams.runtimeContext?.currentThreadTs).toBe("thread-1");
     expect(compactParams.runtimeContext?.currentMessageId).toBe("message-1");
     expect(compactParams.runtimeContext?.senderId).toBe("sender-1");
+    expect(compactParams.runtimeContext?.modelSelectionLocked).toBe(true);
+    expect(compactParams.runtimeContext?.provider).toBe("openai");
+    expect(compactParams.runtimeContext?.model).toBe("gpt-5.5");
   });
 
   it("falls through to normal handling when timeout compaction fails", async () => {
@@ -558,6 +644,14 @@ describe("timeout-triggered compaction", () => {
             usage: { input: 150000 },
           } as never,
         }),
+      )
+      // Normal failover gets one final attempt, but the compaction cap stays terminal.
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: { usage: { input: 150000 } } as never,
+        }),
       );
     mockedCompactDirect
       .mockResolvedValueOnce({
@@ -582,7 +676,9 @@ describe("timeout-triggered compaction", () => {
     expect(secondCompact.runtimeContext?.authProfileId).toBe("profile-b");
     expect(secondCompact.runtimeContext?.attempt).toBe(2);
     expect(secondCompact.runtimeContext?.maxAttempts).toBe(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    // After the compaction cap, normal failover gets one final un-compacted attempt.
+    expect(attemptCallAt(2).authProfileId).toBe("profile-a");
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
@@ -609,6 +705,13 @@ describe("timeout-triggered compaction", () => {
             usage: { input: 150000 },
           } as never,
         }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: { usage: { input: 150000 } } as never,
+        }),
       );
     mockedCompactDirect
       .mockRejectedValueOnce(new Error("engine crashed"))
@@ -617,9 +720,10 @@ describe("timeout-triggered compaction", () => {
     const result = await runEmbeddedAgent(overflowBaseRunParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
     expect(attemptCallAt(0).authProfileId).toBe("profile-a");
     expect(attemptCallAt(1).authProfileId).toBe("profile-b");
+    expect(attemptCallAt(2).authProfileId).toBe("profile-a");
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });

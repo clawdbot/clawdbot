@@ -16,8 +16,8 @@ const EMPTY_AUTH_STATUS: ModelAuthStatusResult = { ts: 0, providers: [] };
  * Excludes API-key-only providers — their credentials don't expire on a
  * schedule the dashboard can meaningfully monitor.
  *
- * Single source of truth for both the Overview card and the attention-items
- * panel. Keep the two in sync by always routing through this helper.
+ * Single source of truth for the chat composer and the sidebar attention
+ * chips. Keep consumers in sync by always routing through this helper.
  */
 export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
   if (p.status === "missing") {
@@ -31,9 +31,12 @@ export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
 
 export async function loadModelAuthStatus(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean },
+  opts?: { refresh?: boolean; agentId?: string },
 ): Promise<ModelAuthStatusResult> {
-  const params = opts?.refresh ? { refresh: true } : {};
+  const params = {
+    ...(opts?.refresh ? { refresh: true } : {}),
+    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+  };
   return (
     (await client.request<ModelAuthStatusResult>("models.authStatus", params)) ?? EMPTY_AUTH_STATUS
   );

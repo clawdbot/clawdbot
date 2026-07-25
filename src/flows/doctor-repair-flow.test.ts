@@ -1,9 +1,9 @@
 // Doctor repair flow tests cover repair plan output and repair execution.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
-import { defineSplitHealthCheck, normalizeHealthCheck } from "./health-check-adapter.js";
-import type { RunnableHealthCheck } from "./health-check-runner-types.js";
+import { normalizeHealthCheck } from "./health-check-adapter.js";
+import type { RunnableHealthCheck, SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthRepairContext } from "./health-checks.js";
 
 function ctx(cfg: OpenClawConfig): HealthRepairContext {
@@ -68,7 +68,7 @@ describe("runDoctorHealthRepairs", () => {
   it("repairs modern checks and threads updated config", async () => {
     const scopes: unknown[] = [];
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/repairable",
         kind: "core",
         description: "repairable",
@@ -107,34 +107,16 @@ describe("runDoctorHealthRepairs", () => {
   });
 
   it("keeps repairable out of split repair result types", () => {
-    const check = defineSplitHealthCheck({
-      id: "test/repair-result-status-boundary",
-      kind: "core",
-      description: "repair result status boundary",
-      async detect() {
-        return [
-          {
-            checkId: "test/repair-result-status-boundary",
-            severity: "warning",
-            message: "needs repair",
-          },
-        ];
-      },
-      // @ts-expect-error repairable is a run-result preview status, not a split repair result.
-      async repair() {
-        return {
-          status: "repairable",
-          changes: [],
-        };
-      },
-    });
-
-    expect(check.id).toBe("test/repair-result-status-boundary");
+    type SplitRepair = NonNullable<SplitHealthCheckInput["repair"]>;
+    expectTypeOf(async () => ({
+      status: "repairable" as const,
+      changes: [],
+    })).not.toMatchTypeOf<SplitRepair>();
   });
 
   it("leaves non-repairable checks for legacy doctor behavior", async () => {
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/legacy-only",
         kind: "core",
         description: "legacy only",
@@ -162,7 +144,7 @@ describe("runDoctorHealthRepairs", () => {
 
   it("keeps split check findings when repair throws", async () => {
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/repair-throws",
         kind: "core",
         description: "repair throws",
@@ -197,7 +179,7 @@ describe("runDoctorHealthRepairs", () => {
 
   it("reports repair validation findings that remain after repair", async () => {
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/not-fixed",
         kind: "core",
         description: "not fixed",
@@ -235,7 +217,7 @@ describe("runDoctorHealthRepairs", () => {
   it("validates successful repairs by default", async () => {
     let detectCalls = 0;
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/no-default-validation",
         kind: "core",
         description: "no default validation",
@@ -274,7 +256,7 @@ describe("runDoctorHealthRepairs", () => {
   it("does not validate skipped or failed repair results", async () => {
     let validationCalls = 0;
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/skipped",
         kind: "core",
         description: "skipped",
@@ -312,7 +294,7 @@ describe("runDoctorHealthRepairs", () => {
     const repairContexts: HealthRepairContext[] = [];
     let detectCalls = 0;
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/dry-run",
         kind: "core",
         description: "dry run",
@@ -374,7 +356,7 @@ describe("runDoctorHealthRepairs", () => {
   it("passes diff false and true through the repair API", async () => {
     const repairContexts: HealthRepairContext[] = [];
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/diff-preview",
         kind: "core",
         description: "diff preview",

@@ -20,7 +20,11 @@ Related: [Browser tool](/tools/browser)
 - `--timeout <ms>`: request timeout in ms (default: `30000`).
 - `--expect-final`: wait for a final Gateway response.
 - `--browser-profile <name>`: choose a browser profile (default: `openclaw`, or `browser.defaultProfile`).
-- `--json`: machine-readable output (where supported).
+- `--json`: machine-readable output (where supported). This is a browser-level option, so
+  place it before the subcommand for an unambiguous form, such as
+  `openclaw browser --json status`. Trailing placement such as
+  `openclaw browser status --json` also works when the selected child command does not
+  define its own `--json`.
 
 ## Quick start (local)
 
@@ -61,6 +65,11 @@ openclaw browser --browser-profile openclaw reset-profile
 ```
 
 - `doctor --deep` adds a live snapshot probe: useful when basic CDP readiness is green but you want proof the current tab can be inspected.
+- For a running local managed profile, `status` and `doctor` report cached
+  graphics diagnostics from Chrome: hardware/software classification, renderer,
+  backend, device/driver, feature and disabled-status details, and accelerated
+  video capabilities. `openclaw browser --json status` returns the full structured payload.
+  Passive status never launches Chrome just to collect these facts.
 - `stop` closes the active control session and clears temporary emulation overrides even for `attachOnly` and remote CDP profiles where OpenClaw did not launch the browser process itself. For local managed profiles, `stop` also stops the spawned browser process.
 - `start --headless` applies only to that start request, and only when OpenClaw launches a local managed browser. It does not rewrite `browser.headless` or profile config, and is a no-op for an already-running browser.
 - On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser.
@@ -91,6 +100,10 @@ Profiles are named browser routing configs:
 
 ```bash
 openclaw browser profiles
+openclaw browser system-profiles
+openclaw browser system-profiles --browser brave
+openclaw browser import-profile --browser chrome --system Default --into imported
+openclaw browser import-profile --system "Profile 1" --into work --domains google.com,youtube.com
 openclaw browser create-profile --name work --color "#FF5A36"
 openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser create-profile --name remote --cdp-url https://browser-host.example.com
@@ -98,6 +111,12 @@ openclaw browser delete-profile --name work
 ```
 
 Use a specific profile with `--browser-profile <name>` on any subcommand, for example `openclaw browser --browser-profile work tabs`.
+
+On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles available on the host. `import-profile` decrypts their cookies after one macOS Keychain/Touch ID consent prompt and injects them into a fresh OpenClaw-managed profile. It imports cookies only; local storage and IndexedDB are unchanged. Some Google sessions use device-bound session credentials (DBSC) and can still require re-authentication after import.
+
+When the macOS app uses a local Gateway, it can offer this import once and make the isolated imported profile the default for agent browsing. Import always requires an explicit click; successful import or dismissal suppresses later automatic prompts, and **Settings → General → Browser login** remains available for re-import.
+
+System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
 
 ## Tabs
 
@@ -178,6 +197,16 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 When an action opens a modal dialog, the action response returns `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 
+Batch actions:
+
+```bash
+openclaw browser batch --actions '[{"kind":"wait","timeMs":500},{"kind":"click","ref":"12"},{"kind":"type","ref":"23","text":"hello"}]'
+openclaw browser batch --actions-file plan.json
+openclaw browser batch --actions-file - --continue
+```
+
+`openclaw browser batch` sends a `kind="batch"` `/act` request with nested `BrowserActRequest` actions (`wait`, `click`, `type`, `evaluate`, ...) — not `open`/`navigate`/`snapshot`/`screenshot`, which are CLI subcommands, not `/act` kinds. `--continue` sets `stopOnError=false` (default stops on first error); `--target-id` scopes the whole batch to one tab. A failed nested action makes the command exit nonzero; use `--json` to retain the ordered `results` response. See [Browser batch CLI](/tools/browser-control#browser-batch-cli) for the full contract (ref lifecycle, target id conflicts, error summary). `batch` is not supported on `profile="user"` / existing-session profiles.
+
 ## State and storage
 
 Viewport + emulation:
@@ -236,11 +265,11 @@ The default existing-session path is host-only Chrome MCP auto-connect. If the b
 Current existing-session limits:
 
 - Snapshot-driven actions use refs, not CSS selectors.
-- `browser.actionTimeoutMs` defaults supported `act` requests to 60000 ms when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
+- Supported `act` requests use a built-in 60000 ms default when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
 - `click` is left-click only.
 - `type` does not support `slowly=true`.
 - `press` does not support `delayMs`.
-- `hover`, `scrollintoview`, `drag`, `select`, `fill`, and `evaluate` reject per-call timeout overrides.
+- `hover`, `scrollintoview`, `drag`, `select`, and `fill` reject per-call timeout overrides; `evaluate` accepts `--timeout-ms`.
 - `select` supports one value only.
 - `wait --load networkidle` is not supported (works on managed and raw/remote CDP profiles).
 - File uploads require `--ref` / `--input-ref`, do not support CSS `--element`, and support one file at a time.

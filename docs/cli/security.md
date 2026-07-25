@@ -50,8 +50,8 @@ Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then upd
 **Sandbox/tools**
 
 - Warns when sandbox Docker settings are configured while sandbox mode is off.
-- Warns when `gateway.nodes.denyCommands` uses ineffective pattern-like/unknown entries (matching is exact node command-name only, not shell-text filtering).
-- Warns when `gateway.nodes.allowCommands` explicitly enables dangerous node commands.
+- Warns when `gateway.nodes.commands.deny` uses ineffective pattern-like/unknown entries (matching is exact node command-name only, not shell-text filtering).
+- Warns when `gateway.nodes.commands.allow` explicitly enables dangerous node commands.
 - Warns when global `tools.profile="minimal"` is overridden by agent tool profiles.
 - Warns when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary.
 - Warns when open DMs or groups expose runtime/filesystem tools without sandbox/workspace guards.
@@ -124,7 +124,7 @@ Applies safe, deterministic remediations:
 - flips common `groupPolicy="open"` to `groupPolicy="allowlist"` (including account variants in supported channels)
 - when WhatsApp group policy flips to `allowlist`, seeds `groupAllowFrom` from the stored `allowFrom` file when that list exists and config does not already define `allowFrom`
 - sets `logging.redactSensitive` from `"off"` to `"tools"`
-- tightens permissions for state/config and common sensitive files (`credentials/*.json`, `auth-profiles.json`, `sessions.json`, session `*.jsonl`)
+- tightens permissions for state/config and common sensitive files (`credentials/*.json`, `auth-profiles.json`, `openclaw-agent.sqlite`, and legacy session artifacts)
 - also tightens config include files referenced from `openclaw.json`
 - uses `chmod` on POSIX hosts and `icacls` resets on Windows
 

@@ -8,7 +8,7 @@ import {
 import type { PluginManifestContractListKey } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
-export type ManifestContractRuntimePluginResolution = {
+type ManifestContractRuntimePluginResolution = {
   pluginIds: string[];
   bundledCompatPluginIds: string[];
 };

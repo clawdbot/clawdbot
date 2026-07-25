@@ -32,7 +32,7 @@ export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-
 export { isAbortRequestText } from "../auto-reply/reply/abort.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
 export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-export { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+export { finalizeInboundContextForSdk as finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -46,6 +46,7 @@ export {
   createReplyDispatcherWithTyping,
 } from "../auto-reply/reply/reply-dispatcher.js";
 export type {
+  ReplyDispatchBeforeDeliverOptions,
   ReplyDispatchKind,
   ReplyDispatcher,
   ReplyFollowupAdmissionBarrierTimeoutPolicy,

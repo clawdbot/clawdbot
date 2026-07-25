@@ -1,6 +1,7 @@
 // web_search late-binding tests cover runtime config and provider metadata
 // selection at execution time.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { createWebSearchTool } from "./web-search.js";
 
 const mocks = vi.hoisted(() => ({
@@ -52,6 +53,10 @@ describe("web_search late-bound runtime fallback", () => {
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue(null);
     mocks.getActiveSecretsRuntimeConfigSnapshot.mockReset();
     mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    setActiveDegradedSecretOwners([]);
   });
 
   it("falls back to options.runtimeWebSearch when active runtime web tools metadata is absent", async () => {
@@ -169,6 +174,32 @@ describe("web_search late-bound runtime fallback", () => {
     await expect(tool?.execute("call-search", { query: "openclaw" }, undefined)).rejects.toThrow(
       "web_search is disabled.",
     );
+    expect(mocks.runWebSearch).not.toHaveBeenCalled();
+  });
+
+  it("returns typed unavailability for only the isolated search provider", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "web-search:brave",
+        state: "unavailable",
+        paths: ["plugins.entries.brave.config.webSearch.apiKey"],
+        refKeys: ["env:default:MISSING_BRAVE_KEY"],
+        reason: "missing test ref",
+      },
+    ]);
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "brave" } } } },
+    });
+
+    await expect(
+      tool?.execute("call-search", { query: "openclaw" }, undefined),
+    ).rejects.toMatchObject({
+      name: "SecretSurfaceUnavailableError",
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId: "web-search:brave",
+    });
     expect(mocks.runWebSearch).not.toHaveBeenCalled();
   });
 });

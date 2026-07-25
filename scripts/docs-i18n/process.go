@@ -128,6 +128,7 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 		"provider":            docsI18nProvider(),
 		"model":               docsI18nModel(),
 		"workflow":            workflowVersion,
+		"prompt_version":      promptVersion,
 		"generated_at":        time.Now().UTC().Format(time.RFC3339),
 		"postprocess_version": localizedLinkPostprocessPending,
 	}

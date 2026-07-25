@@ -1,10 +1,8 @@
-// Per-(account, database) high-water of the last dispatched chat.db rowid. On
-// startup it is passed to imsg `watch.subscribe` as `since_rowid` so imsg
-// replays the rows that landed while the gateway was down (downtime recovery),
-// then tails live. The GUID dedupe makes over-replay safe — anything already
-// handled is dropped — so this needs none of the cursor/retry bookkeeping the
-// old catchup subsystem carried. The database identity is part of the store key
-// (not just a number per account): a high-water from one chat.db must never seed
+// Per-(account, database) high-water of the last durably admitted chat.db rowid.
+// It advances only after the SQLite ingress enqueue, then seeds `since_rowid`
+// on startup. GUID-keyed ingress tombstones make over-replay safe, while rows
+// journaled before a crash resume from the queue. The store key also includes
+// the database identity: a high-water from one chat.db must never seed
 // since_rowid for a different one, or repointing `dbPath`/`remoteHost` to a
 // lower-rowid database silently suppresses every row in it forever (#99638).
 import { createHash } from "node:crypto";
@@ -12,8 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { getIMessageRuntime } from "../runtime.js";
 
-export const IMESSAGE_RECOVERY_CURSOR_NAMESPACE = "imessage.recovery-cursor";
-export const IMESSAGE_RECOVERY_CURSOR_MAX_ENTRIES = 64;
+const IMESSAGE_RECOVERY_CURSOR_NAMESPACE = "imessage.recovery-cursor";
+const IMESSAGE_RECOVERY_CURSOR_MAX_ENTRIES = 64;
 
 // Retired catchup cursor, seeded into the recovery cursor once on upgrade (see
 // loadIMessageRecoveryCursor) so a user who had catchup enabled still recovers
@@ -149,9 +147,9 @@ function migrateLegacyCatchupCursor(accountId: string, dbIdentity: string): numb
 }
 
 /**
- * Last dispatched rowid for this account on `dbIdentity`, or null when none is
- * recorded yet (including when the only stored cursor belongs to a different
- * database).
+ * Last durably admitted rowid for this account on `dbIdentity`, or null when
+ * none is recorded yet (including when the only stored cursor belongs to a
+ * different database).
  */
 export function loadIMessageRecoveryCursor(
   accountId: string,
@@ -187,6 +185,6 @@ export function advanceIMessageRecoveryCursor(
     store.register(key, { lastRowid: rowid });
   } catch {
     // Best effort: a failed cursor write just means we replay a little more
-    // next startup, which the dedupe absorbs.
+    // next startup, which durable ingress tombstones reject by GUID.
   }
 }

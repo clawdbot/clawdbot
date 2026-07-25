@@ -1,0 +1,12 @@
+{"seq":1,"at":0,"dir":"out","kind":"sendChatAction","data":{"payload":{"action":"typing"},"result":true,"target":"4242"}}
+{"seq":2,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":3,"at":0,"dir":"out","kind":"sendChatAction","data":{"payload":{"action":"typing"},"result":true,"target":"4242"}}
+{"seq":4,"at":0,"dir":"in","kind":"partial","data":{"text":"Collecting logs"}}
+{"seq":5,"at":300,"dir":"in","kind":"wire-fault","data":{"fault":"rate-limit","retryAfterMs":1000}}
+{"seq":6,"at":300,"dir":"in","kind":"partial","data":{"text":"Collecting logs from the gateway."}}
+{"seq":7,"at":300,"dir":"out","kind":"sendMessage","data":{"payload":{"parse_mode":"HTML","reply_parameters":{"allow_sending_without_reply":true,"message_id":1},"text":"Collecting logs from the gateway."},"result":{"message_id":1001},"target":"4242"}}
+{"seq":8,"at":1400,"dir":"in","kind":"partial","data":{"text":"Collecting logs from the gateway. Found the failure."}}
+{"seq":9,"at":1400,"dir":"out","kind":"editMessageText","data":{"payload":{"message_id":1001,"parse_mode":"HTML","text":"Collecting logs from the gateway. Found the failure."},"result":{"error_code":429,"parameters":{"retry_after":1}},"target":"4242"}}
+{"seq":10,"at":1700,"dir":"in","kind":"final","data":{"text":"Collecting logs from the gateway. Found the failure."}}
+{"seq":11,"at":1700,"dir":"in","kind":"idle"}
+{"seq":12,"at":2400,"dir":"out","kind":"editMessageText","data":{"payload":{"message_id":1001,"parse_mode":"HTML","text":"Collecting logs from the gateway. Found the failure."},"result":true,"target":"4242"}}

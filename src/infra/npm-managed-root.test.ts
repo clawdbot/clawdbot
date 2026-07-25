@@ -230,7 +230,7 @@ describe("managed npm root", () => {
       packageName: "@openclaw/feishu",
       dependencySpec: "2026.5.4",
       managedOverrides: {
-        axios: "1.16.0",
+        axios: "1.18.0",
         "node-domexception": "npm:@nolyfill/domexception@1.0.28",
         nested: {
           semver: "1.2.3",
@@ -249,7 +249,7 @@ describe("managed npm root", () => {
       },
       overrides: {
         "left-pad": "1.3.0",
-        axios: "1.16.0",
+        axios: "1.18.0",
         "node-domexception": "npm:@nolyfill/domexception@1.0.28",
         nested: {
           alias: "npm:@scope/alias@1.0.0",
@@ -271,7 +271,7 @@ describe("managed npm root", () => {
       dependencySpec: "2026.5.4",
       omitUnsupportedManagedOverrides: true,
       managedOverrides: {
-        axios: "1.16.0",
+        axios: "1.18.0",
         "node-domexception": "npm:@nolyfill/domexception@1.0.28",
         nested: {
           alias: "npm:@scope/alias@1.0.0",
@@ -284,7 +284,7 @@ describe("managed npm root", () => {
       fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
     ).resolves.toMatchObject({
       overrides: {
-        axios: "1.16.0",
+        axios: "1.18.0",
         nested: {
           semver: "1.2.3",
         },
@@ -351,7 +351,7 @@ describe("managed npm root", () => {
       dependencySpec: "2.0.0",
       managedOverrides: {
         "pinned-package": "1.0.0",
-        axios: "1.16.0",
+        axios: "1.18.0",
       },
     });
 
@@ -363,7 +363,7 @@ describe("managed npm root", () => {
         "pinned-package": "2.0.0",
       },
       overrides: {
-        axios: "1.16.0",
+        axios: "1.18.0",
       },
       openclaw: {
         managedOverrides: ["axios"],
@@ -537,7 +537,7 @@ describe("managed npm root", () => {
     const expectedOverrides = workspace.overrides ?? {};
 
     expect(expectedOverrides).toMatchObject({
-      axios: "1.16.0",
+      axios: "1.18.1",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     });
     await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual(expectedOverrides);
@@ -558,7 +558,7 @@ describe("managed npm root", () => {
     );
     await fs.writeFile(
       path.join(packageRoot, "pnpm-workspace.yaml"),
-      "overrides:\n  axios: 1.16.0\n",
+      "overrides:\n  axios: 1.18.0\n",
     );
 
     await expect(
@@ -567,7 +567,7 @@ describe("managed npm root", () => {
         cwd: path.join(packageRoot, "dist"),
       }),
     ).resolves.toEqual({
-      axios: "1.16.0",
+      axios: "1.18.0",
     });
   });
 
@@ -598,7 +598,7 @@ describe("managed npm root", () => {
         "  nested:",
         '    optional-runtime: "$optional-runtime"',
         '    alias: "$node-domexception"',
-        "  axios: 1.16.0",
+        "  axios: 1.18.0",
         '  node-domexception: "$node-domexception"',
         "",
       ].join("\n"),
@@ -610,7 +610,7 @@ describe("managed npm root", () => {
         "optional-runtime": "2.0.0",
         alias: "npm:@nolyfill/domexception@1.0.28",
       },
-      axios: "1.16.0",
+      axios: "1.18.0",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     });
   });
@@ -1580,3 +1580,4 @@ describe("managed npm root", () => {
     await expectPathMissing(path.join(npmRoot, "node_modules", ".package-lock.json"));
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

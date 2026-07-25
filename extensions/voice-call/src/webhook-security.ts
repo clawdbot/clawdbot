@@ -127,15 +127,13 @@ function extractHostname(hostHeader: string): string | null {
     return null;
   }
 
-  let hostname: string;
-
   // Handle IPv6 addresses: [::1]:8080
   if (hostHeader.startsWith("[")) {
     const endBracket = hostHeader.indexOf("]");
     if (endBracket === -1) {
       return null; // Malformed IPv6
     }
-    hostname = hostHeader.slice(1, endBracket);
+    const hostname = hostHeader.slice(1, endBracket);
     return normalizeLowercaseStringOrEmpty(hostname);
   }
 
@@ -145,10 +143,10 @@ function extractHostname(hostHeader: string): string | null {
     return null; // Reject potential injection: attacker.com:80@legitimate.com
   }
 
-  hostname = hostHeader.split(":")[0];
+  const hostname = hostHeader.split(":").at(0);
 
   // Validate the extracted hostname
-  if (!isValidHostname(hostname)) {
+  if (!hostname || !isValidHostname(hostname)) {
     return null;
   }
 
@@ -721,8 +719,11 @@ function toParamMapFromSearchParams(sp: URLSearchParams): PlivoParamMap {
 
 function sortedQueryString(params: PlivoParamMap): string {
   const parts: string[] = [];
-  for (const key of Object.keys(params).toSorted()) {
-    const values = [...params[key]].toSorted();
+  const entries = Object.entries(params).toSorted(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  for (const [key, entryValues] of entries) {
+    const values = [...entryValues].toSorted();
     for (const value of values) {
       parts.push(`${key}=${value}`);
     }
@@ -732,8 +733,11 @@ function sortedQueryString(params: PlivoParamMap): string {
 
 function sortedParamsString(params: PlivoParamMap): string {
   const parts: string[] = [];
-  for (const key of Object.keys(params).toSorted()) {
-    const values = [...params[key]].toSorted();
+  const entries = Object.entries(params).toSorted(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  for (const [key, entryValues] of entries) {
+    const values = [...entryValues].toSorted();
     for (const value of values) {
       parts.push(`${key}${value}`);
     }
@@ -865,7 +869,6 @@ export function verifyPlivoWebhook(
     try {
       const req = new URL(reconstructed);
       const base = new URL(options.publicUrl);
-      base.pathname = req.pathname;
       base.search = req.search;
       verificationUrl = base.toString();
     } catch {

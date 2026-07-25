@@ -25,11 +25,34 @@ import {
 import { OPENAI_ACCOUNT_WIZARD_GROUP, OPENAI_API_KEY_LABEL } from "./auth-choice-copy.js";
 import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
-  isOpenAIApiBaseUrl,
+  classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
+  isOpenAIHttpsApiBaseUrl,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
-import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import {
+  applyOpenAIConfig,
+  OPENAI_CODEX_DEFAULT_MODEL,
+  OPENAI_DEFAULT_MODEL,
+} from "./default-models.js";
+import {
+  OPENAI_CHAT_LATEST_MODEL_ID,
+  OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
+  OPENAI_GPT_54_MINI_MODEL_ID,
+  OPENAI_GPT_54_MODEL_ID,
+  OPENAI_GPT_54_NANO_MODEL_ID,
+  OPENAI_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_56_LUNA_MODEL_ID,
+  OPENAI_GPT_56_MODEL_ID,
+  OPENAI_GPT_56_SOL_MODEL_ID,
+  OPENAI_GPT_56_TERRA_MODEL_ID,
+  OPENAI_PROVIDER_MODERN_MODEL_IDS,
+  isOpenAIPlatformOnlyRouteModelId,
+  isOpenAISubscriptionOnlyRouteModelId,
+  normalizeOpenAIModelRouteId,
+} from "./model-route-contract.js";
 import {
   buildOpenAIChatGPTAuthMethods,
   buildOpenAICodexProviderHooks,
@@ -41,29 +64,34 @@ import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
   matchesExactOrPrefix,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
+
+// OpenAI-native error codes stay with the OpenAI provider hook.
+function classifyOpenAiFailoverCode(code: string | undefined) {
+  switch (code?.trim().toUpperCase()) {
+    case "SERVER_ERROR":
+      return "server_error" as const;
+    case "INSUFFICIENT_QUOTA":
+      return "billing" as const;
+    default:
+      return undefined;
+  }
+}
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
-const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=1.0.0`;
+// Keep synchronized with extensions/codex's exact @openai/codex dependency;
+// the provider contract test fails when that managed-runtime pin changes.
+const OPENAI_CODEX_CLIENT_VERSION = "0.145.0";
+const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
-const OPENAI_CHAT_LATEST_MODEL_ID = "chat-latest";
-const OPENAI_GPT_56_SOL_MODEL_ID = "gpt-5.6-sol";
-const OPENAI_GPT_56_TERRA_MODEL_ID = "gpt-5.6-terra";
-const OPENAI_GPT_56_LUNA_MODEL_ID = "gpt-5.6-luna";
-const OPENAI_GPT_55_MODEL_ID = "gpt-5.5";
-const OPENAI_GPT_55_PRO_MODEL_ID = "gpt-5.5-pro";
-const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
-const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
-const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
-const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
-const OPENAI_GPT_53_CODEX_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-const OPENAI_GPT_56_CONTEXT_TOKENS = 372_000;
-const OPENAI_GPT_55_CONTEXT_WINDOW = 1_000_000;
-const OPENAI_GPT_55_CONTEXT_TOKENS = 272_000;
-const OPENAI_GPT_55_PRO_CONTEXT_TOKENS = 1_000_000;
+const OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW = 1_050_000;
+const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
+const OPENAI_GPT_55_CONTEXT_WINDOW = 1_050_000;
+const OPENAI_GPT_55_PRO_CONTEXT_WINDOW = 1_050_000;
 const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
@@ -121,23 +149,10 @@ const OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS = [
 ] as const;
 const OPENAI_GPT_56_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_MODEL_ID] as const;
 const OPENAI_GPT_56_THINKING_LEVEL_MAP = {
-  off: null,
+  off: "none",
   xhigh: "xhigh",
   max: "max",
 } as const;
-const OPENAI_MODERN_MODEL_IDS = [
-  OPENAI_CHAT_LATEST_MODEL_ID,
-  OPENAI_GPT_56_SOL_MODEL_ID,
-  OPENAI_GPT_56_TERRA_MODEL_ID,
-  OPENAI_GPT_56_LUNA_MODEL_ID,
-  OPENAI_GPT_55_MODEL_ID,
-  OPENAI_GPT_55_PRO_MODEL_ID,
-  OPENAI_GPT_54_MODEL_ID,
-  OPENAI_GPT_54_PRO_MODEL_ID,
-  OPENAI_GPT_54_MINI_MODEL_ID,
-  OPENAI_GPT_54_NANO_MODEL_ID,
-  OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
-] as const;
 const OPENAI_UNKNOWN_MODEL_COST = {
   input: 0,
   output: 0,
@@ -160,7 +175,7 @@ type BuildOpenAILiveProviderConfigParams = {
 };
 
 function shouldFetchOpenAILiveModels(baseUrl: string): boolean {
-  return /^https:/i.test(baseUrl) && isOpenAIApiBaseUrl(baseUrl);
+  return isOpenAIHttpsApiBaseUrl(baseUrl);
 }
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
@@ -171,7 +186,7 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   );
 }
 
-export async function buildOpenAILiveProviderConfig(
+async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<ModelProviderConfig> {
   const baseUrl =
@@ -238,14 +253,14 @@ function readCodexModelStringArray(row: unknown, keys: readonly string[]): reado
   return [];
 }
 
-function readCodexReasoningLevels(row: unknown): readonly string[] {
+function readCodexReasoningLevels(row: unknown): readonly string[] | undefined {
   if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return [];
+    return undefined;
   }
   const record = row as Record<string, unknown>;
   const value = record.supported_reasoning_levels ?? record.supportedReasoningLevels;
   if (!Array.isArray(value)) {
-    return [];
+    return undefined;
   }
   return value.flatMap((entry) => {
     if (typeof entry === "string" && entry.trim().length > 0) {
@@ -315,11 +330,52 @@ function resolveCodexModelInput(
   return input.size > 0 ? [...input] : (fallback?.input ?? ["text", "image"]);
 }
 
+function normalizeOpenAICodexCatalogModel(
+  model: ModelDefinitionConfig,
+): ModelDefinitionConfig | undefined {
+  const modelId = normalizeLowercaseStringOrEmpty(model.id);
+  if (modelId === OPENAI_GPT_56_MODEL_ID) {
+    return undefined;
+  }
+  if (
+    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
+    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
+    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
+  ) {
+    const supportsNativeUltra =
+      modelId === OPENAI_GPT_56_SOL_MODEL_ID || modelId === OPENAI_GPT_56_TERRA_MODEL_ID;
+    const supportedReasoningEfforts = model.compat?.supportedReasoningEfforts
+      ? [
+          ...new Set([
+            ...model.compat.supportedReasoningEfforts.filter((effort) => effort !== "none"),
+            ...(supportsNativeUltra ? (["ultra"] as const) : []),
+          ]),
+        ]
+      : undefined;
+    return {
+      ...model,
+      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_WINDOW,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+      thinkingLevelMap: { ...model.thinkingLevelMap, off: null },
+      ...(model.compat
+        ? {
+            compat: {
+              ...model.compat,
+              ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
+            },
+          }
+        : {}),
+    };
+  }
+  return model;
+}
+
 function resolveCodexModelFallback(modelId: string): ModelDefinitionConfig | undefined {
-  return OPENAI_MANIFEST_PROVIDER.models.find(
-    (model) =>
-      normalizeLowercaseStringOrEmpty(model.id) === normalizeLowercaseStringOrEmpty(modelId),
+  const fallbackModel = OPENAI_MANIFEST_PROVIDER.models.find(
+    (candidate) =>
+      normalizeLowercaseStringOrEmpty(candidate.id) === normalizeLowercaseStringOrEmpty(modelId),
   );
+  return fallbackModel ? normalizeOpenAICodexCatalogModel(fallbackModel) : undefined;
 }
 
 function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
@@ -330,13 +386,24 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
   if (!modelId) {
     return undefined;
   }
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   const fallback = resolveCodexModelFallback(modelId);
   const reasoningLevels = readCodexReasoningLevels(row);
-  const contextTokens = readCodexModelPositiveInteger(row, ["context_window", "contextWindow"]);
+  const observedContextTokens = readCodexModelPositiveInteger(row, [
+    "context_window",
+    "contextWindow",
+  ]);
+  const isGpt56Model = matchesExactOrPrefix(normalizedModelId, [OPENAI_GPT_56_MODEL_ID]);
+  const contextTokens = isGpt56Model
+    ? Math.min(
+        observedContextTokens ?? fallback?.contextTokens ?? OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+        OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+      )
+    : observedContextTokens;
   const contextWindow =
     readCodexModelPositiveInteger(row, ["max_context_window", "maxContextWindow"]) ??
     fallback?.contextWindow ??
-    contextTokens ??
+    observedContextTokens ??
     DEFAULT_CONTEXT_TOKENS;
   const maxTokens =
     readCodexModelPositiveInteger(row, [
@@ -348,7 +415,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     fallback?.maxTokens ??
     OPENAI_GPT_54_MAX_TOKENS;
   const compat =
-    reasoningLevels.length > 0
+    reasoningLevels !== undefined
       ? {
           ...fallback?.compat,
           supportsReasoningEffort: true,
@@ -356,10 +423,10 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
         }
       : fallback?.compat;
   const thinkingLevelMap = {
-    ...fallback?.thinkingLevelMap,
-    ...(normalizeLowercaseStringOrEmpty(modelId).startsWith("gpt-5.6") ? { off: null } : {}),
-    ...(reasoningLevels.includes("xhigh") ? { xhigh: "xhigh" as const } : {}),
-    ...(reasoningLevels.includes("max") ? { max: "max" as const } : {}),
+    ...(reasoningLevels === undefined ? fallback?.thinkingLevelMap : {}),
+    ...(normalizedModelId.startsWith("gpt-5.6") ? { off: null } : {}),
+    ...(reasoningLevels?.includes("xhigh") ? { xhigh: "xhigh" as const } : {}),
+    ...(reasoningLevels?.includes("max") ? { max: "max" as const } : {}),
   };
 
   return {
@@ -367,7 +434,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     name: readCodexModelString(row, "display_name") ?? fallback?.name ?? modelId,
     api: "openai-chatgpt-responses",
     baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
-    reasoning: reasoningLevels.length > 0 || fallback?.reasoning || false,
+    reasoning: (reasoningLevels?.length ?? 0) > 0 || fallback?.reasoning || false,
     input: resolveCodexModelInput(row, fallback),
     cost: fallback?.cost ?? OPENAI_UNKNOWN_MODEL_COST,
     contextWindow,
@@ -386,11 +453,20 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
     baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
     api: "openai-chatgpt-responses",
     auth: "oauth",
-    models: OPENAI_MANIFEST_PROVIDER.models,
+    models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
+      const modelId = normalizeLowercaseStringOrEmpty(model.id);
+      // Static OAuth rows are offline hints, not entitlement claims. Keep only
+      // the proven GPT-5.6 subscription route; live discovery may add others.
+      if (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID) {
+        return [];
+      }
+      const normalized = normalizeOpenAICodexCatalogModel(model);
+      return normalized ? [normalized] : [];
+    }),
   };
 }
 
-export async function buildOpenAICodexLiveProviderConfig(params: {
+async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
@@ -423,6 +499,9 @@ export async function buildOpenAICodexLiveProviderConfig(params: {
       .map(buildOpenAICodexModelFromLiveRow)
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
     if (models.length > 0) {
+      // Successful Codex OAuth discovery is account-scoped and authoritative
+      // for the picker/list catalog. Do not merge static OpenAI fallback rows
+      // into a successful live catalog.
       return {
         baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
         api: "openai-chatgpt-responses",
@@ -456,17 +535,95 @@ function resolveOpenAICatalogBaseUrl(ctx: {
 
 function shouldUseOpenAIResponsesTransport(params: {
   provider: string;
+  modelId?: string;
   api?: string | null;
   baseUrl?: string;
+  config?: { models?: { providers?: Record<string, ModelProviderConfig | undefined> } };
 }): boolean {
   if (params.api !== "openai-completions") {
     return false;
   }
   const isOwnerProvider = normalizeProviderId(params.provider) === PROVIDER_ID;
+  const isPlatformEndpoint =
+    typeof params.baseUrl === "string" && classifyOpenAIBaseUrl(params.baseUrl) === "platform";
   if (isOwnerProvider) {
-    return !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl);
+    if (resolveAuthoredOpenAICompletionsRoute(params)) {
+      return false;
+    }
+    return !params.baseUrl || isPlatformEndpoint;
   }
-  return typeof params.baseUrl === "string" && isOpenAIApiBaseUrl(params.baseUrl);
+  return isPlatformEndpoint;
+}
+
+/** Resolves the effective authored OpenAI config route for one model. */
+function resolveAuthoredOpenAIConfigRoute(params: {
+  provider: string;
+  modelId?: string;
+  config?: { models?: { providers?: Record<string, ModelProviderConfig | undefined> } };
+}):
+  | { configuredModel?: ModelDefinitionConfig; configuredProvider: ModelProviderConfig }
+  | undefined {
+  if (normalizeProviderId(params.provider) !== PROVIDER_ID) {
+    return undefined;
+  }
+  const providers = Object.entries(params.config?.models?.providers ?? {});
+  const requestedProvider = params.provider.trim();
+  const providerKey =
+    providers.find(([providerId]) => providerId.trim() === requestedProvider)?.[0].trim() ??
+    providers.find(([providerId]) => normalizeProviderId(providerId) === PROVIDER_ID)?.[0].trim();
+  let providerConfig: ModelProviderConfig | undefined;
+  for (const [providerId, candidate] of providers) {
+    if (providerId.trim() !== providerKey || !candidate) {
+      continue;
+    }
+    providerConfig = providerConfig
+      ? {
+          ...providerConfig,
+          ...candidate,
+          models: candidate.models ?? providerConfig.models,
+        }
+      : candidate;
+  }
+  if (!providerConfig) {
+    return undefined;
+  }
+  const modelId = normalizeOpenAIModelRouteId(params.modelId);
+  let modelConfig: ModelDefinitionConfig | undefined;
+  for (const model of providerConfig.models ?? []) {
+    if (normalizeOpenAIModelRouteId(model.id) !== modelId) {
+      continue;
+    }
+    // Match config normalization: the first row stays authoritative while
+    // later duplicate rows fill fields the first row omitted.
+    modelConfig = modelConfig ? { ...model, ...modelConfig } : model;
+  }
+  return {
+    ...(modelConfig ? { configuredModel: modelConfig } : {}),
+    configuredProvider: providerConfig,
+  };
+}
+
+/** Authored Completions is a current transport contract; only catalog defaults are upgraded. */
+function resolveAuthoredOpenAICompletionsRoute(params: {
+  provider: string;
+  modelId?: string;
+  config?: { models?: { providers?: Record<string, ModelProviderConfig | undefined> } };
+}): { api: "openai-completions"; baseUrl: string } | undefined {
+  const configuredRoute = resolveAuthoredOpenAIConfigRoute(params);
+  if (!configuredRoute) {
+    return undefined;
+  }
+  const effectiveApi =
+    normalizeOptionalString(configuredRoute.configuredModel?.api) ??
+    normalizeOptionalString(configuredRoute.configuredProvider.api);
+  if (effectiveApi !== "openai-completions") {
+    return undefined;
+  }
+  const baseUrl =
+    normalizeOptionalString(configuredRoute.configuredModel?.baseUrl) ??
+    normalizeOptionalString(configuredRoute.configuredProvider.baseUrl) ??
+    resolveOpenAIDefaultBaseUrl(process.env);
+  return { api: "openai-completions", baseUrl };
 }
 
 function isOpenAIProvider(provider: string | undefined): boolean {
@@ -474,11 +631,19 @@ function isOpenAIProvider(provider: string | undefined): boolean {
   return normalized === PROVIDER_ID;
 }
 
-function normalizeOpenAITransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
+function normalizeOpenAITransport(
+  model: ProviderRuntimeModel,
+  context?: {
+    modelId?: string;
+    config?: { models?: { providers?: Record<string, ModelProviderConfig | undefined> } };
+  },
+): ProviderRuntimeModel {
   const useResponsesTransport = shouldUseOpenAIResponsesTransport({
     provider: model.provider,
+    modelId: context?.modelId,
     api: model.api,
     baseUrl: model.baseUrl,
+    config: context?.config,
   });
 
   if (!useResponsesTransport) {
@@ -502,19 +667,10 @@ function shouldUseCodexResponsesHooks(params: {
   return typeof params.baseUrl === "string" && isOpenAICodexBaseUrl(params.baseUrl);
 }
 
-function resolveConfiguredAuthTransport(
-  ctx: Pick<
-    ProviderResolveDynamicModelContext,
-    "authProfileId" | "authProfileMode" | "config" | "providerConfig"
-  >,
+function resolveConfiguredProviderAuthTransport(
+  providerConfig: ProviderResolveDynamicModelContext["providerConfig"],
 ) {
-  if (ctx.authProfileMode === "oauth" || ctx.authProfileMode === "token") {
-    return "codex";
-  }
-  if (ctx.authProfileMode === "api_key" || ctx.authProfileMode === "aws-sdk") {
-    return "responses";
-  }
-  const authMode = ctx.providerConfig?.auth;
+  const authMode = providerConfig?.auth;
   if (authMode === "oauth" || authMode === "token") {
     return "codex";
   }
@@ -522,28 +678,6 @@ function resolveConfiguredAuthTransport(
     return "responses";
   }
 
-  const auth = ctx.config?.auth;
-  const profiles = auth?.profiles ?? {};
-  const orderedProfileIds = auth?.order?.[PROVIDER_ID] ?? [];
-  for (const profileId of orderedProfileIds) {
-    const mode = profiles[profileId]?.mode;
-    if (mode === "oauth" || mode === "token") {
-      return "codex";
-    }
-    if (mode === "api_key") {
-      return "responses";
-    }
-  }
-
-  const providerModes = Object.values(profiles)
-    .filter((profile) => normalizeProviderId(profile.provider) === PROVIDER_ID)
-    .map((profile) => profile.mode);
-  if (providerModes.some((mode) => mode === "oauth" || mode === "token")) {
-    return "codex";
-  }
-  if (providerModes.includes("api_key")) {
-    return "responses";
-  }
   return undefined;
 }
 
@@ -557,12 +691,21 @@ function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelC
   ) {
     return true;
   }
-  if (ctx.providerConfig?.baseUrl && !isOpenAIApiBaseUrl(ctx.providerConfig.baseUrl)) {
+  if (
+    ctx.providerConfig?.api === "openai-responses" ||
+    ctx.providerConfig?.api === "openai-completions" ||
+    (ctx.providerConfig?.baseUrl && !isOpenAICodexBaseUrl(ctx.providerConfig.baseUrl))
+  ) {
     return false;
   }
-  const authTransport = resolveConfiguredAuthTransport(ctx);
-  if (authTransport) {
-    return authTransport === "codex";
+  // The auth planner owns profile ordering and projects the selected physical
+  // route into providerConfig before materialization. Until then, only a
+  // one-route model contract may choose a transport.
+  if (isOpenAIPlatformOnlyRouteModelId(ctx.modelId)) {
+    return false;
+  }
+  if (isOpenAISubscriptionOnlyRouteModelId(ctx.modelId)) {
+    return true;
   }
   return ctx.agentRuntimeId === "codex";
 }
@@ -593,13 +736,14 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
     };
   } else if (
+    lower === OPENAI_GPT_56_MODEL_ID ||
     lower === OPENAI_GPT_56_SOL_MODEL_ID ||
     lower === OPENAI_GPT_56_TERRA_MODEL_ID ||
     lower === OPENAI_GPT_56_LUNA_MODEL_ID
   ) {
     templateIds = OPENAI_GPT_56_TEMPLATE_MODEL_IDS;
     const cost =
-      lower === OPENAI_GPT_56_SOL_MODEL_ID
+      lower === OPENAI_GPT_56_MODEL_ID || lower === OPENAI_GPT_56_SOL_MODEL_ID
         ? OPENAI_GPT_56_SOL_COST
         : lower === OPENAI_GPT_56_TERRA_MODEL_ID
           ? OPENAI_GPT_56_TERRA_COST
@@ -611,8 +755,8 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       reasoning: true,
       input: ["text", "image"],
       cost,
-      contextWindow: OPENAI_GPT_56_CONTEXT_TOKENS,
-      contextTokens: OPENAI_GPT_56_CONTEXT_TOKENS,
+      contextWindow: OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
       thinkingLevelMap: OPENAI_GPT_56_THINKING_LEVEL_MAP,
     };
@@ -627,7 +771,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       mediaInput: OPENAI_GPT_55_MEDIA_INPUT,
       cost: OPENAI_GPT_55_COST,
       contextWindow: OPENAI_GPT_55_CONTEXT_WINDOW,
-      contextTokens: OPENAI_GPT_55_CONTEXT_TOKENS,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
     };
   } else if (lower === OPENAI_GPT_55_PRO_MODEL_ID) {
@@ -639,7 +783,8 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_55_PRO_COST,
-      contextWindow: OPENAI_GPT_55_PRO_CONTEXT_TOKENS,
+      contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
     };
   } else if (lower === OPENAI_GPT_54_MODEL_ID) {
@@ -736,6 +881,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         promptMessage: "Enter OpenAI API key",
         profileId: "openai:api-key",
         defaultModel: OPENAI_DEFAULT_MODEL,
+        preserveExistingPrimary: true,
         expectedProviders: ["openai"],
         applyConfig: (cfg) => applyOpenAIConfig(cfg),
         wizard: {
@@ -824,6 +970,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
       if (!isOpenAIProvider(ctx.provider)) {
         return undefined;
       }
+      const authoredCompletionsRoute = resolveAuthoredOpenAICompletionsRoute(ctx);
+      if (authoredCompletionsRoute) {
+        return { ...ctx.model, ...authoredCompletionsRoute };
+      }
       if (
         shouldUseCodexResponsesHooks({
           provider: ctx.provider,
@@ -833,9 +983,16 @@ export function buildOpenAIProvider(): ProviderPlugin {
       ) {
         return codexHooks.normalizeResolvedModel?.(ctx);
       }
-      return normalizeOpenAITransport(ctx.model);
+      return normalizeOpenAITransport(ctx.model, ctx);
     },
     normalizeTransport: (ctx) => {
+      const authoredCompletionsRoute = resolveAuthoredOpenAICompletionsRoute(ctx);
+      if (authoredCompletionsRoute) {
+        return ctx.api === authoredCompletionsRoute.api &&
+          ctx.baseUrl === authoredCompletionsRoute.baseUrl
+          ? undefined
+          : authoredCompletionsRoute;
+      }
       if (shouldUseCodexResponsesHooks(ctx)) {
         return codexHooks.normalizeTransport?.(ctx);
       }
@@ -853,11 +1010,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
           baseUrl: ctx.model?.baseUrl,
         }) ||
         (normalizeProviderId(ctx.provider) === PROVIDER_ID &&
-          (!providerConfig?.baseUrl || isOpenAIApiBaseUrl(providerConfig.baseUrl)) &&
-          resolveConfiguredAuthTransport({
-            config: ctx.config,
-            providerConfig,
-          }) === "codex");
+          (!providerConfig?.baseUrl || isOpenAIHttpsApiBaseUrl(providerConfig.baseUrl)) &&
+          resolveConfiguredProviderAuthTransport(providerConfig) === "codex");
       return (useCodexTransport ? codexResponsesHooks : responsesHooks).prepareExtraParams?.(ctx);
     },
     resolveUsageAuth: codexHooks.resolveUsageAuth,
@@ -871,16 +1025,18 @@ export function buildOpenAIProvider(): ProviderPlugin {
       if (ctx.listProfileIds(PROVIDER_ID).length === 0) {
         return undefined;
       }
-      return `No API key found for provider "openai". You are authenticated with OpenAI ChatGPT/Codex OAuth. Use ${OPENAI_DEFAULT_MODEL} with the ChatGPT/Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.`;
+      return `No API key found for provider "openai". You are authenticated with OpenAI ChatGPT/Codex OAuth. Use ${OPENAI_CODEX_DEFAULT_MODEL} with the ChatGPT/Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.`;
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
+    classifyFailoverReason: ({ code }) => classifyOpenAiFailoverCode(code),
     resolveReasoningOutputMode: () => "native",
-    resolveThinkingProfile: ({ provider, modelId }) =>
+    resolveThinkingProfile: ({ provider, modelId, agentRuntime, api, compat }) =>
       normalizeProviderId(provider) === PROVIDER_ID
-        ? resolveUnifiedOpenAIThinkingProfile(modelId)
+        ? resolveUnifiedOpenAIThinkingProfile(modelId, agentRuntime, compat, api)
         : null,
-    isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
+    isModernModelRef: ({ modelId }) =>
+      matchesExactOrPrefix(modelId, OPENAI_PROVIDER_MODERN_MODEL_IDS),
     augmentModelCatalog: (ctx) => {
       const openAiGpt55ProTemplate = findCatalogTemplate({
         entries: ctx.entries,
@@ -912,7 +1068,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
           id: OPENAI_GPT_55_PRO_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
-          contextWindow: OPENAI_GPT_55_PRO_CONTEXT_TOKENS,
+          contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
+          contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
         }),
         buildOpenAISyntheticCatalogEntry(openAiGpt54Template, {
           id: OPENAI_GPT_54_MODEL_ID,
@@ -947,3 +1104,4 @@ export function buildOpenAIProvider(): ProviderPlugin {
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
   return buildOpenAIProvider();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -8,10 +8,6 @@ import { renderChatControls } from "./components/chat-controls.ts";
 
 type ChatControlsProps = Parameters<typeof renderChatControls>[0];
 
-vi.mock("../../components/icons.ts", () => ({
-  icons: {},
-}));
-
 function createSettings(): UiSettings {
   return {
     gatewayUrl: "ws://localhost:18789",
@@ -22,24 +18,17 @@ function createSettings(): UiSettings {
     themeMode: "dark",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    chatPersistCommentary: false,
-    chatAutoScroll: "near-bottom",
+    chatPersistCommentary: true,
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 280,
-    sidebarPinnedRoutes: ["overview", "workboard", "agents"],
-    sidebarMoreExpanded: false,
+    sidebarEntries: ["route:workboard", "route:tasks"],
   };
 }
 
 function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps {
   return {
     paneId: "test-pane",
-    agentsList: null,
-    connected: true,
-    hideCronSessions: true,
-    loading: false,
-    manualRefreshInFlight: false,
     model: {
       activeRunId: null,
       connected: true,
@@ -53,106 +42,92 @@ function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps
       stream: null,
     },
     onboarding: false,
-    runId: null,
-    sending: false,
     settings: createSettings(),
-    settingsOpen: true,
-    sessionKey: "main",
-    sessionsResult: null,
-    stream: null,
-    onRefresh: () => undefined,
+    viewMenuOpen: true,
     onSettingsChange: () => undefined,
-    onSettingsOpenChange: () => undefined,
-    realtimeTalkOptions: {
-      model: "",
-      voice: "marin",
-      vadThreshold: "",
-    },
-    realtimeTalkInputDevices: [
-      { deviceId: "built-in", label: "Built-in Microphone" },
-      { deviceId: "usb", label: "USB Audio Interface" },
-    ],
-    realtimeTalkInputDeviceId: "built-in",
-    onRealtimeTalkInputRefresh: () => undefined,
-    onRealtimeTalkInputSelect: () => undefined,
-    onRealtimeTalkOptionsChange: () => undefined,
+    onViewMenuOpenChange: () => undefined,
     ...overrides,
   } as unknown as ChatControlsProps;
 }
 
-describe("chat composer settings", () => {
-  it("combines chat and voice controls in one Settings menu", () => {
+function menuItems(container: HTMLElement) {
+  return Array.from(
+    container.querySelectorAll<HTMLElement & { checked: boolean; disabled: boolean }>(
+      ".chat-view-menu__item",
+    ),
+  );
+}
+
+describe("chat composer view menu", () => {
+  it("renders the three display rows with their checked state", () => {
     const container = document.createElement("div");
     render(renderChatControls(createProps()), container);
 
-    expect(container.querySelectorAll(`button[aria-label="${t("chat.settings")}"]`)).toHaveLength(
-      1,
-    );
-    expect(container.querySelector('[aria-label="Talk settings"]')).toBeNull();
-    expect(
-      Array.from(container.querySelectorAll(".chat-settings-popover__label")).map((node) =>
-        node.textContent?.trim(),
-      ),
-    ).toEqual(["Chat", "Voice"]);
-    expect(container.querySelector('[aria-label="Voice options"]')).not.toBeNull();
-    expect(container.querySelector('[data-talk-select="microphone"] select')).not.toBeNull();
+    const items = menuItems(container);
+    expect(items.map((item) => item.textContent?.trim())).toEqual([
+      t("chat.view.reasoning"),
+      t("chat.view.toolCalls"),
+      t("chat.view.commentary"),
+    ]);
+    expect(items.map((item) => item.checked)).toEqual([true, true, true]);
   });
 
-  it("keeps voice options editable from Settings", () => {
+  it("toggles settings from the menu rows", () => {
     const container = document.createElement("div");
-    const onRealtimeTalkOptionsChange = vi.fn();
-    render(renderChatControls(createProps({ onRealtimeTalkOptionsChange })), container);
+    const onSettingsChange = vi.fn();
+    render(renderChatControls(createProps({ onSettingsChange })), container);
 
-    const voice = container.querySelector<HTMLSelectElement>('[data-talk-select="voice"] select');
-    expect(voice).toBeInstanceOf(HTMLSelectElement);
-    if (!(voice instanceof HTMLSelectElement)) {
-      throw new Error("expected voice select");
-    }
-    voice.value = "cedar";
-    voice.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ voice: "cedar" });
-  });
-
-  it("keeps microphone selection in Voice settings", () => {
-    const container = document.createElement("div");
-    const onRealtimeTalkInputSelect = vi.fn();
-    render(renderChatControls(createProps({ onRealtimeTalkInputSelect })), container);
-
-    const microphone = container.querySelector<HTMLSelectElement>(
-      '[data-talk-select="microphone"] select',
+    const [reasoning, toolCalls, commentary] = menuItems(container);
+    const dropdown = container.querySelector("wa-dropdown");
+    const select = (item: HTMLElement) =>
+      dropdown?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          detail: { item },
+        }),
+      );
+    select(reasoning!);
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ chatShowThinking: false }),
     );
-    expect(microphone).toBeInstanceOf(HTMLSelectElement);
-    if (!(microphone instanceof HTMLSelectElement)) {
-      throw new Error("expected microphone select");
-    }
-    expect(microphone.value).toBe("built-in");
-    microphone.value = "usb";
-    microphone.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(onRealtimeTalkInputSelect).toHaveBeenCalledWith("usb");
-  });
-
-  it("refreshes microphone access from Voice settings", () => {
-    const container = document.createElement("div");
-    const onRealtimeTalkInputRefresh = vi.fn();
-    render(renderChatControls(createProps({ onRealtimeTalkInputRefresh })), container);
-
-    const refresh = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Refresh: Microphone input"]',
+    select(toolCalls!);
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ chatShowToolCalls: false }),
     );
-    expect(refresh).toBeInstanceOf(HTMLButtonElement);
-    refresh?.click();
-
-    expect(onRealtimeTalkInputRefresh).toHaveBeenCalledOnce();
+    select(commentary!);
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ chatPersistCommentary: false }),
+    );
   });
 
-  it("keeps the composer control cluster limited to model and Settings controls", () => {
+  it("disables the rows and pins display state during onboarding", () => {
+    const container = document.createElement("div");
+    const onSettingsChange = vi.fn();
+    render(renderChatControls(createProps({ onboarding: true, onSettingsChange })), container);
+
+    const items = menuItems(container);
+    expect(items.every((item) => item.disabled)).toBe(true);
+    // Onboarding forces thinking hidden and tool calls visible.
+    expect(items.map((item) => item.checked)).toEqual([false, true, true]);
+    container.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        detail: { item: items[0] },
+      }),
+    );
+    expect(onSettingsChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the composer control cluster limited to the view menu and model controls", () => {
     const container = document.createElement("div");
     render(renderChatControls(createProps()), container);
 
     expect(Array.from(container.children).map((node) => node.className)).toEqual([
-      "chat-settings-popover-wrapper",
+      "chat-view-menu-wrapper",
       "chat-composer-model-control",
     ]);
     expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();

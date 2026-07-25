@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const FUTURE_DEFAULT_MODEL = "openai/gpt-next-default";
+const FUTURE_API_DEFAULT_MODEL = "openai/gpt-next-default";
+const FUTURE_CODEX_DEFAULT_MODEL = "openai/gpt-next-codex-default";
 
 describe("OpenAI missing auth message", () => {
   afterEach(() => {
@@ -14,8 +15,8 @@ describe("OpenAI missing auth message", () => {
       const actual = await importOriginal<typeof import("./default-models.js")>();
       return {
         ...actual,
-        OPENAI_DEFAULT_MODEL: FUTURE_DEFAULT_MODEL,
-        OPENAI_CODEX_DEFAULT_MODEL: FUTURE_DEFAULT_MODEL,
+        OPENAI_DEFAULT_MODEL: FUTURE_API_DEFAULT_MODEL,
+        OPENAI_CODEX_DEFAULT_MODEL: FUTURE_CODEX_DEFAULT_MODEL,
       };
     });
 
@@ -27,6 +28,9 @@ describe("OpenAI missing auth message", () => {
       listProfileIds: (providerId: string) => (providerId === "openai" ? ["openai:codex"] : []),
     } as never);
 
-    expect(message).toContain(`Use ${FUTURE_DEFAULT_MODEL} with the ChatGPT/Codex OAuth profile`);
+    expect(message).toContain(
+      `Use ${FUTURE_CODEX_DEFAULT_MODEL} with the ChatGPT/Codex OAuth profile`,
+    );
+    expect(message).not.toContain(FUTURE_API_DEFAULT_MODEL);
   });
 });

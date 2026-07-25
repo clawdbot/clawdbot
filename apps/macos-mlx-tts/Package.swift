@@ -13,13 +13,33 @@ let package = Package(
         .executable(name: "openclaw-mlx-tts", targets: ["OpenClawMLXTTSHelper"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/Blaizzy/mlx-audio-swift", revision: "fc4fe22dc41c053062e647a4e3db9142193670d2"),
+        .package(url: "https://github.com/Blaizzy/mlx-audio-swift", exact: "0.1.3"),
+        .package(path: "../shared/OpenClawMLXTTSProtocol"),
     ],
     targets: [
+        .target(
+            name: "OpenClawMLXTTSRuntime",
+            dependencies: [
+                .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
+                .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+            ]),
         .executableTarget(
             name: "OpenClawMLXTTSHelper",
             dependencies: [
-                .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
+                "OpenClawMLXTTSRuntime",
+                .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+            ]),
+        .testTarget(
+            name: "OpenClawMLXTTSRuntimeTests",
+            dependencies: [
+                "OpenClawMLXTTSRuntime",
+                .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),

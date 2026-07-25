@@ -10,6 +10,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 
 const RELAY_SECRET_FILE = "browser-extension-relay.secret";
@@ -26,11 +27,10 @@ function normalizeToken(raw: string): string | null {
 
 /** Read the host-local relay token, or null when it has not been created yet. */
 export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
-  try {
-    return normalizeToken(fs.readFileSync(resolveExtensionRelaySecretPath(env), "utf8"));
-  } catch {
-    return null;
-  }
+  return normalizeToken(
+    tryReadSecretFileSync(resolveExtensionRelaySecretPath(env), "browser extension relay secret") ??
+      "",
+  );
 }
 
 /**
@@ -71,15 +71,4 @@ export function ensureExtensionRelayToken(env: NodeJS.ProcessEnv = process.env):
 /** Resolve the relay token for config (read-only; null until first ensured). */
 export function resolveExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
   return readExtensionRelayToken(env);
-}
-
-/**
- * Constant-time token comparison. Both sides are hashed to a fixed length
- * before timingSafeEqual so no length short-circuit leaks token length.
- */
-export function extensionRelayTokenMatches(expected: string, candidate: string): boolean {
-  return crypto.timingSafeEqual(
-    crypto.createHash("sha256").update(expected).digest(),
-    crypto.createHash("sha256").update(candidate).digest(),
-  );
 }

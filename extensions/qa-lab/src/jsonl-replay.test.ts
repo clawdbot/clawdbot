@@ -5,12 +5,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createMockJsonlReplayCellRunner,
-  extractJsonlReplayUserTurns,
   renderJsonlReplayMarkdownReport,
   runJsonlReplay,
-  type JsonlReplayCellRunner,
 } from "./jsonl-replay.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
+
+type JsonlReplayCellRunner = NonNullable<
+  NonNullable<Parameters<typeof runJsonlReplay>[1]>["runCell"]
+>;
 
 const tempRoots: string[] = [];
 
@@ -56,8 +58,10 @@ afterEach(async () => {
 });
 
 describe("jsonl replay", () => {
-  it("extracts user-turn boundaries while ignoring system, tool-only, empty, and malformed rows", () => {
-    const turns = extractJsonlReplayUserTurns(
+  it("extracts user-turn boundaries while ignoring system, tool-only, empty, and malformed rows", async () => {
+    const transcriptDir = await makeTempDir();
+    await fs.writeFile(
+      path.join(transcriptDir, "turns.jsonl"),
       [
         `{"message":{"role":"system","content":"System setup"}}`,
         `{"message":{"role":"tool","content":"tool-only prelude"}}`,
@@ -67,6 +71,21 @@ describe("jsonl replay", () => {
         `{"message":{"role":"user","content":[{"type":"text","text":"Plan the release"},{"type":"tool_result","content":"ignored"}]}}`,
         `{"role":"user","content":[{"type":"input_text","text":"Check the follow-up"}]}`,
       ].join("\n"),
+      "utf8",
+    );
+    let turns: readonly Parameters<JsonlReplayCellRunner>[0]["turn"][] = [];
+    const runCell: JsonlReplayCellRunner = async (params) => {
+      turns = params.turns;
+      return createMockJsonlReplayCellRunner()(params);
+    };
+
+    await runJsonlReplay(
+      {
+        directory: transcriptDir,
+        runtimePair: ["openclaw", "codex"],
+        providerMode: "mock-openai",
+      },
+      { runCell },
     );
 
     expect(turns).toEqual([

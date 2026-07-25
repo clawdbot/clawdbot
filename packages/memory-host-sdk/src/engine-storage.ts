@@ -42,11 +42,14 @@ export type {
   MemorySyncProgressUpdate,
 } from "./host/types.js";
 export {
+  dropMemoryPathFtsTriggers,
   ensureMemoryIndexSchema,
+  ensureMemoryPathFtsTriggers,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_META_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,

@@ -61,6 +61,10 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
 
     expect(script).toContain('direct_probe_log="$(mktemp)"');
     expect(script).toContain("This is a local CLI smoke test.");
+    expect(script).toContain("What is two plus two?");
+    expect(script).toContain("(4|four)");
+    expect(script).not.toContain("direct_token=");
+    expect(script).not.toContain("expected token");
     expect(script).not.toContain("OPENCLAW-CLAUDE-SUBSCRIPTION-DIRECT");
     expect(script).toContain("direct Claude subscription probe exited with status");
     expect(script).toContain("<redacted-email>");

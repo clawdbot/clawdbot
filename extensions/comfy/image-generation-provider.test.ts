@@ -3,10 +3,7 @@ import type { LookupAddress } from "node:dns";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  setComfyFetchGuardForTesting,
-  buildComfyImageGenerationProvider,
-} from "./image-generation-provider.js";
+import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
 import {
   buildComfyConfig,
   buildLegacyComfyConfig,
@@ -14,6 +11,7 @@ import {
   mockComfyProviderApiKey,
   parseComfyJsonBody,
 } from "./test-helpers.js";
+import { setComfyFetchGuardForTesting } from "./test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -1087,3 +1085,4 @@ describe("comfy image-generation provider", () => {
     expect(extraData?.api_key_comfy_org).toBe("profile-key");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

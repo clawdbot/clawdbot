@@ -64,7 +64,7 @@ async function waitForCronRunCompletion(params: {
   timeoutMs: number;
   pollIntervalMs: number;
 }): Promise<CronRunLogEntryResult> {
-  // Poll the run log rather than cron.run because completion state is written asynchronously.
+  // Poll the task ledger rather than cron.run because completion state is written asynchronously.
   const startedAt = Date.now();
   for (;;) {
     const page = (await callGatewayFromCli("cron.runs", params.opts, {
@@ -93,7 +93,7 @@ function findCronJobInPage(jobs: CronJob[], idOrName: string): CronJob | undefin
   );
 }
 
-export async function loadCronJobForShow(
+async function loadCronJobForShow(
   opts: GatewayRpcOpts,
   idOrName: string,
 ): Promise<{ job?: CronJob; deliveryPreview?: CronDeliveryPreview }> {
@@ -143,6 +143,11 @@ function registerCronToggleCommand(params: {
             patch: { enabled: params.enabled },
           });
           printCronJson(res);
+          if (!params.enabled && process.stderr.isTTY) {
+            process.stderr.write(
+              `Note: 'openclaw cron list' hides disabled jobs by default. Use 'openclaw cron list --all' to see this job, or 'openclaw cron enable <id>' to re-enable it.\n`,
+            );
+          }
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           handleCronCliError(err);

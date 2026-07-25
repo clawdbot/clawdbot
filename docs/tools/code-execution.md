@@ -11,6 +11,11 @@ title: "Code execution"
 (`https://api.x.ai/v1/responses`, same endpoint `x_search` uses). It is
 registered by the bundled `xai` plugin under the `tools` contract.
 
+<Warning>
+  `code_execution` runs on xAI's servers. xAI bills $5 per 1,000 tool calls,
+  plus the model's input and output tokens.
+</Warning>
+
 | Property           | Value                                                                             |
 | ------------------ | --------------------------------------------------------------------------------- |
 | Tool name          | `code_execution`                                                                  |
@@ -77,9 +82,15 @@ For local execution, use [`exec`](/tools/exec) instead.
   </Step>
 
   <Step title="Enable and tune code_execution">
-    `code_execution` is available whenever xAI credentials resolve. Set
-    `plugins.entries.xai.config.codeExecution.enabled` to `false` to disable
-    it, or use the same block to override the model, turn cap, or timeout:
+    With `enabled` omitted, `code_execution` is exposed only when the active
+    model's provider is `xai` and xAI credentials resolve. For an active model
+    with a known non-xAI provider, set
+    `plugins.entries.xai.config.codeExecution.enabled` to `true` to opt in to
+    cross-provider use. If the active model provider is missing or unresolved,
+    the tool stays hidden. Set `enabled` to `false` to disable it for every
+    provider. xAI credentials are always required.
+
+    Use the same block to override the model, turn cap, or timeout:
 
     ```json5
     {
@@ -88,7 +99,7 @@ For local execution, use [`exec`](/tools/exec) instead.
           xai: {
             config: {
               codeExecution: {
-                enabled: true,
+                enabled: true, // required for a known non-xAI model provider
                 model: "grok-4.3", // override the default xAI code-execution model
                 maxTurns: 2,            // optional cap on internal tool turns
                 timeoutSeconds: 30,     // request timeout (default: 30)
@@ -108,7 +119,7 @@ For local execution, use [`exec`](/tools/exec) instead.
     ```
 
     `code_execution` appears in the agent's tool list once the xAI plugin
-    re-registers with `enabled: true`.
+    re-registers and the provider, enablement, and auth checks above pass.
 
   </Step>
 </Steps>

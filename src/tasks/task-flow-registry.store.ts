@@ -9,9 +9,7 @@ import {
 import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
-export type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
-
-export type TaskFlowRegistryStore = {
+type TaskFlowRegistryStore = {
   loadSnapshot: () => TaskFlowRegistryStoreSnapshot;
   saveSnapshot: (snapshot: TaskFlowRegistryStoreSnapshot) => void;
   upsertFlow?: (flow: TaskFlowRecord) => void;
@@ -35,7 +33,7 @@ export type TaskFlowRegistryObserverEvent =
       previous: TaskFlowRecord;
     };
 
-export type TaskFlowRegistryObservers = {
+type TaskFlowRegistryObservers = {
   // Observers are incremental/best-effort only. Snapshot persistence belongs to TaskFlowRegistryStore.
   onEvent?: (event: TaskFlowRegistryObserverEvent) => void;
 };
@@ -59,7 +57,7 @@ export function getTaskFlowRegistryObservers(): TaskFlowRegistryObservers | null
   return configuredFlowRegistryObservers;
 }
 
-export function configureTaskFlowRegistryRuntime(params: {
+function configureTaskFlowRegistryRuntime(params: {
   store?: TaskFlowRegistryStore;
   observers?: TaskFlowRegistryObservers | null;
 }) {
@@ -75,4 +73,10 @@ export function resetTaskFlowRegistryRuntimeForTests() {
   configuredFlowRegistryStore.close?.();
   configuredFlowRegistryStore = defaultFlowRegistryStore;
   configuredFlowRegistryObservers = null;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.taskFlowRegistryStoreTestApi")
+  ] = { configureTaskFlowRegistryRuntime };
 }

@@ -7,10 +7,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -24,6 +21,7 @@ import {
 } from "../plugins/provider-discovery.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -56,6 +54,7 @@ const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const
 
 type ImplicitProviderParams = {
   agentDir: string;
+  authStore?: AuthProfileStore;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
@@ -95,11 +94,6 @@ function resolveProviderDiscoveryFilter(params: {
   providerIds?: readonly string[];
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
-  const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
-  if (testRaw) {
-    const ids = normalizeStringEntries(testRaw.split(","));
-    return ids.length > 0 ? uniqueStrings(ids) : undefined;
-  }
   const scopedProviderIds = params.providerIds
     ? normalizeStringEntries([...params.providerIds])
     : undefined;
@@ -235,7 +229,7 @@ function appendNormalizedPluginMetadataOwners(
 }
 
 /** Resolve the plugin discovery filter used by implicit provider discovery tests. */
-export function resolveProviderDiscoveryFilterForTest(params: {
+function resolveProviderDiscoveryFilterForTest(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
@@ -246,11 +240,20 @@ export function resolveProviderDiscoveryFilterForTest(params: {
 }
 
 /** Resolve provider owner plugin IDs from a preloaded metadata snapshot for tests. */
-export function resolvePluginMetadataProviderOwnersForTest(
+function resolvePluginMetadataProviderOwnersForTest(
   pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
   provider: string,
 ): readonly string[] | undefined {
   return resolvePluginMetadataProviderOwners(pluginMetadataSnapshot, provider);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.modelsConfigImplicitProvidersTestApi")
+  ] = {
+    resolvePluginMetadataProviderOwnersForTest,
+    resolveProviderDiscoveryFilterForTest,
+  };
 }
 
 function mergeImplicitProviderSet(
@@ -351,15 +354,13 @@ function hasProviderWildcardVisibility(params: {
 function hasRuntimeProviderCatalog(
   provider: import("../plugins/types.js").ProviderPlugin,
 ): boolean {
-  return (
-    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
-  );
+  return typeof provider.catalog?.run === "function";
 }
 
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   providers: import("../plugins/types.js").ProviderPlugin[],
-  order: import("../plugins/types.js").ProviderDiscoveryOrder,
+  order: import("../plugins/types.js").ProviderCatalogOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
@@ -403,6 +404,10 @@ async function resolvePluginImplicitProviders(
       };
     };
 
+    if (ctx.providerDiscoveryEntriesOnly === true && !provider.staticCatalog) {
+      // Mandatory startup accepts only provider facts that do not execute live discovery.
+      continue;
+    }
     const useStaticCatalog =
       Boolean(provider.staticCatalog) &&
       (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
@@ -535,7 +540,7 @@ export async function resolveImplicitProviders(
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const env = params.env ?? process.env;
-  let authStore: ReturnType<typeof ensureAuthProfileStore> | undefined;
+  let authStore = params.authStore;
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(params.agentDir, {
       allowKeychainPrompt: false,

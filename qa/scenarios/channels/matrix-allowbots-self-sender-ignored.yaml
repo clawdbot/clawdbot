@@ -1,0 +1,29 @@
+title: Matrix allowBots=true still ignores messages from the SUT user id
+scenario:
+  id: matrix-allowbots-self-sender-ignored
+  surface: channels
+  coverage:
+    primary:
+      - matrix.mention-gates
+  execution:
+    profiles: { "matrix:all": 43, "matrix:transport": 42 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 8000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        allowBots: true
+        groupAllowRoles:
+          - driver
+          - observer
+          - sut
+        groupsByKey:
+          main:
+            requireMention: false
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-allowbots.js
+  call: runAllowBotsSelfSenderIgnoredScenario
+  args:
+    - expr: "scenarioContext"

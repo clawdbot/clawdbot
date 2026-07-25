@@ -1,4 +1,3 @@
-import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -21,7 +20,15 @@ import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
-import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+import {
+  killQaScenarioWindowsProcessTree,
+  resetQaScenarioCommandCleanupTimings,
+  runQaScenarioCommandLifecycle,
+  setQaScenarioCommandCleanupTimings,
+  type QaScenarioCommandExecution,
+  type QaScenarioCommandResult,
+} from "./test-file-scenario-command-lifecycle.js";
+export type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
   execution: Extract<
@@ -43,22 +50,6 @@ type QaTestFileScenarioRunParams = {
   runCommand?: QaScenarioCommandRunner;
   scenarios: readonly QaSeedScenarioWithSource[];
   writeEvidenceFile?: boolean;
-};
-
-export type QaScenarioCommandExecution = {
-  args: string[];
-  command: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-};
-
-type QaScenarioCommandResult = {
-  exitCode: number;
-  failureMessage?: string;
-  signal?: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
 };
 
 type QaScenarioCommandRunner = (
@@ -94,12 +85,6 @@ type QaTestFileRunnerDefinition = {
 };
 
 const DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS = 30 * 60_000;
-const QA_TEST_FILE_COMMAND_TIMEOUT_KILL_GRACE_MS = 2_000;
-const QA_TEST_FILE_COMMAND_TIMEOUT_FORCE_SETTLE_MS = 500;
-let qaTestFileCommandTimeoutKillGraceMs = QA_TEST_FILE_COMMAND_TIMEOUT_KILL_GRACE_MS;
-let qaTestFileCommandTimeoutForceSettleMs = QA_TEST_FILE_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
-const QA_TEST_FILE_COMMAND_PARENT_SIGNALS = ["SIGINT", "SIGTERM"] as const;
-
 export function isQaTestFileScenario(
   scenario: QaSeedScenarioWithSource,
 ): scenario is QaTestFileScenario {
@@ -120,6 +105,9 @@ function vitestSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
 }
 
 function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
+  const testNamePattern =
+    scenario.execution.kind === "playwright" ? scenario.execution.testNamePattern : undefined;
+  const testNameArgs = testNamePattern ? ["--testNamePattern", testNamePattern] : [];
   return [
     {
       command: process.execPath,
@@ -136,6 +124,7 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
         "runner",
         scenario.execution.path,
         "--reporter=verbose",
+        ...testNameArgs,
       ],
     },
   ];
@@ -191,218 +180,6 @@ function formatCommand(step: QaScenarioCommandStep) {
   return [step.command, ...step.args].map(shellQuote).join(" ");
 }
 
-type QaScenarioTaskkillRunner = typeof spawnSync;
-
-function killQaScenarioWindowsProcessTree(
-  pid: number | undefined,
-  signal: NodeJS.Signals,
-  runTaskkill: QaScenarioTaskkillRunner = spawnSync,
-) {
-  if (pid === undefined) {
-    return false;
-  }
-  const taskkillPath = resolveQaWindowsSystem32ExePath("taskkill.exe");
-  const args = ["/pid", String(pid), "/T"];
-  if (signal === "SIGKILL") {
-    args.push("/F");
-  }
-  const result = runTaskkill(taskkillPath, args, {
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  if (!result.error && result.status === 0) {
-    return true;
-  }
-  if (signal !== "SIGKILL") {
-    const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    return !forceResult.error && forceResult.status === 0;
-  }
-  return false;
-}
-
-function runQaScenarioCommand(
-  execution: QaScenarioCommandExecution,
-): Promise<QaScenarioCommandResult> {
-  return new Promise((resolve, reject) => {
-    const useProcessGroup = process.platform !== "win32";
-    const child = spawn(execution.command, execution.args, {
-      cwd: execution.cwd,
-      detached: useProcessGroup,
-      env: execution.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    const timeoutMs = execution.timeoutMs;
-    let forceKillTimer: NodeJS.Timeout | undefined;
-    let forceSettleTimer: NodeJS.Timeout | undefined;
-    let settled = false;
-    let timedOut = false;
-    let timeoutTimer: NodeJS.Timeout | undefined;
-    const readOutput = () => ({
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-    });
-    const commandLabel = () => path.basename(execution.command);
-    const clearForcedTimers = () => {
-      if (forceKillTimer) {
-        clearTimeout(forceKillTimer);
-        forceKillTimer = undefined;
-      }
-      if (forceSettleTimer) {
-        clearTimeout(forceSettleTimer);
-        forceSettleTimer = undefined;
-      }
-    };
-    const clearTimers = () => {
-      if (timeoutTimer) {
-        clearTimeout(timeoutTimer);
-        timeoutTimer = undefined;
-      }
-      clearForcedTimers();
-    };
-    const signalChild = (signal: NodeJS.Signals) => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The process group may already be gone; fall back to the direct child.
-        }
-      }
-      if (!useProcessGroup && process.platform === "win32") {
-        if (killQaScenarioWindowsProcessTree(child.pid, signal)) {
-          return;
-        }
-      }
-      child.kill(signal);
-    };
-    const handleParentExit = () => {
-      signalChild("SIGKILL");
-    };
-    const removeParentSignalHandlers = () => {
-      for (const signal of QA_TEST_FILE_COMMAND_PARENT_SIGNALS) {
-        process.removeListener(signal, handleParentSignal);
-      }
-    };
-    const cleanupParentHandlers = () => {
-      removeParentSignalHandlers();
-      process.removeListener("exit", handleParentExit);
-    };
-    const handleParentSignal = (signal: (typeof QA_TEST_FILE_COMMAND_PARENT_SIGNALS)[number]) => {
-      removeParentSignalHandlers();
-      signalChild(signal);
-      scheduleForcedCleanup({
-        exitCode: 1,
-        failureMessage: `${commandLabel()} interrupted by ${signal}`,
-        signal,
-      });
-      process.kill(process.pid, signal);
-    };
-    const isProcessGroupRunning = () => {
-      if (!useProcessGroup || !child.pid) {
-        return false;
-      }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
-      }
-    };
-    const finish = (
-      result: Pick<QaScenarioCommandResult, "exitCode" | "failureMessage" | "signal">,
-    ) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      cleanupParentHandlers();
-      resolve({
-        ...result,
-        ...readOutput(),
-      });
-    };
-    const scheduleForcedCleanup = (
-      result: Pick<QaScenarioCommandResult, "exitCode" | "failureMessage" | "signal">,
-    ) => {
-      if (forceKillTimer || forceSettleTimer) {
-        return;
-      }
-      forceKillTimer = setTimeout(() => {
-        forceKillTimer = undefined;
-        signalChild("SIGKILL");
-        forceSettleTimer = setTimeout(() => {
-          forceSettleTimer = undefined;
-          const stillRunning = isProcessGroupRunning();
-          const failureMessage =
-            result.failureMessage ??
-            (stillRunning ? `${commandLabel()} left background processes running` : undefined);
-          finish({
-            exitCode: stillRunning ? 1 : result.exitCode,
-            signal: result.signal,
-            ...(failureMessage ? { failureMessage } : {}),
-          });
-        }, qaTestFileCommandTimeoutForceSettleMs);
-      }, qaTestFileCommandTimeoutKillGraceMs);
-    };
-    timeoutTimer =
-      timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            timeoutTimer = undefined;
-            timedOut = true;
-            signalChild("SIGTERM");
-            scheduleForcedCleanup({
-              exitCode: 1,
-              failureMessage: `${commandLabel()} timed out after ${timeoutMs}ms`,
-              signal: null,
-            });
-          }, timeoutMs);
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout.push(chunk);
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr.push(chunk);
-    });
-    process.once("exit", handleParentExit);
-    for (const signal of QA_TEST_FILE_COMMAND_PARENT_SIGNALS) {
-      process.once(signal, handleParentSignal);
-    }
-    child.on("error", (error) => {
-      clearTimers();
-      cleanupParentHandlers();
-      reject(error);
-    });
-    child.on("close", (exitCode, signal) => {
-      if (!timedOut && timeoutTimer) {
-        clearTimeout(timeoutTimer);
-        timeoutTimer = undefined;
-      }
-      const result = {
-        exitCode: timedOut ? 1 : (exitCode ?? (signal ? 1 : 0)),
-        signal,
-        ...(timedOut ? { failureMessage: `${commandLabel()} timed out after ${timeoutMs}ms` } : {}),
-      };
-      if (timedOut && !useProcessGroup && (forceKillTimer || forceSettleTimer)) {
-        return;
-      }
-      if (isProcessGroupRunning()) {
-        if (!timedOut) {
-          signalChild("SIGTERM");
-        }
-        scheduleForcedCleanup(result);
-        return;
-      }
-      finish(result);
-    });
-  });
-}
-
 function buildScenarioEvidenceTarget(scenario: QaTestFileScenario) {
   return {
     id: scenario.id,
@@ -413,6 +190,20 @@ function buildScenarioEvidenceTarget(scenario: QaTestFileScenario) {
     docsRefs: scenario.docsRefs,
     codeRefs: scenario.codeRefs,
   };
+}
+
+function coverageForScenario(scenario: QaTestFileScenario) {
+  return [
+    ...(scenario.coverage?.primary ?? []).map((id) => ({ id, role: "primary" as const })),
+    ...(scenario.coverage?.secondary ?? []).map((id) => ({ id, role: "secondary" as const })),
+  ];
+}
+
+function withScenarioCoverage(
+  entry: QaEvidenceSummaryJson["entries"][number],
+  scenario: QaTestFileScenario,
+) {
+  return { ...entry, coverage: coverageForScenario(scenario) };
 }
 
 async function runScenarioCommandSteps(params: {
@@ -564,8 +355,12 @@ function buildTestFileEvidence(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
 }) {
-  const producerEntries = params.results.flatMap(
-    (result) => result.producerEvidence?.entries ?? [],
+  const producerEntries = params.results.flatMap((result) =>
+    // Producer artifacts own execution facts; the scenario catalog remains the
+    // sole owner of which semantic features those facts cover.
+    (result.producerEvidence?.entries ?? []).map((entry) =>
+      withScenarioCoverage(entry, result.scenario),
+    ),
   );
   if (producerEntries.length > 0) {
     const definition = testFileRunnerDefinitions[params.kind];
@@ -774,7 +569,7 @@ export async function runQaTestFileScenarios(
     throw new Error("qa suite found no script, Vitest, or Playwright scenarios to run.");
   }
   await fs.mkdir(params.outputDir, { recursive: true });
-  const runCommand = params.runCommand ?? runQaScenarioCommand;
+  const runCommand = params.runCommand ?? runQaScenarioCommandLifecycle;
   const commandTimeoutMs = resolvePositiveTimerTimeoutMs(
     params.commandTimeoutMs,
     DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS,
@@ -829,11 +624,9 @@ export async function runQaTestFileScenarios(
 export const qaTestFileScenarioRunnerTesting = {
   killQaScenarioWindowsProcessTree,
   resetTimeoutCleanupTimings() {
-    qaTestFileCommandTimeoutKillGraceMs = QA_TEST_FILE_COMMAND_TIMEOUT_KILL_GRACE_MS;
-    qaTestFileCommandTimeoutForceSettleMs = QA_TEST_FILE_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
+    resetQaScenarioCommandCleanupTimings();
   },
   setTimeoutCleanupTimings(params: { forceSettleMs: number; killGraceMs: number }) {
-    qaTestFileCommandTimeoutKillGraceMs = params.killGraceMs;
-    qaTestFileCommandTimeoutForceSettleMs = params.forceSettleMs;
+    setQaScenarioCommandCleanupTimings(params);
   },
 };

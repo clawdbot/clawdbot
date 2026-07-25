@@ -44,6 +44,7 @@ describe("prepareSessionManagerForRun", () => {
       ],
       byId: new Map([["old", {}]]),
       labelsById: new Map([["old", {}]]),
+      labelTimestampsById: new Map([["old", "2026-05-27T00:00:01.000Z"]]),
       leafId: "old",
     };
     const readFileSpy = vi.spyOn(fs, "readFile");
@@ -67,6 +68,7 @@ describe("prepareSessionManagerForRun", () => {
     ]);
     expect(sessionManager.byId.size).toBe(0);
     expect(sessionManager.labelsById.size).toBe(0);
+    expect(sessionManager.labelTimestampsById.size).toBe(0);
     expect(sessionManager.leafId).toBeNull();
     expect(sessionManager.flushed).toBe(false);
     expect(readFileSpy).not.toHaveBeenCalled();

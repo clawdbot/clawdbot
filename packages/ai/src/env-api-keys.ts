@@ -109,7 +109,7 @@ function getProcEnv(key: string): string | undefined {
 }
 
 function getEnvValue(key: string): string | undefined {
-  return getProcessEnv()?.[key] || getProcEnv(key);
+  return (getProcessEnv()?.[key] || getProcEnv(key))?.trim() || undefined;
 }
 
 let cachedVertexAdcCredentialsExists: true | null = null;
@@ -166,7 +166,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
-    "meta": "MODEL_API_KEY",
+    meta: "MODEL_API_KEY",
     "azure-openai-responses": "AZURE_OPENAI_API_KEY",
     deepseek: "DEEPSEEK_API_KEY",
     google: "GEMINI_API_KEY",

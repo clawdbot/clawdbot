@@ -2,88 +2,187 @@
  * Tests for Nostr Profile Import
  */
 
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import type { Event, SimplePool } from "nostr-tools";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
 
+type ProfileSubscriptionParams = Parameters<SimplePool["subscribeMany"]>[2];
+
 const mockState = vi.hoisted(() => ({
-  subscribeMany: vi.fn(),
+  close: vi.fn(),
+  closeSubscription: vi.fn(),
+  subscribeMany:
+    vi.fn<(relays: string[], filter: unknown, params: ProfileSubscriptionParams) => void>(),
 }));
 
 vi.mock("nostr-tools", () => {
   class MockSimplePool {
-    subscribeMany(
-      relays: string[],
-      filters: unknown,
-      handlers: {
-        onevent: (event: Record<string, unknown>) => void;
-        oneose?: () => void;
-        onclose?: () => void;
-      },
-    ) {
-      mockState.subscribeMany(relays, filters, handlers);
-      queueMicrotask(() => handlers.oneose?.());
-      return {
-        close: vi.fn(),
-      };
+    subscribeMany(relays: string[], filter: unknown, params: ProfileSubscriptionParams) {
+      mockState.subscribeMany(relays, filter, params);
+      return { close: mockState.closeSubscription };
     }
 
-    close = vi.fn();
+    close(relays: string[]) {
+      mockState.close(relays);
+    }
   }
 
   return {
     SimplePool: MockSimplePool,
-    verifyEvent: vi.fn(() => true),
   };
 });
 
-// Mock SimplePool so importProfileFromRelays can assert the relay subscription shape.
+function createProfileEvent(overrides: Partial<Event> = {}): Event {
+  return {
+    id: "1".repeat(64),
+    pubkey: "a".repeat(64),
+    created_at: 1,
+    kind: 0,
+    tags: [],
+    content: JSON.stringify({ name: "profile" }),
+    sig: "b".repeat(128),
+    ...overrides,
+  };
+}
+
+function respondWithProfileContent(content: unknown): void {
+  mockState.subscribeMany.mockImplementation((_relays, _filter, params) => {
+    params.onevent?.(createProfileEvent({ content: JSON.stringify(content) }));
+    params.oneose?.();
+  });
+}
+
+function importDefaultProfile() {
+  return importProfileFromRelays({
+    pubkey: "a".repeat(64),
+    relays: ["wss://relay.example"],
+  });
+}
 
 describe("nostr-profile-import", () => {
   beforeEach(() => {
-    mockState.subscribeMany.mockClear();
+    mockState.close.mockReset();
+    mockState.closeSubscription.mockReset();
+    mockState.subscribeMany.mockReset();
   });
 
   describe("importProfileFromRelays", () => {
-    it("subscribes to profiles with a single Nostr filter object", async () => {
+    it("queries relays independently and uses the newest profile", async () => {
       const pubkey = "a".repeat(64);
-
-      await importProfileFromRelays({
-        pubkey,
-        relays: ["wss://relay.example"],
-        timeoutMs: 1,
+      const relays = ["wss://old.example", "wss://new.example"];
+      const relayEvents = [
+        createProfileEvent({ id: "1".repeat(64), created_at: 10 }),
+        createProfileEvent({
+          id: "2".repeat(64),
+          created_at: 20,
+          content: JSON.stringify({ name: "newest" }),
+        }),
+      ];
+      mockState.subscribeMany.mockImplementation((_relays, _filter, params) => {
+        params.onevent?.(relayEvents.shift()!);
+        params.oneose?.();
       });
 
-      expect(mockState.subscribeMany).toHaveBeenCalledTimes(1);
-      const filters = mockState.subscribeMany.mock.calls[0]?.[1];
-      expect(Array.isArray(filters)).toBe(false);
-      expect(filters).toMatchObject({
-        kinds: [0],
-        authors: [pubkey],
-        limit: 1,
+      const result = await importProfileFromRelays({
+        pubkey,
+        relays,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        profile: { name: "newest" },
+        event: { id: "2".repeat(64), created_at: 20 },
+        relaysQueried: relays,
+        sourceRelay: relays[1],
+      });
+      expect(mockState.subscribeMany).toHaveBeenCalledTimes(2);
+      for (const [index, relay] of relays.entries()) {
+        expect(mockState.subscribeMany).toHaveBeenNthCalledWith(
+          index + 1,
+          [relay],
+          { kinds: [0], authors: [pubkey], limit: 1 },
+          expect.objectContaining({
+            onevent: expect.any(Function),
+            oneose: expect.any(Function),
+            onclose: expect.any(Function),
+          }),
+        );
+      }
+      expect(mockState.close).toHaveBeenCalledWith(relays);
+    });
+
+    it("bounds the whole query while the native relay subscription is pending", async () => {
+      vi.useFakeTimers();
+      try {
+        const resultPromise = importProfileFromRelays({
+          pubkey: "a".repeat(64),
+          relays: ["wss://slow.example"],
+          timeoutMs: 25,
+        });
+
+        await vi.advanceTimersByTimeAsync(25);
+
+        await expect(resultPromise).resolves.toMatchObject({
+          ok: false,
+          error: "No profile found on any relay",
+        });
+        expect(mockState.closeSubscription).toHaveBeenCalledOnce();
+        expect(mockState.close).toHaveBeenCalledWith(["wss://slow.example"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rejects profile content that is not a JSON object", async () => {
+      respondWithProfileContent(null);
+
+      await expect(importDefaultProfile()).resolves.toMatchObject({
+        ok: false,
+        error: "Profile event content must be a JSON object",
+        sourceRelay: "wss://relay.example",
       });
     });
 
-    it("caps oversized relay timeouts and clears pending timeout handles", async () => {
-      vi.useFakeTimers();
-      try {
-        const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-        const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    it.each([
+      {
+        case: "a wrong field type",
+        content: { name: 123, about: "valid" },
+      },
+      {
+        case: "a wrong URL field type",
+        content: { name: "valid", picture: 123 },
+      },
+      {
+        case: "an overlong field",
+        content: { name: "a".repeat(257), about: "valid" },
+      },
+      {
+        case: "a wrong field type alongside an unsafe URL",
+        content: { name: "valid", about: 123, picture: "https://127.0.0.1/avatar.png" },
+      },
+    ])("rejects the whole profile for $case", async ({ content }) => {
+      respondWithProfileContent(content);
 
-        await importProfileFromRelays({
-          pubkey: "a".repeat(64),
-          relays: ["wss://relay.example"],
-          timeoutMs: Number.MAX_SAFE_INTEGER,
-        });
+      await expect(importDefaultProfile()).resolves.toMatchObject({
+        ok: false,
+        error: "Profile event content has invalid fields",
+        sourceRelay: "wss://relay.example",
+      });
+    });
 
-        expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-        expect(timeoutSpy).toHaveBeenCalledTimes(2);
-        expect(clearSpy).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
-        vi.restoreAllMocks();
-      }
+    it("drops unknown fields and unsafe URLs from an otherwise valid profile", async () => {
+      respondWithProfileContent({
+        name: "valid",
+        picture: "https://127.0.0.1/avatar.png",
+        website: "https://example.com",
+        custom: "ignored",
+      });
+
+      const result = await importDefaultProfile();
+
+      expect(result).toMatchObject({ ok: true, sourceRelay: "wss://relay.example" });
+      expect(result.profile).toStrictEqual({ name: "valid", website: "https://example.com" });
     });
   });
 

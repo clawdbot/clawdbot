@@ -1,4 +1,5 @@
 // Tests plugin command dispatch and plugin-scoped command aliases.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handlePluginCommand } from "./commands-plugin.js";
@@ -65,16 +66,21 @@ describe("handlePluginCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe("from plugin");
     expect(executePluginCommandMock).toHaveBeenCalledTimes(1);
-    const [[commandParams]] = executePluginCommandMock.mock.calls as unknown as Array<
-      [
-        {
-          gatewayClientScopes?: string[];
-          sessionKey?: string;
-          sessionId?: string;
-          commandBody?: string;
-        },
-      ]
-    >;
+    const [commandParams] = expectDefined(
+      (
+        executePluginCommandMock.mock.calls as unknown as Array<
+          [
+            {
+              gatewayClientScopes?: string[];
+              sessionKey?: string;
+              sessionId?: string;
+              commandBody?: string;
+            },
+          ]
+        >
+      )[0],
+      "(executePluginCommandMock.mock.calls as unknown as Array<\n        [\n          {\n            gatewayClientScopes?: string[];\n            sessionKey?: string;\n            sessionId?: string;\n            commandBody?: string;\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(commandParams.gatewayClientScopes).toEqual(["operator.write", "operator.pairing"]);
     expect(commandParams.sessionKey).toBe("agent:main:whatsapp:direct:test-user");
     expect(commandParams.sessionId).toBe("session-plugin-command");
@@ -109,9 +115,14 @@ describe("handlePluginCommand", () => {
     await handlePluginCommand(params, true);
 
     expect(executePluginCommandMock).toHaveBeenCalledTimes(1);
-    const [[commandParams]] = executePluginCommandMock.mock.calls as unknown as Array<
-      [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]
-    >;
+    const [commandParams] = expectDefined(
+      (
+        executePluginCommandMock.mock.calls as unknown as Array<
+          [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]
+        >
+      )[0],
+      "(executePluginCommandMock.mock.calls as unknown as Array<\n        [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]\n      >)[0] test invariant",
+    );
     expect(commandParams.sessionId).toBe("target-session");
     expect(commandParams.sessionFile).toBe("/tmp/target-session.jsonl");
     expect(commandParams.authProfileId).toBe("openai:owner@example.com");

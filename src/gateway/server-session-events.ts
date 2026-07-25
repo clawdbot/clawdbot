@@ -4,6 +4,11 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
+import {
+  loadSessionEntryReadOnly as loadAccessorSessionEntry,
+  resolveTranscriptSessionKeyBySessionId,
+} from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -15,7 +20,10 @@ import type {
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
-import { buildGatewaySessionEventFields } from "./session-event-payload.js";
+import {
+  buildGatewaySessionEventFields,
+  buildGatewaySessionEventRow,
+} from "./session-event-payload.js";
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -23,7 +31,7 @@ import {
 } from "./session-transcript-readers.js";
 import {
   loadGatewaySessionRow,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   type GatewaySessionRow,
 } from "./session-utils.js";
 
@@ -81,7 +89,14 @@ function buildGatewaySessionSnapshot(params: {
   if (!sessionRow) {
     return {};
   }
-  const session = params.includeSession ? { ...sessionRow } : undefined;
+  // Nested snapshots are the UI merge source, so preserve explicit clear semantics there too.
+  const session = params.includeSession
+    ? {
+        ...buildGatewaySessionEventRow(sessionRow),
+        createdActor: sessionRow.createdActor ?? null,
+        thinkingLevel: sessionRow.thinkingLevel ?? null,
+      }
+    : undefined;
   if (session && sessionRow.key === "global" && !params.agentId) {
     // The unscoped global row hides goal state to avoid presenting one agent's
     // scoped goal as the global/default session goal.
@@ -135,9 +150,18 @@ async function handleTranscriptUpdateBroadcast(
   },
   update: InternalSessionTranscriptUpdate,
 ): Promise<void> {
+  const sqliteMarker = parseSqliteSessionFileMarker(update.sessionFile);
+  const storageAgentId = update.target?.agentId ?? update.agentId ?? sqliteMarker?.agentId;
   const sessionKey =
     update.target?.sessionKey ??
     update.sessionKey ??
+    (sqliteMarker
+      ? resolveTranscriptSessionKeyBySessionId({
+          agentId: storageAgentId,
+          sessionId: sqliteMarker.sessionId,
+          storePath: sqliteMarker.storePath,
+        })
+      : undefined) ??
     (update.sessionFile ? resolveSessionKeyForTranscriptFile(update.sessionFile) : undefined);
   if (!sessionKey || update.message === undefined) {
     return;
@@ -166,11 +190,22 @@ async function handleTranscriptUpdateBroadcast(
   if (messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
-    const { entry, storePath } = loadSessionEntry(sessionKey, { agentId: visibleAgentId });
+    const markerEntry = sqliteMarker
+      ? loadAccessorSessionEntry({
+          agentId: storageAgentId,
+          sessionKey,
+          storePath: sqliteMarker.storePath,
+        })
+      : undefined;
+    const fallbackTarget = markerEntry
+      ? undefined
+      : loadSessionEntryReadOnly(sessionKey, { agentId: visibleAgentId });
+    const entry = markerEntry ?? fallbackTarget?.entry;
+    const storePath = sqliteMarker?.storePath ?? fallbackTarget?.storePath;
     messageSeq = entry?.sessionId
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync({
-            agentId: visibleAgentId,
+            agentId: storageAgentId ?? visibleAgentId,
             sessionEntry: entry,
             sessionId: entry.sessionId,
             sessionKey,
@@ -255,6 +290,11 @@ export function createLifecycleEventBroadcastHandler(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   return (event: SessionLifecycleEvent): void => {
+    const swarmEvent = event as SessionLifecycleEvent & {
+      swarmGroupId?: string;
+      kind?: "phase" | "log";
+      text?: string;
+    };
     const connIds = params.sessionEventSubscribers.getAll();
     if (connIds.size === 0) {
       return;
@@ -286,6 +326,13 @@ export function createLifecycleEventBroadcastHandler(params: {
           hasActiveRun: activeRunState?.active,
           activeRunIds: activeRunState?.runIds,
         }),
+        ...(swarmEvent.swarmGroupId
+          ? {
+              swarmGroupId: swarmEvent.swarmGroupId,
+              kind: swarmEvent.kind,
+              text: swarmEvent.text,
+            }
+          : {}),
       },
       connIds,
       { dropIfSlow: true },

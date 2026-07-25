@@ -174,15 +174,6 @@ export function listRegisteredMemoryEmbeddingProviders(): RegisteredMemoryEmbedd
 export function listMemoryEmbeddingProviders(): MemoryEmbeddingProviderAdapter[] {
   return listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter);
 }
-
-/** Replaces registered memory embedding providers with adapter-only state. */
-export function restoreMemoryEmbeddingProviders(adapters: MemoryEmbeddingProviderAdapter[]): void {
-  getMemoryEmbeddingProviders().clear();
-  for (const adapter of adapters) {
-    registerMemoryEmbeddingProvider(adapter);
-  }
-}
-
 /** Replaces registered memory embedding providers while preserving metadata. */
 export function restoreRegisteredMemoryEmbeddingProviders(
   entries: RegisteredMemoryEmbeddingProvider[],

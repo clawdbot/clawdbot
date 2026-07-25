@@ -52,7 +52,6 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./engine-storage",
   "./multimodal",
   "./query",
-  "./runtime",
   "./runtime-cli",
   "./runtime-core",
   "./runtime-files",
@@ -62,6 +61,7 @@ const MEMORY_HOST_SDK_EXPORTS = [
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
   "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
 ] as const;
 const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
@@ -118,10 +118,12 @@ function collectCodeFiles(relativeDir: string): string[] {
 }
 
 function collectCoreReferenceFiles(relativeDir: string): string[] {
-  return collectCodeFiles(relativeDir).filter((file) => {
-    const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
-    return source.includes("../../../../src/") || source.includes("../../../src/");
-  });
+  return collectCodeFiles(relativeDir)
+    .filter((file) => !file.endsWith(".test.ts"))
+    .filter((file) => {
+      const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
+      return source.includes("../../../../src/") || source.includes("../../../src/");
+    });
 }
 
 function collectOpenClawRuntimeDirectImportFiles(relativeDir: string): string[] {
@@ -201,6 +203,7 @@ describe("opt-in extension package boundaries", () => {
       "../../packages/media-generation-core/src/**/*.ts",
       "../../packages/model-catalog-core/src/**/*.ts",
       "../../packages/normalization-core/src/**/*.ts",
+      "../../packages/retry/src/**/*.ts",
       "../../packages/acp-core/src/**/*.ts",
       "../../packages/terminal-core/src/**/*.ts",
       "../../src/plugin-sdk/**/*.ts",
@@ -277,13 +280,6 @@ describe("opt-in extension package boundaries", () => {
     );
     expect(packageJson.exports?.["./provider-model-types"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-model-types.d.ts",
-    );
-    expect(packageJson.exports?.["./channel-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/channel-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./compat"]?.types).toBe("./dist/src/plugin-sdk/compat.d.ts");
-    expect(packageJson.exports?.["./config-types"]?.types).toBe(
-      "./dist/src/plugin-sdk/config-types.d.ts",
     );
     expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/infra-runtime.d.ts",

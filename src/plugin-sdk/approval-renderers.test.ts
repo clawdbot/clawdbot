@@ -7,13 +7,90 @@ import {
   buildApprovalResolvedReplyPayload,
   buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
+  buildTypedApprovalPendingReplyPayload,
+  buildTypedPluginApprovalPendingReplyPayload,
 } from "./approval-renderers.js";
 
 describe("plugin-sdk/approval-renderers", () => {
+  it("preserves command controls when shipped approvalKind metadata is supplied", () => {
+    expect(
+      buildApprovalPendingReplyPayload({
+        approvalKind: "plugin",
+        approvalId: "plugin:legacy-approval",
+        approvalSlug: "legacy-a",
+        text: "Approval required",
+        allowedDecisions: ["deny"],
+      }),
+    ).toEqual({
+      text: "Approval required",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Deny",
+                action: { type: "command", command: "/approve plugin:legacy-approval deny" },
+                value: "/approve plugin:legacy-approval deny",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      },
+      channelData: {
+        execApproval: {
+          approvalId: "plugin:legacy-approval",
+          approvalSlug: "legacy-a",
+          approvalKind: "plugin",
+          agentId: undefined,
+          allowedDecisions: ["deny"],
+          sessionKey: undefined,
+          state: "pending",
+        },
+      },
+    });
+  });
+
+  it("preserves command controls in the shipped plugin approval builder", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-legacy",
+        request: {
+          title: "Sensitive action",
+          description: "Needs approval",
+          allowedDecisions: ["allow-once"],
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+      },
+      nowMs: 1_000,
+    });
+
+    expect(payload.text).toContain("Reply with: /approve plugin-legacy allow-once");
+    expect(payload.text).not.toContain("allow-once|deny");
+    expect(payload.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              action: { type: "command", command: "/approve plugin-legacy allow-once" },
+              value: "/approve plugin-legacy allow-once",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it.each([
     {
-      name: "builds shared approval payloads with generic presentation commands",
-      payload: buildApprovalPendingReplyPayload({
+      name: "builds shared approval payloads with typed plugin decisions",
+      payload: buildTypedApprovalPendingReplyPayload({
+        approvalKind: "plugin",
         approvalId: "plugin:approval-123",
         approvalSlug: "plugin:a",
         text: "Approval required @everyone",
@@ -27,28 +104,31 @@ describe("plugin-sdk/approval-renderers", () => {
               {
                 label: "Allow Once",
                 action: {
-                  type: "command",
-                  command: "/approve plugin:approval-123 allow-once",
+                  type: "approval",
+                  approvalId: "plugin:approval-123",
+                  approvalKind: "plugin",
+                  decision: "allow-once",
                 },
-                value: "/approve plugin:approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
                 action: {
-                  type: "command",
-                  command: "/approve plugin:approval-123 allow-always",
+                  type: "approval",
+                  approvalId: "plugin:approval-123",
+                  approvalKind: "plugin",
+                  decision: "allow-always",
                 },
-                value: "/approve plugin:approval-123 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
                 action: {
-                  type: "command",
-                  command: "/approve plugin:approval-123 deny",
+                  type: "approval",
+                  approvalId: "plugin:approval-123",
+                  approvalKind: "plugin",
+                  decision: "deny",
                 },
-                value: "/approve plugin:approval-123 deny",
                 style: "danger",
               },
             ],
@@ -59,7 +139,7 @@ describe("plugin-sdk/approval-renderers", () => {
     },
     {
       name: "builds plugin pending payloads with approval metadata and extra channel data",
-      payload: buildPluginApprovalPendingReplyPayload({
+      payload: buildTypedPluginApprovalPendingReplyPayload({
         request: {
           id: "plugin-approval-123",
           request: {
@@ -86,28 +166,31 @@ describe("plugin-sdk/approval-renderers", () => {
               {
                 label: "Allow Once",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-approval-123 allow-once",
+                  type: "approval",
+                  approvalId: "plugin-approval-123",
+                  approvalKind: "plugin",
+                  decision: "allow-once",
                 },
-                value: "/approve plugin-approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-approval-123 allow-always",
+                  type: "approval",
+                  approvalId: "plugin-approval-123",
+                  approvalKind: "plugin",
+                  decision: "allow-always",
                 },
-                value: "/approve plugin-approval-123 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-approval-123 deny",
+                  type: "approval",
+                  approvalId: "plugin-approval-123",
+                  approvalKind: "plugin",
+                  decision: "deny",
                 },
-                value: "/approve plugin-approval-123 deny",
                 style: "danger",
               },
             ],
@@ -130,22 +213,25 @@ describe("plugin-sdk/approval-renderers", () => {
       },
     },
     {
-      name: "builds plugin pending payloads with request-scoped decisions",
-      payload: buildPluginApprovalPendingReplyPayload({
+      name: "adds fail-closed deny to request-scoped plugin decisions",
+      payload: buildTypedPluginApprovalPendingReplyPayload({
         request: {
           id: "plugin-approval-123",
           request: {
             title: "Sensitive action",
             description: "Needs approval",
-            allowedDecisions: ["allow-once", "deny"],
+            allowedDecisions: ["allow-once"],
           },
           createdAtMs: 1_000,
           expiresAtMs: 61_000,
         },
         nowMs: 1_000,
+        allowedDecisions: ["allow-once"],
       }),
-      textExpected: (text: string) =>
-        expect(text).toContain("Reply with: /approve plugin-approval-123 allow-once|deny"),
+      textExpected: (text: string) => {
+        expect(text).toContain("Reply with: /approve plugin-approval-123 allow-once");
+        expect(text).not.toContain("allow-once|deny");
+      },
       presentationExpected: {
         blocks: [
           {
@@ -154,19 +240,21 @@ describe("plugin-sdk/approval-renderers", () => {
               {
                 label: "Allow Once",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-approval-123 allow-once",
+                  type: "approval",
+                  approvalId: "plugin-approval-123",
+                  approvalKind: "plugin",
+                  decision: "allow-once",
                 },
-                value: "/approve plugin-approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Deny",
                 action: {
-                  type: "command",
-                  command: "/approve plugin-approval-123 deny",
+                  type: "approval",
+                  approvalId: "plugin-approval-123",
+                  approvalKind: "plugin",
+                  decision: "deny",
                 },
-                value: "/approve plugin-approval-123 deny",
                 style: "danger",
               },
             ],

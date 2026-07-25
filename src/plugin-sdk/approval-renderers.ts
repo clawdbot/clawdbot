@@ -2,8 +2,10 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildApprovalPresentation,
+  buildTypedApprovalPresentation,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   buildPluginApprovalRequestMessage,
   buildPluginApprovalResolvedMessage,
@@ -15,10 +17,7 @@ import type { ReplyPayload } from "./reply-payload.js";
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
-/** Build a pending approval reply payload using the portable presentation API. */
-export function buildApprovalPendingReplyPayload(params: {
-  /** Approval surface recorded in channel metadata; defaults to exec approvals. */
-  approvalKind?: "exec" | "plugin";
+type BuildApprovalPendingReplyPayloadParams = {
   /** Stable approval id used by `/approve` commands and metadata correlation. */
   approvalId: string;
   /** Short channel-facing approval slug for compact metadata displays. */
@@ -33,7 +32,12 @@ export function buildApprovalPendingReplyPayload(params: {
   sessionKey?: string | null;
   /** Channel-specific metadata merged with the shared approval metadata. */
   channelData?: Record<string, unknown>;
-}): ReplyPayload {
+};
+
+/** Build a shipped command-backed approval payload. */
+export function buildApprovalPendingReplyPayload(
+  params: BuildApprovalPendingReplyPayloadParams & { approvalKind?: "exec" | "plugin" },
+): ReplyPayload {
   // Keep defaults aligned with the generic approval command UI when callers do
   // not provide request-scoped decision restrictions.
   const allowedDecisions = params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
@@ -55,6 +59,21 @@ export function buildApprovalPendingReplyPayload(params: {
       },
       ...params.channelData,
     },
+  };
+}
+
+/** Build a pending approval payload with canonical typed decision actions. */
+export function buildTypedApprovalPendingReplyPayload(
+  params: BuildApprovalPendingReplyPayloadParams & { approvalKind: "exec" | "plugin" },
+): ReplyPayload {
+  const payload = buildApprovalPendingReplyPayload(params);
+  return {
+    ...payload,
+    presentation: buildTypedApprovalPresentation({
+      approvalId: params.approvalId,
+      approvalKind: params.approvalKind,
+      allowedDecisions: params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS,
+    }),
   };
 }
 
@@ -82,8 +101,7 @@ export function buildApprovalResolvedReplyPayload(params: {
   };
 }
 
-/** Build pending plugin approval copy and metadata from a plugin approval request. */
-export function buildPluginApprovalPendingReplyPayload(params: {
+type BuildPluginApprovalPendingReplyPayloadParams = {
   /** Plugin approval request to render. */
   request: PluginApprovalRequest;
   /** Current time used for request expiry copy. */
@@ -96,7 +114,12 @@ export function buildPluginApprovalPendingReplyPayload(params: {
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   /** Channel-specific metadata merged with the shared approval metadata. */
   channelData?: Record<string, unknown>;
-}): ReplyPayload {
+};
+
+/** Build pending plugin approval copy and metadata from a plugin approval request. */
+export function buildPluginApprovalPendingReplyPayload(
+  params: BuildPluginApprovalPendingReplyPayloadParams,
+): ReplyPayload {
   return buildApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.request.id,
@@ -105,6 +128,22 @@ export function buildPluginApprovalPendingReplyPayload(params: {
     allowedDecisions:
       params.allowedDecisions ??
       resolvePluginApprovalRequestAllowedDecisions(params.request.request),
+    channelData: params.channelData,
+  });
+}
+
+/** Build a plugin approval prompt with canonical typed decision actions. */
+export function buildTypedPluginApprovalPendingReplyPayload(
+  params: BuildPluginApprovalPendingReplyPayloadParams,
+): ReplyPayload {
+  return buildTypedApprovalPendingReplyPayload({
+    approvalKind: "plugin",
+    approvalId: params.request.id,
+    approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
+    text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
+    allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
+      allowedDecisions: params.allowedDecisions ?? params.request.request.allowedDecisions,
+    }),
     channelData: params.channelData,
   });
 }

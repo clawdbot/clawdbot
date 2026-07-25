@@ -2,9 +2,8 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
+  buildProviderReplayFamilyHooks,
   matchesExactOrPrefix,
-  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
-  resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
@@ -16,6 +15,8 @@ import {
   normalizeOpencodeZenBaseUrl,
   resolveOpencodeZenModel,
 } from "./provider-catalog.js";
+import { resolveThinkingProfile as resolveOpencodeThinkingProfile } from "./provider-policy-api.js";
+import { registerOpenCodeSessionCatalog } from "./session-catalog-plugin.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
@@ -148,10 +149,11 @@ export default definePluginEntry({
         },
       },
       augmentModelCatalog: () => listOpencodeZenModelCatalogEntries(),
-      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
-      resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
+      resolveThinkingProfile: resolveOpencodeThinkingProfile,
     });
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);
+    registerOpenCodeSessionCatalog(api);
   },
 });

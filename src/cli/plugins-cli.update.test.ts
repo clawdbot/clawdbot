@@ -1,14 +1,12 @@
 // Plugins CLI update tests cover plugin update command behavior and output.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { hashConfigIncludeRaw } from "../config/includes.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import {
   loadConfig,
+  notifyGatewayPluginMetadataChanged,
   readConfigFileSnapshotForWrite,
   refreshPluginRegistry,
   registerPluginsCli,
@@ -18,6 +16,7 @@ import {
   runtimeErrors,
   runtimeLogs,
   setInstalledPluginIndexInstallRecords,
+  setHookInstallRecords,
   updateNpmInstalledHookPacks,
   updateNpmInstalledPlugins,
   writeConfigFile,
@@ -91,6 +90,7 @@ function expectSingleCallParams(mockFn: ReturnType<typeof vi.fn>) {
 function primeUpdateConfigSnapshot(params: {
   config: OpenClawConfig;
   configPath?: string;
+  hash?: string;
   loadedConfig?: OpenClawConfig;
   parsed?: Record<string, unknown>;
   runtimeConfig?: OpenClawConfig;
@@ -98,13 +98,12 @@ function primeUpdateConfigSnapshot(params: {
   valid?: boolean;
   includeFileHashesForWrite?: Record<string, string>;
   includeFileTargetsForWrite?: Record<string, string>;
-}): void {
+}) {
   const configPath = params.configPath ?? path.join(process.cwd(), "openclaw.json5");
   const parsed = params.parsed ?? (params.config as Record<string, unknown>);
   const sourceConfig = params.sourceConfig ?? params.config;
   const runtimeConfig = params.runtimeConfig ?? params.config;
-  loadConfig.mockReturnValue(params.loadedConfig ?? params.config);
-  readConfigFileSnapshotForWrite.mockResolvedValue({
+  const prepared = {
     snapshot: {
       path: configPath,
       exists: true,
@@ -115,7 +114,7 @@ function primeUpdateConfigSnapshot(params: {
       runtimeConfig,
       valid: params.valid ?? true,
       config: runtimeConfig,
-      hash: "update-config",
+      hash: params.hash ?? "update-config",
       issues: [],
       warnings: [],
       legacyIssues: [],
@@ -127,7 +126,10 @@ function primeUpdateConfigSnapshot(params: {
       includeFileHashesForWrite: params.includeFileHashesForWrite,
       includeFileTargetsForWrite: params.includeFileTargetsForWrite,
     },
-  });
+  };
+  loadConfig.mockReturnValue(params.loadedConfig ?? params.config);
+  readConfigFileSnapshotForWrite.mockResolvedValue(prepared);
+  return prepared;
 }
 
 function primeBlockedUpdateConfig(section: "hooks" | "plugins", config: OpenClawConfig): void {
@@ -194,38 +196,16 @@ describe("plugins cli update", () => {
   });
 
   it("updates tracked hook packs through plugins update", async () => {
-    const cfg = {
-      hooks: {
-        internal: {
-          installs: {
-            "demo-hooks": {
-              source: "npm",
-              spec: "@acme/demo-hooks@1.0.0",
-              installPath: "/tmp/hooks/demo-hooks",
-              resolvedName: "@acme/demo-hooks",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const nextConfig = {
-      hooks: {
-        internal: {
-          installs: {
-            "demo-hooks": {
-              source: "npm",
-              spec: "@acme/demo-hooks@1.1.0",
-              installPath: "/tmp/hooks/demo-hooks",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = {} as OpenClawConfig;
+    const nextConfig = cfg;
 
-    primeUpdateConfigSnapshot({
-      config: cfg,
-      includeFileHashesForWrite: {
-        "/tmp/hooks.json5": "hooks-start-hash",
+    primeUpdateConfigSnapshot({ config: cfg });
+    setHookInstallRecords({
+      "demo-hooks": {
+        source: "npm",
+        spec: "@acme/demo-hooks@1.0.0",
+        installPath: "/tmp/hooks/demo-hooks",
+        resolvedName: "@acme/demo-hooks",
       },
     });
     updateNpmInstalledPlugins.mockResolvedValue({
@@ -251,32 +231,15 @@ describe("plugins cli update", () => {
     expect(hookUpdateParams.config).toBe(cfg);
     expect(hookUpdateParams.hookIds).toEqual(["demo-hooks"]);
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
-    expect(replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig,
-      baseHash: "update-config",
-      writeOptions: expect.objectContaining({
-        includeFileHashesForWrite: {
-          "/tmp/hooks.json5": "hooks-start-hash",
-        },
-      }),
-    });
+    expect(replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig, baseHash: "update-config" }),
+    );
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expectRestartNoticeLogged();
   });
 
   it("uses the mutation-start snapshot for updater input and hook selection", async () => {
     const loadedConfig = {
-      hooks: {
-        internal: {
-          installs: {
-            "old-hooks": {
-              source: "npm",
-              spec: "@acme/old-hooks@1.0.0",
-              installPath: "/tmp/hooks/old-hooks",
-            },
-          },
-        },
-      },
       plugins: {
         entries: {
           alpha: { enabled: true },
@@ -284,17 +247,6 @@ describe("plugins cli update", () => {
       },
     } as OpenClawConfig;
     const snapshotConfig = {
-      hooks: {
-        internal: {
-          installs: {
-            "new-hooks": {
-              source: "npm",
-              spec: "@acme/new-hooks@1.0.0",
-              installPath: "~/.openclaw/hooks/new-hooks",
-            },
-          },
-        },
-      },
       plugins: {
         entries: {
           alpha: { enabled: false },
@@ -313,23 +265,19 @@ describe("plugins cli update", () => {
       loadedConfig,
       runtimeConfig: {
         ...snapshotConfig,
-        hooks: {
-          internal: {
-            installs: {
-              "new-hooks": {
-                source: "npm",
-                spec: "@acme/new-hooks@1.0.0",
-                installPath: "/home/test/.openclaw/hooks/new-hooks",
-              },
-            },
-          },
-        },
         messages: {
           ackReactionScope: "group-mentions",
         },
       },
     });
     setInstalledPluginIndexInstallRecords(installRecords);
+    setHookInstallRecords({
+      "new-hooks": {
+        source: "npm",
+        spec: "@acme/new-hooks@1.0.0",
+        installPath: "/home/test/.openclaw/hooks/new-hooks",
+      },
+    });
     updateNpmInstalledPlugins.mockImplementation(async (params: { config: OpenClawConfig }) => ({
       config: params.config,
       changed: false,
@@ -347,17 +295,6 @@ describe("plugins cli update", () => {
     const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacks);
     expect(pluginUpdateParams.config).toEqual({
       ...snapshotConfig,
-      hooks: {
-        internal: {
-          installs: {
-            "new-hooks": {
-              source: "npm",
-              spec: "@acme/new-hooks@1.0.0",
-              installPath: "/home/test/.openclaw/hooks/new-hooks",
-            },
-          },
-        },
-      },
       messages: {
         ackReactionScope: "group-mentions",
       },
@@ -369,11 +306,21 @@ describe("plugins cli update", () => {
     expect(hookUpdateParams.hookIds).toEqual(["new-hooks"]);
   });
 
-  it("uses resolved shipped install records instead of raw env placeholders", async () => {
-    const cfg = createTrackedPluginConfig({
-      pluginId: "alpha",
-      spec: "@openclaw/alpha@1.0.0",
-    });
+  it("uses persisted install records instead of retired config records", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const persistedRecords = {
+      alpha: {
+        source: "npm",
+        spec: "@openclaw/alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      },
+    } as const;
     primeUpdateConfigSnapshot({
       config: cfg,
       parsed: {
@@ -388,8 +335,15 @@ describe("plugins cli update", () => {
         },
       },
     });
+    setInstalledPluginIndexInstallRecords(persistedRecords);
     updateNpmInstalledPlugins.mockResolvedValue({
-      config: cfg,
+      config: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: persistedRecords,
+        },
+      } as OpenClawConfig,
       changed: false,
       outcomes: [],
     });
@@ -397,7 +351,13 @@ describe("plugins cli update", () => {
     await runPluginsCommand(["plugins", "update", "alpha"]);
 
     const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
-    expect(updateParams.config).toEqual(cfg);
+    expect(updateParams.config).toEqual({
+      ...cfg,
+      plugins: {
+        ...cfg.plugins,
+        installs: persistedRecords,
+      },
+    });
   });
 
   it("rejects invalid config snapshots before updater side effects", async () => {
@@ -415,33 +375,6 @@ describe("plugins cli update", () => {
 
     expect(runtimeErrors.at(-1)).toBe(
       "Cannot update plugins or hooks while the config is invalid.",
-    );
-    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("blocks hook pack updates before updater side effects when hooks config is include-owned", async () => {
-    const cfg = {
-      hooks: {
-        internal: {
-          installs: {
-            "demo-hooks": {
-              source: "npm",
-              spec: "@acme/demo-hooks@1.0.0",
-              installPath: "/tmp/hooks/demo-hooks",
-              resolvedName: "@acme/demo-hooks",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    primeBlockedUpdateConfig("hooks", cfg);
-
-    await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow("__exit__:1");
-
-    expect(runtimeErrors.at(-1)).toContain(
-      "Config hooks are stored in an external or unresolved top-level $include",
     );
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
@@ -488,7 +421,7 @@ describe("plugins cli update", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
       nextConfig.plugins?.installs,
     );
-    expect(writeConfigFile).toHaveBeenCalledWith(cfg);
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("allows scoped non-npm updates beside include-owned plugin config", async () => {
@@ -527,7 +460,326 @@ describe("plugins cli update", () => {
     expect(runtimeErrors).toEqual([]);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(pluginRecords);
-    expect(writeConfigFile).toHaveBeenCalledWith(cfg);
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite source config for persisted install record-only updates", async () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+        port: 18889,
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+      channels: {
+        discord: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        entries: {
+          brave: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const sourceCfg = structuredClone(cfg);
+    delete sourceCfg.gateway;
+    const previousRecords = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
+        installPath: "/tmp/brave-beta",
+        resolvedName: "@openclaw/brave-plugin",
+        resolvedVersion: "2026.6.11-beta.2",
+      },
+    } as const;
+    const nextRecords = {
+      brave: {
+        ...previousRecords.brave,
+        spec: "@openclaw/brave-plugin@2026.6.11",
+        installPath: "/tmp/brave-stable",
+        resolvedVersion: "2026.6.11",
+      },
+    } as const;
+    primeUpdateConfigSnapshot({
+      config: cfg,
+      parsed: sourceCfg as Record<string, unknown>,
+      runtimeConfig: cfg,
+      sourceConfig: sourceCfg,
+    });
+    setInstalledPluginIndexInstallRecords(previousRecords);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: nextRecords,
+        },
+      } as OpenClawConfig,
+      changed: true,
+      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+    });
+
+    await runPluginsCommand(["plugins", "update", "brave"]);
+
+    expect(runtimeErrors).toEqual([]);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords);
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: sourceCfg,
+      installRecords: nextRecords,
+      reason: "source-changed",
+    });
+    expect(notifyGatewayPluginMetadataChanged).toHaveBeenCalledWith(cfg);
+    expectRestartNoticeLogged();
+  });
+
+  it("rolls back persisted install records when source config changes during a records-only update", async () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+        port: 18889,
+      },
+      plugins: {
+        entries: {
+          brave: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const changedCfg = {
+      ...cfg,
+      gateway: {
+        ...cfg.gateway,
+        port: 18890,
+      },
+    } as OpenClawConfig;
+    const previousRecords = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
+        installPath: "/tmp/brave-beta",
+        resolvedName: "@openclaw/brave-plugin",
+        resolvedVersion: "2026.6.11-beta.2",
+      },
+    } as const;
+    const nextRecords = {
+      brave: {
+        ...previousRecords.brave,
+        spec: "@openclaw/brave-plugin@2026.6.11",
+        installPath: "/tmp/brave-stable",
+        resolvedVersion: "2026.6.11",
+      },
+    } as const;
+    const initialSnapshot = primeUpdateConfigSnapshot({ config: cfg });
+    const changedSnapshot = {
+      ...initialSnapshot,
+      snapshot: {
+        ...initialSnapshot.snapshot,
+        raw: JSON.stringify(changedCfg),
+        parsed: changedCfg as Record<string, unknown>,
+        resolved: changedCfg,
+        sourceConfig: changedCfg,
+        runtimeConfig: changedCfg,
+        config: changedCfg,
+        hash: "changed-config",
+      },
+    };
+    readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(changedSnapshot);
+    setInstalledPluginIndexInstallRecords(previousRecords);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: nextRecords,
+        },
+      } as OpenClawConfig,
+      changed: true,
+      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+    });
+
+    await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
+      "config changed since last load",
+    );
+
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      1,
+      nextRecords,
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      2,
+      previousRecords,
+    );
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(notifyGatewayPluginMetadataChanged).not.toHaveBeenCalled();
+  });
+
+  it("rolls back persisted install records when included config changes during a records-only update", async () => {
+    const includePath = "/tmp/plugins.json5";
+    const includeTarget = "/tmp/plugins.json5";
+    const cfg = {
+      plugins: {
+        entries: {
+          brave: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const previousRecords = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
+        installPath: "/tmp/brave-beta",
+        resolvedName: "@openclaw/brave-plugin",
+        resolvedVersion: "2026.6.11-beta.2",
+      },
+    } as const;
+    const nextRecords = {
+      brave: {
+        ...previousRecords.brave,
+        spec: "@openclaw/brave-plugin@2026.6.11",
+        installPath: "/tmp/brave-stable",
+        resolvedVersion: "2026.6.11",
+      },
+    } as const;
+    const initialSnapshot = primeUpdateConfigSnapshot({
+      config: cfg,
+      parsed: {
+        plugins: {
+          $include: includePath,
+        },
+      },
+      includeFileHashesForWrite: {
+        [includePath]: "include-start",
+      },
+      includeFileTargetsForWrite: {
+        [includePath]: includeTarget,
+      },
+    });
+    const changedSnapshot = {
+      ...initialSnapshot,
+      writeOptions: {
+        ...initialSnapshot.writeOptions,
+        includeFileHashesForWrite: {
+          [includePath]: "include-changed",
+        },
+      },
+    };
+    readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(changedSnapshot);
+    setInstalledPluginIndexInstallRecords(previousRecords);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: nextRecords,
+        },
+      } as OpenClawConfig,
+      changed: true,
+      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+    });
+
+    await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
+      "included config changed since last load",
+    );
+
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      1,
+      nextRecords,
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      2,
+      previousRecords,
+    );
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+  });
+
+  it("rolls back persisted install records when records-only update invalidates config", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          brave: {
+            enabled: true,
+            config: {
+              oldOption: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const previousRecords = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
+        installPath: "/tmp/brave-beta",
+        resolvedName: "@openclaw/brave-plugin",
+        resolvedVersion: "2026.6.11-beta.2",
+      },
+    } as const;
+    const nextRecords = {
+      brave: {
+        ...previousRecords.brave,
+        spec: "@openclaw/brave-plugin@2026.6.11",
+        installPath: "/tmp/brave-stable",
+        resolvedVersion: "2026.6.11",
+      },
+    } as const;
+    const initialSnapshot = primeUpdateConfigSnapshot({ config: cfg });
+    const invalidSnapshot = {
+      ...initialSnapshot,
+      snapshot: {
+        ...initialSnapshot.snapshot,
+        valid: false,
+        issues: [
+          {
+            path: "plugins.entries.brave.config.oldOption",
+            message: "invalid config for plugin brave: must NOT have additional properties",
+          },
+        ],
+      },
+    };
+    readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(invalidSnapshot);
+    setInstalledPluginIndexInstallRecords(previousRecords);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: nextRecords,
+        },
+      } as OpenClawConfig,
+      changed: true,
+      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+    });
+
+    await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
+      "invalid config for plugin brave",
+    );
+
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      1,
+      nextRecords,
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      2,
+      previousRecords,
+    );
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("blocks legacy plugin id migration before updater side effects", async () => {
@@ -647,19 +899,8 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("preflights legacy plugin-record cleanup before hook-only updater side effects", async () => {
+  it("ignores retired plugin records during hook-only ownership checks", async () => {
     const cfg = {
-      hooks: {
-        internal: {
-          installs: {
-            "demo-hooks": {
-              source: "npm",
-              spec: "@acme/demo-hooks@1.0.0",
-              installPath: "/tmp/hooks/demo-hooks",
-            },
-          },
-        },
-      },
       plugins: {
         installs: {
           legacy: {
@@ -671,16 +912,23 @@ describe("plugins cli update", () => {
       },
     } as OpenClawConfig;
     primeBlockedUpdateConfig("plugins", cfg);
+    setHookInstallRecords({
+      "demo-hooks": {
+        source: "npm",
+        spec: "@acme/demo-hooks@1.0.0",
+        installPath: "/tmp/hooks/demo-hooks",
+      },
+    });
 
-    await expect(runPluginsCommand(["plugins", "update", "demo-hooks"])).rejects.toThrow(
-      "__exit__:1",
-    );
+    await runPluginsCommand(["plugins", "update", "demo-hooks"]);
 
-    expect(runtimeErrors.at(-1)).toContain(
-      "Config plugins are stored in an external or unresolved top-level $include",
-    );
-    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([]);
+    const pluginUpdateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(pluginUpdateParams.config).toEqual({
+      ...cfg,
+      plugins: { installs: {} },
+    });
+    expect(updateNpmInstalledHookPacks).toHaveBeenCalledOnce();
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -745,186 +993,6 @@ describe("plugins cli update", () => {
     expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
     expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("preserves an include-owned plugins section during legacy-record cleanup", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-"));
-    const configPath = path.join(tempRoot, "openclaw.json5");
-    const pluginsPath = path.join(tempRoot, "plugins.json5");
-    const cfg = createTrackedPluginConfig({
-      pluginId: "alpha",
-      spec: "@openclaw/alpha@1.0.0",
-    });
-    const pluginsRaw = `${JSON.stringify(cfg.plugins, null, 2)}\n`;
-    const nextConfig = createTrackedPluginConfig({
-      pluginId: "alpha",
-      spec: "@openclaw/alpha@1.1.0",
-    });
-    fs.writeFileSync(pluginsPath, pluginsRaw);
-    primeUpdateConfigSnapshot({
-      config: cfg,
-      configPath,
-      parsed: { plugins: { $include: "./plugins.json5" } },
-      includeFileHashesForWrite: {
-        [pluginsPath]: hashConfigIncludeRaw(pluginsRaw),
-      },
-      includeFileTargetsForWrite: {
-        [pluginsPath]: fs.realpathSync(pluginsPath),
-      },
-    });
-    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: nextConfig,
-      changed: true,
-      outcomes: [{ pluginId: "alpha", status: "updated", message: "Updated alpha." }],
-    });
-
-    try {
-      await runPluginsCommand(["plugins", "update", "alpha"]);
-
-      expect(runtimeErrors).toEqual([]);
-      expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-      expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
-        nextConfig.plugins?.installs,
-      );
-      expect(writeConfigFile).toHaveBeenCalledWith({ plugins: {} });
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("migrates included legacy install records while updating another indexed plugin", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-"));
-    const configPath = path.join(tempRoot, "openclaw.json5");
-    const pluginsPath = path.join(tempRoot, "plugins.json5");
-    const legacyRecord = {
-      source: "npm",
-      spec: "@openclaw/legacy@1.0.0",
-      installPath: "/tmp/legacy",
-    } as const;
-    const indexedRecord = {
-      source: "npm",
-      spec: "@openclaw/alpha@1.0.0",
-      installPath: "/tmp/alpha",
-    } as const;
-    const updatedIndexedRecord = {
-      ...indexedRecord,
-      spec: "@openclaw/alpha@1.1.0",
-    } as const;
-    const cfg = {
-      plugins: {
-        installs: {
-          legacy: legacyRecord,
-        },
-      },
-    } as OpenClawConfig;
-    const pluginsRaw = `${JSON.stringify(cfg.plugins, null, 2)}\n`;
-    const nextInstallRecords = {
-      alpha: updatedIndexedRecord,
-      legacy: legacyRecord,
-    };
-    fs.writeFileSync(pluginsPath, pluginsRaw);
-    primeUpdateConfigSnapshot({
-      config: cfg,
-      configPath,
-      parsed: { plugins: { $include: "./plugins.json5" } },
-      includeFileHashesForWrite: {
-        [pluginsPath]: hashConfigIncludeRaw(pluginsRaw),
-      },
-      includeFileTargetsForWrite: {
-        [pluginsPath]: fs.realpathSync(pluginsPath),
-      },
-    });
-    setInstalledPluginIndexInstallRecords({
-      alpha: indexedRecord,
-    });
-    updateNpmInstalledPlugins.mockResolvedValue({
-      config: {
-        plugins: {
-          installs: nextInstallRecords,
-        },
-      } as OpenClawConfig,
-      changed: true,
-      outcomes: [{ pluginId: "alpha", status: "updated", message: "Updated alpha." }],
-    });
-
-    try {
-      await runPluginsCommand(["plugins", "update", "alpha"]);
-
-      expect(runtimeErrors).toEqual([]);
-      const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
-      expect(updateParams.config).toEqual({
-        plugins: {
-          installs: {
-            alpha: indexedRecord,
-            legacy: legacyRecord,
-          },
-        },
-      });
-      expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
-        nextInstallRecords,
-      );
-      expect(writeConfigFile).toHaveBeenCalledWith({ plugins: {} });
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("blocks combined plugin and hook updates when either config section uses an include", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-"));
-    const configPath = path.join(tempRoot, "openclaw.json5");
-    const pluginsPath = path.join(tempRoot, "plugins.json5");
-    const pluginsRaw = "{}\n";
-    fs.writeFileSync(pluginsPath, pluginsRaw);
-    const cfg = {
-      hooks: {
-        internal: {
-          installs: {
-            "demo-hooks": {
-              source: "npm",
-              spec: "@acme/demo-hooks@1.0.0",
-              installPath: "/tmp/hooks/demo-hooks",
-            },
-          },
-        },
-      },
-      plugins: {
-        installs: {
-          alpha: {
-            source: "npm",
-            spec: "@openclaw/alpha@1.0.0",
-            installPath: "/tmp/alpha",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    primeUpdateConfigSnapshot({
-      config: cfg,
-      configPath,
-      parsed: {
-        hooks: {},
-        plugins: { $include: "./plugins.json5" },
-      },
-      includeFileHashesForWrite: {
-        [pluginsPath]: hashConfigIncludeRaw(pluginsRaw),
-      },
-      includeFileTargetsForWrite: {
-        [pluginsPath]: fs.realpathSync(pluginsPath),
-      },
-    });
-    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
-
-    try {
-      await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow("__exit__:1");
-      expect(runtimeErrors.at(-1)).toContain(
-        "Config plugins and hooks cannot be updated together while either section uses a top-level $include",
-      );
-      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-      expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
-      expect(writeConfigFile).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
   });
 
   it("exits when update is called without id and without --all", async () => {
@@ -1365,21 +1433,16 @@ describe("plugins cli update", () => {
   });
 
   it("exits non-zero when a hook pack update reports an error", async () => {
-    const cfg = {
-      hooks: {
-        internal: {
-          installs: {
-            "demo-hooks": {
-              source: "npm",
-              spec: "@acme/demo-hooks@1.0.0",
-              installPath: "/tmp/hooks/demo-hooks",
-              resolvedName: "@acme/demo-hooks",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = {} as OpenClawConfig;
     loadConfig.mockReturnValue(cfg);
+    setHookInstallRecords({
+      "demo-hooks": {
+        source: "npm",
+        spec: "@acme/demo-hooks@1.0.0",
+        installPath: "/tmp/hooks/demo-hooks",
+        resolvedName: "@acme/demo-hooks",
+      },
+    });
     updateNpmInstalledPlugins.mockResolvedValue({
       config: cfg,
       changed: false,
@@ -1405,3 +1468,4 @@ describe("plugins cli update", () => {
     expect(runtimeLogs).toContain('Failed to update hook pack "demo-hooks": registry timeout');
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

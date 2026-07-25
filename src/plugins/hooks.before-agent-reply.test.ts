@@ -1,7 +1,7 @@
 // Covers plugin hooks that run before agent replies are emitted.
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
+import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 
 const EVENT = { cleanedBody: "hello world" };
 
@@ -119,6 +119,5 @@ describe("before_agent_reply hook runner (claiming pattern)", () => {
     const runner = createHookRunner(registry);
 
     expect(runner.hasHooks("before_agent_reply")).toBe(true);
-    expect(runner.hasHooks("before_agent_start")).toBe(false);
   });
 });

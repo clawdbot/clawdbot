@@ -1,6 +1,4 @@
 // Doctor cron warnings for model overrides and stale WhatsApp crontab health scripts.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { normalizeChatChannelId } from "../../../channels/ids.js";
@@ -10,15 +8,16 @@ import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../../../cron/delivery-plan.js";
 import type { CronJob } from "../../../cron/types.js";
+import { runExec } from "../../../process/exec.js";
 import { shortenHomePath } from "../../../utils.js";
 
 type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
 
-const execFileAsync = promisify(execFile);
 const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
   /(?:^|\s)(?:"[^"]*ensure-whatsapp\.sh"|'[^']*ensure-whatsapp\.sh'|[^\s#;|&]*ensure-whatsapp\.sh)\b/u;
 const CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT = 3;
 const CRON_DELIVERY_TARGET_ADVISORY_EXAMPLE_LIMIT = 3;
+const CRONTAB_READ_TIMEOUT_MS = 5_000;
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -167,7 +166,7 @@ function listConcreteCronDeliveryTargets(
  * list is resolved lazily so doctor skips the read-only channel snapshot when no job can drift.
  * Returns `null` when no job pins a concrete target or every concrete target is active.
  */
-export function collectCronDeliveryTargetAdvisory(params: {
+function collectCronDeliveryTargetAdvisory(params: {
   jobs: Array<Record<string, unknown>>;
   storePath: string;
   resolveAvailableChannelIds: () => Iterable<string>;
@@ -244,9 +243,9 @@ export function noteCronDeliveryTargetAdvisory(params: {
 }
 
 async function readUserCrontab(): Promise<{ stdout: string; stderr?: string }> {
-  const result = await execFileAsync("crontab", ["-l"], {
-    encoding: "utf8",
-    windowsHide: true,
+  const result = await runExec("crontab", ["-l"], {
+    logOutput: false,
+    timeoutMs: CRONTAB_READ_TIMEOUT_MS,
   });
   return {
     stdout: result.stdout,

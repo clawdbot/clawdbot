@@ -4,19 +4,27 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../../agents/internal-runtime-context.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
   markTaskTerminalById,
   recordTaskProgressByRunId,
-  reloadTaskRegistryFromStore,
+} from "../../tasks/runtime-internal.js";
+import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
+import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import {
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
-} from "../../tasks/runtime-internal.js";
-import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
+} from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
@@ -49,6 +57,7 @@ beforeEach(async () => {
   cancelSessionMock.mockReset();
   killSubagentRunAdminMock.mockReset();
   setTaskRegistryControlRuntimeForTests({
+    cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: cancelSessionMock,
     }),
@@ -101,7 +110,10 @@ async function runTaskHandler(
   params: Record<string, unknown>,
 ) {
   const { calls, respond } = captureRespond();
-  await tasksHandlers[method]({
+  await expectDefined(
+    tasksHandlers[method],
+    "tasksHandlers[method] test invariant",
+  )({
     req: { type: "req", id: `req-${method}`, method },
     params,
     respond,
@@ -281,6 +293,51 @@ describe("tasks gateway handlers", () => {
 
     expect(payload?.task?.status).toBe("completed");
     expect(payload?.task?.title).toBe("Done task");
+    expect(payload?.task?.prompt).toBe("Done task");
+  });
+
+  it("keeps bounded prompts lookup-only", async () => {
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: `Inspect the task prompt ${"x".repeat(5_000)}`,
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    const listed = await runTaskHandler("tasks.list", {});
+    expect(listed.payload?.tasks?.[0]?.prompt).toBeUndefined();
+
+    const { payload } = await getTaskPayload(task.taskId);
+    expect(payload?.task?.prompt).toHaveLength(4_000);
+    expect(payload?.task?.prompt).toMatch(/^Inspect the task prompt/);
+    expect(payload?.task?.prompt).toMatch(/…$/);
+  });
+
+  it("preserves prompt layout while removing internal runtime context", async () => {
+    const visiblePrompt = [
+      "Review this workflow:",
+      "",
+      "  ```yaml",
+      "  steps:",
+      "    - test",
+      "  ```",
+    ].join("\n");
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    const { payload } = await getTaskPayload(task.taskId);
+
+    expect(payload?.task?.prompt).toBe(visiblePrompt);
   });
 
   it("sanitizes task text before exposing SDK summaries", async () => {
@@ -315,7 +372,37 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.title).toBe("Compile artifact");
     expect(payload?.task?.terminalSummary).toBe("Failed after build");
     expect(payload?.task?.error).toBe("Tool failed");
+    expect(payload?.task?.prompt).toBe("Compile artifact");
     expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
+  });
+
+  it("exposes tool activity in task summaries", async () => {
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:activity",
+      runId: "run-tool-activity",
+      task: "Sweep the repo",
+      status: "running",
+      deliveryStatus: "not_applicable",
+    });
+    emitAgentEvent({
+      runId: "run-tool-activity",
+      stream: "tool",
+      data: { phase: "start", name: "read", toolCallId: "call-1" },
+    });
+    emitAgentEvent({
+      runId: "run-tool-activity",
+      stream: "tool",
+      data: { phase: "start", name: "exec", toolCallId: "call-2" },
+    });
+
+    const { payload } = await getTaskPayload(task.taskId);
+
+    expect(payload?.task?.toolUseCount).toBe(2);
+    expect(payload?.task?.lastToolName).toBe("exec");
   });
 
   it("cancels running task records and returns the updated task", async () => {

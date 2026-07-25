@@ -9,12 +9,22 @@ import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
+import {
+  normalizeConversationReadInvocationOrigin,
+  type ConversationReadInvocationOrigin,
+} from "../channels/plugins/conversation-read-origin.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import {
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionStoreEntryProtected,
+} from "../sessions/agent-harness-session-key.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -156,9 +166,13 @@ export async function invokeGatewayTool(params: {
   agentThreadId?: string;
   senderIsOwner?: boolean;
   clientCaps?: string[];
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
 }): Promise<ToolsInvokeOutcome> {
+  const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
+    params.conversationReadOrigin,
+  );
   const toolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
   if (!toolName) {
     return {
@@ -197,6 +211,23 @@ export async function invokeGatewayTool(params: {
       ? (argsRaw as Record<string, unknown>)
       : {};
   const sessionKey = resolveSessionKey({ cfg: params.cfg, input: params.input });
+  const harnessEntry = isAgentHarnessSessionKey(sessionKey)
+    ? resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey }).entry
+    : undefined;
+  if (
+    isAgentHarnessSessionKey(sessionKey) &&
+    (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, harnessEntry))
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      toolName,
+      error: {
+        type: "invalid_request",
+        message: AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+      },
+    };
+  }
   const resolveTools = (disablePluginTools: boolean) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
@@ -207,6 +238,7 @@ export async function invokeGatewayTool(params: {
       agentThreadId: params.agentThreadId,
       senderIsOwner: params.senderIsOwner,
       clientCaps: params.clientCaps,
+      conversationReadOrigin,
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",
@@ -244,8 +276,8 @@ export async function invokeGatewayTool(params: {
     const gatewayTool: AnyAgentTool = tool;
     const idempotencyKey = normalizeOptionalString(params.input.idempotencyKey);
     const toolCallId = idempotencyKey
-      ? `${params.toolCallIdPrefix}-${idempotencyKey}`
-      : `${params.toolCallIdPrefix}-${Date.now()}`;
+      ? `${params.toolCallIdPrefix}-${conversationReadOrigin}-${idempotencyKey}`
+      : `${params.toolCallIdPrefix}-${conversationReadOrigin}-${Date.now()}`;
     const toolArgs = mergeActionIntoArgsIfSupported({
       toolSchema: gatewayTool.parameters,
       action,

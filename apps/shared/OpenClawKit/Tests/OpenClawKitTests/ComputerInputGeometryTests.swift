@@ -23,6 +23,51 @@ struct ComputerInputGeometryTests {
             sourceHeight: sourceHeight)
     }
 
+    @Test func `display frame identity changes with physical display geometry`() {
+        let display = self.display(originX: -1280, originY: 0, width: 1280, height: 800)
+        let original = OpenClawComputerInputGeometry.displayFrameId(
+            displayID: 42,
+            sourceWidth: 2560,
+            sourceHeight: 1600,
+            referenceWidth: 1280,
+            display: display)
+        let repeated = OpenClawComputerInputGeometry.displayFrameId(
+            displayID: 42,
+            sourceWidth: 2560,
+            sourceHeight: 1600,
+            referenceWidth: 1280,
+            display: display)
+        let reindexed = OpenClawComputerInputGeometry.displayFrameId(
+            displayID: 43,
+            sourceWidth: 2560,
+            sourceHeight: 1600,
+            referenceWidth: 1280,
+            display: display)
+        let resized = OpenClawComputerInputGeometry.displayFrameId(
+            displayID: 42,
+            sourceWidth: 1920,
+            sourceHeight: 1200,
+            referenceWidth: 1280,
+            display: display)
+        let moved = OpenClawComputerInputGeometry.displayFrameId(
+            displayID: 42,
+            sourceWidth: 2560,
+            sourceHeight: 1600,
+            referenceWidth: 1280,
+            display: self.display(originX: 0, originY: 0, width: 1280, height: 800))
+
+        let rescaled = OpenClawComputerInputGeometry.displayFrameId(
+            displayID: 42,
+            sourceWidth: 2560,
+            sourceHeight: 1600,
+            referenceWidth: 640,
+            display: display)
+
+        #expect(original.hasPrefix("display-frame:v1:"))
+        #expect(original == repeated)
+        #expect(Set([original, reindexed, resized, moved, rescaled]).count == 5)
+    }
+
     @Test func `maps one to one when capture matches display`() {
         // Source width equals display points and refWidth: captured 1280px over
         // a 1280pt display → 1:1.
@@ -116,6 +161,49 @@ struct ComputerInputGeometryTests {
         #expect(captured == 1280)
     }
 
+    @Test func `accepts finite positive mapping geometry with negative display origins`() {
+        let display = self.display(originX: -2560, originY: -1440, width: 2560, height: 1440)
+        #expect(OpenClawComputerInputGeometry.isValidMappingGeometry(
+            sourceWidth: 2560,
+            sourceHeight: 1440,
+            display: display))
+    }
+
+    @Test func `rejects nonpositive or nonfinite mapping geometry`() {
+        let validDisplay = self.display(originX: -100, originY: 200, width: 1280, height: 800)
+        for invalidSourceWidth in [0, -1, Double.nan, .infinity, -.infinity] {
+            #expect(!OpenClawComputerInputGeometry.isValidMappingGeometry(
+                sourceWidth: invalidSourceWidth,
+                sourceHeight: 800,
+                display: validDisplay))
+        }
+        for invalidSourceHeight in [0, -1, Double.nan, .infinity, -.infinity] {
+            #expect(!OpenClawComputerInputGeometry.isValidMappingGeometry(
+                sourceWidth: 1280,
+                sourceHeight: invalidSourceHeight,
+                display: validDisplay))
+        }
+
+        let invalidDisplays = [
+            display(originX: .nan, originY: 0, width: 1280, height: 800),
+            display(originX: 0, originY: .infinity, width: 1280, height: 800),
+            display(width: 0, height: 800),
+            display(width: -1, height: 800),
+            display(width: .nan, height: 800),
+            display(width: .infinity, height: 800),
+            display(width: 1280, height: 0),
+            display(width: 1280, height: -1),
+            display(width: 1280, height: .nan),
+            display(width: 1280, height: .infinity),
+        ]
+        for display in invalidDisplays {
+            #expect(!OpenClawComputerInputGeometry.isValidMappingGeometry(
+                sourceWidth: 1280,
+                sourceHeight: 800,
+                display: display))
+        }
+    }
+
     @Test func `clamps far-edge and out-of-bounds points strictly inside the display`() {
         let display = self.display(originX: 100, originY: 200, width: 1280, height: 800)
         // The far right/bottom edge maps to origin + size, which belongs to the
@@ -156,11 +244,12 @@ struct ComputerInputGeometryTests {
 
     @Test func `decodes partial act params`() throws {
         let json = """
-        {"action":"left_click","x":12,"y":34,"modifiers":"shift","screenIndex":0,"refWidth":1280}
+        {"action":"left_click","displayFrameId":"display-frame:v1:test","x":12,"y":34,"modifiers":"shift","screenIndex":0,"refWidth":1280}
         """
         let data = try #require(json.data(using: .utf8))
         let params = try JSONDecoder().decode(OpenClawComputerActParams.self, from: data)
         #expect(params.action == .leftClick)
+        #expect(params.displayFrameId == "display-frame:v1:test")
         #expect(params.x == 12)
         #expect(params.modifiers == "shift")
         #expect(params.refWidth == 1280)

@@ -728,9 +728,14 @@ describe("cli program (nodes basics)", () => {
         useStoredDeviceAuth?: boolean;
       };
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("missing scope: operator.read"), {
+        throw Object.assign(new Error("permission denied"), {
           name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
+          gatewayCode: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.read",
+            requiredScopes: ["operator.read"],
+          },
         });
       }
       if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {

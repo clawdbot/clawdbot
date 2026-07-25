@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import { clearLoadPluginMetadataSnapshotMemo } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
@@ -160,7 +159,6 @@ async function expectStaleMetadataSnapshotRebuild(params: {
 
 describe("loadPluginLookUpTable", () => {
   beforeEach(() => {
-    clearLoadPluginMetadataSnapshotMemo();
     listPotentialConfiguredChannelIds
       .mockReset()
       .mockImplementation((config: OpenClawConfig) => Object.keys(config.channels ?? {}));
@@ -263,6 +261,50 @@ describe("loadPluginLookUpTable", () => {
     expect(table.startup.channelPluginIds).toEqual(["telegram"]);
     expect(table.startup.configuredDeferredChannelPluginIds).toStrictEqual([]);
     expect(table.startup.pluginIds).toEqual(["telegram"]);
+  });
+
+  it("excludes ambient-only channels from the suppressed gateway startup plan", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const index = createIndex(plugins);
+    const manifestRegistry: PluginManifestRegistry = { plugins, diagnostics: [] };
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { ambientEnvTriggers?: string },
+      ) => (options?.ambientEnvTriggers === "suppress" ? [] : ["telegram"]),
+    );
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+    const config = { plugins: { slots: { memory: "none" } } } as OpenClawConfig;
+    const env = { TELEGRAM_FAKE_TEST_TRIGGER: "configured" } as NodeJS.ProcessEnv;
+
+    expect(loadPluginLookUpTable({ config, env, index }).startup.pluginIds).toEqual(["telegram"]);
+    expect(
+      loadPluginLookUpTable({
+        config,
+        env,
+        index,
+        ambientEnvTriggers: "suppress",
+      }).startup.pluginIds,
+    ).toStrictEqual([]);
+    expect(
+      loadPluginLookUpTable({
+        config: {
+          ...config,
+          channels: { telegram: { enabled: true } },
+        } as OpenClawConfig,
+        env,
+        index,
+        ambientEnvTriggers: "suppress",
+      }).startup.pluginIds,
+    ).toEqual(["telegram"]);
   });
 
   it("scopes metadata manifest reconstruction for restrictive startup allowlists", async () => {
@@ -647,149 +689,6 @@ describe("loadPluginLookUpTable", () => {
     expect(table.metrics.totalMs).toBe(
       metadataSnapshot.metrics.totalMs + table.metrics.startupPlanMs,
     );
-  });
-
-  it("reuses lookup tables prepared from the same metadata snapshot and activation config", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
-    const config = {
-      channels: {
-        telegram: { token: "configured" },
-      },
-    } as OpenClawConfig;
-    const index = {
-      ...createIndex(plugins),
-      policyHash: resolveInstalledPluginIndexPolicyHash(config),
-    };
-    const manifestRegistry: PluginManifestRegistry = {
-      plugins,
-      diagnostics: [],
-    };
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
-    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
-    const { clearPluginLookUpTableMemoForTest, loadPluginLookUpTable } =
-      await import("./plugin-lookup-table.js");
-    clearPluginLookUpTableMemoForTest();
-
-    const metadataSnapshot = loadPluginMetadataSnapshot({
-      config,
-      env: {},
-      index,
-    });
-    const manifestRegistryLoadCount = loadPluginManifestRegistryForInstalledIndex.mock.calls.length;
-    listPotentialConfiguredChannelIds.mockClear();
-
-    const first = loadPluginLookUpTable({
-      config,
-      env: {},
-      metadataSnapshot,
-    });
-    const second = loadPluginLookUpTable({
-      config,
-      env: {},
-      metadataSnapshot,
-    });
-
-    expect(second).toBe(first);
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(
-      manifestRegistryLoadCount,
-    );
-  });
-
-  it("reuses lookup tables when unrelated env values change", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
-    const config = {} as OpenClawConfig;
-    const index = {
-      ...createIndex(plugins),
-      policyHash: resolveInstalledPluginIndexPolicyHash(config),
-    };
-    const manifestRegistry: PluginManifestRegistry = {
-      plugins,
-      diagnostics: [],
-    };
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
-    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
-    const { clearPluginLookUpTableMemoForTest, loadPluginLookUpTable } =
-      await import("./plugin-lookup-table.js");
-    clearPluginLookUpTableMemoForTest();
-
-    const metadataSnapshot = loadPluginMetadataSnapshot({
-      config,
-      env: { UNRELATED_ONE: "1" },
-      index,
-    });
-
-    const first = loadPluginLookUpTable({
-      config,
-      env: { UNRELATED_ONE: "1" },
-      metadataSnapshot,
-    });
-    const second = loadPluginLookUpTable({
-      config,
-      env: { UNRELATED_TWO: "2" },
-      metadataSnapshot,
-    });
-
-    expect(second).toBe(first);
-  });
-
-  it("does not reuse lookup tables when channel env presence changes startup scope", async () => {
-    listPotentialConfiguredChannelIds.mockImplementation(
-      (_config: OpenClawConfig, env: NodeJS.ProcessEnv) => (env.TELEGRAM_TOKEN ? ["telegram"] : []),
-    );
-    const plugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
-    const config = {} as OpenClawConfig;
-    const index = {
-      ...createIndex(plugins),
-      policyHash: resolveInstalledPluginIndexPolicyHash(config),
-    };
-    const manifestRegistry: PluginManifestRegistry = {
-      plugins,
-      diagnostics: [],
-    };
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
-    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
-    const { clearPluginLookUpTableMemoForTest, loadPluginLookUpTable } =
-      await import("./plugin-lookup-table.js");
-    clearPluginLookUpTableMemoForTest();
-
-    const metadataSnapshot = loadPluginMetadataSnapshot({
-      config,
-      env: {},
-      index,
-    });
-
-    const first = loadPluginLookUpTable({
-      config,
-      env: {},
-      metadataSnapshot,
-    });
-    const second = loadPluginLookUpTable({
-      config,
-      env: { TELEGRAM_TOKEN: "configured" },
-      metadataSnapshot,
-    });
-
-    expect(second).not.toBe(first);
-    expect(first.startup.pluginIds).toStrictEqual([]);
-    expect(second.startup.pluginIds).toStrictEqual(["telegram"]);
   });
 
   it("rebuilds when a provided metadata snapshot has a stale plugin policy", async () => {

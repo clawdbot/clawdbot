@@ -1,13 +1,15 @@
 // Covers restoring redacted config snapshots into writable config values.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   REDACTED_SENTINEL,
   redactConfigSnapshot,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
-import type { ConfigUiHints } from "./schema.js";
 
 describe("restoreRedactedValues", () => {
   it("restores redacted URL endpoint fields on round-trip", () => {
@@ -235,8 +237,18 @@ describe("restoreRedactedValues", () => {
       },
     };
     const result = restoreRedactedValues(incoming, original, hints) as typeof incoming;
-    expect(result.channels.slack.accounts[0].botToken).toBe("original-token-first-account");
-    expect(result.channels.slack.accounts[1].botToken).toBe("user-provided-new-token-value");
+    expect(
+      expectDefined(
+        result.channels.slack.accounts[0],
+        "result.channels.slack.accounts[0] test invariant",
+      ).botToken,
+    ).toBe("original-token-first-account");
+    expect(
+      expectDefined(
+        result.channels.slack.accounts[1],
+        "result.channels.slack.accounts[1] test invariant",
+      ).botToken,
+    ).toBe("user-provided-new-token-value");
   });
 
   it("restores redacted SecretRef ids for channels token paths", () => {

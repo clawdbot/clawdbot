@@ -5,6 +5,7 @@ import type {
   MigrationProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { applyHermesPlan } from "./apply.js";
+import { isMemoryOnlyMigration } from "./memory.js";
 import { buildHermesPlan } from "./plan.js";
 import { discoverHermesSource, hasHermesSource } from "./source.js";
 
@@ -17,9 +18,12 @@ export function buildHermesMigrationProvider(
     id: "hermes",
     label: "Hermes",
     description: "Import Hermes config, memories, skills, and supported credentials.",
+    supportedItemKinds: ["memory"],
     async detect(ctx) {
       const source = await discoverHermesSource(ctx.source);
-      const found = hasHermesSource(source);
+      const found = isMemoryOnlyMigration(ctx)
+        ? Boolean(source.memoryPath || source.userPath)
+        : hasHermesSource(source);
       return {
         found,
         source: source.root,

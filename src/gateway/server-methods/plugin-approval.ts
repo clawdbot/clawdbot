@@ -9,12 +9,15 @@ import {
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import {
-  resolvePluginApprovalRequestAllowedDecisions,
-  resolvePluginApprovalTimeoutMs,
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
+import type {
+  PluginApprovalRequest,
+  PluginApprovalRequestPayload,
+  PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
+import { resolvePluginApprovalTimeoutMs } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
@@ -28,10 +31,21 @@ import {
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+type PluginApprovalIosPushDelivery = {
+  handleRequested?: (
+    request: PluginApprovalRequest,
+    opts?: {
+      isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+    },
+  ) => Promise<boolean>;
+  handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
+  handleExpired?: (request: PluginApprovalRequest) => Promise<void>;
+};
+
 /** Create plugin approval handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-  opts?: { forwarder?: ExecApprovalForwarder },
+  opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
     "plugin.approval.list": async ({ respond, client }) => {
@@ -55,6 +69,7 @@ export function createPluginApprovalHandlers(
         pluginId?: string | null;
         title: string;
         description: string;
+        detail?: string | null;
         severity?: string | null;
         toolName?: string | null;
         toolCallId?: string | null;
@@ -79,12 +94,13 @@ export function createPluginApprovalHandlers(
         pluginId: p.pluginId ?? null,
         title: p.title,
         description: p.description,
+        detail: normalizeTrimmedString(p.detail),
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: p.toolName ?? null,
         toolCallId: p.toolCallId ?? null,
         ...(Array.isArray(p.allowedDecisions)
           ? {
-              allowedDecisions: resolvePluginApprovalRequestAllowedDecisions({
+              allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
                 allowedDecisions: p.allowedDecisions,
               }),
             }
@@ -113,12 +129,15 @@ export function createPluginApprovalHandlers(
         record,
         timeoutMs,
         respond,
+        context,
       });
       if (!decisionPromise) {
         return;
       }
 
       const requestEvent = buildRequestedApprovalEvent(record);
+      const forwardRequest = opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder);
+      const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
 
       await handlePendingApprovalRequest({
         manager,
@@ -131,19 +150,26 @@ export function createPluginApprovalHandlers(
         requestEvent,
         twoPhase,
         approvalKind: "plugin",
-        deliverRequest: () => {
-          if (!opts?.forwarder?.handlePluginApprovalRequested) {
-            return false;
+        deliverRequest: () =>
+          runApprovalRequestDeliveries({
+            context,
+            record,
+            forward: forwardRequest
+              ? [() => forwardRequest(requestEvent), "plugin approvals: forward request failed"]
+              : undefined,
+            iosPush: iosPushRequest
+              ? [
+                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
+                  "plugin approvals: iOS push request failed",
+                ]
+              : undefined,
+          }),
+        afterDecision: async (decision) => {
+          if (decision === null) {
+            await opts?.iosPushDelivery?.handleExpired?.(requestEvent);
           }
-          return opts.forwarder
-            .handlePluginApprovalRequested(requestEvent)
-            .catch((err: unknown) => {
-              context.logGateway?.error?.(
-                `plugin approvals: forward request failed: ${String(err)}`,
-              );
-              return false;
-            });
         },
+        afterDecisionErrorLabel: "plugin approvals: iOS push expire failed",
       });
     },
 
@@ -168,6 +194,7 @@ export function createPluginApprovalHandlers(
       }
       const { inputId, decision } = resolveParams;
       await handleApprovalResolve({
+        approvalKind: "plugin",
         manager,
         inputId,
         decision,
@@ -176,12 +203,14 @@ export function createPluginApprovalHandlers(
         client,
         exposeAmbiguousPrefixError: false,
         validateDecision: (snapshot) =>
-          resolvePluginApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
+          resolveCanonicalPluginApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
             ? null
             : {
                 message: `${decision} is unavailable for this plugin approval`,
                 details: {
-                  allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(snapshot.request),
+                  allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
+                    snapshot.request,
+                  ),
                 },
               },
         resolvedEventName: "plugin.approval.resolved",
@@ -191,16 +220,25 @@ export function createPluginApprovalHandlers(
           resolvedBy,
           snapshot,
           nowMs,
-        }) => ({
-          id: approvalId,
-          decision: decisionLocal,
-          resolvedBy,
-          ts: nowMs,
-          request: snapshot.request,
-        }),
+        }) =>
+          ({
+            id: approvalId,
+            decision: decisionLocal,
+            resolvedBy,
+            ts: nowMs,
+            request: snapshot.request,
+          }) satisfies PluginApprovalResolved,
         forwardResolved: (resolvedEvent) =>
           opts?.forwarder?.handlePluginApprovalResolved?.(resolvedEvent),
         forwardResolvedErrorLabel: "plugin approvals: forward resolve failed",
+        extraResolvedHandlers: opts?.iosPushDelivery?.handleResolved
+          ? [
+              {
+                run: (resolvedEvent) => opts.iosPushDelivery!.handleResolved!(resolvedEvent),
+                errorLabel: "plugin approvals: iOS push resolve failed",
+              },
+            ]
+          : undefined,
       });
     },
   };

@@ -1,0 +1,13 @@
+{"seq":1,"at":0,"dir":"out","kind":"sendReadReceipt","data":{"target":"$inbound-1"}}
+{"seq":2,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":3,"at":0,"dir":"out","kind":"setTyping","data":{"payload":{"timeoutMs":30000,"typing":true},"target":"!room:example.org"}}
+{"seq":4,"at":0,"dir":"in","kind":"partial","data":{"text":"Ship checklist complete."}}
+{"seq":5,"at":0,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"Ship checklist complete.","format":"org.matrix.custom.html","formatted_body":"<p>Ship checklist complete.</p>","msgtype":"m.text","org.matrix.msc4357.live":{}},"result":{"event_id":"$e1"},"target":"!room:example.org"}}
+{"seq":6,"at":400,"dir":"in","kind":"partial","data":{"text":"Ship checklist complete. Tagging the release."}}
+{"seq":7,"at":1000,"dir":"out","kind":"getEvent","data":{"result":{"found":true},"target":"$e1"}}
+{"seq":8,"at":1000,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"* Ship checklist complete. Tagging the release.","format":"org.matrix.custom.html","formatted_body":"* <p>Ship checklist complete. Tagging the release.</p>","m.new_content":{"body":"Ship checklist complete. Tagging the release.","format":"org.matrix.custom.html","formatted_body":"<p>Ship checklist complete. Tagging the release.</p>","msgtype":"m.text","org.matrix.msc4357.live":{}},"m.relates_to":{"event_id":"$e1","rel_type":"m.replace"},"msgtype":"m.text","org.matrix.msc4357.live":{}},"result":{"event_id":"$e2"},"target":"!room:example.org"}}
+{"seq":9,"at":1100,"dir":"in","kind":"final","data":{"text":"Ship checklist complete. Tagging the release."}}
+{"seq":10,"at":1100,"dir":"out","kind":"getEvent","data":{"result":{"found":true},"target":"$e1"}}
+{"seq":11,"at":1100,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"* Ship checklist complete. Tagging the release.","format":"org.matrix.custom.html","formatted_body":"* <p>Ship checklist complete. Tagging the release.</p>","m.new_content":{"body":"Ship checklist complete. Tagging the release.","format":"org.matrix.custom.html","formatted_body":"<p>Ship checklist complete. Tagging the release.</p>","msgtype":"m.text"},"m.relates_to":{"event_id":"$e1","rel_type":"m.replace"},"msgtype":"m.text"},"result":{"event_id":"$e3"},"target":"!room:example.org"}}
+{"seq":12,"at":1100,"dir":"in","kind":"idle"}
+{"seq":13,"at":1100,"dir":"out","kind":"setTyping","data":{"payload":{"timeoutMs":30000,"typing":false},"target":"!room:example.org"}}

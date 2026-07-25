@@ -13,7 +13,14 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import {
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../../../config/sessions/sqlite-marker.js";
+import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
@@ -25,7 +32,11 @@ import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
+import {
+  findPreviousSessionFile,
+  getRecentSessionContentFromEvents,
+  getRecentSessionContentWithResetFallback,
+} from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -105,6 +116,26 @@ async function resolveAvailableMemoryFilename(params: {
       }
       throw err;
     }
+  }
+}
+
+async function getRecentSqliteSessionContent(
+  marker: SqliteSessionFileMarker,
+  messageCount: number,
+): Promise<string | null> {
+  try {
+    return getRecentSessionContentFromEvents(
+      selectVisibleTranscriptEvents(
+        await loadTranscriptEvents({
+          agentId: marker.agentId,
+          sessionId: marker.sessionId,
+          storePath: marker.storePath,
+        }),
+      ),
+      messageCount,
+    );
+  } catch {
+    return null;
   }
 }
 
@@ -216,25 +247,26 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     let sessionContent: string | null = null;
 
     if (sessionFile) {
-      // Get recent conversation content, with fallback to rotated reset transcript.
-      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+      const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+      // SQLite-backed runtime sessions carry a marker in the legacy sessionFile
+      // slot; file artifact helpers only run for real transcript paths.
+      sessionContent = sqliteMarker
+        ? await getRecentSqliteSessionContent(sqliteMarker, messageCount)
+        : await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,
       });
 
       // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
-      const isTestEnv =
-        process.env.OPENCLAW_TEST_FAST === "1" ||
-        process.env.VITEST === "true" ||
-        process.env.VITEST === "1" ||
-        process.env.NODE_ENV === "test";
+      const isTestEnv = isVitestRuntimeEnv();
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
+        slug = await generateSlugViaLLM({ sessionContent, cfg, model: slugModel });
         log.debug("Generated slug", { slug });
       }
     }

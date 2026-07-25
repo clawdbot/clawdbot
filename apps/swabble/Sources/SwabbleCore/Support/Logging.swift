@@ -13,13 +13,17 @@ public enum LogLevel: String, Comparable, CaseIterable, Sendable {
         }
     }
 
-    public static func < (lhs: LogLevel, rhs: LogLevel) -> Bool { lhs.rank < rhs.rank }
+    public static func < (lhs: LogLevel, rhs: LogLevel) -> Bool {
+        lhs.rank < rhs.rank
+    }
 }
 
 public struct Logger: Sendable {
     public let level: LogLevel
 
-    public init(level: LogLevel) { self.level = level }
+    public init(level: LogLevel) {
+        self.level = level
+    }
 
     public func log(_ level: LogLevel, _ message: String) {
         guard level >= self.level else { return }
@@ -27,11 +31,17 @@ public struct Logger: Sendable {
         print("[\(level.rawValue.uppercased())] \(ts) | \(message)")
     }
 
-    public func trace(_ msg: String) { log(.trace, msg) }
-    public func debug(_ msg: String) { log(.debug, msg) }
-    public func info(_ msg: String) { log(.info, msg) }
-    public func warn(_ msg: String) { log(.warn, msg) }
-    public func error(_ msg: String) { log(.error, msg) }
+    public func debug(_ msg: String) {
+        self.log(.debug, msg)
+    }
+
+    public func info(_ msg: String) {
+        self.log(.info, msg)
+    }
+
+    public func error(_ msg: String) {
+        self.log(.error, msg)
+    }
 }
 
 extension LogLevel {

@@ -251,7 +251,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toStrictEqual([]);
   });
 
-  it("falls back to global text dedupe for legacy multi-target messaging telemetry", () => {
+  it("does not apply ambiguous global text evidence across multiple routes", () => {
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: baseConfig,
@@ -264,7 +264,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
           { tool: "discord", provider: "discord", to: "channel:C2" },
         ],
       }),
-    ).toStrictEqual([]);
+    ).toStrictEqual([{ text: "hello world!" }]);
   });
 
   it("dedupes final media only against message-tool media sent to the same route", () => {
@@ -293,7 +293,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "photo", mediaUrl: "file:///tmp/discord-photo.jpg" }]);
   });
 
-  it("falls back to global media dedupe for legacy multi-target messaging telemetry", () => {
+  it("does not apply ambiguous global media evidence across multiple routes", () => {
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: baseConfig,
@@ -306,7 +306,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
           { tool: "discord", provider: "discord", to: "channel:C2" },
         ],
       }),
-    ).toEqual([{ text: "photo", mediaUrl: undefined, mediaUrls: undefined }]);
+    ).toEqual([{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }]);
   });
 
   it("delivers distinct replies when a messaging tool already sent to the same provider and target", () => {

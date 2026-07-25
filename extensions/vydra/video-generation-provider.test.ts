@@ -1,6 +1,7 @@
 // Vydra tests cover video generation provider plugin behavior.
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   binaryResponse,
@@ -78,6 +79,72 @@ describe("vydra video-generation provider", () => {
       videoUrl: "https://cdn.vydra.ai/generated/test.mp4",
       status: "completed",
     });
+  });
+
+  it("carries configured request policy through video submit, poll, and download", async () => {
+    stubVydraApiKey();
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+    const pollProviderOperationJsonSpy = vi.spyOn(providerHttp, "pollProviderOperationJson");
+    const fetchWithTimeoutGuardedSpy = vi.spyOn(providerHttp, "fetchWithTimeoutGuarded");
+    const fetchMock = stubFetch(
+      jsonResponse({ jobId: "job-policy", status: "processing" }),
+      jsonResponse({
+        jobId: "job-policy",
+        status: "completed",
+        videoUrl: "https://198.18.0.10/generated/policy.mp4",
+      }),
+      binaryResponse("mp4-data", "video/mp4"),
+    );
+
+    const provider = buildVydraVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "vydra",
+      model: "veo3",
+      prompt: "policy proof",
+      cfg: {
+        models: {
+          providers: {
+            vydra: {
+              baseUrl: "https://198.18.0.10/api/v1",
+              models: [],
+              request: {
+                allowPrivateNetwork: true,
+                headers: { "X-Vydra-Policy": "video-policy" },
+                proxy: { mode: "env-proxy" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const submitRequest = postJsonRequestSpy.mock.calls[0]?.[0];
+    expect(submitRequest?.allowPrivateNetwork).toBe(true);
+    expect(submitRequest?.dispatcherPolicy).toMatchObject({ mode: "env-proxy" });
+    expect(submitRequest?.headers.get("x-vydra-policy")).toBe("video-policy");
+
+    const pollRequest = pollProviderOperationJsonSpy.mock.calls[0]?.[0];
+    expect(pollRequest?.allowPrivateNetwork).toBe(true);
+    expect(pollRequest?.dispatcherPolicy).toBe(submitRequest?.dispatcherPolicy);
+    const pollHeaders = new Headers(
+      typeof pollRequest?.headers === "function" ? pollRequest.headers() : pollRequest?.headers,
+    );
+    expect(pollHeaders.get("x-vydra-policy")).toBe("video-policy");
+
+    const downloadRequest = fetchWithTimeoutGuardedSpy.mock.calls.find(
+      ([url]) => url === "https://198.18.0.10/generated/policy.mp4",
+    );
+    expect(downloadRequest?.[4]).toMatchObject({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy: submitRequest?.dispatcherPolicy,
+      auditContext: "vydra-media-download",
+    });
+
+    for (const index of [0, 1, 2]) {
+      const headers = new Headers((fetchCall(fetchMock, index)[1] as RequestInit).headers);
+      expect(headers.get("authorization")).toBe("Bearer vydra-test-key");
+      expect(headers.get("x-vydra-policy")).toBe("video-policy");
+    }
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {

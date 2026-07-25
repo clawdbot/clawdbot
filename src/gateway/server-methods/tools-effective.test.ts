@@ -1,5 +1,7 @@
 // Effective tools tests cover session-scoped tool inventory, MCP catalog state,
 // caching behavior, delivery context, and policy filtering.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
@@ -66,7 +68,17 @@ const runtimeMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./tools-effective.runtime.js", () => runtimeMocks);
+vi.mock("./tools-effective.runtime.js", () => ({
+  ...runtimeMocks,
+  loadSessionEntryReadOnly: runtimeMocks.loadSessionEntry,
+}));
+
+const nodePluginToolSnapshotMocks = vi.hoisted(() => ({
+  version: 1,
+  getConnectedNodePluginToolsVersion: vi.fn(() => nodePluginToolSnapshotMocks.version),
+}));
+
+vi.mock("../node-plugin-tool-snapshot.js", () => nodePluginToolSnapshotMocks);
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 type ToolsEffectivePayload = {
@@ -93,7 +105,10 @@ function createInvokeParams(params: Record<string, unknown>) {
   return {
     respond,
     invoke: async () =>
-      await toolsEffectiveHandlers["tools.effective"]({
+      await expectDefined(
+        toolsEffectiveHandlers["tools.effective"],
+        'toolsEffectiveHandlers["tools.effective"] test invariant',
+      )({
         params,
         respond: respond as never,
         context: { getRuntimeConfig: () => ({}) } as never,
@@ -224,6 +239,7 @@ describe("tools.effective handler", () => {
     vi.clearAllMocks();
     testing.resetToolsEffectiveCacheForTest();
     testing.resetToolsEffectiveNowForTest();
+    nodePluginToolSnapshotMocks.version = 1;
     runtimeMocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace-main");
     runtimeMocks.resolveAgentDir.mockReturnValue("/tmp/agents/main/agent");
     runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
@@ -342,6 +358,19 @@ describe("tools.effective handler", () => {
     expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
     expect(runtimeMocks.peekSessionMcpRuntime).toHaveBeenCalledTimes(2);
     expect(runtimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledTimes(1);
+    expectResponsesOk(first.respond, second.respond);
+  });
+
+  it("recomputes fresh base inventory when connected node plugin tools change", async () => {
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    await first.invoke();
+
+    nodePluginToolSnapshotMocks.version = 2;
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+    await second.invoke();
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(2);
     expectResponsesOk(first.respond, second.respond);
   });
 

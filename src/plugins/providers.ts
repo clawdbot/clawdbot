@@ -37,7 +37,7 @@ type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegis
 type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
   onlyPluginIds?: readonly string[];
 };
-export type ProviderRefOwnership =
+type ProviderRefOwnership =
   | { status: "unowned" }
   | { status: "owned"; pluginIds: string[] }
   | { status: "ambiguous"; pluginIds: string[] };
@@ -269,34 +269,6 @@ function resolveRegistryManifestContractPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  declaredPluginIds?: ReadonlySet<string>;
-  manifestRegistry?: PluginManifestRegistry;
-}): string[] {
-  const declaredPluginIds =
-    params.declaredPluginIds ?? new Set(resolveExternalAuthProfileProviderPluginIds(params));
-  const registry = loadProviderRegistrySnapshot(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
-    manifestRegistry: params.manifestRegistry,
-  });
-  return listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      plugin.origin !== "bundled" &&
-      providerSurfacePluginIds.has(plugin.pluginId) &&
-      !declaredPluginIds.has(plugin.pluginId) &&
-      isProviderPluginEligibleForRuntimeOwnerActivation({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.config,
-      }),
-  );
-}
-
 export function resolveDiscoveredProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -423,18 +395,6 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
       }),
   });
 }
-
-export const testing = {
-  resolveActivatableProviderOwnerPluginIds,
-  resolveEnabledProviderPluginIds,
-  resolveExternalAuthProfileCompatFallbackPluginIds,
-  resolveExternalAuthProfileProviderPluginIds,
-  resolveDiscoveredProviderPluginIds,
-  resolveDiscoverableProviderOwnerPluginIds,
-  resolveBundledProviderCompatPluginIds,
-  withBundledProviderVitestCompat,
-} as const;
-
 type ModelSupportMatchKind = "pattern" | "prefix";
 
 function resolveManifestRegistry(params: {
@@ -819,6 +779,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  metadataSnapshot?: ProviderManifestLoadParams["metadataSnapshot"];
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
   const manifestRegistry = resolveManifestRegistry({
@@ -853,7 +814,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   return sortUniqueStrings([...enabledProviderPluginIds, ...bundledCompatPluginIds]);
 }
 
-export type UsageHookProviderPluginContract = {
+type UsageHookProviderPluginContract = {
   pluginId: string;
   providerIds: string[];
 };
@@ -900,4 +861,4 @@ export function resolveUsageHookProviderPluginContracts(params: {
     return providerIds.length > 0 ? [{ pluginId, providerIds }] : [];
   });
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

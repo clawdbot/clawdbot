@@ -1,16 +1,32 @@
 // Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
+import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
+  assistantAvatarFallbackUrl,
+  isRenderableControlUiAvatarUrl,
   resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
 } from "../avatar.ts";
 import {
-  assistantAvatarFallbackUrl,
   buildAgentContext,
   formatBytes,
+  listSelectableAgents,
   resolveEffectiveModelFallbacks,
 } from "./display.ts";
+
+describe("listSelectableAgents", () => {
+  it("excludes semantic system rows without depending on identity", () => {
+    const agents = [
+      { id: "main", kind: "agent" as const },
+      { id: "ordinary-looking-id", kind: "system" as const },
+      { id: "legacy-gateway-row" },
+    ];
+
+    expect(listSelectableAgents(agents)).toEqual([agents[0], agents[2]]);
+    expect(agents).toHaveLength(3);
+  });
+});
 
 describe("formatBytes", () => {
   it("preserves the Control UI byte-size display contract", () => {
@@ -79,6 +95,15 @@ describe("resolveAssistantTextAvatar", () => {
 });
 
 describe("resolveAgentAvatarUrl", () => {
+  it("accepts image data URLs only through the shared encoded-size boundary", () => {
+    const prefix = "data:image/svg+xml;base64,";
+    const exact = `${prefix}${"A".repeat(AVATAR_MAX_DATA_URL_CHARS - prefix.length)}`;
+
+    expect(isRenderableControlUiAvatarUrl(exact)).toBe(true);
+    expect(isRenderableControlUiAvatarUrl(`${exact}A`)).toBe(false);
+    expect(isRenderableControlUiAvatarUrl("data:text/plain,avatar")).toBe(false);
+  });
+
   it("prefers a runtime avatar URL over non-URL identity avatars", () => {
     expect(
       resolveAgentAvatarUrl(

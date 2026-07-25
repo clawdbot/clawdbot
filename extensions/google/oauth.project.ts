@@ -1,5 +1,6 @@
 // Google plugin module implements oauth.project behavior.
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithTimeout } from "./oauth.http.js";
 import {
   CODE_ASSIST_ENDPOINT_PROD,
@@ -16,16 +17,21 @@ const LOAD_CODE_ASSIST_METADATA = {
   pluginType: "GEMINI",
 } as const;
 
-async function getUserEmail(accessToken: string): Promise<string | undefined> {
+async function getUserEmail(
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
   try {
     const response = await fetchWithTimeout(USERINFO_URL, {
       headers: { Authorization: `Bearer ${accessToken}` },
+      ...(signal ? { signal } : {}),
     });
     if (response.ok) {
       const data = await readProviderJsonResponse<{ email?: string }>(response, "google.userinfo");
       return data.email;
     }
   } catch {
+    signal?.throwIfAborted();
     // ignore
   }
   return undefined;
@@ -64,13 +70,13 @@ async function pollOperation(
   endpoint: string,
   operationName: string,
   headers: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<{ done?: boolean; response?: { cloudaicompanionProject?: { id?: string } } }> {
   for (let attempt = 0; attempt < 24; attempt += 1) {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5000);
-    });
+    await sleepWithAbort(5000, signal);
     const response = await fetchWithTimeout(`${endpoint}/v1internal/${operationName}`, {
       headers,
+      ...(signal ? { signal } : {}),
     });
     if (!response.ok) {
       continue;
@@ -86,23 +92,29 @@ async function pollOperation(
   throw new Error("Operation polling timeout");
 }
 
-export async function resolveGoogleOAuthIdentity(accessToken: string): Promise<{
+export async function resolveGoogleOAuthIdentity(
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<{
   email?: string;
   projectId?: string;
 }> {
-  const email = await getUserEmail(accessToken);
-  const projectId = await discoverProject(accessToken);
+  const email = await getUserEmail(accessToken, signal);
+  const projectId = await discoverProject(accessToken, signal);
   return { email, projectId };
 }
 
-export async function resolveGooglePersonalOAuthIdentity(accessToken: string): Promise<{
+export async function resolveGooglePersonalOAuthIdentity(
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<{
   email?: string;
   projectId?: string;
 }> {
-  return { email: await getUserEmail(accessToken) };
+  return { email: await getUserEmail(accessToken, signal) };
 }
 
-async function discoverProject(accessToken: string): Promise<string> {
+async function discoverProject(accessToken: string, signal?: AbortSignal): Promise<string> {
   const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
   const headers = {
     Authorization: `Bearer ${accessToken}`,
@@ -133,6 +145,7 @@ async function discoverProject(accessToken: string): Promise<string> {
         method: "POST",
         headers,
         body: JSON.stringify(loadBody),
+        ...(signal ? { signal } : {}),
       });
 
       if (!response.ok) {
@@ -155,6 +168,7 @@ async function discoverProject(accessToken: string): Promise<string> {
       loadError = undefined;
       break;
     } catch (err) {
+      signal?.throwIfAborted();
       loadError = err instanceof Error ? err : new Error("loadCodeAssist failed", { cause: err });
     }
   }
@@ -209,6 +223,7 @@ async function discoverProject(accessToken: string): Promise<string> {
     method: "POST",
     headers,
     body: JSON.stringify(onboardBody),
+    ...(signal ? { signal } : {}),
   });
 
   if (!onboardResponse.ok) {
@@ -222,7 +237,7 @@ async function discoverProject(accessToken: string): Promise<string> {
   }>(onboardResponse, "google.onboard-user");
 
   if (!lro.done && lro.name) {
-    lro = await pollOperation(activeEndpoint, lro.name, headers);
+    lro = await pollOperation(activeEndpoint, lro.name, headers, signal);
   }
 
   const projectId = lro.response?.cloudaicompanionProject?.id;

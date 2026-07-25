@@ -24,7 +24,7 @@ type DiscordDraftStream = {
   seal: () => Promise<void>;
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
-  forceNewMessage: () => void;
+  forceNewMessage: (mode?: "preserve" | "discard") => void;
 };
 
 export function createDiscordDraftStream(params: {
@@ -53,8 +53,12 @@ export function createDiscordDraftStream(params: {
   const streamState = { stopped: false, final: false };
   let streamMessageId: string | undefined;
   let lastSentText = "";
+  let streamGeneration = 0;
+  let activeCreateGeneration: number | undefined;
+  let discardActiveCreate = false;
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
+    const generation = streamGeneration;
     // Allow final flush even if stopped (e.g., after clear()).
     if (streamState.stopped && !streamState.final) {
       return false;
@@ -99,6 +103,7 @@ export function createDiscordDraftStream(params: {
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
+      activeCreateGeneration = generation;
       const sent = await createChannelMessage<{ id?: string }>(rest, channelId, {
         body: {
           content: trimmed,
@@ -108,6 +113,21 @@ export function createDiscordDraftStream(params: {
         },
       });
       const sentMessageId = sent?.id;
+      const shouldDiscardStaleCreate = activeCreateGeneration === generation && discardActiveCreate;
+      activeCreateGeneration = undefined;
+      discardActiveCreate = false;
+      if (generation !== streamGeneration) {
+        if (shouldDiscardStaleCreate && typeof sentMessageId === "string" && sentMessageId) {
+          try {
+            await deleteChannelMessage(rest, channelId, sentMessageId);
+          } catch (err) {
+            params.warn?.(
+              `discord stale stream preview cleanup failed: ${formatErrorMessage(err)}`,
+            );
+          }
+        }
+        return true;
+      }
       if (typeof sentMessageId !== "string" || !sentMessageId) {
         streamState.stopped = true;
         params.warn?.("discord stream preview stopped (missing message id from send)");
@@ -116,6 +136,13 @@ export function createDiscordDraftStream(params: {
       streamMessageId = sentMessageId;
       return true;
     } catch (err) {
+      if (activeCreateGeneration === generation) {
+        activeCreateGeneration = undefined;
+        discardActiveCreate = false;
+      }
+      if (generation !== streamGeneration) {
+        return true;
+      }
       streamState.stopped = true;
       params.warn?.(`discord stream preview failed: ${formatErrorMessage(err)}`);
       return false;
@@ -143,10 +170,20 @@ export function createDiscordDraftStream(params: {
     warnPrefix: "discord stream preview cleanup failed",
   });
 
-  const forceNewMessage = () => {
+  const forceNewMessage = (mode: "preserve" | "discard" = "preserve") => {
+    // In-flight REST calls may finish after a turn boundary. Advance identity
+    // synchronously so their result cannot overwrite the next turn's state.
+    // Block mode preserves the prior block; progress mode discards its draft.
+    if (mode === "discard" && activeCreateGeneration !== undefined) {
+      discardActiveCreate = true;
+    }
+    streamGeneration += 1;
+    streamState.stopped = false;
+    streamState.final = false;
     streamMessageId = undefined;
     lastSentText = "";
     loop.resetPending();
+    loop.resetThrottleWindow();
   };
   const deleteCurrentMessage = async () => {
     loop.resetPending();

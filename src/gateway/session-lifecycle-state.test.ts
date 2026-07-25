@@ -2,15 +2,16 @@
  * Session lifecycle state derivation tests.
  */
 import { describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
 const persistenceMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
-  updateSessionStoreEntry: vi.fn(),
+  updateSessionEntry: vi.fn(),
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  updateSessionStoreEntry: persistenceMocks.updateSessionStoreEntry,
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  updateSessionEntry: persistenceMocks.updateSessionEntry,
 }));
 
 vi.mock("./session-utils.js", () => ({
@@ -18,68 +19,15 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 import {
-  deriveGatewaySessionLifecycleSnapshot,
-  derivePersistedSessionLifecyclePatch,
   isStaleLifecycleEventForSession,
   persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 
-type PersistedLifecycleInput = Parameters<typeof derivePersistedSessionLifecyclePatch>[0];
-type PersistedLifecycleData = PersistedLifecycleInput["event"]["data"];
-type PersistedLifecyclePatch = NonNullable<ReturnType<typeof derivePersistedSessionLifecyclePatch>>;
-type PersistedLifecycleStatus = PersistedLifecyclePatch["status"];
-type UpdateSessionStoreEntryParams = Parameters<
-  typeof import("../config/sessions.js").updateSessionStoreEntry
->[0];
-
-type PersistedLifecycleCase = {
-  name: string;
-  data: PersistedLifecycleData;
-  status: PersistedLifecycleStatus;
-  abortedLastRun: boolean;
-};
+type UpdateSessionEntry =
+  typeof import("../config/sessions/session-accessor.js").updateSessionEntry;
+type LifecycleEvent = Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"];
 
 const exactCronSessionKey = "agent:main:cron:job-1:run:cron-run-1";
-
-function terminalPatch(
-  startedAt: number,
-  endedAt: number,
-  status: PersistedLifecycleStatus,
-  abortedLastRun: boolean,
-): PersistedLifecyclePatch {
-  return {
-    updatedAt: endedAt,
-    status,
-    startedAt,
-    endedAt,
-    runtimeMs: endedAt - startedAt,
-    abortedLastRun,
-  };
-}
-
-function expectPersistedLifecyclePatch(options: {
-  entry?: Partial<PersistedLifecycleInput["entry"]>;
-  data: PersistedLifecycleData;
-  runId?: string;
-  lifecycleGeneration?: string;
-  expected: ReturnType<typeof derivePersistedSessionLifecyclePatch>;
-}): void {
-  expect(
-    derivePersistedSessionLifecyclePatch({
-      entry: {
-        updatedAt: 1_000,
-        startedAt: 1_050,
-        ...options.entry,
-      },
-      event: {
-        ts: 2_000,
-        runId: options.runId,
-        lifecycleGeneration: options.lifecycleGeneration,
-        data: options.data,
-      },
-    }),
-  ).toEqual(options.expected);
-}
 
 function cronSessionEntry(
   phase: "running" | "ready" | "continuing",
@@ -108,10 +56,11 @@ async function persistExactCronLifecycle(options: {
     canonicalKey: exactCronSessionKey,
     entry: currentEntry,
   });
-  persistenceMocks.updateSessionStoreEntry
+  persistenceMocks.updateSessionEntry
     .mockReset()
-    .mockImplementation(async (params: UpdateSessionStoreEntryParams) => {
-      const patch = await params.update(structuredClone(currentEntry));
+    .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
+      const [, update] = args;
+      const patch = await update(structuredClone(currentEntry));
       if (patch) {
         currentEntry = { ...currentEntry, ...patch };
       }
@@ -125,6 +74,30 @@ async function persistExactCronLifecycle(options: {
       runId: options.eventRunId,
       data: { phase: "end", startedAt: 1_300, endedAt: 1_950 },
     },
+  });
+  return currentEntry;
+}
+
+async function persistLifecycle(entry: SessionEntry, event: LifecycleEvent): Promise<SessionEntry> {
+  let currentEntry = structuredClone(entry);
+  persistenceMocks.loadSessionEntry.mockReset().mockReturnValue({
+    storePath: "/tmp/sessions.json",
+    canonicalKey: "agent:main:main",
+    entry: currentEntry,
+  });
+  persistenceMocks.updateSessionEntry
+    .mockReset()
+    .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
+      const [, update] = args;
+      const patch = await update(structuredClone(currentEntry));
+      if (patch) {
+        currentEntry = { ...currentEntry, ...patch };
+      }
+      return currentEntry;
+    });
+  await persistGatewaySessionLifecycleEvent({
+    sessionKey: "agent:main:main",
+    event,
   });
   return currentEntry;
 }
@@ -148,347 +121,350 @@ describe("session lifecycle state", () => {
     ).toBe(false);
   });
 
-  it("reactivates completed sessions on lifecycle start", () => {
-    expect(
-      deriveGatewaySessionLifecycleSnapshot({
-        session: {
-          updatedAt: 500,
-          status: "done",
-          startedAt: 100,
-          endedAt: 400,
-          runtimeMs: 300,
-          abortedLastRun: true,
-        },
-        event: {
-          ts: 1_000,
-          data: {
-            phase: "start",
-            startedAt: 900,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 900,
-      status: "running",
-      startedAt: 900,
-      endedAt: undefined,
-      runtimeMs: undefined,
-      abortedLastRun: false,
-    });
-  });
-
-  it("marks completed lifecycle end events as done with terminal timing", () => {
-    expect(
-      deriveGatewaySessionLifecycleSnapshot({
-        session: {
-          updatedAt: 1_000,
-          status: "running",
-          startedAt: 1_200,
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "end",
-            startedAt: 1_200,
-            endedAt: 1_900,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_900,
-      status: "done",
-      startedAt: 1_200,
-      endedAt: 1_900,
-      runtimeMs: 700,
-      abortedLastRun: false,
-    });
-  });
-
-  it("maps aborted stop reasons to killed", () => {
-    expectPersistedLifecyclePatch({
-      entry: { startedAt: 1_100 },
-      data: {
-        phase: "end",
-        endedAt: 1_800,
-        stopReason: "aborted",
-      },
-      expected: terminalPatch(1_100, 1_800, "killed", true),
-    });
-  });
-
-  it("persists restart terminal lifecycle when no recovery marker exists", () => {
-    expectPersistedLifecyclePatch({
-      entry: {
-        status: "running",
-        abortedLastRun: false,
-      },
-      data: {
-        phase: "end",
-        aborted: true,
-        stopReason: "restart",
-        endedAt: 1_800,
-      },
-      expected: terminalPatch(1_050, 1_800, "killed", true),
-    });
-  });
-
-  it("preserves restart recovery state through late interrupted-run lifecycle events", () => {
-    for (const data of [
-      {
-        phase: "end",
-        aborted: true,
-        stopReason: "restart",
-      },
-      {
-        phase: "error",
-        aborted: true,
-        stopReason: "restart",
-        error: "request aborted",
-      },
-    ] as const) {
-      expectPersistedLifecyclePatch({
-        entry: {
-          status: "running",
-          abortedLastRun: true,
-          restartRecoveryRuns: [
-            {
-              runId: "restart-run",
-              lifecycleGeneration: "pre-restart",
-            },
-          ],
-        },
-        runId: "restart-run",
-        lifecycleGeneration: "pre-restart",
-        data,
-        expected: {},
-      });
-    }
-  });
-
   it.each([
     {
-      name: "user cancellation",
-      data: {
-        phase: "end",
-        aborted: true,
-        stopReason: "aborted",
-        endedAt: 1_800,
-      } as const,
-      expected: {
-        ...terminalPatch(1_050, 1_800, "killed", true),
-        restartRecoveryRuns: undefined,
-      },
-    },
-    {
-      name: "provider timeout",
-      data: {
-        phase: "end",
-        aborted: true,
-        stopReason: "timeout",
-        endedAt: 1_800,
-      } as const,
-      expected: {
-        ...terminalPatch(1_050, 1_800, "timeout", false),
-        restartRecoveryRuns: undefined,
-      },
-    },
-  ])("persists $name terminal state despite a restart marker", ({ data, expected }) => {
-    expectPersistedLifecyclePatch({
-      entry: {
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryRuns: [
-          {
-            runId: "restart-run",
-            lifecycleGeneration: "pre-restart",
-          },
-        ],
-      },
-      runId: "restart-run",
-      lifecycleGeneration: "pre-restart",
-      data,
-      expected,
-    });
-  });
-
-  it("preserves restart recovery state through a delayed lifecycle start", () => {
-    expectPersistedLifecyclePatch({
-      entry: {
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryRuns: [
-          {
-            runId: "restart-run",
-            lifecycleGeneration: "pre-restart",
-          },
-        ],
-      },
-      runId: "restart-run",
-      lifecycleGeneration: "pre-restart",
-      data: {
-        phase: "start",
-        startedAt: 1_500,
-      },
-      expected: {},
-    });
-  });
-
-  it("persists successful marked-run completion and removes its recovery marker", () => {
-    expectPersistedLifecyclePatch({
-      entry: {
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryRuns: [
-          {
-            runId: "restart-run",
-            lifecycleGeneration: "pre-restart",
-          },
-        ],
-      },
-      runId: "restart-run",
-      lifecycleGeneration: "pre-restart",
-      data: {
-        phase: "end",
-        endedAt: 1_800,
-      },
-      expected: {
-        ...terminalPatch(1_050, 1_800, "done", false),
-        restartRecoveryRuns: undefined,
-      },
-    });
-  });
-
-  it("keeps session recovery active while another marked run remains", () => {
-    expectPersistedLifecyclePatch({
-      entry: {
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryRuns: [
-          {
-            runId: "completed-run",
-            lifecycleGeneration: "pre-restart",
-          },
-          {
-            runId: "interrupted-run",
-            lifecycleGeneration: "pre-restart",
-          },
-        ],
-      },
-      runId: "completed-run",
-      lifecycleGeneration: "pre-restart",
-      data: {
-        phase: "end",
-        endedAt: 1_800,
-      },
-      expected: {
-        restartRecoveryRuns: [
-          {
-            runId: "interrupted-run",
-            lifecycleGeneration: "pre-restart",
-          },
-        ],
-      },
-    });
-  });
-
-  it("persists lifecycle events from a recovery run with a different run id", () => {
-    expectPersistedLifecyclePatch({
-      entry: {
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryRuns: [
-          {
-            runId: "shared-idempotency-key",
-            lifecycleGeneration: "pre-restart",
-          },
-        ],
-      },
-      runId: "shared-idempotency-key",
-      lifecycleGeneration: "post-restart",
-      data: {
-        phase: "end",
-        endedAt: 1_800,
-      },
-      expected: terminalPatch(1_050, 1_800, "done", false),
-    });
-  });
-
-  it.each<PersistedLifecycleCase>([
-    {
-      name: "maps aborted lifecycle end events without stopReason to timeout",
-      data: {
-        phase: "end",
-        endedAt: 1_550,
-        aborted: true,
-      },
-      status: "timeout",
-      abortedLastRun: false,
-    },
-    {
-      name: "keeps provider hard timeouts stronger than rpc cancellation metadata",
-      data: {
-        phase: "end",
-        aborted: true,
-        stopReason: "rpc",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        endedAt: 1_550,
-      },
-      status: "timeout",
-      abortedLastRun: false,
-    },
-    {
-      name: "maps non-hard rpc lifecycle aborts to killed sessions",
-      data: {
-        phase: "end",
-        aborted: true,
-        stopReason: "rpc",
-        timeoutPhase: "queue",
-        providerStarted: false,
-        endedAt: 1_550,
-      },
+      name: "aborted",
+      data: { phase: "end", endedAt: 1_800, stopReason: "aborted" },
       status: "killed",
       abortedLastRun: true,
     },
     {
-      name: "maps provider timeout lifecycle errors to timed out sessions",
+      name: "timeout",
+      data: { phase: "end", endedAt: 1_800, aborted: true },
+      status: "timeout",
+      abortedLastRun: false,
+    },
+    {
+      name: "provider timeout",
       data: {
         phase: "error",
+        endedAt: 1_800,
         error: "provider request timed out",
-        livenessState: "blocked",
         timeoutPhase: "provider",
         providerStarted: true,
-        endedAt: 1_550,
       },
       status: "timeout",
       abortedLastRun: false,
     },
     {
-      name: "maps provider timeout lifecycle end metadata to timed out sessions",
-      data: {
-        phase: "end",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        endedAt: 1_550,
-      },
-      status: "timeout",
+      name: "abandoned",
+      data: { phase: "end", endedAt: 1_800, livenessState: "abandoned" },
+      status: "failed",
       abortedLastRun: false,
     },
     {
-      name: "maps abandoned lifecycle ends to failed sessions",
+      name: "error with stale yield metadata",
       data: {
-        phase: "end",
-        livenessState: "abandoned",
-        endedAt: 1_550,
+        phase: "error",
+        endedAt: 1_800,
+        error: "continuation setup failed",
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
       },
       status: "failed",
       abortedLastRun: false,
     },
-  ])("$name", ({ data, status, abortedLastRun }) => {
-    expectPersistedLifecyclePatch({
-      data,
-      expected: terminalPatch(1_050, 1_550, status, abortedLastRun),
+    {
+      name: "aborted with stale yield metadata",
+      data: {
+        phase: "end",
+        endedAt: 1_800,
+        aborted: true,
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      },
+      status: "timeout",
+      abortedLastRun: false,
+    },
+  ] as const)("persists $name terminal state", async ({ data, status, abortedLastRun }) => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+      },
+      { ts: 2_000, sessionId: "session-id", data },
+    );
+
+    expect(persisted).toMatchObject({
+      status,
+      startedAt: 1_050,
+      endedAt: 1_800,
+      runtimeMs: 750,
+      abortedLastRun,
     });
+  });
+
+  it("persists a compact failure reason and clears it when a new run starts", async () => {
+    const failed = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: {
+          phase: "error",
+          endedAt: 1_800,
+          error: `Provider credits exhausted\n${"details ".repeat(40)}`,
+        },
+      },
+    );
+
+    expect(failed.status).toBe("failed");
+    expect(failed.lastRunError).toMatch(/^Provider credits exhausted details/);
+    expect(failed.lastRunError?.length).toBeLessThanOrEqual(160);
+    expect(failed.lastRunError).not.toContain("\n");
+
+    const restarted = await persistLifecycle(failed, {
+      ts: 2_100,
+      sessionId: "session-id",
+      data: { phase: "start", startedAt: 2_100 },
+    });
+    expect(restarted.status).toBe("running");
+    expect(restarted.lastRunError).toBeUndefined();
+  });
+
+  it("keeps an explicitly yielded parent pending until continuation starts", async () => {
+    const yielded = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: {
+          phase: "end",
+          endedAt: 1_800,
+          yielded: true,
+          livenessState: "paused",
+          stopReason: "end_turn",
+        },
+      },
+    );
+
+    expect(yielded).toMatchObject({
+      status: "running",
+      endedAt: 1_800,
+      runtimeMs: 750,
+      abortedLastRun: false,
+    });
+
+    const resumed = await persistLifecycle(yielded, {
+      ts: 2_100,
+      sessionId: "session-id",
+      data: { phase: "start", startedAt: 2_100 },
+    });
+    expect(resumed.status).toBe("running");
+    expect(resumed.endedAt).toBeUndefined();
+  });
+
+  it("does not infer pending continuation from end_turn without explicit yield metadata", async () => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: {
+          phase: "end",
+          endedAt: 1_800,
+          livenessState: "paused",
+          stopReason: "end_turn",
+        },
+      },
+    );
+
+    expect(persisted.status).toBe("done");
+  });
+
+  it("preserves recovery state for a late interrupted-run event", async () => {
+    const mainRestartRecovery = {
+      cycleId: "cycle-1",
+      revision: 2,
+      chargedAttempts: 2,
+    };
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+        mainRestartRecovery,
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "restart-run",
+        lifecycleGeneration: "pre-restart",
+        data: { phase: "end", aborted: true, stopReason: "restart" },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+      mainRestartRecovery,
+    });
+  });
+
+  it("ignores an unidentified completion while recovery remains pending", async () => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 2,
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+    });
+    expect(persisted.restartRecoveryRuns).toEqual([
+      { runId: "restart-run", lifecycleGeneration: "pre-restart" },
+    ]);
+    expect(persisted.mainRestartRecovery).toMatchObject({ cycleId: "cycle-1" });
+  });
+
+  it("applies the terminal snapshot for the foreground owner run", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
+          { runId: "foreground-run", lifecycleGeneration },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 2,
+          foregroundClaims: {
+            lifecycleGeneration,
+            tokens: ["owner-claim"],
+            runIdsByClaimId: { "owner-claim": "foreground-run" },
+          },
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "foreground-run",
+        lifecycleGeneration,
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "done",
+      endedAt: 1_800,
+      abortedLastRun: false,
+    });
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(persisted.mainRestartRecovery).toBeUndefined();
+  });
+
+  it("does not settle a foreground owner from a stale lifecycle generation", async () => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
+          { runId: "foreground-run", lifecycleGeneration: "pre-restart" },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 2,
+          foregroundClaims: {
+            lifecycleGeneration: "pre-restart",
+            tokens: ["owner-claim"],
+            runIdsByClaimId: { "owner-claim": "foreground-run" },
+          },
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "foreground-run",
+        lifecycleGeneration: "pre-restart",
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "pre-restart" }],
+      mainRestartRecovery: {
+        foregroundClaims: { tokens: ["owner-claim"] },
+      },
+    });
+  });
+
+  it("clears only the completed recovery marker", async () => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          { runId: "completed-run", lifecycleGeneration: "pre-restart" },
+          { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
+        ],
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "completed-run",
+        lifecycleGeneration: "pre-restart",
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted.restartRecoveryRuns).toEqual([
+      { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
+    ]);
+    expect(persisted.status).toBe("running");
   });
 
   it.each([
@@ -532,9 +508,11 @@ describe("session lifecycle state", () => {
 
     expect(persisted?.status).toBe(testCase.expectedStatus);
     // One exact-row write only. Continuation settlement owns base projection.
-    expect(persistenceMocks.updateSessionStoreEntry).toHaveBeenCalledTimes(1);
-    expect(persistenceMocks.updateSessionStoreEntry.mock.calls[0]?.[0]).toMatchObject({
+    expect(persistenceMocks.updateSessionEntry).toHaveBeenCalledTimes(1);
+    expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[0]).toMatchObject({
       sessionKey: exactCronSessionKey,
+    });
+    expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
   });

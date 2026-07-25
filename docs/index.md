@@ -26,7 +26,8 @@ title: "OpenClaw"
 
 <p align="center">
   <strong>Any OS gateway for AI agents across Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more.</strong><br />
-  Send a message, get an agent response from your pocket. Run one Gateway across channel plugins, WebChat, and mobile nodes.
+  Send a message, get an agent response from your pocket. Run one Gateway across channel plugins, WebChat, and mobile nodes.<br />
+  Developed in the open by the <a href="https://openclaw.org">OpenClaw Foundation</a>, a non-profit.
 </p>
 
 <Columns>
@@ -44,6 +45,47 @@ title: "OpenClaw"
   </Card>
 </Columns>
 
+## Browse docs
+
+Mobile browsers may show the section menu without the full desktop tab bar. Use
+these hub links to reach the same top-level docs areas from the page body.
+
+<Columns>
+  <Card title="Get started" href="/" icon="rocket">
+    Overview, showcase, first steps, and setup guides.
+  </Card>
+  <Card title="Install" href="/install" icon="download">
+    Install paths, updates, containers, hosting, and advanced setup.
+  </Card>
+  <Card title="Channels" href="/channels" icon="messages-square">
+    Messaging channels, pairing, routing, access groups, and channel QA.
+  </Card>
+  <Card title="Agents" href="/concepts/architecture" icon="bot">
+    Architecture, sessions, context, memory, and multi-agent routing.
+  </Card>
+  <Card title="Capabilities" href="/tools" icon="wand-sparkles">
+    Tools, skills, cron, webhooks, and automation capabilities.
+  </Card>
+  <Card title="ClawHub" href="/clawhub" icon="store">
+    Plugin marketplace, publishing, curation, and trust guidance.
+  </Card>
+  <Card title="Models" href="/providers" icon="brain">
+    Providers, model configuration, failover, and local model services.
+  </Card>
+  <Card title="Platforms" href="/platforms" icon="monitor-smartphone">
+    macOS, Windows, iOS, Android, nodes, and web surfaces.
+  </Card>
+  <Card title="Gateway & Ops" href="/gateway" icon="server">
+    Gateway configuration, security, diagnostics, and operations.
+  </Card>
+  <Card title="Reference" href="/cli" icon="terminal">
+    CLI reference, schemas, RPC, release notes, and templates.
+  </Card>
+  <Card title="Help" href="/help" icon="life-buoy">
+    Troubleshooting, FAQs, testing, diagnostics, and environment checks.
+  </Card>
+</Columns>
+
 ## What is OpenClaw?
 
 OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more via channel plugins — to AI coding agents. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
@@ -57,7 +99,7 @@ OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — 
 - **Agent-native**: built for coding agents with tool use, sessions, memory, and multi-agent routing
 - **Open source**: MIT licensed, community-driven
 
-**What do you need?** Node 24 (recommended), or Node 22 LTS (`22.19+`) for compatibility, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
+**What do you need?** Node 24.15+ (recommended), Node 22 LTS (`22.22.3+`) for compatibility, or Node 25.9+, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
 
 ## How it works
 

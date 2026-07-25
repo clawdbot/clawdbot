@@ -1,11 +1,26 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.NativeStringResources
+import ai.openclaw.app.i18n.joinedNativeText
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.node.NodePresenceAliveBeacon
+import ai.openclaw.app.ui.chat.contextMeterThinkingLabel
+import ai.openclaw.app.ui.formatApprovalDuration
+import ai.openclaw.app.ui.formatCronWake
+import ai.openclaw.app.ui.formatUsageUpdated
+import ai.openclaw.app.ui.skillWorkshopStatusLabel
+import android.os.Build
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.LocaleListCompat
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
@@ -108,7 +123,63 @@ class AppLanguageTest {
     assertEquals("OpenClaw translations · ja", appLanguageRowSubtitle(AppLanguage.Japanese, "en-US"))
   }
 
+  @Test
+  fun retainedNativeTextResolvesAgainstTheCurrentLocale() {
+    val activity = Robolectric.buildActivity(LocaleTestActivity::class.java).setup()
+    NativeStringResources.install(activity.get())
+    val retained = MutableStateFlow(nativeText("Mic off")).resolveNativeText()
+    val retainedComposite =
+      MutableStateFlow(
+        joinedNativeText(
+          separator = " · ",
+          parts = listOf(nativeText("Mic off"), verbatimText("raw")),
+        ),
+      ).resolveNativeText()
+    val previous = currentAppLanguage()
+    try {
+      setAppLanguage(AppLanguage.English)
+      assertEquals("Mic off", retained.value)
+      assertEquals("Mic off · raw", retainedComposite.value)
+      assertEquals("Pending", skillWorkshopStatusLabel("pending"))
+
+      setAppLanguage(AppLanguage.French)
+      assertEquals("Micro désactivé", retained.value)
+      assertEquals("Micro désactivé · raw", retainedComposite.value)
+      assertEquals("En attente", skillWorkshopStatusLabel("pending"))
+      assertEquals("Retenu", skillWorkshopStatusLabel("quarantined"))
+      assertEquals("Retenu", skillWorkshopStatusLabel("stale"))
+      assertEquals("Appliqué", skillWorkshopStatusLabel("applied"))
+      assertEquals("Rejeté", skillWorkshopStatusLabel("rejected"))
+      assertEquals("Chargement", skillWorkshopStatusLabel("loading"))
+      assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
+      assertEquals("Élevé", contextMeterThinkingLabel("high"))
+      assertEquals("adaptive", contextMeterThinkingLabel("adaptive"))
+      val androidRelease =
+        Build.VERSION.RELEASE
+          ?.trim()
+          .orEmpty()
+          .ifEmpty { "unknown" }
+      assertEquals(
+        "Android $androidRelease (SDK ${Build.VERSION.SDK_INT})",
+        NodePresenceAliveBeacon.androidPlatformMetadata(),
+      )
+      assertEquals("Connexion…", gatewayConnectionStatusForDisplay("Connecting…"))
+      assertEquals(
+        "Impossible de charger les approbations.",
+        gatewayExecApprovalTextForDisplay("Could not load approvals."),
+      )
+      assertEquals("1 min", formatApprovalDuration(60_000))
+      assertEquals("2 min", formatUsageUpdated(updatedAtMs = 0, nowMs = 120_000))
+      assertEquals("3 h", formatCronWake(timeMs = 10_800_000, nowMs = 0))
+    } finally {
+      setAppLanguage(previous)
+      activity.destroy()
+    }
+  }
+
   private companion object {
     const val androidNamespace = "http://schemas.android.com/apk/res/android"
   }
 }
+
+private class LocaleTestActivity : AppCompatActivity()

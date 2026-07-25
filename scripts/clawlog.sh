@@ -146,12 +146,6 @@ escape_predicate_literal() {
     printf '%s' "$value"
 }
 
-# Show help if no arguments provided
-if [[ $# -eq 0 ]]; then
-    show_usage
-    exit 0
-fi
-
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -165,14 +159,26 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -n|--lines)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error: $1 requires a value${NC}" >&2
+                exit 1
+            fi
             TAIL_LINES="$2"
             shift 2
             ;;
         -l|--last)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error: $1 requires a value${NC}" >&2
+                exit 1
+            fi
             TIME_RANGE="$2"
             shift 2
             ;;
         -c|--category)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error: $1 requires a value${NC}" >&2
+                exit 1
+            fi
             CATEGORY="$2"
             shift 2
             ;;
@@ -185,10 +191,18 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -s|--search)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error: $1 requires a value${NC}" >&2
+                exit 1
+            fi
             SEARCH_TEXT="$2"
             shift 2
             ;;
         -o|--output)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error: $1 requires a value${NC}" >&2
+                exit 1
+            fi
             OUTPUT_FILE="$2"
             shift 2
             ;;

@@ -46,6 +46,7 @@ type NodeDaemonInstallOptions = {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  shareInstalledApps?: boolean;
   runtime?: string;
   force?: boolean;
   json?: boolean;
@@ -120,7 +121,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
     return;
   }
 
@@ -162,6 +163,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       tlsFingerprint: tlsFingerprint || undefined,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
+      installedAppsSharing: opts.shareInstalledApps,
       runtime: runtimeRaw,
       warn: (message) => {
         if (json) {

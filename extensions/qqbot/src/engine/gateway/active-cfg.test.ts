@@ -1,7 +1,8 @@
 // Qqbot tests cover active cfg plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { createActiveCfgProvider, resolveActiveCfg, type GatewayCfgLoader } from "./active-cfg.js";
+import { createActiveCfgProvider } from "./active-cfg.js";
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
 
@@ -12,25 +13,6 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
 function asCfg(shape: { bindings: Array<{ id: string }> }): OpenClawConfig {
   return shape as unknown as OpenClawConfig;
 }
-
-describe("resolveActiveCfg", () => {
-  it("returns the freshly loaded value when the loader succeeds", () => {
-    const fresh = asCfg({ bindings: [{ id: "fresh" }] });
-    const fallback = asCfg({ bindings: [{ id: "stale" }] });
-    const loader: GatewayCfgLoader = () => fresh;
-
-    expect(resolveActiveCfg(loader, fallback)).toBe(fresh);
-  });
-
-  it("falls back when the loader throws", () => {
-    const fallback = asCfg({ bindings: [{ id: "stale" }] });
-    const loader: GatewayCfgLoader = () => {
-      throw new Error("snapshot not initialised");
-    };
-
-    expect(resolveActiveCfg(loader, fallback)).toBe(fallback);
-  });
-});
 
 describe("createActiveCfgProvider", () => {
   it("invokes the injected loader on every getActiveCfg call", () => {
@@ -59,7 +41,7 @@ describe("createActiveCfgProvider", () => {
     let index = 0;
     const provider = createActiveCfgProvider({
       fallback,
-      load: () => calls[index++],
+      load: () => expectDefined(calls[index++], `QQBot config load ${index}`),
     });
 
     expect(provider.getActiveCfg()).toBe(calls[0]);

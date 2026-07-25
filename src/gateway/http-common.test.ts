@@ -10,13 +10,13 @@ import {
 } from "../infra/diagnostic-events.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
+  buildMissingScopeForbiddenBody,
   readJsonBodyOrError,
   sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   sendRateLimited,
-  sendText,
   sendUnauthorized,
   setDefaultSecurityHeaders,
   setSseHeaders,
@@ -123,13 +123,15 @@ describe("sendJson", () => {
   });
 });
 
-describe("sendText", () => {
-  it("sets status, content-type and writes plain-text body", () => {
-    const { res, setHeader, end } = makeMockHttpResponse();
-    sendText(res, 202, "hello");
-    expect(res.statusCode).toBe(202);
-    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
-    expect(end).toHaveBeenCalledWith("hello");
+describe("buildMissingScopeForbiddenBody", () => {
+  it("preserves the legacy response when no concrete scope is available", () => {
+    expect(buildMissingScopeForbiddenBody(undefined)).toEqual({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: undefined",
+      },
+    });
   });
 });
 

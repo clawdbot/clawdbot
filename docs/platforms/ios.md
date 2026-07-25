@@ -13,11 +13,13 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).
-- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake.
+- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake, and opt-in Health summaries.
 - Receives `node.invoke` commands and reports node status events.
 - Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
+- Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
+- **Settings -> OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Requirements
@@ -29,6 +31,11 @@ Availability: iPhone app builds are distributed through Apple channels when enab
   - Manual host/port (fallback).
 
 ## Quick start (pair + connect)
+
+On first launch the app walks through a short pairing explainer and a
+permissions page (notifications, camera, microphone, photos, contacts,
+calendar, reminders, location). Every grant is optional and can be changed
+later in **Settings** -> **Permissions**, or in the iOS Settings app.
 
 1. Start an authenticated Gateway with a route your phone can reach. Tailscale
    Serve is the recommended remote path:
@@ -43,7 +50,9 @@ Gateway has not been configured yet, run `openclaw onboard` first so setup-code
 creation has a token or password auth path.
 
 2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
-   **Pair mobile device** in the **Nodes & devices** card.
+   **Pair mobile device** on the **Devices** page. Full access is recommended
+   and selected by default; choose Limited access only when you want to omit
+   administrative Gateway controls, then click **Create setup code**.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
@@ -51,8 +60,22 @@ creation has a token or password auth path.
    If the setup code contains both LAN and Tailscale Serve routes, the app
    probes them in order and saves the first reachable endpoint.
 
+   Paired gateways remain in the **Gateways** list. The checkmark identifies
+   the focused gateway; use the bolt control on another row to keep its
+   operator session connected at the same time. Switching focus does not
+   disconnect other enabled gateways. Only the focused gateway receives the
+   iPhone's capability-bearing node session, so camera, screen, location, and
+   other device commands always have one unambiguous owner. iOS may suspend
+   these foreground connections after the app enters the background.
+
 4. The official app connects automatically. If **Pending approval** shows a
    request, review its role and scopes before approving it.
+
+   **Settings → Gateway** shows whether the saved operator connection has
+   **Full** or **Limited** access. Plaintext LAN `ws://` setup is automatically
+   limited for bearer-token safety. If it is limited, configure `wss://` or
+   Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
+   then reconnect to enable settings and upgrades.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered gateway in the iOS app (or enable
@@ -88,10 +111,50 @@ openclaw nodes status
 openclaw gateway call node.list --params "{}"
 ```
 
+## Health summaries
+
+The iOS node can return an opt-in, read-only HealthKit aggregate for the current
+calendar day. iOS device consent and explicit Gateway command authorization are
+independent gates. See [HealthKit summaries](/platforms/ios-healthkit) for
+setup, invocation, payload fields, privacy behavior, and troubleshooting.
+
 By default, the Apple Watch companion keeps using the existing iPhone relay and
 does not need a separate Gateway pairing. Pair the Watch with the iPhone in
 Apple's Watch app, install OpenClaw from **Watch app -> My Watch -> Available
 Apps**, then open OpenClaw once on both devices.
+
+## Review command approvals
+
+An operator connection with `operator.admin`, or a paired
+`operator.approvals` connection explicitly targeted by the Gateway, can review
+pending exec requests on iPhone. The approval card shows the Gateway's
+sanitized command preview, warning, host context, expiry, and only the
+decisions offered by that request. The paired Apple Watch receives the same
+reviewer-safe prompt through the existing iPhone relay and offers the compact
+allow-once/deny decision subset. Direct Watch Gateway mode does not carry
+approval prompts.
+
+Approval state is shared with the Control UI and supported chat surfaces. The
+first committed answer wins. iPhone and Watch fetch the Gateway's canonical
+terminal record after another surface resolves the request, after a remote
+resolved notification, and whenever a resolve acknowledgement may have been
+lost. Actions stay unavailable until that readback confirms whether the
+request remains pending.
+
+Approval ownership is bound to the selected Gateway. Switching gateways cannot
+apply an old prompt to the replacement connection. Gateways that predate the
+unified approval methods fall back to the shipped exec-specific methods;
+retained terminal state and richer cross-surface results require an updated
+Gateway.
+
+## Answer agent questions
+
+Chat shows pending Gateway questions as native cards for operator connections
+with `operator.questions` (or `operator.admin`). Cards support single- and
+multi-select options, option descriptions, free-text **Other** answers, and an
+expiry countdown. Reconnects reload pending questions from the Gateway. A card
+locks when this device answers it, another surface answers it first, or the
+question expires or is cancelled.
 
 ## Optional direct Apple Watch node
 

@@ -1,9 +1,51 @@
 import { EventEmitter } from "node:events";
+import http from "node:http";
 import type { Express, NextFunction, Request, Response } from "express";
-import { describe, expect, it, vi } from "vitest";
-import { installBrowserCommonMiddleware } from "./server-middleware.js";
+import express from "express";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  installBrowserAuthMiddleware,
+  installBrowserCommonMiddleware,
+} from "./server-middleware.js";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
+
+let server: http.Server | undefined;
+
+async function startMiddlewareTestServer(): Promise<{ url: string; getRouteCalls: () => number }> {
+  const app = express();
+  let routeCalls = 0;
+  installBrowserCommonMiddleware(app);
+  installBrowserAuthMiddleware(app, { token: "test-token" });
+  app.post("/mutate", (req, res) => {
+    routeCalls += 1;
+    res.status(200).json({ body: req.body });
+  });
+
+  server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => {
+    server?.once("listening", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP test server address");
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    getRouteCalls: () => routeCalls,
+  };
+}
+
+afterEach(async () => {
+  const current = server;
+  server = undefined;
+  if (!current) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    current.close((error) => (error ? reject(error) : resolve()));
+  });
+});
 
 describe("installBrowserCommonMiddleware", () => {
   it("shadows native request signals with the browser response-lifetime signal", () => {
@@ -47,5 +89,39 @@ describe("installBrowserCommonMiddleware", () => {
     req.emit("aborted");
     expect(req.signal.aborted).toBe(true);
     expect(req.signal.reason).toEqual(new Error("request aborted"));
+  });
+
+  it("rejects cross-site mutations before JSON body parsing", async () => {
+    const { url, getRouteCalls } = await startMiddlewareTestServer();
+
+    const response = await fetch(`${url}/mutate`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://evil.example",
+      },
+      body: "{not json",
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe("Forbidden");
+    expect(getRouteCalls()).toBe(0);
+  });
+
+  it("still parses allowed JSON requests after the mutation guard", async () => {
+    const { url, getRouteCalls } = await startMiddlewareTestServer();
+
+    const response = await fetch(`${url}/mutate`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ok: true }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ body: { ok: true } });
+    expect(getRouteCalls()).toBe(1);
   });
 });

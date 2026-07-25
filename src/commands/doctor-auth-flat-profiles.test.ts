@@ -117,6 +117,55 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expect(fs.existsSync(`${statePath}.sqlite-import.456.bak`)).toBe(true);
   });
 
+  it("preserves secret refs and OAuth material when migrating a flat auth-profiles.json", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      chutes: {
+        type: "oauth",
+        provider: "chutes",
+        access: "ACCESS_TOKEN",
+        refresh: "REFRESH_TOKEN",
+        expires: 1_900_000_000_000,
+        clientId: "chutes-client-id-123",
+        idToken: "ID_TOKEN_xyz",
+        chatgptPlanType: "pro",
+      },
+      openai: {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", id: "OPENAI_API_KEY" },
+      },
+    });
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 472,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
+      profiles: {
+        "chutes:default": {
+          type: "oauth",
+          provider: "chutes",
+          access: "ACCESS_TOKEN",
+          refresh: "REFRESH_TOKEN",
+          clientId: "chutes-client-id-123",
+          idToken: "ID_TOKEN_xyz",
+          chatgptPlanType: "pro",
+        },
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+        },
+      },
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(fs.existsSync(`${authPath}.sqlite-import.472.bak`)).toBe(true);
+  });
+
   it("moves legacy aws-sdk auth markers to config before removing JSON", async () => {
     const state = await makeTestState();
     const cfg = {};
@@ -887,6 +936,53 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     expect(JSON.parse(fs.readFileSync(`${authPath}.legacy-flat.123.bak`, "utf8"))).toEqual(legacy);
   });
 
+  it("preserves existing SQLite auth profiles when migrating a legacy flat store", async () => {
+    const state = await makeTestState();
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "sk-access-live",
+            refresh: "sk-refresh-live",
+            expires: 9999999999999,
+          },
+        },
+      },
+      state.agentDir(),
+    );
+    const legacy = { openai: { apiKey: "sk-openai-flat" } };
+    const authPath = await writeLegacyAuthProfilesJson(state, legacy);
+
+    const result = await maybeRepairLegacyFlatAuthProfileStores({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 123,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      `Migrated ${authPath} to the SQLite auth profile store (backup: ${authPath}.legacy-flat.123.bak).`,
+    ]);
+    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toEqual({
+      "anthropic:default": {
+        type: "oauth",
+        provider: "anthropic",
+        access: "sk-access-live",
+        refresh: "sk-refresh-live",
+        expires: 9999999999999,
+      },
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-flat",
+      },
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+  });
+
   it("reports legacy flat stores without rewriting when repair is declined", async () => {
     const state = await makeTestState();
     const legacy = {
@@ -1374,4 +1470,61 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
       JSON.parse(fs.readFileSync(`${authPath}.openai-provider-unification.789.bak`, "utf8")),
     ).toEqual(legacy);
   });
+
+  it("canonicalizes a mixed Codex store before importing it into SQLite", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:media-api": {
+          type: "api_key",
+          provider: "openai",
+          key: "test-api-key",
+        },
+        "openai-codex:qa-oauth": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "test-access",
+          refresh: "test-refresh",
+          expires: Date.UTC(2036, 0, 1),
+          accountId: "qa-codex-account",
+        },
+      },
+      order: {
+        openai: ["openai:media-api"],
+        "openai-codex": ["openai-codex:qa-oauth"],
+      },
+    });
+
+    const providerRepair = await maybeRepairOpenAICodexAuthProfileStores({
+      cfg: {},
+      env: state.env,
+      now: () => 790,
+    });
+    expect(providerRepair.warnings).toStrictEqual([]);
+
+    const sqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      env: state.env,
+      prompter: makePrompter(true),
+      now: () => 791,
+    });
+    expect(sqliteMigration.warnings).toStrictEqual([]);
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
+      profiles: {
+        "openai:media-api": {
+          type: "api_key",
+          provider: "openai",
+        },
+        "openai:qa-oauth": {
+          type: "oauth",
+          provider: "openai",
+          accountId: "qa-codex-account",
+        },
+      },
+      order: { openai: ["openai:qa-oauth", "openai:media-api"] },
+    });
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

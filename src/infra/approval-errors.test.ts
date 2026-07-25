@@ -21,6 +21,7 @@ describe("isApprovalNotFoundError", () => {
 
   it("matches legacy message-only not-found errors", () => {
     expect(isApprovalNotFoundError(new Error("unknown or expired approval id"))).toBe(true);
+    expect(isApprovalNotFoundError(new Error("approval expired or not found"))).toBe(true);
   });
 
   it("ignores unrelated errors", () => {

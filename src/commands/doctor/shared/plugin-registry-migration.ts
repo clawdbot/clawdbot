@@ -24,31 +24,22 @@ import {
 import { loadPluginManifestRegistryForInstalledIndex } from "../../../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 
-export const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
-export const FORCE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION";
 const DOCTOR_PLUGIN_ID_ALIASES: Readonly<Record<string, readonly string[]>> = {
   openai: ["openai-codex"],
 };
 
-export type PluginRegistryInstallMigrationPreflightAction =
-  | "disabled"
-  | "skip-existing"
-  | "migrate";
+type PluginRegistryInstallMigrationPreflightAction = "skip-existing" | "migrate";
 
-export type PluginRegistryInstallMigrationPreflight = {
+type PluginRegistryInstallMigrationPreflight = {
   /** Migration action selected before reading or writing registry state. */
   action: PluginRegistryInstallMigrationPreflightAction;
   /** Persisted plugin index path that migration will inspect or write. */
   filePath: string;
-  /** True when deprecated force env requested migration despite existing registry. */
-  force: boolean;
-  /** Deprecation warnings for env toggles that should be shown to users. */
-  deprecationWarnings: readonly string[];
 };
 
-export type PluginRegistryInstallMigrationResult =
+type PluginRegistryInstallMigrationResult =
   | {
-      status: "disabled" | "skip-existing" | "dry-run";
+      status: "skip-existing" | "dry-run";
       migrated: false;
       preflight: PluginRegistryInstallMigrationPreflight;
     }
@@ -67,48 +58,24 @@ export type PluginRegistryInstallMigrationParams = LoadInstalledPluginIndexParam
     readConfig?: () => Promise<OpenClawConfig> | OpenClawConfig;
   };
 
-function hasEnvFlag(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
-  const value = env?.[key]?.trim().toLowerCase();
-  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
-}
-
-function forceDeprecationWarning(): string {
-  return `${FORCE_PLUGIN_REGISTRY_MIGRATION_ENV} is deprecated and will be removed after the plugin registry migration rollout; use doctor registry repair once available.`;
-}
-
 /** Decide whether plugin install registry migration should run for this environment. */
 export function preflightPluginRegistryInstallMigration(
   params: PluginRegistryInstallMigrationParams = {},
 ): PluginRegistryInstallMigrationPreflight {
-  const env = params.env ?? process.env;
   const filePath = resolveInstalledPluginIndexStorePath(params);
-  const force = hasEnvFlag(env, FORCE_PLUGIN_REGISTRY_MIGRATION_ENV);
-  const deprecationWarnings = force ? [forceDeprecationWarning()] : [];
-  if (hasEnvFlag(env, DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV)) {
-    return {
-      action: "disabled",
-      filePath,
-      force,
-      deprecationWarnings,
-    };
-  }
   const pathExists = params.existsSync ?? fs.existsSync;
-  if (!force && pathExists(filePath)) {
+  if (pathExists(filePath)) {
     const currentRegistry = readPersistedInstalledPluginIndexSync(params);
     if (currentRegistry) {
       return {
         action: "skip-existing",
         filePath,
-        force,
-        deprecationWarnings,
       };
     }
   }
   return {
     action: "migrate",
     filePath,
-    force,
-    deprecationWarnings,
   };
 }
 
@@ -271,6 +238,9 @@ function listMigrationRelevantPluginRecords(params: {
     if ((manifest?.commandAliases ?? []).some((alias) => alias.cliCommand)) {
       return true;
     }
+    if ((manifest?.contracts?.migrationProviders?.length ?? 0) > 0) {
+      return true;
+    }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {
       return true;
     }
@@ -292,9 +262,6 @@ export async function migratePluginRegistryForInstall(
   params: PluginRegistryInstallMigrationParams = {},
 ): Promise<PluginRegistryInstallMigrationResult> {
   const preflight = preflightPluginRegistryInstallMigration(params);
-  if (preflight.action === "disabled") {
-    return { status: "disabled", migrated: false, preflight };
-  }
   if (preflight.action === "skip-existing") {
     return { status: "skip-existing", migrated: false, preflight };
   }

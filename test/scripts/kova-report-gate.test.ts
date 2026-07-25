@@ -206,7 +206,13 @@ function partialReport(): JsonObject {
           cpuPercentMax: 80,
           peakRssMb: 650,
         },
-        phases: [{ id: "agent-turn", results: [commandResult()] }],
+        phases: [
+          {
+            commands: [commandResult().command],
+            id: "agent-turn",
+            results: [commandResult()],
+          },
+        ],
         profiling: normalProfiling(),
         scenario: SCENARIO,
         state: { id: STATE },
@@ -300,7 +306,13 @@ function profiledResourceReport(): JsonObject {
             "agent-process": { maxCpuPercent: 156.2, peakRssMb: 923.7 },
           },
         },
-        phases: [{ id: "agent-turn", results: [commandResult()] }],
+        phases: [
+          {
+            commands: [commandResult().command],
+            id: "agent-turn",
+            results: [commandResult()],
+          },
+        ],
         profiling: deepProfiling(),
         scenario: SCENARIO,
         state: { id: STATE },
@@ -415,6 +427,21 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
       classification: "filtered-partial",
       ok: true,
     });
+  });
+
+  it("accepts a declared collector-only phase without commands", () => {
+    const report = partialReport();
+    setAt(report, ["records", 0, "phases", 0], {
+      collectionIntent: "post-ready-health",
+      commands: [],
+      driverKind: "none",
+      evidence: ["startup logs"],
+      id: "logs",
+      metrics: { schemaVersion: "kova.envMetrics.v1" },
+      results: [],
+    });
+
+    expect(evaluateToleratedPartialKovaReport(report)).toEqual({ ok: true });
   });
 
   it("accepts an exact deep-profile resource-only rejection", () => {
@@ -548,6 +575,15 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     [
       "rejects timed-out phase commands",
       (report) => setAt(report, ["records", 0, "phases", 0, "results", 0, "timedOut"], true),
+    ],
+    [
+      "rejects phase command/result count drift",
+      (report) => setAt(report, ["records", 0, "phases", 0, "results"], []),
+    ],
+    [
+      "rejects phase command/result identity drift",
+      (report) =>
+        setAt(report, ["records", 0, "phases", 0, "results", 0, "command"], "different command"),
     ],
     [
       "rejects retained record cleanup",
@@ -831,6 +867,13 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     [
       "rejects PARTIAL phase failures",
       (report) => setAt(report, ["records", 0, "phases", 0, "results", 0, "status"], 1),
+    ],
+    [
+      "rejects unmarked commandless PARTIAL phases",
+      (report) => {
+        setAt(report, ["records", 0, "phases", 0, "commands"], []);
+        setAt(report, ["records", 0, "phases", 0, "results"], []);
+      },
     ],
     [
       "rejects PARTIAL cleanup failures",

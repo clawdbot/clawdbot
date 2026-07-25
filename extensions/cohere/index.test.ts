@@ -5,14 +5,13 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import {
-  COHERE_COMMAND_A_PLUS_MODEL_ID,
-  COHERE_COMMAND_A_REASONING_MODEL_ID,
-  COHERE_COMMAND_A_VISION_MODEL_ID,
-  COHERE_NORTH_MINI_CODE_MODEL_ID,
-} from "./models.js";
-import { buildCohereProvider } from "./provider-catalog.js";
+import { COHERE_COMMAND_A_PLUS_MODEL_ID } from "./models.js";
+import { buildCohereProvider, COHERE_LIVE_MODEL_DISCOVERY } from "./provider-catalog.js";
 import { createCohereCompletionsWrapper } from "./stream.js";
+
+const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
+const COHERE_COMMAND_A_VISION_MODEL_ID = "command-a-vision-07-2025";
+const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
 function readManifest() {
   return JSON.parse(readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8")) as {
@@ -109,6 +108,8 @@ describe("Cohere provider plugin", () => {
         }),
         expect.objectContaining({
           id: "command-a-03-2025",
+          status: "deprecated",
+          replacedBy: COHERE_COMMAND_A_PLUS_MODEL_ID,
           compat: {
             supportsStore: false,
             supportsUsageInStreaming: false,
@@ -117,6 +118,8 @@ describe("Cohere provider plugin", () => {
         }),
         expect.objectContaining({
           id: COHERE_COMMAND_A_REASONING_MODEL_ID,
+          status: "deprecated",
+          replacedBy: COHERE_COMMAND_A_PLUS_MODEL_ID,
           reasoning: true,
           input: ["text"],
           contextWindow: 256000,
@@ -124,6 +127,8 @@ describe("Cohere provider plugin", () => {
         }),
         expect.objectContaining({
           id: COHERE_COMMAND_A_VISION_MODEL_ID,
+          status: "deprecated",
+          replacedBy: COHERE_COMMAND_A_PLUS_MODEL_ID,
           reasoning: false,
           input: ["text", "image"],
           contextWindow: 128000,
@@ -158,6 +163,42 @@ describe("Cohere provider plugin", () => {
         }),
       ],
     });
+  });
+
+  it("normalizes Cohere live catalog rows for chat discovery", () => {
+    expect(COHERE_LIVE_MODEL_DISCOVERY.endpointUrl).toEqual({
+      url: "https://api.cohere.com/v1/models?endpoint=chat&page_size=1000",
+      requireBaseUrl: "https://api.cohere.ai/compatibility/v1",
+    });
+    expect(
+      COHERE_LIVE_MODEL_DISCOVERY.readRows?.({
+        models: [
+          {
+            name: "command-fresh",
+            is_deprecated: false,
+            endpoints: ["chat"],
+            context_length: 256_000,
+          },
+          { name: "command-retired", is_deprecated: true, endpoints: ["chat"] },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "command-fresh",
+        name: "command-fresh",
+        is_deprecated: false,
+        active: true,
+        endpoints: ["chat"],
+        context_length: 256_000,
+      },
+      {
+        id: "command-retired",
+        name: "command-retired",
+        is_deprecated: true,
+        active: false,
+        endpoints: ["chat"],
+      },
+    ]);
   });
 
   it("uses Cohere's OpenAI-compatible completions payload fields", () => {

@@ -63,7 +63,9 @@ describe("Venice usage", () => {
     const snapshot = await fetchVeniceUsage({
       token: "venice-key",
       timeoutMs: 5000,
-      fetchFn: vi.fn(async () => new Response("private", { status: 403 })) as unknown as typeof fetch,
+      fetchFn: vi.fn(
+        async () => new Response("private", { status: 403 }),
+      ) as unknown as typeof fetch,
     });
 
     expect(snapshot.error).toBe("HTTP 403");

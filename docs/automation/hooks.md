@@ -147,11 +147,11 @@ conversation) and for `session:compact:before` / `session:compact:after`
 
 **Command events** (`command:stop`): `context.sessionEntry`, `context.sessionId`, `context.commandSource`, `context.senderId`.
 
-**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
+**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.media` (ordered staged attachment facts), `context.originalMedia` plus `context.mediaStagingPending` when remote media is not locally staged yet, and `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries. Legacy media aliases inside `metadata` are deprecated.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`, plus `context.error` when sending failed.
 
-**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
+**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, and `context.media`. `context.mediaPath` and `context.mediaType` remain deprecated aliases for the first fact.
 
 **Message events** (`message:preprocessed`): `context.bodyForAgent` (final enriched body), `context.from`, `context.channelId`.
 
@@ -238,7 +238,7 @@ openclaw hooks enable <hook-name>
 
 ### session-memory details
 
-Extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs with the configured model (falls back to timestamp slugs when unavailable). Requires `workspace.dir` to be configured.
+Extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs, and optionally set `hooks.internal.entries.session-memory.model` to a configured alias such as `sonnet`, a bare model ID on the agent's default provider, or a `provider/model` ref. Slug generation uses the agent's default model when `model` is omitted and falls back to timestamp slugs when unavailable. Requires `workspace.dir` to be configured.
 
 <a id="bootstrap-extra-files"></a>
 
@@ -259,7 +259,7 @@ Extracts the last user/assistant messages (default 15, configurable with `hooks.
 }
 ```
 
-`patterns` and `files` are accepted as aliases of `paths`. Paths resolve relative to the workspace and must stay inside it. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+`patterns` and `files` are accepted as aliases of `paths`. Paths resolve relative to the workspace and must stay inside it. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md`).
 
 <a id="command-logger"></a>
 

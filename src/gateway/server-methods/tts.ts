@@ -7,12 +7,15 @@ import {
   validateTtsSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  assertSecretOwnerAvailable,
+  SecretSurfaceUnavailableError,
+} from "../../secrets/runtime-degraded-state.js";
+import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
 import {
-  getResolvedSpeechProviderConfig,
   getTtsPersona,
   getTtsProvider,
   isTtsEnabled,
@@ -51,11 +54,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const providerStates = listSpeechProviders(cfg).map((candidate) => ({
         id: candidate.id,
         label: candidate.label,
-        configured: candidate.isConfigured({
-          cfg,
-          providerConfig: getResolvedSpeechProviderConfig(config, candidate.id, cfg),
-          timeoutMs: config.timeoutMs,
-        }),
+        configured: isTtsProviderConfigured(config, candidate.id, cfg),
       }));
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
@@ -175,7 +174,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      // synthesizeSpeech enforces the same messages.tts.maxTextLength bound but
+      // synthesizeSpeech enforces the same tts.maxTextLength bound but
       // reports it as a synthesis failure; pre-check to return a request error.
       const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
       if (text.length > maxTextLength) {
@@ -189,6 +188,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      assertSecretOwnerAvailable("capability", "tts");
       const result = await synthesizeSpeech({ text, cfg });
       const provider = normalizeOptionalString(result.provider);
       if (!result.success || !result.audioBuffer || result.audioBuffer.length === 0 || !provider) {
@@ -207,7 +207,23 @@ export const ttsHandlers: GatewayRequestHandlers = {
         fileExtension: result.fileExtension,
       });
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          formatForLog(err),
+          err instanceof SecretSurfaceUnavailableError
+            ? {
+                details: {
+                  reason: err.code,
+                  ownerKind: err.ownerKind,
+                  ownerId: err.ownerId,
+                },
+              }
+            : undefined,
+        ),
+      );
     }
   },
   "tts.setProvider": async ({ params, respond, context }) => {
@@ -299,11 +315,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         providers: listSpeechProviders(cfg).map((provider) => ({
           id: provider.id,
           name: provider.label,
-          configured: provider.isConfigured({
-            cfg,
-            providerConfig: getResolvedSpeechProviderConfig(config, provider.id, cfg),
-            timeoutMs: config.timeoutMs,
-          }),
+          configured: isTtsProviderConfigured(config, provider.id, cfg),
           models: [...(provider.models ?? [])],
           voices: [...(provider.voices ?? [])],
         })),

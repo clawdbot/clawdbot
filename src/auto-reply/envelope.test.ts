@@ -79,6 +79,16 @@ describe("formatAgentEnvelope", () => {
     const body = formatAgentEnvelope({ channel: "Telegram", body: "hi" });
     expect(body).toBe("[Telegram] hi");
   });
+
+  it("formats the Unix epoch timestamp", () => {
+    const body = formatAgentEnvelope({
+      channel: "WebChat",
+      timestamp: 0,
+      envelope: { timezone: "utc" },
+      body: "hello",
+    });
+    expect(body).toBe("[WebChat Thu 1970-01-01T00:00:00Z] hello");
+  });
 });
 
 describe("formatInboundEnvelope", () => {
@@ -198,7 +208,7 @@ describe("formatInboundEnvelope", () => {
     expect(body).toBe("[WhatsApp Family Chat] Alice: hello");
   });
 
-  it("resolves envelope options from config", () => {
+  it("uses fixed envelope options while preserving the user timezone", () => {
     const options = resolveEnvelopeFormatOptions({
       agents: {
         defaults: {
@@ -210,9 +220,9 @@ describe("formatInboundEnvelope", () => {
       },
     });
     expect(options).toEqual({
-      timezone: "user",
-      includeTimestamp: false,
-      includeElapsed: false,
+      timezone: "Europe/Vienna",
+      includeTimestamp: true,
+      includeElapsed: true,
       userTimezone: "Europe/Vienna",
     });
   });

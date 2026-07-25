@@ -68,20 +68,28 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
         binaryName: "gemini",
       },
     },
+    // Gemini's published bundle owns inference; optional keychain/PTY modules
+    // are auth and tool integrations, not the inference transport.
+    runtimeArtifact: {
+      kind: "bundled-package-tree",
+      packageName: "@google/gemini-cli",
+      entrypoint: "command",
+    },
     bundleMcp: true,
     bundleMcpMode: "gemini-system-settings",
-    nativeToolMode: "always-on",
+    nativeToolMode: "selectable",
+    toolAvailabilityEnforcement: "prepare-execution",
     authEpochMode: "profile-only",
     normalizeConfig: normalizeGeminiCliBackendConfig,
     prepareExecution: async (ctx) => {
-      const { prepareGeminiCliAuthHome } = await import("./cli-backend-auth.runtime.js");
-      return await prepareGeminiCliAuthHome(
+      const { prepareGeminiCliExecution } = await import("./cli-backend-auth.runtime.js");
+      return await prepareGeminiCliExecution(
         {
           agentDir: ctx.agentDir,
           authProfileId: ctx.authProfileId,
           systemSettingsPath:
-            (ctx as typeof ctx & { env?: Record<string, string> }).env
-              ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
+            ctx.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
+          toolAvailability: ctx.toolAvailability,
         },
         (ctx as typeof ctx & { authCredential?: unknown }).authCredential,
       );

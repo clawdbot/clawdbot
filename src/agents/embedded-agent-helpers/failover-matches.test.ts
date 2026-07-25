@@ -1,10 +1,11 @@
 // Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
-import { classifyFailoverReason, classifyFailoverReasonFromHttpStatus } from "./errors.js";
+import { classifyFailoverReason } from "./errors.js";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
@@ -180,6 +181,26 @@ describe("server error status classification", () => {
   });
 });
 
+describe("provider-completed finish_reason error (#109218)", () => {
+  it("matches bare finish/stop error reasons as provider-completed failures", () => {
+    expect(isProviderCompletedErrorFinishReasonMessage("Provider finish_reason: error")).toBe(true);
+    expect(isTimeoutErrorMessage("Provider finish_reason: error")).toBe(false);
+    expect(classifyFailoverReason("Provider finish_reason: error")).toBe("server_error");
+  });
+
+  it("keeps abort/network/malformed finish reasons in the timeout lane", () => {
+    for (const sample of [
+      "Provider finish_reason: abort",
+      "Provider finish_reason: network_error",
+      "Provider finish_reason: malformed_response",
+    ]) {
+      expect(isProviderCompletedErrorFinishReasonMessage(sample)).toBe(false);
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+    }
+  });
+});
+
 describe("generic assistant error text classification (#93931)", () => {
   it("classifies the generic 'LLM request failed.' as a timeout (transient)", () => {
     // The generic error text wraps provider availability failures (model not
@@ -218,7 +239,7 @@ describe("HTTP 429 overload wording (#98101)", () => {
       "429 status code (exceeded limit)\n" +
       '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
     expect(classifyFailoverReason(message)).toBe("rate_limit");
-    expect(classifyFailoverReasonFromHttpStatus(429, message)).toBe("rate_limit");
+    expect(classifyFailoverReason(`HTTP 429: ${message}`)).toBe("rate_limit");
     expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );

@@ -10,6 +10,7 @@ import {
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   adoptPersistedSessionSnapshot,
   sessionModelOverrideChangesApplied,
@@ -18,13 +19,21 @@ import {
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "../../sessions/model-overrides.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  applyModelRuntimeDirective,
+  resolveModelRuntimeDirective,
+} from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
@@ -61,6 +70,7 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
+    policyAliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
@@ -85,13 +95,14 @@ export async function handleDirectiveOnly(
     config: params.cfg,
   });
   const agentDir = resolveAgentDir(params.cfg, activeAgentId);
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+  });
   const runtimeIsSandboxed = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: resolveRuntimePolicySessionKey({
-      cfg: params.cfg,
-      ctx: params.ctx,
-      sessionKey: params.sessionKey,
-    }),
+    sessionKey: runtimePolicySessionKey,
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
   const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
@@ -119,6 +130,8 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
+    policyAliasIndex,
+    allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
     workspaceDir: params.workspaceDir,
@@ -139,15 +152,40 @@ export async function handleDirectiveOnly(
     allowedModelKeys,
     allowedModelCatalog,
     provider,
+    agentId: activeAgentId,
   });
   if (modelResolution.errorText) {
     return { text: modelResolution.errorText };
   }
   const modelSelection = modelResolution.modelSelection;
   const profileOverride = modelResolution.profileOverride;
+  if (modelSelection && isModelSelectionLocked(sessionEntry)) {
+    return { text: MODEL_SELECTION_LOCKED_MESSAGE };
+  }
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
+  const modelRuntimeResolution = modelSelection
+    ? resolveModelRuntimeDirective({
+        rawRuntime: directives.rawModelRuntime,
+        provider: resolvedProvider,
+        cfg: params.cfg,
+        sessionEntry,
+      })
+    : ({ kind: "unchanged" } as const);
+  if (modelRuntimeResolution.kind === "invalid") {
+    return { text: modelRuntimeResolution.errorText };
+  }
+  const prospectiveSessionEntry = { ...sessionEntry };
+  applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
+  const thinkingRuntime = resolveEffectiveAgentRuntime({
+    cfg: params.cfg,
+    provider: resolvedProvider,
+    modelId: resolvedModel,
+    agentId: activeAgentId,
+    sessionKey: runtimePolicySessionKey,
+    sessionEntry: prospectiveSessionEntry,
+  });
   const thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0
       ? params.thinkingCatalog
@@ -171,16 +209,22 @@ export async function handleDirectiveOnly(
   if (directives.hasThinkDirective && !directives.thinkLevel && !directives.clearThinkLevel) {
     // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {
-      const level = currentThinkLevel ?? "off";
+      const level = resolveSupportedThinkingLevel({
+        provider: resolvedProvider,
+        model: resolvedModel,
+        level: currentThinkLevel ?? "off",
+        catalog: thinkingCatalog,
+        agentRuntime: thinkingRuntime,
+      });
       return {
         text: withOptions(
           `Current thinking level: ${level}.`,
-          `default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}`,
+          `default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, thinkingRuntime)}`,
         ),
       };
     }
     return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}.`,
+      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, thinkingRuntime)}.`,
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
@@ -336,10 +380,11 @@ export async function handleDirectiveOnly(
       model: resolvedModel,
       level: directives.thinkLevel,
       catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
     })
   ) {
     return {
-      text: `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}.`,
+      text: `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, thinkingRuntime)}.`,
     };
   }
 
@@ -355,12 +400,14 @@ export async function handleDirectiveOnly(
       model: resolvedModel,
       level: nextThinkLevel,
       catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
     })
       ? resolveSupportedThinkingLevel({
           provider: resolvedProvider,
           model: resolvedModel,
           level: nextThinkLevel,
           catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
         })
       : undefined;
   const shouldRemapUnsupportedThinkLevel =
@@ -479,7 +526,8 @@ export async function handleDirectiveOnly(
         profileOverride,
         markLiveSwitchPending: true,
       });
-      modelSelectionUpdated = applied.updated;
+      const appliedRuntime = applyModelRuntimeDirective(sessionEntry, modelRuntimeResolution);
+      modelSelectionUpdated = applied.updated || appliedRuntime.updated;
     }
     if (directives.hasQueueDirective && directives.queueReset) {
       delete sessionEntry.queueMode;
@@ -576,8 +624,20 @@ export async function handleDirectiveOnly(
         nextProvider: modelSelection.provider,
         nextModel: modelSelection.model,
         nextModelOverrideSource: "user",
-        nextAuthProfileId: profileOverride,
-        nextAuthProfileIdSource: profileOverride ? "user" : undefined,
+        nextAuthProfileId: appliedSessionEntry.authProfileOverride,
+        nextAuthProfileIdSource: appliedSessionEntry.authProfileOverrideSource,
+        nextThinking: {
+          level: appliedSessionEntry.thinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: resolveEffectiveAgentRuntime({
+            cfg: params.cfg,
+            provider: modelSelection.provider,
+            modelId: modelSelection.model,
+            agentId: activeAgentId,
+            sessionKey: runtimePolicySessionKey,
+            sessionEntry: appliedSessionEntry,
+          }),
+        },
       });
     }
   }
@@ -718,6 +778,11 @@ export async function handleDirectiveOnly(
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);
     }
+    if (modelRuntimeResolution.kind === "clear") {
+      parts.push("Runtime reset to configured policy.");
+    } else if (modelRuntimeResolution.kind === "set") {
+      parts.push(`Runtime set to ${modelRuntimeResolution.runtime} for this session.`);
+    }
   } else if (modelSelection) {
     parts.push("Model change was not applied because the session changed. Retry.");
   }
@@ -752,3 +817,4 @@ export async function handleDirectiveOnly(
   }
   return { text: ack || "OK." };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

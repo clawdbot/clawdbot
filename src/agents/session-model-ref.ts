@@ -36,9 +36,6 @@ export function resolveSessionModelRef(
   }
   const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
   const runtimeModel = normalizeOptionalString(entry?.model);
-  if (runtimeProvider && runtimeModel) {
-    return { provider: runtimeProvider, model: runtimeModel };
-  }
 
   const resolved = agentId
     ? resolveDefaultModelForAgent({
@@ -55,16 +52,16 @@ export function resolveSessionModelRef(
 
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-    runtimeProvider,
-    runtimeModel,
+    // Runtime fields record the previous run. Agent-scoped selection must use
+    // current config or an explicit override; legacy callers without an agent
+    // still use the persisted pair as their fallback selection context.
+    runtimeProvider: agentId ? undefined : runtimeProvider,
+    runtimeModel: agentId ? undefined : runtimeModel,
     overrideProvider: normalizedOverride.providerOverride,
     overrideModel: normalizedOverride.modelOverride,
     allowPluginNormalization: options?.allowPluginNormalization,
   });
-  if (persisted) {
-    return persisted;
-  }
-  return resolved;
+  return persisted ?? resolved;
 }
 
 export function resolveSessionModelIdentityRef(

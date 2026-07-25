@@ -32,12 +32,3 @@ export function setGatewaySubagentRuntime(subagent: PluginRuntime["subagent"]): 
 export function setGatewayNodesRuntime(nodes: PluginRuntime["nodes"]): void {
   gatewaySubagentState.nodes = nodes;
 }
-
-/**
- * Reset the process-global gateway subagent runtime.
- * Used by tests to avoid leaking gateway state across module reloads.
- */
-export function clearGatewaySubagentRuntime(): void {
-  gatewaySubagentState.subagent = undefined;
-  gatewaySubagentState.nodes = undefined;
-}

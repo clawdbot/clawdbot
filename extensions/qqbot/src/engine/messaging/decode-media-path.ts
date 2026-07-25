@@ -76,7 +76,7 @@ export function decodeMediaPath(raw: string, log?: EngineLogger): string {
         if (code <= 0xff) {
           bytes.push(code);
         } else {
-          const charBytes = Buffer.from(decoded[i], "utf8");
+          const charBytes = Buffer.from(decoded.charAt(i), "utf8");
           bytes.push(...charBytes);
         }
       }

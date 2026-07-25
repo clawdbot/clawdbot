@@ -32,10 +32,14 @@ function resolveHarnessAuthProvider(params: {
 /** Builds the auth forwarding plan for one resolved agent runtime. */
 export function buildAgentRuntimeAuthPlan(params: {
   provider: string;
+  modelId?: string;
   authProfileProvider?: string;
   authProfileMode?: string;
   sessionAuthProfileId?: string;
+  sessionAuthProfileSource?: "auto" | "user";
   sessionAuthProfileCandidateIds?: string[];
+  modelRoute?: AgentRuntimeAuthPlan["modelRoute"];
+  deferredRouteSupport?: AgentRuntimeAuthPlan["deferredRouteSupport"];
   config?: OpenClawConfig;
   workspaceDir?: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
@@ -71,16 +75,26 @@ export function buildAgentRuntimeAuthPlan(params: {
   const providerCanForwardProfile =
     !harnessProviderForAuth && providerForAuth === authProfileProviderForAuth;
   const canForwardProfile = providerCanForwardProfile || harnessCanForwardProfile;
+  const forwardedAuthProfileId = canForwardProfile ? params.sessionAuthProfileId : undefined;
 
   // Forward only when the selected provider/harness resolves to the same auth
   // owner as the stored session profile; otherwise the runtime must choose auth.
   return {
     providerForAuth,
+    ...(params.modelId ? { modelId: params.modelId } : {}),
     authProfileProviderForAuth,
     ...(harnessProviderForAuth ? { harnessAuthProvider: harnessProviderForAuth } : {}),
-    ...(canForwardProfile ? { forwardedAuthProfileId: params.sessionAuthProfileId } : {}),
+    ...(canForwardProfile ? { forwardedAuthProfileId } : {}),
+    ...(canForwardProfile && params.sessionAuthProfileId && params.sessionAuthProfileSource
+      ? { forwardedAuthProfileSource: params.sessionAuthProfileSource }
+      : {}),
     ...(canForwardProfile && params.sessionAuthProfileCandidateIds?.length
       ? { forwardedAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds }
       : {}),
-  };
+    ...(canForwardProfile && params.authProfileMode
+      ? { selectedAuthMode: params.authProfileMode }
+      : {}),
+    ...(params.modelRoute ? { modelRoute: params.modelRoute } : {}),
+    ...(params.deferredRouteSupport ? { deferredRouteSupport: params.deferredRouteSupport } : {}),
+  } satisfies AgentRuntimeAuthPlan;
 }

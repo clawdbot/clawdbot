@@ -30,6 +30,8 @@ export type ExecToolDefaults = {
   ask?: ExecAsk;
   trigger?: string;
   node?: string;
+  /** Default working directory for node-host execution only. */
+  nodeCwd?: string;
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;
@@ -52,6 +54,10 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** Stable agent run that owns any approval created by this tool. */
+  runId?: string;
+  /** Durable session that receives detached exec completion events and approval followups. */
+  notifySessionKey?: string;
   /** Ephemeral session UUID active when this exec tool was built. Regenerated
    *  on `/new` and `/reset`, so it pins exec-approval followups to the original
    *  session instance and lets stale followups drop after a session rebind. */
@@ -77,6 +83,8 @@ export type ExecToolDefaults = {
   channelContext?: PluginHookChannelContext;
   accountId?: string;
   approvalReviewerDeviceId?: string;
+  /** Deny approval-requiring commands without creating operator approval events. */
+  nonInteractiveApproval?: boolean;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
@@ -86,6 +94,7 @@ export type ExecToolDefaults = {
 export type ExecApprovalFollowupOutcome = {
   status: "completed" | "failed";
   exitCode: number | null;
+  exitReason?: TerminationReason;
   timedOut: boolean;
   aggregated: string;
   reason?: string;

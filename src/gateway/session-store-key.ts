@@ -6,6 +6,7 @@ import {
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   canonicalizeMainSessionAlias,
+  resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -103,10 +104,14 @@ export function resolveSessionStoreKey(params: {
 
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  const storeAgentId = params.storeAgentId ? normalizeAgentId(params.storeAgentId) : undefined;
   if (lowered === "main" || lowered === rawMainKey) {
+    if (storeAgentId) {
+      return resolveAgentMainSessionKey({ cfg: params.cfg, agentId: storeAgentId });
+    }
     return resolveMainSessionKey(params.cfg);
   }
-  const agentId = resolveDefaultStoreAgentId(params.cfg);
+  const agentId = storeAgentId ?? resolveDefaultStoreAgentId(params.cfg);
   return canonicalizeSessionKeyForAgent(agentId, raw);
 }
 

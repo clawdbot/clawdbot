@@ -1,607 +1,90 @@
-/**
- * Tests agent wait dedupe behavior for repeated gateway wait requests.
- */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_RUN_ABORTED_ERROR } from "../../agents/run-termination.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DedupeEntry } from "../server-shared.js";
-import {
-  testing,
-  readTerminalSnapshotFromGatewayDedupe,
-  setGatewayDedupeEntry,
-  waitForTerminalGatewayDedupe,
-} from "./agent-wait-dedupe.js";
+import { setGatewayDedupeEntry } from "./agent-job.js";
+import { agentHandlers } from "./agent.js";
 
-type DedupeKind = "agent" | "chat";
-type SnapshotReadOptions = Omit<
-  Parameters<typeof readTerminalSnapshotFromGatewayDedupe>[0],
-  "dedupe" | "runId"
->;
-type SnapshotWaitOptions = Omit<
-  Parameters<typeof waitForTerminalGatewayDedupe>[0],
-  "dedupe" | "runId"
->;
-type RunEntryParams = {
-  dedupe: Map<string, DedupeEntry>;
-  kind: DedupeKind;
-  runId: string;
-  ts?: number;
-  ok?: boolean;
-  payload: Record<string, unknown>;
-};
+function waitThroughGateway(params: { runId: string; timeoutMs: number }) {
+  const respond = vi.fn();
+  const handler = expectDefined(
+    agentHandlers["agent.wait"],
+    'agentHandlers["agent.wait"] test invariant',
+  );
+  const promise = Promise.resolve(
+    handler({
+      params,
+      respond,
+      context: { chatAbortControllers: new Map() },
+    } as unknown as Parameters<typeof handler>[0]),
+  );
+  return { promise, respond };
+}
 
-describe("agent wait dedupe helper", () => {
-  function setRunEntry(params: RunEntryParams) {
-    setGatewayDedupeEntry({
-      dedupe: params.dedupe,
-      key: `${params.kind}:${params.runId}`,
-      entry: {
-        ts: params.ts ?? Date.now(),
-        ok: params.ok ?? true,
-        payload: params.payload,
-      },
-    });
-  }
+function completeRun(dedupe: Map<string, DedupeEntry>, runId: string): void {
+  setGatewayDedupeEntry({
+    dedupe,
+    key: `agent:${runId}`,
+    entry: {
+      ts: Date.now(),
+      ok: true,
+      payload: { runId, status: "ok", startedAt: 100, endedAt: 200 },
+    },
+  });
+}
 
-  function setAgentEntry(params: Omit<RunEntryParams, "kind">) {
-    setRunEntry({ ...params, kind: "agent" });
-  }
+afterEach(() => {
+  vi.useRealTimers();
+});
 
-  function setChatEntry(params: Omit<RunEntryParams, "kind">) {
-    setRunEntry({ ...params, kind: "chat" });
-  }
+describe("agent.wait gateway dedupe observations", () => {
+  it("resolves concurrent waiters when the terminal dedupe entry lands", async () => {
+    const runId = "run-public-concurrent-waiters";
+    const dedupe = new Map<string, DedupeEntry>();
+    const first = waitThroughGateway({ runId, timeoutMs: 1_000 });
+    const second = waitThroughGateway({ runId, timeoutMs: 1_000 });
 
-  function agentMetaPayload(
-    runId: string,
-    meta: Record<string, unknown>,
-    overrides: Record<string, unknown> = {},
-  ) {
-    return {
+    await Promise.resolve();
+    completeRun(dedupe, runId);
+    await Promise.all([first.promise, second.promise]);
+
+    const expected = {
       runId,
       status: "ok",
       startedAt: 100,
       endedAt: 200,
-      ...overrides,
-      result: { meta },
+      error: undefined,
+      stopReason: undefined,
+      livenessState: undefined,
+      yielded: undefined,
+      pendingError: undefined,
+      timeoutPhase: undefined,
+      providerStarted: undefined,
     };
-  }
+    expect(first.respond).toHaveBeenCalledWith(true, expected);
+    expect(second.respond).toHaveBeenCalledWith(true, expected);
+  });
 
-  function okPayload(runId: string, overrides: Record<string, unknown> = {}) {
-    return { runId, status: "ok", ...overrides };
-  }
+  it("lets a fresh wait observe completion after an earlier waiter times out", async () => {
+    vi.useFakeTimers();
+    const runId = "run-public-timeout-cleanup";
+    const dedupe = new Map<string, DedupeEntry>();
+    const timedOut = waitThroughGateway({ runId, timeoutMs: 10 });
 
-  function okSnapshot(overrides: Record<string, unknown> = {}) {
-    return { status: "ok", error: undefined, ...overrides };
-  }
-
-  function queueTimeoutPayload(runId: string, overrides: Record<string, unknown> = {}) {
-    return {
+    await vi.advanceTimersByTimeAsync(11);
+    await timedOut.promise;
+    expect(timedOut.respond).toHaveBeenCalledWith(true, {
       runId,
       status: "timeout",
       timeoutPhase: "queue",
       providerStarted: false,
-      endedAt: 100,
-      ...overrides,
-    };
-  }
-
-  function setRpcQueueTimeoutEntry(params: {
-    dedupe: Map<string, DedupeEntry>;
-    kind: DedupeKind;
-    runId: string;
-    ts?: number;
-  }) {
-    setRunEntry({
-      dedupe: params.dedupe,
-      kind: params.kind,
-      runId: params.runId,
-      ts: params.ts ?? 100,
-      payload: queueTimeoutPayload(params.runId, {
-        stopReason: "rpc",
-      }),
-    });
-  }
-
-  function expectTerminalSnapshot(
-    dedupe: Map<string, DedupeEntry>,
-    runId: string,
-    snapshot: Record<string, unknown>,
-    options: SnapshotReadOptions = {},
-  ) {
-    expect(
-      readTerminalSnapshotFromGatewayDedupe({
-        dedupe,
-        runId,
-        ...options,
-      }),
-    ).toEqual(snapshot);
-  }
-
-  function expectNoTerminalSnapshot(
-    dedupe: Map<string, DedupeEntry>,
-    runId: string,
-    options: SnapshotReadOptions = {},
-  ) {
-    expect(
-      readTerminalSnapshotFromGatewayDedupe({
-        dedupe,
-        runId,
-        ...options,
-      }),
-    ).toBeNull();
-  }
-
-  function waitForTerminalSnapshot(
-    dedupe: Map<string, DedupeEntry>,
-    runId: string,
-    options: Partial<SnapshotWaitOptions> = {},
-  ) {
-    return waitForTerminalGatewayDedupe({ dedupe, runId, timeoutMs: 1_000, ...options });
-  }
-
-  const RPC_QUEUE_CANCEL_SNAPSHOT = {
-    status: "error",
-    startedAt: undefined,
-    endedAt: 100,
-    error: undefined,
-    stopReason: "rpc",
-    livenessState: undefined,
-    timeoutPhase: "queue",
-    providerStarted: false,
-  } as const;
-
-  beforeEach(() => {
-    testing.resetWaiters();
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    testing.resetWaiters();
-    vi.useRealTimers();
-  });
-
-  it("unblocks waiters when a terminal chat dedupe entry is written", async () => {
-    const dedupe = new Map();
-    const runId = "run-chat-terminal";
-    const waiter = waitForTerminalSnapshot(dedupe, runId);
-
-    await Promise.resolve();
-    expect(testing.getWaiterCount(runId)).toBe(1);
-
-    setChatEntry({
-      dedupe,
-      runId,
-      payload: okPayload(runId, { startedAt: 100, endedAt: 200 }),
     });
 
-    await expect(waiter).resolves.toEqual(okSnapshot({ startedAt: 100, endedAt: 200 }));
-    expect(testing.getWaiterCount(runId)).toBe(0);
-  });
-
-  it("preserves structured yield metadata from terminal agent results", () => {
-    const dedupe = new Map();
-    const runId = "run-yielded";
-
-    setAgentEntry({
-      dedupe,
-      runId,
-      payload: agentMetaPayload(runId, {
-        stopReason: "end_turn",
-        livenessState: "paused",
-        yielded: true,
-      }),
-    });
-
-    expectTerminalSnapshot(
-      dedupe,
-      runId,
-      okSnapshot({
-        startedAt: 100,
-        endedAt: 200,
-        stopReason: "end_turn",
-        livenessState: "paused",
-        yielded: true,
-      }),
+    completeRun(dedupe, runId);
+    const completed = waitThroughGateway({ runId, timeoutMs: 0 });
+    await completed.promise;
+    expect(completed.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, status: "ok", endedAt: 200 }),
     );
-  });
-
-  it("preserves timeout attribution from terminal agent result metadata", () => {
-    const dedupe = new Map();
-    const runId = "run-provider-timeout";
-
-    setAgentEntry({
-      dedupe,
-      runId,
-      payload: agentMetaPayload(
-        runId,
-        {
-          timeoutPhase: "provider",
-          providerStarted: true,
-        },
-        {
-          status: "timeout",
-        },
-      ),
-    });
-
-    expectTerminalSnapshot(dedupe, runId, {
-      status: "timeout",
-      startedAt: 100,
-      endedAt: 200,
-      error: undefined,
-      timeoutPhase: "provider",
-      providerStarted: true,
-    });
-  });
-
-  it("keeps hard timeout snapshots stronger than blocked liveness", () => {
-    const dedupe = new Map();
-    const runId = "run-blocked-provider-timeout";
-
-    setAgentEntry({
-      dedupe,
-      runId,
-      payload: agentMetaPayload(
-        runId,
-        {
-          livenessState: "blocked",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        },
-        {
-          status: "error",
-          error: "model timed out",
-        },
-      ),
-    });
-
-    expectTerminalSnapshot(dedupe, runId, {
-      status: "timeout",
-      startedAt: 100,
-      endedAt: 200,
-      error: "model timed out",
-      livenessState: "blocked",
-      timeoutPhase: "provider",
-      providerStarted: true,
-    });
-  });
-
-  it("normalizes blocked ok agent snapshots to errors", () => {
-    const dedupe = new Map();
-    const runId = "run-blocked-agent";
-
-    setAgentEntry({
-      dedupe,
-      runId,
-      payload: agentMetaPayload(
-        runId,
-        {
-          livenessState: "blocked",
-        },
-        {
-          error: "Context overflow: prompt too large for the model.",
-        },
-      ),
-    });
-
-    expectTerminalSnapshot(dedupe, runId, {
-      status: "error",
-      startedAt: 100,
-      endedAt: 200,
-      error: "Context overflow: prompt too large for the model.",
-      livenessState: "blocked",
-    });
-  });
-
-  it("normalizes aborted ok agent snapshots to errors", () => {
-    const dedupe = new Map();
-    const runId = "run-aborted-agent";
-
-    setAgentEntry({
-      dedupe,
-      runId,
-      payload: agentMetaPayload(runId, {
-        stopReason: "aborted",
-      }),
-    });
-
-    expectTerminalSnapshot(dedupe, runId, {
-      status: "error",
-      startedAt: 100,
-      endedAt: 200,
-      error: AGENT_RUN_ABORTED_ERROR,
-      stopReason: "aborted",
-    });
-  });
-
-  it("unblocks waiters with normalized aborted snapshots", async () => {
-    const dedupe = new Map();
-    const runId = "run-wait-aborted";
-    const waiter = waitForTerminalSnapshot(dedupe, runId);
-
-    await Promise.resolve();
-    expect(testing.getWaiterCount(runId)).toBe(1);
-
-    setAgentEntry({
-      dedupe,
-      runId,
-      payload: {
-        runId,
-        status: "ok",
-        stopReason: "aborted",
-        endedAt: 300,
-      },
-    });
-
-    await expect(waiter).resolves.toEqual({
-      status: "error",
-      endedAt: 300,
-      error: AGENT_RUN_ABORTED_ERROR,
-      stopReason: "aborted",
-    });
-    expect(testing.getWaiterCount(runId)).toBe(0);
-  });
-
-  it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
-    const dedupe = new Map();
-    const runId = "run-stale-chat";
-    setChatEntry({
-      dedupe,
-      runId,
-      payload: okPayload(runId),
-    });
-    setAgentEntry({
-      dedupe,
-      runId,
-      payload: {
-        runId,
-        status: "accepted",
-      },
-    });
-
-    expectNoTerminalSnapshot(dedupe, runId);
-
-    const blockedWait = waitForTerminalSnapshot(dedupe, runId, { timeoutMs: 25 });
-    await vi.advanceTimersByTimeAsync(30);
-    await expect(blockedWait).resolves.toBeNull();
-    expect(testing.getWaiterCount(runId)).toBe(0);
-  });
-
-  it("uses newer terminal chat snapshot when agent entry is non-terminal", () => {
-    const dedupe = new Map();
-    const runId = "run-nonterminal-agent-with-newer-chat";
-    setAgentEntry({
-      dedupe,
-      runId,
-      ts: 100,
-      payload: {
-        runId,
-        status: "accepted",
-      },
-    });
-    setChatEntry({
-      dedupe,
-      runId,
-      ts: 200,
-      payload: okPayload(runId, { startedAt: 1, endedAt: 2 }),
-    });
-
-    expectTerminalSnapshot(dedupe, runId, okSnapshot({ startedAt: 1, endedAt: 2 }));
-  });
-
-  it("ignores stale agent snapshots when waiting for an active chat run", async () => {
-    const dedupe = new Map();
-    const runId = "run-chat-active-ignore-agent";
-    setAgentEntry({
-      dedupe,
-      runId,
-      payload: okPayload(runId),
-    });
-
-    expectNoTerminalSnapshot(dedupe, runId, { ignoreAgentTerminalSnapshot: true });
-
-    const wait = waitForTerminalSnapshot(dedupe, runId, {
-      ignoreAgentTerminalSnapshot: true,
-    });
-    await Promise.resolve();
-    expect(testing.getWaiterCount(runId)).toBe(1);
-
-    setChatEntry({
-      dedupe,
-      runId,
-      payload: okPayload(runId, { startedAt: 123, endedAt: 456 }),
-    });
-
-    await expect(wait).resolves.toEqual(okSnapshot({ startedAt: 123, endedAt: 456 }));
-  });
-
-  it("prefers the freshest terminal snapshot when agent/chat dedupe keys collide", () => {
-    const runId = "run-collision";
-    const dedupe = new Map();
-
-    setAgentEntry({
-      dedupe,
-      runId,
-      ts: 100,
-      payload: okPayload(runId, { startedAt: 10, endedAt: 20 }),
-    });
-    setChatEntry({
-      dedupe,
-      runId,
-      ts: 200,
-      ok: false,
-      payload: { runId, status: "error", startedAt: 30, endedAt: 40, error: "chat failed" },
-    });
-
-    expectTerminalSnapshot(dedupe, runId, {
-      status: "error",
-      startedAt: 30,
-      endedAt: 40,
-      error: "chat failed",
-    });
-
-    const dedupeReverse = new Map();
-    setChatEntry({
-      dedupe: dedupeReverse,
-      runId,
-      ts: 100,
-      payload: okPayload(runId, { startedAt: 1, endedAt: 2 }),
-    });
-    setAgentEntry({
-      dedupe: dedupeReverse,
-      runId,
-      ts: 200,
-      payload: { runId, status: "timeout", startedAt: 3, endedAt: 4, error: "still running" },
-    });
-
-    expectTerminalSnapshot(dedupeReverse, runId, {
-      status: "timeout",
-      startedAt: 3,
-      endedAt: 4,
-      error: "still running",
-    });
-  });
-
-  it("preserves an RPC cancel snapshot when late completion writes the same key", () => {
-    const dedupe = new Map();
-    const runId = "run-cancel-wins";
-
-    setRpcQueueTimeoutEntry({
-      dedupe,
-      kind: "agent",
-      runId,
-    });
-    setAgentEntry({
-      dedupe,
-      runId,
-      ts: 200,
-      payload: okPayload(runId, { endedAt: 200 }),
-    });
-
-    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_CANCEL_SNAPSHOT);
-  });
-
-  it("preserves an RPC cancel snapshot when a later accepted write reuses the key", () => {
-    const dedupe = new Map();
-    const runId = "run-cancel-wins-over-accepted";
-
-    setRpcQueueTimeoutEntry({
-      dedupe,
-      kind: "agent",
-      runId,
-    });
-    setAgentEntry({
-      dedupe,
-      runId,
-      ts: 200,
-      payload: { runId, status: "accepted" },
-    });
-
-    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_CANCEL_SNAPSHOT);
-  });
-
-  it("lets an earlier terminal completion correct a provisional timeout snapshot", () => {
-    const dedupe = new Map();
-    const runId = "run-earlier-completion-wins";
-
-    setAgentEntry({
-      dedupe,
-      runId,
-      ts: 200,
-      payload: {
-        runId,
-        status: "timeout",
-        timeoutPhase: "provider",
-        startedAt: 100,
-        endedAt: 200,
-      },
-    });
-    setAgentEntry({
-      dedupe,
-      runId,
-      ts: 250,
-      payload: okPayload(runId, { startedAt: 100, endedAt: 190 }),
-    });
-
-    expectTerminalSnapshot(dedupe, runId, okSnapshot({ startedAt: 100, endedAt: 190 }));
-  });
-
-  it("does not make bare queue timeouts sticky", () => {
-    const dedupe = new Map();
-    const runId = "run-queue-timeout-replaced";
-
-    setAgentEntry({
-      dedupe,
-      runId,
-      ts: 100,
-      payload: queueTimeoutPayload(runId),
-    });
-    setAgentEntry({
-      dedupe,
-      runId,
-      ts: 200,
-      payload: okPayload(runId, { endedAt: 200 }),
-    });
-
-    expectTerminalSnapshot(dedupe, runId, okSnapshot({ endedAt: 200 }));
-  });
-
-  it("preserves an RPC cancel snapshot when late rejection writes the same chat key", () => {
-    const dedupe = new Map();
-    const runId = "run-cancel-chat-error";
-
-    setRpcQueueTimeoutEntry({
-      dedupe,
-      kind: "chat",
-      runId,
-    });
-    setChatEntry({
-      dedupe,
-      runId,
-      ts: 200,
-      ok: false,
-      payload: { runId, status: "error", summary: "late failure", endedAt: 200 },
-    });
-
-    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_CANCEL_SNAPSHOT);
-  });
-
-  it("resolves multiple waiters for the same run id", async () => {
-    const dedupe = new Map();
-    const runId = "run-multi";
-    const first = waitForTerminalSnapshot(dedupe, runId);
-    const second = waitForTerminalSnapshot(dedupe, runId);
-
-    await Promise.resolve();
-    expect(testing.getWaiterCount(runId)).toBe(2);
-
-    setChatEntry({
-      dedupe,
-      runId,
-      payload: okPayload(runId),
-    });
-
-    const firstResult = await first;
-    const secondResult = await second;
-    if (!firstResult || !secondResult) {
-      throw new Error("expected waiters to resolve");
-    }
-    expect(firstResult.status).toBe("ok");
-    expect(firstResult.error).toBeUndefined();
-    expect(secondResult.status).toBe("ok");
-    expect(secondResult.error).toBeUndefined();
-    expect(testing.getWaiterCount(runId)).toBe(0);
-  });
-
-  it("cleans up waiter registration on timeout", async () => {
-    const dedupe = new Map();
-    const runId = "run-timeout";
-    const wait = waitForTerminalSnapshot(dedupe, runId, { timeoutMs: 20 });
-
-    await Promise.resolve();
-    expect(testing.getWaiterCount(runId)).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(25);
-    await expect(wait).resolves.toBeNull();
-    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 });

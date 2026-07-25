@@ -24,7 +24,7 @@ export type MemoryReadonlyRecoveryState = {
     reason?: string;
     force?: boolean;
     sessions?: MemorySessionSyncTarget[];
-    sessionFiles?: string[];
+    archiveFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
   openDatabase: () => DatabaseSync;
@@ -120,19 +120,19 @@ export function enqueueMemoryTargetedSessionSync(
   state: {
     isClosed: () => boolean;
     getSyncing: () => Promise<void> | null;
-    getQueuedSessionFiles: () => Set<string>;
+    getQueuedArchiveFiles: () => Set<string>;
     getQueuedSessions: () => Map<string, MemorySessionSyncTarget>;
     getQueuedSessionSync: () => Promise<void> | null;
     setQueuedSessionSync: (value: Promise<void> | null) => void;
     sync: (params?: MemorySyncParams) => Promise<void>;
   },
-  targets?: Pick<MemorySyncParams, "sessions" | "sessionFiles">,
+  targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
 ): Promise<void> {
-  const queuedSessionFiles = state.getQueuedSessionFiles();
-  for (const sessionFile of targets?.sessionFiles ?? []) {
+  const queuedArchiveFiles = state.getQueuedArchiveFiles();
+  for (const sessionFile of targets?.archiveFiles ?? []) {
     const trimmed = sessionFile.trim();
     if (trimmed) {
-      queuedSessionFiles.add(trimmed);
+      queuedArchiveFiles.add(trimmed);
     }
   }
   const queuedSessions = state.getQueuedSessions();
@@ -142,7 +142,7 @@ export function enqueueMemoryTargetedSessionSync(
       queuedSessions.set(memorySessionSyncTargetKey(normalized), normalized);
     }
   }
-  if (queuedSessionFiles.size === 0 && queuedSessions.size === 0) {
+  if (queuedArchiveFiles.size === 0 && queuedSessions.size === 0) {
     return state.getSyncing() ?? Promise.resolve();
   }
   if (!state.getQueuedSessionSync()) {
@@ -152,16 +152,16 @@ export function enqueueMemoryTargetedSessionSync(
           await state.getSyncing()?.catch(() => undefined);
           while (
             !state.isClosed() &&
-            (state.getQueuedSessionFiles().size > 0 || state.getQueuedSessions().size > 0)
+            (state.getQueuedArchiveFiles().size > 0 || state.getQueuedSessions().size > 0)
           ) {
-            const pendingSessionFiles = Array.from(state.getQueuedSessionFiles());
+            const pendingArchiveFiles = Array.from(state.getQueuedArchiveFiles());
             const pendingSessions = Array.from(state.getQueuedSessions().values());
-            state.getQueuedSessionFiles().clear();
+            state.getQueuedArchiveFiles().clear();
             state.getQueuedSessions().clear();
             await state.sync({
               reason: "queued-sessions",
               sessions: pendingSessions,
-              sessionFiles: pendingSessionFiles,
+              archiveFiles: pendingArchiveFiles,
             });
           }
         } finally {

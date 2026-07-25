@@ -2,7 +2,10 @@
 // message/poll path while preserving media policy and transcript mirrors.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { DurableMessageSendIntent } from "../../channels/message/types.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
@@ -16,20 +19,26 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "../../interactive/payload.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
-import type { OutboundSendDeps } from "./deliver.js";
+import type { OutboundDeliveryResult } from "./deliver-types.js";
+import type { NormalizedOutboundPayload, OutboundSendDeps } from "./deliver.js";
+import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 
+const log = createSubsystemLogger("outbound/send-service");
+
 /** Gateway connection settings forwarded to outbound send helpers. */
-export type OutboundGatewayContext = {
+type OutboundGatewayContext = {
   url?: string;
   token?: string;
   timeoutMs?: number;
@@ -39,7 +48,7 @@ export type OutboundGatewayContext = {
 };
 
 /** Shared execution context for message-tool send and poll actions. */
-export type OutboundSendContext = {
+type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
   params: Record<string, unknown>;
@@ -52,9 +61,12 @@ export type OutboundSendContext = {
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
+  /** Known destination conversation kind prepared by the caller. */
+  conversationType?: ChatType;
   sessionId?: string;
   inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;
@@ -64,6 +76,22 @@ export type OutboundSendContext = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /** Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
+  /** The Gateway owns this call and may use its active gateway-mode adapter directly. */
+  gatewayOwnedDelivery?: boolean;
+  /** Bypass provider-native actions so core durable delivery owns the send. */
+  forceCoreDelivery?: boolean;
+  /** Fail before platform I/O unless the core delivery queue persisted the intent. */
+  requireQueuePersistence?: boolean;
+  /** Stable producer id for idempotent durable queue creation. */
+  deliveryIntentId?: string;
+  /** Serializable owner state finalized by live send or recovery. */
+  deliveryCompletion?: DurableDeliveryCompletion;
+  /** Runs after queue persistence and before platform I/O. */
+  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** Runs on identified platform evidence before queue acknowledgement. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
 
 type PluginHandledResult = {
@@ -111,8 +139,9 @@ async function sendCoreMessage(params: {
   threadId?: string | number;
   queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
   payloads?: SendMessageParams["payloads"];
-}): Promise<MessageSendResult> {
-  return await sendMessage({
+}): Promise<{ result: MessageSendResult; deliveredText?: string }> {
+  const deliveredPayloads: NormalizedOutboundPayload[] = [];
+  const result = await sendMessage({
     cfg: params.ctx.cfg,
     to: params.to,
     content: params.message,
@@ -132,6 +161,8 @@ async function sendCoreMessage(params: {
     asVoice: params.asVoice,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
+    conversationType: params.ctx.conversationType,
+    conversationReadOrigin: params.ctx.conversationReadOrigin,
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
@@ -145,7 +176,29 @@ async function sendCoreMessage(params: {
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
     mediaAccess: params.ctx.mediaAccess,
+    preparedMessageId: params.ctx.preparedMessageId,
+    gatewayOwnedDelivery: params.ctx.gatewayOwnedDelivery,
+    deliveryIntentId: params.ctx.deliveryIntentId,
+    deliveryCompletion: params.ctx.deliveryCompletion,
+    requireUnknownSendReconciliation: params.ctx.requireQueuePersistence ? false : undefined,
+    onDeliveryIntent: params.ctx.onDeliveryIntent,
+    onDeliveryResult: params.ctx.onDeliveryResult,
+    onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
   });
+  const deliveredText =
+    result.deliveryStatus === "sent" &&
+    deliveredPayloads.every(
+      (payload) => payload.mediaUrls.length === 0 && payload.audioAsVoice !== true,
+    )
+      ? deliveredPayloads
+          .map((payload) => payload.text)
+          .filter((text) => text.trim())
+          .join("\n")
+      : "";
+  return {
+    result,
+    ...(deliveredText ? { deliveredText } : {}),
+  };
 }
 
 async function tryHandleWithPluginAction(params: {
@@ -213,6 +266,7 @@ function createChannelActionContext(params: {
     requesterAccountId: params.ctx.requesterAccountId,
     requesterSenderId: params.ctx.requesterSenderId,
     senderIsOwner: params.ctx.senderIsOwner,
+    conversationReadOrigin: params.ctx.conversationReadOrigin,
     sessionKey: params.ctx.sessionKey,
     sessionId: params.ctx.sessionId,
     inboundEventKind: params.ctx.inboundEventKind,
@@ -233,6 +287,7 @@ async function preparePluginSendPayload(params: {
   to: string;
   payload: ReplyPayload;
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number;
 }): Promise<PluginSendPayloadPreparation> {
   const plugin = resolveOutboundChannelPlugin({
@@ -251,6 +306,7 @@ async function preparePluginSendPayload(params: {
     to: params.to,
     payload: params.payload,
     replyToId: params.replyToId,
+    replyToIdSource: params.replyToIdSource,
     threadId: params.threadId,
   });
   // A null result is an ownership decision: the provider-native payload cannot
@@ -274,10 +330,13 @@ export async function executeSendAction(params: {
   forceDocument?: boolean;
   bestEffort?: boolean;
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number;
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
+  /** Exact text handed to the direct transport after core normalization and hooks. */
+  deliveredText?: string;
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
 }> {
@@ -288,21 +347,30 @@ export async function executeSendAction(params: {
     mediaUrls: params.mediaUrls,
     audioAsVoice: params.asVoice === true,
   };
-  const queuePolicy = params.bestEffort === false ? "required" : "best_effort";
-  const pluginPreparation = await preparePluginSendPayload({
-    ctx: params.ctx,
-    to: params.to,
-    payload: defaultPayload,
-    replyToId: params.replyToId,
-    threadId: params.threadId,
-  });
+  const queuePolicy =
+    params.bestEffort === false || params.ctx.requireQueuePersistence ? "required" : "best_effort";
+  // Queue persistence cannot be guaranteed by provider-native action handlers.
+  // Treat the guarantee as forcing the one core path at every dispatch gate.
+  const requiresCoreDelivery =
+    params.ctx.forceCoreDelivery === true || params.ctx.requireQueuePersistence === true;
+  const pluginPreparation = requiresCoreDelivery
+    ? ({ kind: "unavailable" } as const)
+    : await preparePluginSendPayload({
+        ctx: params.ctx,
+        to: params.to,
+        payload: defaultPayload,
+        replyToId: params.replyToId,
+        replyToIdSource: params.replyToIdSource,
+        threadId: params.threadId,
+      });
   const channelPlugin = resolveOutboundChannelPlugin({
     channel: params.ctx.channel,
     cfg: params.ctx.cfg,
   });
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
-  const corePayload =
-    pluginPreparation.kind === "prepared"
+  const corePayload = requiresCoreDelivery
+    ? defaultPayload
+    : pluginPreparation.kind === "prepared"
       ? pluginPreparation.payload
       : pluginPreparation.kind === "unavailable" &&
           presentation &&
@@ -322,7 +390,7 @@ export async function executeSendAction(params: {
     // Prepared payloads and portable presentations need core delivery so queueing,
     // presentation rendering/adaptation, hooks, and mirrors stay uniform. The legacy
     // gateway `send` method accepts text/media only, so materialize its fallback here.
-    const result = await sendCoreMessage({
+    const delivery = await sendCoreMessage({
       ...params,
       message,
       queuePolicy,
@@ -331,8 +399,9 @@ export async function executeSendAction(params: {
 
     return {
       handledBy: "core",
-      payload: result,
-      sendResult: result,
+      payload: delivery.result,
+      ...(delivery.deliveredText ? { deliveredText: delivery.deliveredText } : {}),
+      sendResult: delivery.result,
     };
   }
 
@@ -346,45 +415,61 @@ export async function executeSendAction(params: {
           ...params.ctx,
           params: { ...params.ctx.params, message: pluginMessage },
         };
-  const pluginHandled = await tryHandleWithPluginAction({
-    ctx: pluginCtx,
-    action: "send",
-    onHandled: async () => {
-      if (!params.ctx.mirror) {
-        return;
-      }
-      const materializedPresentationFallback = pluginMessage !== params.message;
-      const mirrorText = materializedPresentationFallback
-        ? pluginMessage
-        : params.ctx.mirror.text?.trim() || pluginMessage;
-      const mirrorMediaUrls =
-        params.ctx.mirror.mediaUrls ??
-        params.mediaUrls ??
-        (params.mediaUrl ? [params.mediaUrl] : undefined);
-      await appendAssistantMessageToSessionTranscript({
-        agentId: params.ctx.mirror.agentId,
-        sessionKey: params.ctx.mirror.sessionKey,
-        text: mirrorText,
-        mediaUrls: mirrorMediaUrls,
-        idempotencyKey: params.ctx.mirror.idempotencyKey,
-        config: params.ctx.cfg,
+  const pluginHandled = requiresCoreDelivery
+    ? null
+    : await tryHandleWithPluginAction({
+        ctx: pluginCtx,
+        action: "send",
+        onHandled: async () => {
+          if (!params.ctx.mirror) {
+            return;
+          }
+          const materializedPresentationFallback = pluginMessage !== params.message;
+          const mirrorText = materializedPresentationFallback
+            ? pluginMessage
+            : params.ctx.mirror.text?.trim() || pluginMessage;
+          const mirrorMediaUrls =
+            params.ctx.mirror.mediaUrls ??
+            params.mediaUrls ??
+            (params.mediaUrl ? [params.mediaUrl] : undefined);
+          try {
+            const mirrorResult = await appendAssistantMessageToSessionTranscript({
+              agentId: params.ctx.mirror.agentId,
+              sessionKey: params.ctx.mirror.sessionKey,
+              expectedSessionId: params.ctx.mirror.expectedSessionId,
+              text: mirrorText,
+              mediaUrls: mirrorMediaUrls,
+              idempotencyKey: params.ctx.mirror.idempotencyKey,
+              deliveryMirror: params.ctx.mirror.deliveryMirror,
+              config: params.ctx.cfg,
+            });
+            if (!mirrorResult.ok) {
+              log.warn(
+                `failed to mirror plugin-handled delivery; channel send already succeeded: ${mirrorResult.reason}`,
+              );
+            }
+          } catch (error) {
+            log.warn(
+              `failed to mirror plugin-handled delivery; channel send already succeeded: ${formatErrorMessage(error)}`,
+            );
+          }
+        },
       });
-    },
-  });
   if (pluginHandled) {
     return pluginHandled;
   }
 
   throwIfAborted(params.ctx.abortSignal);
-  const result = await sendCoreMessage({
+  const delivery = await sendCoreMessage({
     ...params,
     queuePolicy,
   });
 
   return {
     handledBy: "core",
-    payload: result,
-    sendResult: result,
+    payload: delivery.result,
+    ...(delivery.deliveredText ? { deliveredText: delivery.deliveredText } : {}),
+    sendResult: delivery.result,
   };
 }
 

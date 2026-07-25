@@ -48,6 +48,12 @@ type DiscoverLmstudioModelsParams = {
   fetchImpl?: typeof fetch;
 };
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function fetchLmstudioEndpoint(params: {
   url: string;
   init?: RequestInit;
@@ -57,8 +63,10 @@ async function fetchLmstudioEndpoint(params: {
   auditContext: string;
 }): Promise<{ response: Response; release: () => Promise<void> }> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  let response: Response;
+  let release: () => Promise<void>;
   if (params.ssrfPolicy) {
-    return await fetchWithSsrFGuard({
+    const guarded = await fetchWithSsrFGuard({
       url: params.url,
       init: params.init,
       timeoutMs,
@@ -66,14 +74,22 @@ async function fetchLmstudioEndpoint(params: {
       policy: params.ssrfPolicy,
       auditContext: params.auditContext,
     });
-  }
-  const fetchFn = params.fetchImpl ?? fetch;
-  return {
-    response: await fetchFn(params.url, {
+    response = guarded.response;
+    release = guarded.release;
+  } else {
+    const fetchFn = params.fetchImpl ?? fetch;
+    response = await fetchFn(params.url, {
       ...params.init,
       signal: AbortSignal.timeout(timeoutMs),
-    }),
-    release: async () => {},
+    });
+    release = async () => undefined;
+  }
+  return {
+    response,
+    release: async () => {
+      await cancelUnreadResponseBody(response);
+      await release();
+    },
   };
 }
 

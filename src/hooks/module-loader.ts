@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 type ModuleNamespace = Record<string, unknown>;
 type GenericFunction = (...args: never[]) => unknown;
 
-export function resolveFileModuleUrl(params: {
+function resolveFileModuleUrl(params: {
   modulePath: string;
   cacheBust?: boolean;
   nowMs?: number;

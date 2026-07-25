@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import {
   CHANNEL_TO,
   CHAT_ID,
+  TOKEN,
   type GraphMessagesTestModule,
   getGraphMessagesMockState,
   installGraphMessagesMockDefaults,
@@ -19,26 +20,26 @@ beforeAll(async () => {
 });
 
 function readFirstGraphPath(): string {
-  const [call] = mockState.fetchGraphJson.mock.calls;
-  if (!call) {
-    throw new Error("Expected Graph fetch call");
-  }
-  const [request] = call;
-  if (!request || typeof request !== "object" || typeof request.path !== "string") {
+  const request = mockState.fetchGraphJson.mock.calls[0]?.[0];
+  if (!request || typeof request.path !== "string") {
     throw new Error("Expected Graph fetch request path");
   }
   return request.path;
 }
 
 describe("searchMessagesMSTeams", () => {
-  it("searches chat messages with query string", async () => {
+  it("filters chat messages locally and normalizes HTML content", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [
         {
           id: "msg-1",
-          body: { content: "Meeting notes from Monday" },
+          body: { content: "<p>Meeting <b>notes</b> from Monday</p>", contentType: "html" },
           from: { user: { id: "u1", displayName: "Alice" } },
           createdDateTime: "2026-03-25T10:00:00Z",
+        },
+        {
+          id: "msg-2",
+          body: { content: "Unrelated update", contentType: "text" },
         },
       ],
     });
@@ -49,32 +50,23 @@ describe("searchMessagesMSTeams", () => {
       query: "meeting notes",
     });
 
-    expect(result.messages).toEqual([
-      {
-        id: "msg-1",
-        text: "Meeting notes from Monday",
-        from: { user: { id: "u1", displayName: "Alice" } },
-        createdAt: "2026-03-25T10:00:00Z",
-      },
-    ]);
-    const calledPath = readFirstGraphPath();
-    expect(calledPath).toContain(`/chats/${encodeURIComponent(CHAT_ID)}/messages?`);
-    expect(calledPath).toContain("$search=");
-    expect(calledPath).toContain("$top=25");
-    const decoded = decodeURIComponent(calledPath);
-    expect(decoded).toContain('$search="meeting notes"');
-  });
-
-  it("searches channel messages", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
-      value: [
+    expect(result).toEqual({
+      messages: [
         {
-          id: "msg-2",
-          body: { content: "Sprint review" },
-          from: { user: { id: "u2", displayName: "Bob" } },
-          createdDateTime: "2026-03-25T11:00:00Z",
+          id: "msg-1",
+          text: "<p>Meeting <b>notes</b> from Monday</p>",
+          from: { user: { id: "u1", displayName: "Alice" } },
+          createdAt: "2026-03-25T10:00:00Z",
         },
       ],
+      truncated: false,
+    });
+    expect(readFirstGraphPath()).toBe(`/chats/${encodeURIComponent(CHAT_ID)}/messages?$top=50`);
+  });
+
+  it("keeps channel search scoped to the selected channel", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [{ id: "msg-2", body: { content: "Sprint review" } }],
     });
 
     const result = await searchMessagesMSTeams({
@@ -84,129 +76,139 @@ describe("searchMessagesMSTeams", () => {
     });
 
     expect(result.messages).toHaveLength(1);
-    const calledPath = readFirstGraphPath();
-    expect(calledPath).toContain("/teams/team-id-1/channels/channel-id-1/messages?");
+    expect(readFirstGraphPath()).toBe("/teams/team-id-1/channels/channel-id-1/messages?$top=50");
   });
 
-  it("applies limit parameter", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
-
-    await searchMessagesMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
-      query: "test",
-      limit: 10,
+  it("follows target-scoped pagination and applies sender matching locally", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "wrong-sender",
+          body: { content: "budget update" },
+          from: { user: { id: "u1", displayName: "Bob" } },
+        },
+      ],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
     });
-
-    const calledPath = readFirstGraphPath();
-    expect(calledPath).toContain("$top=10");
-  });
-
-  it("clamps limit to max 50", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
-
-    await searchMessagesMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
-      query: "test",
-      limit: 100,
+    mockState.fetchGraphAbsoluteUrl.mockResolvedValue({
+      value: [
+        {
+          id: "right-sender",
+          body: { content: "Budget update" },
+          from: { application: { id: "app-1", displayName: "Finance Bot" } },
+        },
+      ],
     });
-
-    const calledPath = readFirstGraphPath();
-    expect(calledPath).toContain("$top=50");
-  });
-
-  it("clamps limit to min 1", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
-
-    await searchMessagesMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
-      query: "test",
-      limit: 0,
-    });
-
-    const calledPath = readFirstGraphPath();
-    expect(calledPath).toContain("$top=1");
-  });
-
-  it("applies from filter", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
-
-    await searchMessagesMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
-      query: "budget",
-      from: "Alice",
-    });
-
-    const calledPath = readFirstGraphPath();
-    expect(calledPath).toContain("$filter=");
-    const decoded = decodeURIComponent(calledPath);
-    expect(decoded).toContain("from/user/displayName eq 'Alice'");
-  });
-
-  it("escapes single quotes in from filter", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
-
-    await searchMessagesMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
-      query: "test",
-      from: "O'Brien",
-    });
-
-    const calledPath = readFirstGraphPath();
-    const decoded = decodeURIComponent(calledPath);
-    expect(decoded).toContain("O''Brien");
-  });
-
-  it("strips double quotes from query to prevent injection", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
-
-    await searchMessagesMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
-      query: 'say "hello" world',
-    });
-
-    const calledPath = readFirstGraphPath();
-    const decoded = decodeURIComponent(calledPath);
-    expect(decoded).toContain('$search="say hello world"');
-    expect(decoded).not.toContain('""');
-  });
-
-  it("passes ConsistencyLevel: eventual header", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
-
-    await searchMessagesMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
-      query: "test",
-    });
-
-    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
-      token: "test-graph-token",
-      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages?$search=${encodeURIComponent(
-        '"test"',
-      )}&$top=25`,
-      headers: { ConsistencyLevel: "eventual" },
-    });
-  });
-
-  it("returns empty array when no messages match", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
 
     const result = await searchMessagesMSTeams({
       cfg: {} as OpenClawConfig,
       to: CHAT_ID,
-      query: "nonexistent",
+      query: "BUDGET",
+      from: "finance bot",
     });
 
-    expect(result.messages).toStrictEqual([]);
+    expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledWith({
+      token: TOKEN,
+      url: "https://graph.microsoft.com/v1.0/next-page",
+    });
+    expect(result).toEqual({
+      messages: [
+        {
+          id: "right-sender",
+          text: "Budget update",
+          from: { application: { id: "app-1", displayName: "Finance Bot" } },
+          createdAt: undefined,
+        },
+      ],
+      truncated: false,
+    });
   });
 
-  it("resolves user: target through conversation store", async () => {
+  it("matches the sender by stable ID", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "msg-1",
+          body: { content: "hello" },
+          from: { user: { id: "aad-user-1", displayName: "Alice" } },
+        },
+      ],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "hello",
+      from: "AAD-USER-1",
+    });
+
+    expect(result.messages).toHaveLength(1);
+  });
+
+  it("stops at the requested result limit and reports remaining pages", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        { id: "msg-1", body: { content: "match" } },
+        { id: "msg-2", body: { content: "match" } },
+      ],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "match",
+      limit: 1,
+    });
+
+    expect(result.messages.map((message) => message.id)).toEqual(["msg-1"]);
+    expect(result.truncated).toBe(true);
+    expect(mockState.fetchGraphAbsoluteUrl).not.toHaveBeenCalled();
+  });
+
+  it("clamps a non-finite limit to the default", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: Array.from({ length: 30 }, (_, index) => ({
+        id: `msg-${index}`,
+        body: { content: "match" },
+      })),
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "match",
+      limit: Number.POSITIVE_INFINITY,
+    });
+
+    expect(result.messages).toHaveLength(25);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("reports truncation after the bounded ten-page scan", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/page-2",
+    });
+    mockState.fetchGraphAbsoluteUrl.mockImplementation(async ({ url }: { url: string }) => {
+      const page = Number(url.match(/page-(\d+)/)?.[1] ?? "2");
+      return {
+        value: [],
+        "@odata.nextLink": `https://graph.microsoft.com/v1.0/page-${page + 1}`,
+      };
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "missing",
+    });
+
+    expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(9);
+    expect(result).toEqual({ messages: [], truncated: true });
+  });
+
+  it("resolves user targets before reading messages", async () => {
     mockState.findPreferredDmByUserId.mockResolvedValue({
       conversationId: "19:dm-chat@thread.tacv2",
       reference: {},
@@ -220,9 +222,8 @@ describe("searchMessagesMSTeams", () => {
     });
 
     expect(mockState.findPreferredDmByUserId).toHaveBeenCalledWith("aad-user-1");
-    const calledPath = readFirstGraphPath();
-    expect(calledPath).toContain(
-      `/chats/${encodeURIComponent("19:dm-chat@thread.tacv2")}/messages?`,
+    expect(readFirstGraphPath()).toBe(
+      `/chats/${encodeURIComponent("19:dm-chat@thread.tacv2")}/messages?$top=50`,
     );
   });
 });

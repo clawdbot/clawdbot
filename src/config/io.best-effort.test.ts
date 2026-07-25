@@ -1,9 +1,7 @@
 // Covers best-effort config IO reads and warning behavior.
 import fs from "node:fs/promises";
-import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -16,7 +14,6 @@ import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
-import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
@@ -34,18 +31,8 @@ function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
 }
 
 describe("readBestEffortConfig", () => {
-  beforeAll(() => {
-    setBundledPluginsDirOverrideForTest(path.resolve(import.meta.dirname, "../../extensions"));
-    // Materialized reads use the process-stable provider policy cache.
-    applyProviderConfigDefaultsForConfig({ provider: "anthropic", config: {}, env: {} });
-  });
-
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
-  });
-
-  afterAll(() => {
-    setBundledPluginsDirOverrideForTest(undefined);
   });
 
   it("can read snapshots without updating config observation state", async () => {
@@ -206,7 +193,11 @@ describe("readBestEffortConfig", () => {
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.sourceConfig).toEqual({ update: { channel: "beta" } });
+      expect(snapshot.sourceConfigBeforeMigrations).toEqual({ update: { channel: "beta" } });
+      expect(snapshot.sourceConfig).toEqual({
+        update: { channel: "beta" },
+        agents: { entries: { main: { default: true } } },
+      });
       expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
       const entries = await fs.readdir(`${home}/.openclaw`);
       expect(entries.some((entry) => entry.startsWith("openclaw.json.clobbered."))).toBe(false);
@@ -243,9 +234,9 @@ describe("readBestEffortConfig", () => {
     });
   });
 
-  it("returns source and materialized config from one snapshot", async () => {
+  it("controls observation while returning source and materialized config", async () => {
     await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
+      const configPath = await writeOpenClawConfig(home, {
         auth: {
           profiles: {
             "anthropic:api": { provider: "anthropic", mode: "api_key" },
@@ -257,12 +248,22 @@ describe("readBestEffortConfig", () => {
           },
         },
       });
+      const configRaw = await fs.readFile(configPath, "utf-8");
 
-      const snapshot = await readBestEffortConfigSnapshot();
+      const snapshot = await readBestEffortConfigSnapshot({ observe: false });
 
       expect(snapshot.sourceConfig.agents?.defaults?.contextPruning?.mode).toBeUndefined();
       expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
       expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(configRaw);
+      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toBeUndefined();
+
+      await readBestEffortConfigSnapshot();
+
+      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
+        config_path: configPath,
+        last_known_good_json: expect.any(String),
+      });
     });
   });
 });
@@ -286,7 +287,7 @@ describe("readSourceConfigBestEffort", () => {
       const snapshot = await readConfigFileSnapshot();
       const sourceBestEffort = await readSourceConfigBestEffort();
 
-      expect(sourceBestEffort).toEqual(snapshot.resolved);
+      expect(sourceBestEffort).toEqual(snapshot.sourceConfigBeforeMigrations);
       expect(sourceBestEffort.agents?.defaults?.contextPruning?.mode).toBeUndefined();
       expect(sourceBestEffort.agents?.defaults?.compaction?.mode).toBeUndefined();
     });

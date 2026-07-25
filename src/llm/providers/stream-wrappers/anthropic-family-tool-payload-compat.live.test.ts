@@ -12,7 +12,7 @@ const describeLive = LIVE ? describe : describe.skip;
 
 describeLive("OpenAI-compatible Anthropic tool payload wrapper live", () => {
   it("projects and sends a custom pinned tool after quarantining an unreadable sibling", async () => {
-    const liveModelId = process.env.OPENCLAW_LIVE_OPENAI_CHAT_TOOL_MODEL || "gpt-5.5";
+    const liveModelId = process.env.OPENCLAW_LIVE_OPENAI_CHAT_TOOL_MODEL || "gpt-5.6-luna";
     let projectedPayload: Record<string, unknown> | undefined;
     const baseStreamFn: StreamFn = (model, context, options) => {
       const payload: Record<string, unknown> = {
@@ -49,6 +49,7 @@ describeLive("OpenAI-compatible Anthropic tool payload wrapper live", () => {
           },
         ],
         tool_choice: { type: "custom", custom: { name: "live_probe" } },
+        reasoning_effort: "low",
         max_completion_tokens: 128,
       };
       options?.onPayload?.(payload, model);
@@ -67,6 +68,7 @@ describeLive("OpenAI-compatible Anthropic tool payload wrapper live", () => {
     if (!projectedPayload) {
       throw new Error("wrapper did not produce a payload");
     }
+    expect(projectedPayload.reasoning_effort).toBe("none");
 
     const client = new OpenAI({ apiKey: OPENAI_KEY });
     const response = await client.chat.completions.create(

@@ -6,7 +6,6 @@ import {
   createUnitVitestConfig,
   createUnitVitestConfigWithOptions,
   loadExtraExcludePatternsFromEnv,
-  resolveDefaultUnitCoverageIncludePatterns,
 } from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
@@ -151,18 +150,13 @@ describe("unit vitest config", () => {
     );
     const testConfig = requireTestConfig(unitConfig);
     const coverageInclude = testConfig.coverage?.include;
+    expect(coverageInclude).toContain("packages/memory-host-sdk/src/host/embeddings.ts");
+    expect(coverageInclude).toContain("src/commitments/store.ts");
     expect(coverageInclude).toContain("src/commitments/runtime.ts");
     expect(coverageInclude).toContain("src/media-generation/runtime-shared.ts");
     expect(coverageInclude).toContain("src/web-search/runtime.ts");
     expect(coverageInclude).not.toContain("packages/markdown-core/src/render.ts");
     expect(coverageInclude).not.toContain("src/security/audit-workspace-skills.ts");
-  });
-
-  it("derives default coverage includes from non-fast unit tests with sibling source files", () => {
-    const coverageInclude = resolveDefaultUnitCoverageIncludePatterns();
-    expect(coverageInclude).toContain("packages/memory-host-sdk/src/host/embeddings.ts");
-    expect(coverageInclude).toContain("src/commitments/store.ts");
-    expect(coverageInclude).toContain("src/tools/planner.ts");
   });
 
   it("leaves coverage include filters unset for explicit unit include lists", () => {

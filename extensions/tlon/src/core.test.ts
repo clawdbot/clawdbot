@@ -8,7 +8,7 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { TlonAuthorizationSchema, TlonConfigSchema } from "./config-schema.js";
+import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import { normalizeShip, resolveTlonOutboundTarget } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
@@ -46,6 +46,14 @@ const tlonTestPlugin = {
 
 const tlonConfigure = createPluginSetupWizardConfigure(tlonTestPlugin);
 const tlonStatus = createPluginSetupWizardStatus(tlonTestPlugin);
+
+function parseTlonConfig(value: unknown) {
+  const runtime = tlonChannelConfigSchema.runtime;
+  if (!runtime) {
+    throw new Error("expected Tlon channel config runtime");
+  }
+  return runtime.safeParse(value);
+}
 
 describe("tlon core", () => {
   it("formats dm allowlist entries through the shared hybrid adapter", () => {
@@ -85,41 +93,61 @@ describe("tlon core", () => {
   });
 
   it("accepts channelRules with string keys", () => {
-    const parsed = TlonAuthorizationSchema.parse({
-      channelRules: {
-        "chat/~zod/test": {
-          mode: "open",
-          allowedShips: ["~zod"],
+    expect(
+      parseTlonConfig({
+        authorization: {
+          channelRules: {
+            "chat/~zod/test": {
+              mode: "open",
+              allowedShips: ["~zod"],
+            },
+          },
         },
-      },
+      }),
+    ).toMatchObject({
+      success: true,
+      data: { authorization: { channelRules: { "chat/~zod/test": { mode: "open" } } } },
     });
-
-    expect(parsed.channelRules?.["chat/~zod/test"]?.mode).toBe("open");
   });
 
   it("accepts accounts with string keys", () => {
-    const parsed = TlonConfigSchema.parse({
-      accounts: {
-        primary: {
-          ship: "~zod",
-          url: "https://example.com",
-          code: "code-123",
+    expect(
+      parseTlonConfig({
+        accounts: {
+          primary: {
+            ship: "~zod",
+            url: "https://example.com",
+            code: "code-123",
+          },
         },
-      },
-    });
-
-    expect(parsed.accounts?.primary?.ship).toBe("~zod");
+      }),
+    ).toMatchObject({ success: true, data: { accounts: { primary: { ship: "~zod" } } } });
   });
 
   it("exposes group invite allowlists in channel config schema", () => {
-    expect(TlonConfigSchema.parse({ groupInviteAllowlist: ["~zod"] }).groupInviteAllowlist).toEqual(
-      ["~zod"],
-    );
     expect(
-      TlonConfigSchema.parse({
+      parseTlonConfig({
+        groupInviteAllowlist: ["~zod"],
         accounts: { primary: { groupInviteAllowlist: ["~nec"] } },
-      }).accounts?.primary?.groupInviteAllowlist,
-    ).toEqual(["~nec"]);
+      }),
+    ).toMatchObject({
+      success: true,
+      data: {
+        groupInviteAllowlist: ["~zod"],
+        accounts: { primary: { groupInviteAllowlist: ["~nec"] } },
+      },
+    });
+  });
+
+  it("accepts implicit mention policy at root and account scope", () => {
+    expect(
+      parseTlonConfig({
+        implicitMentions: { threadParticipation: false },
+        accounts: {
+          primary: { implicitMentions: { replyToBot: false } },
+        },
+      }),
+    ).toMatchObject({ success: true });
   });
 
   it("configures ship, auth, and discovery settings", async () => {

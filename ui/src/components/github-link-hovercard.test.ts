@@ -2,15 +2,24 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import {
-  parseGitHubIssueOrPullRequestLink,
-  type GitHubLinkHovercardProvider,
-} from "./github-link-hovercard.ts";
+import { i18n } from "../i18n/index.ts";
+import { GitHubLinkHovercardProvider } from "./github-link-hovercard.ts";
+
+const GITHUB_LINK_HOVERCARD_ELEMENT_NAME = `test-openclaw-github-link-hovercard-provider-${crypto.randomUUID()}`;
+
+customElements.define(
+  GITHUB_LINK_HOVERCARD_ELEMENT_NAME,
+  class extends GitHubLinkHovercardProvider {},
+);
+
+type GitHubLinkHovercardProviderElement = HTMLElement & {
+  client: GatewayBrowserClient | null;
+};
 
 function createLink(href: string, label = "GitHub item") {
   const provider = document.createElement(
-    "openclaw-github-link-hovercard-provider",
-  ) as GitHubLinkHovercardProvider;
+    GITHUB_LINK_HOVERCARD_ELEMENT_NAME,
+  ) as GitHubLinkHovercardProviderElement;
   const anchor = document.createElement("a");
   anchor.href = href;
   anchor.textContent = label;
@@ -34,39 +43,14 @@ function leave(anchor: HTMLAnchorElement): void {
   );
 }
 
-describe("parseGitHubIssueOrPullRequestLink", () => {
-  it("parses issue and pull request links with trailing paths", () => {
-    expect(
-      parseGitHubIssueOrPullRequestLink(
-        "https://github.com/openclaw/openclaw/issues/99815#issuecomment-1",
-      ),
-    ).toMatchObject({ kind: "issue", number: 99815, owner: "openclaw", repo: "openclaw" });
-    expect(
-      parseGitHubIssueOrPullRequestLink("https://github.com/openclaw/openclaw/pull/99816/files"),
-    ).toMatchObject({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" });
-  });
-
-  it("rejects non-item, non-HTTPS, credentialed, and non-GitHub links", () => {
-    expect(parseGitHubIssueOrPullRequestLink("https://github.com/openclaw/openclaw")).toBeNull();
-    expect(
-      parseGitHubIssueOrPullRequestLink("http://github.com/openclaw/openclaw/issues/1"),
-    ).toBeNull();
-    expect(
-      parseGitHubIssueOrPullRequestLink("https://user@github.com/openclaw/openclaw/issues/1"),
-    ).toBeNull();
-    expect(
-      parseGitHubIssueOrPullRequestLink("https://example.com/openclaw/openclaw/issues/1"),
-    ).toBeNull();
-  });
-});
-
 describe("openclaw-github-link-hovercard-provider", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-05T10:00:00Z"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -171,6 +155,22 @@ describe("openclaw-github-link-hovercard-provider", () => {
     );
   });
 
+  it.each([
+    "http://github.com/openclaw/openclaw/issues/99815",
+    "https://user:password@github.com/openclaw/openclaw/issues/99815",
+    "https://example.com/openclaw/openclaw/issues/99815",
+    "javascript:alert(1)",
+  ])("does not preview an untrusted item URL: %s", async (href) => {
+    const request = vi.fn();
+    const { anchor, provider } = createLink(href);
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(document.querySelector(".github-link-hovercard")).toBeNull();
+  });
+
   it("preserves an existing description when hover ends before opening", async () => {
     const request = vi.fn();
     const { anchor, provider } = createLink("https://github.com/openclaw/openclaw/issues/99815");
@@ -183,5 +183,92 @@ describe("openclaw-github-link-hovercard-provider", () => {
 
     expect(anchor.getAttribute("aria-describedby")).toBe("existing-description");
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("closes when route replacement removes its active link", async () => {
+    const provider = document.createElement(
+      GITHUB_LINK_HOVERCARD_ELEMENT_NAME,
+    ) as GitHubLinkHovercardProviderElement;
+    provider.client = {
+      request: vi.fn().mockResolvedValue({
+        closedAt: null,
+        comments: 1,
+        createdAt: "2026-07-05T08:00:00Z",
+        kind: "issue",
+        login: "octocat",
+        number: 99815,
+        owner: "openclaw",
+        repo: "openclaw",
+        state: "open",
+        stateReason: null,
+        title: "Keep hover previews compact",
+        updatedAt: "2026-07-05T09:55:00Z",
+      }),
+    } as unknown as GatewayBrowserClient;
+    const route = document.createElement("main");
+    const anchor = document.createElement("a");
+    anchor.href = "https://github.com/openclaw/openclaw/issues/99815";
+    route.append(anchor);
+    provider.append(route);
+    document.body.append(provider);
+
+    await hover(anchor);
+    expect(document.querySelector(".github-link-hovercard")).not.toBeNull();
+
+    route.replaceChildren(document.createElement("p"));
+    await Promise.resolve();
+
+    expect(document.querySelector(".github-link-hovercard")).toBeNull();
+    expect(anchor.hasAttribute("aria-describedby")).toBe(false);
+  });
+
+  it("rerenders an open preview when the locale changes", async () => {
+    const request = vi.fn().mockResolvedValue({
+      closedAt: null,
+      comments: 1,
+      createdAt: "2026-07-05T08:00:00Z",
+      kind: "issue",
+      login: "octocat",
+      number: 99815,
+      owner: "openclaw",
+      repo: "openclaw",
+      state: "open",
+      stateReason: null,
+      title: "Keep hover previews compact",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/issues/99815",
+      "#99815",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+    await hover(anchor);
+
+    i18n.registerTranslation("pt-BR", {
+      githubPreview: {
+        loading: "Carregando detalhes do GitHub…",
+        unavailable: "Prévia do GitHub indisponível",
+        states: {
+          merged: "Mesclado",
+          draft: "Rascunho",
+          open: "Aberto",
+          closed: "Fechado",
+          notPlanned: "Não planejado",
+        },
+        file: "{count} arquivo",
+        files: "{count} arquivos",
+        comment: "{count} comentário",
+        comments: "{count} comentários",
+        pullRequest: "pull request",
+        issue: "issue",
+        ariaLabel: "{state} {kind} {repo} #{number}: {title}, por {author}",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+
+    const card = document.querySelector<HTMLElement>(".github-link-hovercard");
+    expect(card?.textContent).toContain("Aberto");
+    expect(card?.textContent).toContain("1 comentário");
+    expect(card?.getAttribute("aria-label")).toContain("por octocat");
   });
 });

@@ -1,11 +1,17 @@
 // Signal plugin module implements identity behavior.
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { looksLikeUuid } from "./uuid.js";
 
+type SignalSenderAliases = {
+  e164?: string;
+  uuid?: string;
+};
+
 export type SignalSender =
-  | { kind: "phone"; raw: string; e164: string }
-  | { kind: "uuid"; raw: string };
+  | { kind: "phone"; raw: string; e164: string; aliases?: SignalSenderAliases }
+  | { kind: "uuid"; raw: string; aliases?: SignalSenderAliases };
 
 type SignalAllowEntry =
   | { kind: "any" }
@@ -23,13 +29,18 @@ export function resolveSignalSender(params: {
   sourceUuid?: string | null;
 }): SignalSender | null {
   const sourceNumber = params.sourceNumber?.trim();
+  const sourceUuid = params.sourceUuid?.trim();
   if (sourceNumber) {
     const e164 = normalizeE164(sourceNumber);
     if (e164) {
-      return { kind: "phone", raw: sourceNumber, e164 };
+      return {
+        kind: "phone",
+        raw: sourceNumber,
+        e164,
+        ...(sourceUuid ? { aliases: { uuid: sourceUuid } } : {}),
+      };
     }
   }
-  const sourceUuid = params.sourceUuid?.trim();
   if (sourceUuid) {
     return { kind: "uuid", raw: sourceUuid };
   }
@@ -94,23 +105,28 @@ export function normalizeSignalAllowRecipient(entry: string): string | undefined
   return parsed.kind === "phone" ? parsed.e164 : parsed.raw;
 }
 
-export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[]): boolean {
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  const parsed = allowFrom
-    .map(parseSignalAllowEntry)
-    .filter((entry): entry is SignalAllowEntry => entry !== null);
-  if (parsed.some((entry) => entry.kind === "any")) {
-    return true;
-  }
-  return parsed.some((entry) => {
-    if (entry.kind === "phone" && sender.kind === "phone") {
-      return entry.e164 === sender.e164;
+export function isSignalSenderAllowed(sender: SignalSender, allowFrom: readonly string[]): boolean {
+  const normalizedAllowFrom = allowFrom.flatMap((entry) => {
+    const parsed = parseSignalAllowEntry(entry);
+    if (!parsed) {
+      return [];
     }
-    if (entry.kind === "uuid" && sender.kind === "uuid") {
-      return entry.raw === sender.raw;
+    if (parsed.kind === "any") {
+      return ["*"];
     }
-    return false;
+    return [parsed.kind === "phone" ? `phone:${parsed.e164}` : `uuid:${parsed.raw}`];
   });
+  // A sender carries an alias when signal-cli has both forms cached locally
+  // (e.g. after the daemon resolved a number → uuid for an outbound send).
+  // Treat both forms as the same identity so an allowlist entry approved as
+  // one form keeps matching after the other becomes available.
+  const senderE164 = sender.kind === "phone" ? sender.e164 : sender.aliases?.e164;
+  const senderUuid = sender.kind === "uuid" ? sender.raw : sender.aliases?.uuid;
+  return resolveAllowlistMatchByCandidates({
+    allowList: normalizedAllowFrom,
+    candidates: [
+      { value: senderE164 ? `phone:${senderE164}` : undefined, source: "phone" },
+      { value: senderUuid ? `uuid:${senderUuid}` : undefined, source: "uuid" },
+    ],
+  }).allowed;
 }

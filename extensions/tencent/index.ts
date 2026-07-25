@@ -1,7 +1,7 @@
 // Tencent plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   TOKENHUB_MODEL_CATALOG,
   TOKENHUB_PROVIDER_ID,
@@ -65,11 +65,15 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: (ctx) =>
-          buildSingleProviderApiKeyCatalog({
+          buildOpenAICompatibleProviderCatalog({
             ctx,
             providerId: TOKENHUB_PROVIDER_ID,
             buildProvider: buildTokenHubProvider,
           }),
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({ provider: buildTokenHubProvider() }),
       },
       augmentModelCatalog: () =>
         buildStaticCatalogEntries(TOKENHUB_PROVIDER_ID, TOKENHUB_MODEL_CATALOG),
@@ -106,11 +110,15 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: (ctx) =>
-          buildSingleProviderApiKeyCatalog({
+          buildOpenAICompatibleProviderCatalog({
             ctx,
             providerId: TOKENPLAN_PROVIDER_ID,
             buildProvider: buildTokenPlanProvider,
           }),
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({ provider: buildTokenPlanProvider() }),
       },
       augmentModelCatalog: () =>
         buildStaticCatalogEntries(TOKENPLAN_PROVIDER_ID, TOKENPLAN_MODEL_CATALOG),

@@ -1,11 +1,9 @@
 /**
  * Shared run helpers for retry limits, model reporting, and final text.
  */
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
-import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   deriveContextPromptTokens,
@@ -15,7 +13,7 @@ import {
   type NormalizedUsage,
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
-import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
+import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
 
 type UsageSnapshot = {
   input?: number;
@@ -53,18 +51,16 @@ export const MAX_SAME_MODEL_RATE_LIMIT_RETRIES = 3;
 const SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS = 10_000;
 const SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS = 60_000;
 
-export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
-  return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
+export function resolveOverloadFailoverBackoffMs(): number {
+  return DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
 }
 
-export function resolveOverloadProfileRotationLimit(cfg?: OpenClawConfig): number {
-  return cfg?.auth?.cooldowns?.overloadedProfileRotations ?? DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
+export function resolveOverloadProfileRotationLimit(): number {
+  return DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
 }
 
-export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): number {
-  return (
-    cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS
-  );
+export function resolveRateLimitProfileRotationLimit(): number {
+  return DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS;
 }
 
 /**
@@ -96,7 +92,7 @@ const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_R
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
-export function scrubAnthropicRefusalMagic(prompt: string): string {
+function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
     return prompt;
   }
@@ -104,6 +100,18 @@ export function scrubAnthropicRefusalMagic(prompt: string): string {
     ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
     ANTHROPIC_MAGIC_STRING_REPLACEMENT,
   );
+}
+
+/** Applies only outer-transport prompt rewrites; native model owners receive the prompt verbatim. */
+export function resolveEmbeddedAttemptBasePrompt(params: {
+  nativeModelOwned: boolean;
+  provider: string;
+  prompt: string;
+}): string {
+  if (params.nativeModelOwned || params.provider !== "anthropic") {
+    return params.prompt;
+  }
+  return scrubAnthropicRefusalMagic(params.prompt);
 }
 
 export function createCompactionDiagId(): string {
@@ -116,22 +124,11 @@ const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
 
 // Defensive guard for the outer run loop across all retry branches.
-export function resolveMaxRunRetryIterations(
-  profileCandidateCount: number,
-  cfg?: OpenClawConfig,
-  agentId?: string,
-): number {
-  const configRetries =
-    (cfg && agentId ? resolveAgentConfig(cfg, agentId)?.runRetries : undefined) ??
-    cfg?.agents?.defaults?.runRetries;
-
-  const base = Math.max(1, configRetries?.base ?? BASE_RUN_RETRY_ITERATIONS);
-  const perProfile = Math.max(0, configRetries?.perProfile ?? RUN_RETRY_ITERATIONS_PER_PROFILE);
-  const minLimit = Math.max(1, configRetries?.min ?? MIN_RUN_RETRY_ITERATIONS);
-  const maxLimit = Math.max(minLimit, configRetries?.max ?? MAX_RUN_RETRY_ITERATIONS);
-
-  const scaled = base + Math.max(1, profileCandidateCount) * perProfile;
-  return Math.min(maxLimit, Math.max(minLimit, scaled));
+export function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
+  const scaled =
+    BASE_RUN_RETRY_ITERATIONS +
+    Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
+  return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
 export function resolveActiveErrorContext(params: {
@@ -220,7 +217,7 @@ export function buildUsageAgentMetaFields(params: {
     ? lastAssistantUsage
     : hasNonzeroUsage(params.lastRunPromptUsage)
       ? params.lastRunPromptUsage
-      : toLastCallUsage(params.usageAccumulator);
+      : undefined;
   const promptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastRunPromptUsage,
   });

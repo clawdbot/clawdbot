@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyEditsToNormalizedContent, normalizeToLF } from "./edit-diff.js";
+import { applyEditsToNormalizedContent, generateDiffString, normalizeToLF } from "./edit-diff.js";
 
 function getMismatchMessage(
   content: string,
@@ -96,5 +96,43 @@ describe("applyEditsToNormalizedContent", () => {
     ]);
 
     expect(message).toMatch(/Could not find edits\[1\][\s\S]*near line 2/);
+  });
+});
+
+describe("generateDiffString", () => {
+  it("numbers context lines from the new file after an insertion", () => {
+    const result = generateDiffString(
+      "first\nthird\nfourth\n",
+      "first\nsecond\nthird\nfourth\n",
+      2,
+    );
+
+    expect(result).toEqual({
+      diff: " 1 first\n+2 second\n 3 third\n 4 fourth",
+      firstChangedLine: 2,
+    });
+  });
+
+  it("numbers context lines from the new file after a deletion", () => {
+    const result = generateDiffString(
+      "first\nsecond\nthird\nfourth\n",
+      "first\nthird\nfourth\n",
+      2,
+    );
+
+    expect(result).toEqual({
+      diff: " 1 first\n-2 second\n 2 third\n 3 fourth",
+      firstChangedLine: 2,
+    });
+  });
+
+  it("separates distant hunks without displaying dependency EOF markers", () => {
+    const oldContent = Array.from({ length: 10 }, (_, index) => String(index + 1)).join("\n");
+    const newContent = oldContent.replace(/^2$/m, "TWO").replace(/^9$/m, "NINE");
+
+    expect(generateDiffString(oldContent, newContent, 1)).toEqual({
+      diff: "  1 1\n- 2 2\n+ 2 TWO\n  3 3\n    ...\n  8 8\n- 9 9\n+ 9 NINE\n 10 10",
+      firstChangedLine: 2,
+    });
   });
 });

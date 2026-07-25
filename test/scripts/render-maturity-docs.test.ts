@@ -123,17 +123,18 @@ function allProfileScorecardFixture() {
     (surface.categories ?? []).map((category) => {
       const coverageIds = [
         ...new Set((category.features ?? []).flatMap((feature) => feature.coverageIds ?? [])),
-      ].sort();
+      ].toSorted();
+      const features = category.features ?? [];
       return {
         id: `${surface.id}.${category.id}`,
         surfaceId: surface.id,
         name: category.name,
         status: "missing",
         features: {
-          total: category.features.length,
+          total: features.length,
           fulfilled: 0,
           partial: 0,
-          missing: category.features.length,
+          missing: features.length,
           fulfillmentPercent: 0,
         },
         coverageIds: {
@@ -253,9 +254,16 @@ describe("maturity docs renderer CLI", () => {
 
     expect(result.status).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    const taxonomy = fs.readFileSync(path.join(outputDir, "maturity", "taxonomy.md"), "utf8");
     expect(scorecard).toContain("1 passed, 1 skipped");
     expect(scorecard).not.toContain("0 failed");
     expect(scorecard).not.toContain("0 blocked");
+    expect(taxonomy).toMatch(
+      /<div className="maturity-category-docs">\n\n {4}\[[^\n]+\]\([^)]+\)[^\n]*\n\n {4}<\/div>/,
+    );
+    expect(taxonomy).not.toMatch(
+      /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
+    );
   });
 
   it("renders the maturity score from quality and completeness without coverage", () => {

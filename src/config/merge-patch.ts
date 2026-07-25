@@ -25,6 +25,16 @@ function formatMergePatchArrayEntryPath(arrayPath: string): string {
   return `${arrayPath}[]`;
 }
 
+/** Whether a merge-patch key is safe at its exact config path. */
+export function isMergePatchObjectKeyAllowed(key: string, parentPath?: string): boolean {
+  if (!isBlockedObjectKey(key)) {
+    return true;
+  }
+  // Browser profile names are schema-validated map ids. Their values still
+  // recurse through this guard, so nested prototype-related keys stay blocked.
+  return parentPath === "browser.profiles" && (key === "constructor" || key === "prototype");
+}
+
 /**
  * Merge arrays of object-like entries keyed by `id`.
  *
@@ -78,7 +88,8 @@ function mergeObjectArraysById(
  * Applies an RFC 7396-style object merge patch with OpenClaw config safeguards.
  *
  * Non-object patches replace the base, `null` deletes keys, blocked prototype
- * keys are ignored, and id-keyed arrays may merge when the caller opts in.
+ * keys are ignored outside schema-owned record-key paths, and id-keyed arrays
+ * may merge when the caller opts in.
  */
 export function applyMergePatch(
   base: unknown,
@@ -92,10 +103,10 @@ export function applyMergePatch(
   const result: PlainObject = isPlainObject(base) ? { ...base } : {};
 
   for (const [key, value] of Object.entries(patch)) {
-    if (isBlockedObjectKey(key)) {
+    const path = formatMergePatchPath(options.path, key);
+    if (!isMergePatchObjectKeyAllowed(key, options.path)) {
       continue;
     }
-    const path = formatMergePatchPath(options.path, key);
     if (value === null) {
       delete result[key];
       continue;

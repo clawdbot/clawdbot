@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
@@ -17,8 +18,10 @@ const INTERNAL_TRACE_LINE_QUICK_RE =
   /(?:📊|🛠️|📖|📝|🔍|🔎|⚙️|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)/i;
 const INTERNAL_TRACE_LINE_RE =
   /^(?:>\s*)?(?:⚠️\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
+// The current producer reserves "⚠️ 🛠️ Exec|Bash failed[:...]" for exec warnings, so
+// echoed copies must be removed. The second branch preserves the historical "(agent) failed" shape.
 const INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE =
-  /^(?:>\s*)?⚠️\s*🛠️\s+\S[\s\S]*\s+\(agent\)`{0,2}\s+failed(?:\s*:.*)?\s*$/i;
+  /^(?:>\s*)?⚠️\s*🛠️\s+(?:(?:Exec|Bash)\s+failed(?:(?:\s+\(exit\s+-?\d+\))|(?:\s*:[^\r\n]*))?|\S[^\r\n]*\s+\(agent\)`{0,2}\s+failed(?:\s*:[^\r\n]*)?)\s*$/i;
 const INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
   /^(?:>\s*)?🛠️\s*(?:(?:(?:elevated|pty)\b\s*(?:·|,)\s*)+)?(?:`{1,2}\s*\S|(?:run|check|fetch|pull|push|view|show|list|switch|create|merge|rebase|stage|restore|reset|stash|search|find|print|copy|move|remove|install|start|cd|git|pnpm|npm|yarn|bun|node|python|python3|bash|sh)\b)/i;
 const INTERNAL_CHANNEL_TRACE_LINE_RE =
@@ -96,7 +99,7 @@ function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
   }
 
   let cursor = start + 1;
-  while (cursor < text.length && /\s/.test(text[cursor])) {
+  while (cursor < text.length && /\s/.test(text.charAt(cursor))) {
     cursor += 1;
   }
 
@@ -104,7 +107,7 @@ function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
   if (text[cursor] === "/") {
     isClose = true;
     cursor += 1;
-    while (cursor < text.length && /\s/.test(text[cursor])) {
+    while (cursor < text.length && /\s/.test(text.charAt(cursor))) {
       cursor += 1;
     }
   }
@@ -114,7 +117,7 @@ function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
     return null;
   }
   cursor += 1;
-  while (cursor < text.length && /[A-Za-z0-9_.:-]/.test(text[cursor])) {
+  while (cursor < text.length && /[A-Za-z0-9_.:-]/.test(text.charAt(cursor))) {
     cursor += 1;
   }
 
@@ -201,7 +204,7 @@ function startsWithNestedJsonToolCallPayload(text: string, start: number): boole
     return false;
   }
   let cursor = start;
-  while (cursor < text.length && /\s/.test(text[cursor])) {
+  while (cursor < text.length && /\s/.test(text.charAt(cursor))) {
     cursor += 1;
   }
   const nestedTag = parseToolCallTagAt(text, cursor);
@@ -235,7 +238,7 @@ function isLikelyStandaloneFunctionToolCall(
     idx -= 1;
   }
 
-  return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text[idx]);
+  return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text.charAt(idx));
 }
 
 function isStandaloneOpeningTagLine(
@@ -320,7 +323,7 @@ function findAdjacentOpeningToolCallTag(
   tagName: string,
 ): ParsedToolCallTag | null {
   let idx = start;
-  while (idx < text.length && /\s/.test(text[idx])) {
+  while (idx < text.length && /\s/.test(text.charAt(idx))) {
     idx += 1;
   }
   if (text[idx] !== "<") {
@@ -366,7 +369,7 @@ function isDanglingFunctionParameterParent(text: string, tag: ParsedToolCallTag)
     return false;
   }
   let cursor = tag.end;
-  while (cursor < text.length && /\s/.test(text[cursor])) {
+  while (cursor < text.length && /\s/.test(text.charAt(cursor))) {
     cursor += 1;
   }
   const nextTag = parseXmlTagAt(text, cursor);
@@ -425,7 +428,7 @@ function unwrapStandaloneParameterTags(text: string): string {
     if (tag.isClose) {
       const openIndex = openTags.findLastIndex((entry) => entry.name === tag.tagName);
       if (openIndex !== -1) {
-        const opening = openTags[openIndex];
+        const opening = expectDefined(openTags[openIndex], "open tags entry at open index");
         if (opening.unwrap) {
           const contentEnd =
             opening.trimBoundaryLineBreaks &&
@@ -1095,3 +1098,4 @@ export function sanitizeAssistantVisibleTextWithOptions(
   const profile = options?.trim === "none" ? "history" : "delivery";
   return sanitizeAssistantVisibleTextWithProfile(text, profile);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

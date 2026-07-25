@@ -3,12 +3,11 @@ title: Plugin manifest contract health
 scenario:
   id: plugin-manifest-contract-health
   surface: runtime
-  runtimeParityTier: live-only
   coverage:
     primary:
-      - runtime.gateway-log-sentinel.plugin-contracts
+      - plugins.load-failure-contract-sentinel
     secondary:
-      - plugins.contracts.tools
+      - plugins.harness-contracts-tools
   objective: Fail live proof when gateway startup logs show plugin manifest contract registration errors such as missing `contracts.tools`.
   successCriteria:
     - Gateway reaches healthy state.

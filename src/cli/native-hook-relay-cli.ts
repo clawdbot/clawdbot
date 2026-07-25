@@ -16,6 +16,7 @@ const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
 export type NativeHookRelayCliOptions = {
   provider?: string;
   relayId?: string;
+  stateDb?: string;
   generation?: string;
   event?: string;
   preToolUseUnavailable?: string;
@@ -94,6 +95,7 @@ export async function runNativeHookRelayCli(
         invokeBridge({
           provider,
           relayId,
+          stateDbPath: opts.stateDb?.trim() || undefined,
           generation,
           event,
           rawPayload,
@@ -255,24 +257,39 @@ async function withNativeHookRelayDeadline<T>(
   deadline: NativeHookRelayDeadline,
   promise: Promise<T>,
 ): Promise<T> {
-  throwIfNativeHookRelayDeadlineExpired(deadline);
   return await new Promise<T>((resolve, reject) => {
+    let settled = false;
     const cleanup = () => deadline.signal.removeEventListener("abort", abort);
     const abort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       cleanup();
       reject(createNativeHookRelayDeadlineError(deadline));
     };
     deadline.signal.addEventListener("abort", abort, { once: true });
     promise.then(
       (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         cleanup();
         resolve(value);
       },
       (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         cleanup();
         reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
+    if (deadline.signal.aborted || deadline.expiresAtMs <= Date.now()) {
+      abort();
+    }
   });
 }
 

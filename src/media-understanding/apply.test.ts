@@ -33,7 +33,7 @@ const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
-let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
+let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.test-support.js").clearMediaUnderstandingBinaryCacheForTests;
 const mockedResolveApiKey = resolveApiKeyForProviderMock;
 const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
@@ -68,10 +68,10 @@ function createGroqAudioConfig(): OpenClawConfig {
   return {
     tools: {
       media: {
+        models: [{ provider: "groq", capabilities: ["audio"] }],
         audio: {
           enabled: true,
           maxBytes: 1024 * 1024,
-          models: [{ provider: "groq" }],
         },
       },
     },
@@ -116,6 +116,14 @@ function getRunExecCall(index = 0) {
   const call = mockedRunExec.mock.calls[index];
   if (!call) {
     throw new Error(`expected runExec call ${index}`);
+  }
+  return call;
+}
+
+function getRunExecCallForCommand(command: string) {
+  const call = mockedRunExec.mock.calls.find(([calledCommand]) => calledCommand === command);
+  if (!call) {
+    throw new Error(`expected runExec call for ${command}`);
   }
   return call;
 }
@@ -219,9 +227,8 @@ async function createAudioCtx(params?: {
     content: params?.content ?? createSafeAudioFixtureBuffer(2048),
   });
   return {
-    Body: params?.body ?? "<media:audio>",
-    MediaPath: mediaPath,
-    MediaType: params?.mediaType ?? "audio/ogg",
+    Body: params?.body ?? "",
+    media: [{ path: mediaPath, contentType: params?.mediaType ?? "audio/ogg" }],
   } satisfies MsgContext;
 }
 
@@ -245,7 +252,10 @@ async function setupAudioAutoDetectCase(stdout?: string): Promise<{
 }
 
 function mockWhisperCliTranscript(transcript: string) {
-  mockedRunExec.mockImplementationOnce(async (_command, args) => {
+  mockedRunExec.mockImplementation(async (command, args) => {
+    if (command === "readelf" || command === "otool") {
+      return { stdout: "", stderr: "" };
+    }
     const outputBaseIndex = args.indexOf("-of");
     const outputBase = outputBaseIndex >= 0 ? args[outputBaseIndex + 1] : undefined;
     if (typeof outputBase !== "string") {
@@ -264,8 +274,7 @@ async function applyWithDisabledMedia(params: {
 }) {
   const ctx: MsgContext = {
     Body: params.body,
-    MediaPath: params.mediaPath,
-    ...(params.mediaType ? { MediaType: params.mediaType } : {}),
+    media: [{ path: params.mediaPath, contentType: params.mediaType }],
   };
   const result = await applyMediaUnderstanding({
     ctx,
@@ -347,7 +356,7 @@ describe("applyMediaUnderstanding", () => {
       };
     });
     ({ applyMediaUnderstanding } = await import("./apply.js"));
-    ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.js"));
+    ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.test-support.js"));
 
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });
@@ -435,7 +444,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("keeps caption for command parsing when audio has user text", async () => {
     const ctx = await createAudioCtx({
-      body: "<media:audio> /capture status",
+      body: "/capture status",
     });
     ctx.CommandAuthorized = false;
     const result = await applyMediaUnderstanding({
@@ -456,14 +465,14 @@ describe("applyMediaUnderstanding", () => {
 
   it("handles URL-only attachments for audio transcription", async () => {
     const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaUrl: "https://example.com/note.ogg",
-      MediaType: "audio/ogg",
+      Body: "",
+      media: [{ url: "https://example.com/note.ogg", contentType: "audio/ogg" }],
       ChatType: "direct",
     };
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 1024 * 1024,
@@ -471,7 +480,6 @@ describe("applyMediaUnderstanding", () => {
               default: "deny",
               rules: [{ action: "allow", match: { chatType: "direct" } }],
             },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -503,6 +511,7 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 1024 * 1024,
@@ -510,7 +519,6 @@ describe("applyMediaUnderstanding", () => {
               default: "deny",
               rules: [{ action: "allow", match: { channel: "whatsapp" } }],
             },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -535,15 +543,15 @@ describe("applyMediaUnderstanding", () => {
     });
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaUrl: "https://example.com/tiny.ogg",
-      MediaType: "audio/ogg",
+      Body: "",
+      media: [{ url: "https://example.com/tiny.ogg", contentType: "audio/ogg" }],
       ChatType: "dm",
     };
     const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 1024 * 1024,
@@ -551,7 +559,6 @@ describe("applyMediaUnderstanding", () => {
               default: "deny",
               rules: [{ action: "allow", match: { chatType: "direct" } }],
             },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -594,10 +601,10 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 1024 * 1024,
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -640,10 +647,10 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 4,
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -657,7 +664,7 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedAudio).toBe(false);
     expect(transcribeAudio).not.toHaveBeenCalled();
-    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).toBe("");
   });
 
   it("falls back to CLI model when provider fails", async () => {
@@ -665,16 +672,17 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            { provider: "groq", capabilities: ["audio"] },
+            {
+              type: "cli",
+              command: "whisper",
+              args: ["{{MediaPath}}"],
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [
-              { provider: "groq" },
-              {
-                type: "cli",
-                command: "whisper",
-                args: ["{{MediaPath}}"],
-              },
-            ],
           },
         },
       },
@@ -708,15 +716,16 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              type: "cli",
+              command: "parakeet-mlx",
+              args: ["{{MediaPath}}", "--output-format", "txt", "--output-dir", "{{OutputDir}}"],
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [
-              {
-                type: "cli",
-                command: "parakeet-mlx",
-                args: ["{{MediaPath}}", "--output-format", "txt", "--output-dir", "{{OutputDir}}"],
-              },
-            ],
           },
         },
       },
@@ -746,15 +755,16 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              type: "cli",
+              command: "parakeet-mlx",
+              args: ["{{MediaPath}}", "--output-format", "json", "--output-dir", "{{OutputDir}}"],
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [
-              {
-                type: "cli",
-                command: "parakeet-mlx",
-                args: ["{{MediaPath}}", "--output-format", "json", "--output-dir", "{{OutputDir}}"],
-              },
-            ],
           },
         },
       },
@@ -810,7 +820,7 @@ describe("applyMediaUnderstanding", () => {
       `--encoder=${path.join(modelDir, "encoder.onnx")}`,
       `--decoder=${path.join(modelDir, "decoder.onnx")}`,
       `--joiner=${path.join(modelDir, "joiner.onnx")}`,
-      await fs.realpath(ctx.MediaPath ?? ""),
+      await fs.realpath(ctx.media?.[0]?.path ?? ""),
     ]);
     expectCliRunOptions(options);
   });
@@ -841,7 +851,7 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBeUndefined();
-    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).toBe("");
     const [command] = getRunExecCall();
     expect(command).toBe("sherpa-onnx-offline");
   });
@@ -869,7 +879,7 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBe("whisper cpp ok");
-    const [command, args, options] = getRunExecCall();
+    const [command, args, options] = getRunExecCallForCommand("whisper-cli");
     expect(command).toBe("whisper-cli");
     if (!Array.isArray(args)) {
       throw new Error("expected whisper-cli args");
@@ -877,7 +887,17 @@ describe("applyMediaUnderstanding", () => {
     expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
     expect(typeof args[4]).toBe("string");
     expect(String(args[4]).endsWith("sample")).toBe(true);
-    expect(args.slice(5)).toEqual(["-np", "-nt", await fs.realpath(ctx.MediaPath ?? "")]);
+    expect(args.slice(5)).toEqual(["-nt", await fs.realpath(ctx.media?.[0]?.path ?? "")]);
+    if (process.platform === "linux") {
+      expect(mockedRunExec.mock.calls).toContainEqual([
+        "readelf",
+        ["-d", expect.stringContaining("whisper-cli")],
+        expect.objectContaining({ timeoutMs: 1500 }),
+      ]);
+      expect(mockedRunExec.mock.calls.some(([calledCommand]) => calledCommand === "ldd")).toBe(
+        false,
+      );
+    }
     expectCliRunOptions(options);
   });
 
@@ -935,14 +955,14 @@ describe("applyMediaUnderstanding", () => {
     expect(String(ffmpegArgs[11])).toContain("telegram-voice.wav");
     expect(String(ffmpegArgs[11]).endsWith(".part")).toBe(true);
 
-    const [command, args, options] = getRunExecCall();
+    const [command, args, options] = getRunExecCallForCommand("whisper-cli");
     expect(command).toBe("whisper-cli");
     if (!Array.isArray(args)) {
       throw new Error("expected whisper-cli transcode args");
     }
     expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
-    expect(args.slice(5, 7)).toEqual(["-np", "-nt"]);
-    expect(String(args[7]).endsWith("telegram-voice.wav")).toBe(true);
+    expect(args[5]).toBe("-nt");
+    expect(String(args[6]).endsWith("telegram-voice.wav")).toBe(true);
     expectCliRunOptions(options);
   });
 
@@ -973,7 +993,7 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBeUndefined();
-    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).toBe("");
     expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
@@ -1005,7 +1025,7 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBeUndefined();
-    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).toBe("");
     expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
@@ -1018,9 +1038,8 @@ describe("applyMediaUnderstanding", () => {
       content: "image-bytes",
     });
     const ctx: MsgContext = {
-      Body: "<media:image>",
-      MediaPath: imagePath,
-      MediaType: "image/jpeg",
+      Body: "",
+      media: [{ path: imagePath, contentType: "image/jpeg" }],
     };
     const cfg: OpenClawConfig = { tools: { media: { image: {} } } };
     mockedResolveApiKey.mockResolvedValue({
@@ -1070,22 +1089,22 @@ describe("applyMediaUnderstanding", () => {
     });
 
     const ctx: MsgContext = {
-      Body: "<media:image> show Dom",
-      MediaPath: imagePath,
-      MediaType: "image/jpeg",
+      Body: "show Dom",
+      media: [{ path: imagePath, contentType: "image/jpeg" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              type: "cli",
+              command: "gemini",
+              args: ["--file", "{{MediaPath}}", "--prompt", "{{Prompt}}"],
+              capabilities: ["image"],
+            },
+          ],
           image: {
             enabled: true,
-            models: [
-              {
-                type: "cli",
-                command: "gemini",
-                args: ["--file", "{{MediaPath}}", "--prompt", "{{Prompt}}"],
-              },
-            ],
           },
         },
       },
@@ -1116,9 +1135,8 @@ describe("applyMediaUnderstanding", () => {
     });
 
     const ctx: MsgContext = {
-      Body: "<media:image>",
-      MediaPath: imagePath,
-      MediaType: "image/jpeg",
+      Body: "",
+      media: [{ path: imagePath, contentType: "image/jpeg" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1149,25 +1167,29 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Image]\nDescription:\nshared description");
   });
 
-  it("uses media workspace for staged files and agent workspace for provider resolution", async () => {
-    const mediaWorkspaceDir = await createTempMediaDir();
+  it("uses the agent workspace as a fallback for relative media paths", async () => {
+    const workspaceDir = await createTempMediaDir();
     const relativeImagePath = path.join("media", "inbound", "workspace.jpg");
-    const imagePath = path.join(mediaWorkspaceDir, relativeImagePath);
+    const imagePath = path.join(workspaceDir, relativeImagePath);
     await fs.mkdir(path.dirname(imagePath), { recursive: true });
     await fs.writeFile(imagePath, "image-bytes");
     const describeImage = vi.fn(async () => ({ text: "workspace image" }));
     const ctx: MsgContext = {
-      Body: "<media:image>",
-      MediaPath: relativeImagePath,
-      MediaType: "image/jpeg",
-      MediaWorkspaceDir: mediaWorkspaceDir,
+      Body: "",
+      media: [{ path: relativeImagePath, contentType: "image/jpeg" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-5.4",
+              capabilities: ["image"],
+            },
+          ],
           image: {
             enabled: true,
-            models: [{ provider: "openai", model: "gpt-5.4" }],
           },
         },
       },
@@ -1177,7 +1199,7 @@ describe("applyMediaUnderstanding", () => {
       ctx,
       cfg,
       agentDir: "/tmp/openclaw-agent",
-      workspaceDir: "/tmp/openclaw-workspace",
+      workspaceDir,
       providers: {
         openai: {
           id: "openai",
@@ -1191,7 +1213,7 @@ describe("applyMediaUnderstanding", () => {
     expect(describeImage).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw-agent",
-        workspaceDir: "/tmp/openclaw-workspace",
+        workspaceDir,
         fileName: "workspace.jpg",
         provider: "openai",
         model: "gpt-5.4",
@@ -1206,16 +1228,21 @@ describe("applyMediaUnderstanding", () => {
     });
     const describeImage = vi.fn(async () => ({ text: "normalized image" }));
     const ctx: MsgContext = {
-      Body: "<media:image>",
-      MediaPath: imagePath,
-      MediaType: "image/heic",
+      Body: "",
+      media: [{ path: imagePath, contentType: "image/heic" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-5.4",
+              capabilities: ["image"],
+            },
+          ],
           image: {
             enabled: true,
-            models: [{ provider: "openai", model: "gpt-5.4" }],
           },
         },
       },
@@ -1253,9 +1280,8 @@ describe("applyMediaUnderstanding", () => {
     });
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaPath: audioPath,
-      MediaType: "audio/ogg",
+      Body: "",
+      media: [{ path: audioPath, contentType: "audio/ogg" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1291,16 +1317,14 @@ describe("applyMediaUnderstanding", () => {
     const ctx: MsgContext = {
       Body: "preflight transcript",
       Transcript: "preflight transcript",
-      MediaPath: audioPath,
-      MediaType: "audio/ogg",
-      MediaTranscribedIndexes: [0],
+      media: [{ path: audioPath, contentType: "audio/ogg", transcribed: true }],
     };
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -1337,17 +1361,19 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(audioPathB, audioBytes);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaPaths: [audioPathA, audioPathB],
-      MediaTypes: ["audio/ogg", "audio/ogg"],
+      Body: "",
+      media: [
+        { path: audioPathA, contentType: "audio/ogg" },
+        { path: audioPathB, contentType: "audio/ogg" },
+      ],
     };
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             attachments: { mode: "all", maxAttachments: 2 },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -1381,17 +1407,19 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(tinyPath, tinyAudio);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaPaths: [validPath, tinyPath],
-      MediaTypes: ["audio/ogg", "audio/ogg"],
+      Body: "",
+      media: [
+        { path: validPath, contentType: "audio/ogg" },
+        { path: tinyPath, contentType: "audio/ogg" },
+      ],
     };
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             attachments: { mode: "all", maxAttachments: 2 },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -1431,16 +1459,24 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {
-      Body: "<media:mixed>",
-      MediaPaths: [imagePath, audioPath, videoPath],
-      MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
+      Body: "",
+      media: [
+        { path: imagePath, contentType: "image/jpeg" },
+        { path: audioPath, contentType: "audio/ogg" },
+        { path: videoPath, contentType: "video/mp4" },
+      ],
     };
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
-          audio: { enabled: true, models: [{ provider: "groq" }] },
-          video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
+          models: [
+            { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
+            { provider: "groq", capabilities: ["audio"] },
+            { provider: "google", model: "gemini-3", capabilities: ["video"] },
+          ],
+          image: { enabled: true },
+          audio: { enabled: true },
+          video: { enabled: true },
         },
       },
     };
@@ -1480,6 +1516,62 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
+  it("limits native-harness preprocessing to audio", async () => {
+    const dir = await createTempMediaDir();
+    const imagePath = path.join(dir, "photo.jpg");
+    const audioPath = path.join(dir, "note.ogg");
+    const filePath = path.join(dir, "notes.txt");
+    await fs.writeFile(imagePath, "image-bytes");
+    await fs.writeFile(audioPath, createSafeAudioFixtureBuffer(2048));
+    await fs.writeFile(filePath, "file text");
+
+    const describeImage = vi.fn(async () => ({ text: "image ok" }));
+    const transcribeAudio = vi.fn(async () => ({ text: "audio ok" }));
+    const ctx: MsgContext = {
+      Body: "",
+      media: [
+        { path: imagePath, contentType: "image/jpeg" },
+        { path: audioPath, contentType: "audio/ogg" },
+        { path: filePath, contentType: "text/plain" },
+      ],
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          models: [
+            { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
+            { provider: "groq", capabilities: ["audio"] },
+          ],
+          image: { enabled: true },
+          audio: { enabled: true },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      processingMode: "audio-only",
+      providers: {
+        openai: { id: "openai", describeImage },
+        groq: { id: "groq", transcribeAudio },
+      },
+    });
+
+    expect(describeImage).not.toHaveBeenCalled();
+    expect(transcribeAudio).toHaveBeenCalledOnce();
+    expect(result).toEqual(
+      expect.objectContaining({
+        appliedImage: false,
+        appliedAudio: true,
+        appliedVideo: false,
+        appliedFile: false,
+        extractedFileImages: [],
+      }),
+    );
+    expect(ctx.Body).toBe("[Audio]\nTranscript:\naudio ok");
+  });
+
   it("orders synthetic too-small audio output between image and video", async () => {
     const dir = await createTempMediaDir();
     const imagePath = path.join(dir, "photo.jpg");
@@ -1490,16 +1582,24 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {
-      Body: "<media:mixed>",
-      MediaPaths: [imagePath, audioPath, videoPath],
-      MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
+      Body: "",
+      media: [
+        { path: imagePath, contentType: "image/jpeg" },
+        { path: audioPath, contentType: "audio/ogg" },
+        { path: videoPath, contentType: "video/mp4" },
+      ],
     };
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
-          audio: { enabled: true, models: [{ provider: "groq" }] },
-          video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
+          models: [
+            { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
+            { provider: "groq", capabilities: ["audio"] },
+            { provider: "google", model: "gemini-3", capabilities: ["video"] },
+          ],
+          image: { enabled: true },
+          audio: { enabled: true },
+          video: { enabled: true },
         },
       },
     };
@@ -1849,6 +1949,24 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain('mime="application/json"');
   });
 
+  it.each(["application/", "application/json garbage", 'application/json" onclick="alert(1)'])(
+    "rejects malformed MIME before file extraction: %j",
+    async (mediaType) => {
+      const filePath = await createTempMediaFile({
+        fileName: "payload.bin",
+        content: Buffer.alloc(256, 0x81),
+      });
+
+      const { ctx, result } = await applyWithDisabledMedia({
+        body: "<media:document>",
+        mediaPath: filePath,
+        mediaType,
+      });
+
+      expectFileNotApplied({ ctx, result, body: "<media:document>" });
+    },
+  );
+
   it("handles path traversal attempts in filenames safely", async () => {
     // Even if a file somehow got a path-like name, it should be handled safely
     const filePath = await createTempMediaFile({
@@ -1985,3 +2103,4 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("vendor-json");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

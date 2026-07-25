@@ -9,7 +9,7 @@ import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger } from "./logger.js";
 import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
-import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
+import { formatTimestamp } from "./timestamps.js";
 import type { ConsoleStyle, LoggerSettings } from "./types.js";
 
 export type { ConsoleStyle } from "./types.js";
@@ -61,7 +61,7 @@ function resolveConsoleSettings(): ConsoleSettings {
     return { level: "silent", style: normalizeConsoleStyle(undefined) };
   }
 
-  let cfg: OpenClawConfig["logging"] | undefined =
+  let cfg: OpenClawConfig["logging"] | LoggerSettings | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
     if (loggingState.resolvingConsoleSettings) {
@@ -182,7 +182,7 @@ export function formatConsoleTimestamp(style: ConsoleStyle): string {
   if (style === "pretty") {
     return formatTimestamp(now, { style: "short" }).replace(/[+-]\d{2}:\d{2}$/, "");
   }
-  return formatLocalIsoWithOffset(now);
+  return formatTimestamp(now, { style: "long" });
 }
 
 function hasTimestampPrefix(value: string): boolean {

@@ -129,7 +129,7 @@ function configureMockModel() {
 
 function assertMockModelConfig() {
   const mockPort = parseMockOpenAiPort(process.argv[3]);
-  const expectedModelRef = "openai/gpt-5.5";
+  const expectedModelRef = "openai/gpt-5.6-luna";
   const expectedBaseUrl = `http://127.0.0.1:${mockPort}/v1`;
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);

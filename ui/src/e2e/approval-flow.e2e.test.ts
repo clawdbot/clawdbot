@@ -14,7 +14,8 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
-let browser: Browser | undefined;
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 let page: Page | undefined;
 let server: ControlUiE2eServer | undefined;
 
@@ -36,7 +37,13 @@ function requireRecord(value: unknown): Record<string, unknown> {
 
 describeControlUiE2e("Control UI approval flow", () => {
   beforeAll(async () => {
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterEach(async () => {
@@ -44,17 +51,15 @@ describeControlUiE2e("Control UI approval flow", () => {
       ?.context()
       .close()
       .catch(() => {});
-    await browser?.close().catch(() => {});
     page = undefined;
-    browser = undefined;
   });
 
   afterAll(async () => {
+    await browser?.close().catch(() => {});
     await server?.close();
   });
 
   it("keeps an older resolve failure off the newly active approval", async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -87,7 +92,6 @@ describeControlUiE2e("Control UI approval flow", () => {
   });
 
   it("sends a typed approval command immediately while the active run waits", async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -104,7 +108,7 @@ describeControlUiE2e("Control UI approval flow", () => {
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
 
     await composer.fill("/approve approval-123 allow-once");
-    await currentPage.getByRole("button", { name: "Queue message" }).click();
+    await currentPage.getByRole("button", { name: "Send message" }).click();
 
     await expect
       .poll(async () => (await gateway.getRequests("chat.send")).length, { timeout: 10_000 })

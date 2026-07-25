@@ -1,5 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -11,69 +13,51 @@ import { NonEmptyString } from "./primitives.js";
 const ApnsEnvironmentSchema = Type.String({ enum: ["sandbox", "production"] });
 
 /** Request payload for sending a test APNS notification to one node. */
-export const PushTestParamsSchema = Type.Object(
-  {
-    nodeId: NonEmptyString,
-    title: Type.Optional(Type.String()),
-    body: Type.Optional(Type.String()),
-    environment: Type.Optional(ApnsEnvironmentSchema),
-  },
-  { additionalProperties: false },
-);
+export const PushTestParamsSchema = closedObject({
+  nodeId: NonEmptyString,
+  title: Type.Optional(Type.String()),
+  body: Type.Optional(Type.String()),
+  environment: Type.Optional(ApnsEnvironmentSchema),
+});
 
 /** Result payload from an APNS push test, including provider status and transport. */
-export const PushTestResultSchema = Type.Object(
-  {
-    ok: Type.Boolean(),
-    status: Type.Integer(),
-    apnsId: Type.Optional(Type.String()),
-    reason: Type.Optional(Type.String()),
-    tokenSuffix: Type.String(),
-    topic: Type.String(),
-    environment: ApnsEnvironmentSchema,
-    transport: Type.String({ enum: ["direct", "relay"] }),
-  },
-  { additionalProperties: false },
-);
+export const PushTestResultSchema = closedObject({
+  ok: Type.Boolean(),
+  status: Type.Integer(),
+  apnsId: Type.Optional(Type.String()),
+  reason: Type.Optional(Type.String()),
+  tokenSuffix: Type.String(),
+  topic: Type.String(),
+  environment: ApnsEnvironmentSchema,
+  transport: Type.String({ enum: ["direct", "relay"] }),
+});
 
 // --- Web Push schemas ---
 
-const WebPushKeysSchema = Type.Object(
-  {
-    p256dh: Type.String({ minLength: 1, maxLength: 512 }),
-    auth: Type.String({ minLength: 1, maxLength: 512 }),
-  },
-  { additionalProperties: false },
-);
+const WebPushKeysSchema = closedObject({
+  p256dh: Type.String({ minLength: 1, maxLength: 512 }),
+  auth: Type.String({ minLength: 1, maxLength: 512 }),
+});
 
 /** Empty request payload for fetching the Web Push VAPID public key. */
-export const WebPushVapidPublicKeyParamsSchema = Type.Object({}, { additionalProperties: false });
+export const WebPushVapidPublicKeyParamsSchema = closedObject({});
 
 /** Browser Web Push subscription payload registered with the gateway. */
-export const WebPushSubscribeParamsSchema = Type.Object(
-  {
-    endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
-    keys: WebPushKeysSchema,
-  },
-  { additionalProperties: false },
-);
+export const WebPushSubscribeParamsSchema = closedObject({
+  endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
+  keys: WebPushKeysSchema,
+});
 
 /** Browser Web Push endpoint removal payload. */
-export const WebPushUnsubscribeParamsSchema = Type.Object(
-  {
-    endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
-  },
-  { additionalProperties: false },
-);
+export const WebPushUnsubscribeParamsSchema = closedObject({
+  endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
+});
 
 /** Request payload for sending a test Web Push notification to current subscriptions. */
-export const WebPushTestParamsSchema = Type.Object(
-  {
-    title: Type.Optional(Type.String()),
-    body: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
+export const WebPushTestParamsSchema = closedObject({
+  title: Type.Optional(Type.String()),
+  body: Type.Optional(Type.String()),
+});
 
 /** Empty request type for fetching the Web Push VAPID public key. */
 export type WebPushVapidPublicKeyParams = Record<string, never>;
@@ -91,3 +75,8 @@ export type WebPushTestParams = {
   title?: string;
   body?: string;
 };
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type PushTestParams = Static<typeof PushTestParamsSchema>;
+export type PushTestResult = Static<typeof PushTestResultSchema>;

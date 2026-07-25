@@ -17,9 +17,22 @@ logs live, how to read them, and how to configure log levels and formats.
 
 ## Where logs live
 
-By default, the Gateway writes a rolling log file per day:
+By default, the Gateway writes a rolling log file per day. The default profile
+keeps the historical path:
 
 `/tmp/openclaw/openclaw-YYYY-MM-DD.log`
+
+Named profiles use a profile-qualified filename in the same directory:
+
+`/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`
+
+The filename profile segment is lowercase and limited to letters, numbers, and
+dashes. Simple lowercase names stay readable, so the `--dev` shorthand writes
+`openclaw-dev-YYYY-MM-DD.log`. Case, underscores, and literal dashes use a
+reversible dash escape so distinct profile names never share a log file.
+Oversized values set directly through the environment use a bounded hash suffix
+to stay within filesystem filename limits. An explicit `logging.file` overrides
+these defaults.
 
 The date uses the gateway host's local timezone. When `/tmp/openclaw` is unsafe
 or unavailable (and always on Windows), OpenClaw uses a user-scoped
@@ -28,8 +41,9 @@ pruned after 24 hours.
 
 Each file rotates when the next write would exceed `logging.maxFileBytes`
 (default: 100 MB). OpenClaw keeps up to five numbered archives beside the
-active file, such as `openclaw-YYYY-MM-DD.1.log`, and keeps writing to a fresh
-active log instead of suppressing diagnostics.
+active file, such as `openclaw-YYYY-MM-DD.1.log` or
+`openclaw-dev-YYYY-MM-DD.1.log`, and keeps writing to a fresh active log instead
+of suppressing diagnostics.
 
 You can override the path in `~/.openclaw/openclaw.json`:
 
@@ -49,7 +63,12 @@ Tail the gateway log file via RPC:
 
 ```bash
 openclaw logs --follow
+openclaw --dev logs --follow
+openclaw --profile work logs --follow
 ```
+
+The root profile selector resolves the same profile-specific file used by the
+Gateway, including CLI fallback reads when local RPC is unavailable.
 
 Options:
 
@@ -174,7 +193,7 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 {
   "logging": {
     "level": "info",
-    "file": "/tmp/openclaw/openclaw-YYYY-MM-DD.log",
+    "file": "/path/to/openclaw.log",
     "consoleLevel": "info",
     "consoleStyle": "pretty",
     "redactSensitive": "tools",
@@ -283,7 +302,7 @@ OTLP log records, persisted session transcript text, or Control UI tool
 event payloads (tool start args, partial/final result payloads, derived
 exec output, and patch summaries):
 
-- `logging.redactSensitive`: `off` | `tools` (default: `tools`)
+- Sensitive-value redaction is always enabled.
 - `logging.redactPatterns`: list of regex strings that replaces the default set for log/transcript output. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
 
 File logs and session transcripts stay JSONL, but matching secret values are
@@ -295,13 +314,9 @@ The built-in defaults cover common API credentials and payment-credential field
 names such as card number, CVC/CVV, shared payment token, and payment credential
 when they appear as JSON fields, URL parameters, CLI flags, or assignments.
 
-`logging.redactSensitive: "off"` only disables this general log/transcript
-policy. OpenClaw still redacts safety-boundary payloads that can be shown to UI
-clients, support bundles, diagnostics observers, approval prompts, or agent
-tools. Examples include Control UI tool-call events, `sessions_history` output,
-diagnostics support exports, provider error observations, exec approval command
-display, and Gateway WebSocket protocol logs. Custom `logging.redactPatterns`
-can still add project-specific patterns on those surfaces.
+OpenClaw also redacts safety-boundary payloads shown to UI clients, support
+bundles, diagnostics observers, approval prompts, or agent tools. Custom
+`logging.redactPatterns` can add project-specific patterns on those surfaces.
 
 ## Diagnostics and OpenTelemetry
 

@@ -39,7 +39,7 @@ describe("zai model definitions", () => {
       input: ["text"],
       contextWindow: 1_000_000,
       maxTokens: 131_072,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
     });
   });
 
@@ -48,68 +48,30 @@ describe("zai model definitions", () => {
       id: "glm-5.1",
       reasoning: true,
       input: ["text"],
-      contextWindow: 202800,
-      maxTokens: 131100,
+      contextWindow: 200_000,
+      maxTokens: 131_072,
+      cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+    });
+  });
+
+  it("uses official GLM-5-Turbo metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5-turbo",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 200_000,
+      maxTokens: 131_072,
       cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
     });
   });
 
-  it("uses current OpenClaw metadata for the new GLM-5V Turbo model", () => {
+  it("uses official GLM-5V-Turbo metadata", () => {
     expectZaiModelFields({
       id: "glm-5v-turbo",
       reasoning: true,
       input: ["text", "image"],
-      contextWindow: 202800,
-      maxTokens: 131100,
-      cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
-    });
-  });
-
-  it("uses current OpenClaw metadata for the GLM-5 model", () => {
-    expectZaiModelFields({
-      id: "glm-5",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 202800,
-      maxTokens: 131100,
-      cost: ZAI_DEFAULT_COST,
-    });
-  });
-
-  it("publishes newer GLM 4.5/4.6 family metadata from OpenClaw", () => {
-    expectZaiModelFields({
-      id: "glm-4.6v",
-      input: ["text", "image"],
-      contextWindow: 128000,
-      maxTokens: 32768,
-      cost: { input: 0.3, output: 0.9, cacheRead: 0, cacheWrite: 0 },
-    });
-    expectZaiModelFields({
-      id: "glm-4.5-air",
-      input: ["text"],
-      contextWindow: 131072,
-      maxTokens: 98304,
-      cost: { input: 0.2, output: 1.1, cacheRead: 0.03, cacheWrite: 0 },
-    });
-  });
-
-  it("keeps the remaining GLM 4.7/5 pricing and token limits aligned with OpenClaw", () => {
-    expectZaiModelFields({
-      id: "glm-4.7-flash",
-      cost: { input: 0.07, output: 0.4, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 131072,
-    });
-    expectZaiModelFields({
-      id: "glm-4.7-flashx",
-      cost: { input: 0.06, output: 0.4, cacheRead: 0.01, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 128000,
-    });
-    expectZaiModelFields({
-      id: "glm-5-turbo",
-      contextWindow: 202800,
-      maxTokens: 131100,
+      contextWindow: 200_000,
+      maxTokens: 131_072,
       cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
     });
   });

@@ -7,11 +7,12 @@
     "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
-    "lib": ["DOM", "DOM.Iterable", "ES2023", "ScriptHost"],
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noImplicitOverride": true,
     "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "noEmitOnError": true,
     "noUncheckedSideEffectImports": true,
@@ -24,16 +25,19 @@
     "useDefineForClassFields": false,
     "verbatimModuleSyntax": true,
     "paths": {
-      "openclaw/extension-api": ["./src/extensionAPI.ts"],
-      "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "@openclaw/ai": ["./packages/ai/src/index.ts"],
       "@openclaw/ai/diagnostics": ["./packages/ai/src/utils/diagnostics.ts"],
       "@openclaw/ai/event-stream": ["./packages/ai/src/utils/event-stream.ts"],
       "@openclaw/ai/providers": ["./packages/ai/src/providers.ts"],
+      "@openclaw/ai/transports": ["./packages/ai/src/transports.ts"],
       "@openclaw/ai/types": ["./packages/ai/src/types.ts"],
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
-      "@openclaw/ai/internal/*": ["./packages/ai/src/internal/*.ts"],
+      "@openclaw/ai/internal/anthropic": ["./packages/ai/src/internal/anthropic.ts"],
+      "@openclaw/ai/internal/openai": ["./packages/ai/src/internal/openai.ts"],
+      "@openclaw/ai/internal/retry-after": ["./packages/ai/src/internal/retry-after.ts"],
+      "@openclaw/ai/internal/runtime": ["./packages/ai/src/internal/runtime.ts"],
+      "@openclaw/ai/internal/shared": ["./packages/ai/src/internal/shared.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
       "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],
@@ -65,6 +69,7 @@
       ],
       "@openclaw/model-catalog-core/*": ["./packages/model-catalog-core/src/*"],
       "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
+      "@openclaw/gateway-client/browser": ["./packages/gateway-client/src/browser.ts"],
       "@openclaw/gateway-client/*": ["./packages/gateway-client/src/*"],
       "@openclaw/gateway-protocol": ["./packages/gateway-protocol/src/index.ts"],
       "@openclaw/gateway-protocol/client-info": [
@@ -72,6 +77,9 @@
       ],
       "@openclaw/gateway-protocol/connect-error-details": [
         "./packages/gateway-protocol/src/connect-error-details.ts"
+      ],
+      "@openclaw/gateway-protocol/gateway-error-details": [
+        "./packages/gateway-protocol/src/gateway-error-details.ts"
       ],
       "@openclaw/gateway-protocol/frame-guards": [
         "./packages/gateway-protocol/src/frame-guards.ts"
@@ -115,9 +123,6 @@
         "./packages/media-core/src/read-byte-stream-with-limit.ts"
       ],
       "@openclaw/media-core/*": ["./packages/media-core/src/*"],
-      "@openclaw/media-understanding-common": [
-        "./packages/media-understanding-common/src/index.ts"
-      ],
       "@openclaw/media-understanding-common/*": [
         "./packages/media-understanding-common/src/*"
       ],
@@ -134,17 +139,27 @@
       "@openclaw/markdown-core/types": ["./packages/markdown-core/src/types.ts"],
       "@openclaw/markdown-core/*": ["./packages/markdown-core/src/*"],
       "@openclaw/normalization-core": ["./packages/normalization-core/src/index.ts"],
+      "@openclaw/normalization-core/agent-id": [
+        "./packages/normalization-core/src/agent-id.ts"
+      ],
       "@openclaw/normalization-core/boolean-coercion": [
         "./packages/normalization-core/src/boolean-coercion.ts"
       ],
       "@openclaw/normalization-core/error-coercion": [
         "./packages/normalization-core/src/error-coercion.ts"
       ],
+      "@openclaw/normalization-core/expect": ["./packages/normalization-core/src/expect.ts"],
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
       ],
+      "@openclaw/normalization-core/phone-presentation": [
+        "./packages/normalization-core/src/phone-presentation.ts"
+      ],
       "@openclaw/normalization-core/record-coerce": [
         "./packages/normalization-core/src/record-coerce.ts"
+      ],
+      "@openclaw/normalization-core/result": [
+        "./packages/normalization-core/src/result.ts"
       ],
       "@openclaw/normalization-core/string-coerce": [
         "./packages/normalization-core/src/string-coerce.ts"
@@ -156,6 +171,8 @@
         "./packages/normalization-core/src/utf16-slice.ts"
       ],
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
+      "@openclaw/retry": ["./packages/retry/src/index.ts"],
+      "@openclaw/workboard-contract": ["./packages/workboard-contract/src/index.ts"],
       "@openclaw/acp-core": ["./packages/acp-core/src/index.ts"],
       "@openclaw/acp-core/meta": ["./packages/acp-core/src/meta.ts"],
       "@openclaw/acp-core/numeric-options": ["./packages/acp-core/src/numeric-options.ts"],
@@ -225,19 +242,16 @@
       "@openclaw/net-policy/url-protocol": ["./packages/net-policy/src/url-protocol.ts"],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
-      "@openclaw/web-content-core": ["./packages/web-content-core/src/index.ts"],
       "@openclaw/web-content-core/provider-runtime-shared": [
         "./packages/web-content-core/src/provider-runtime-shared.ts"
       ],
       "@openclaw/web-content-core/*": ["./packages/web-content-core/src/*"],
       "@openclaw/speech-core": ["./packages/speech-core/runtime-api.ts"],
-      "@openclaw/speech-core/api": ["./packages/speech-core/api.ts"],
       "@openclaw/speech-core/runtime-api": ["./packages/speech-core/runtime-api.ts"],
       "@openclaw/speech-core/speaker": ["./packages/speech-core/speaker.ts"],
       "@openclaw/speech-core/voice-models": ["./packages/speech-core/voice-models.ts"],
       "@openclaw/speech-core/*": ["./packages/speech-core/*"],
       "@openclaw/sdk": ["./packages/sdk/src/index.ts"],
-      "@openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "@openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"],
       "@openclaw/*": ["./extensions/*"]

@@ -9,7 +9,7 @@ import { normalizeAccountId } from "../../routing/session-key.js";
 /**
  * Minimal conversation shape normalized before binding lookup or storage.
  */
-export type ConversationRefShape = {
+type ConversationRefShape = {
   channel: string;
   accountId: string;
   conversationId: string;

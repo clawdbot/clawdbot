@@ -78,6 +78,7 @@
     "typescript/no-empty-object-type": ["error", { "allowInterfaces": "with-single-extends" }],
     "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "error",
+    "typescript/no-floating-promises": "error",
     "typescript/no-import-type-side-effects": "error",
     "typescript/no-meaningless-void-operator": "error",
     "typescript/no-misused-promises": "error",
@@ -209,15 +210,15 @@
     "dist/",
     "dist-runtime/",
     "docs/_layouts/",
+    "**/a2ui.bundle.js",
+    "extensions/browser/chrome-extension/modules/copilot-runtime.js",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
-    "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",
     "skills/**",
     "src/auto-reply/reply/export-html/template.js",
-    "src/canvas-host/a2ui/a2ui.bundle.js",
     "vendor/",
     "**/.cache/**",
     "**/.openclaw-runtime-deps-copy-*/**",
@@ -228,6 +229,36 @@
     "**/node_modules/**"
   ],
   "overrides": [
+    {
+      "files": ["extensions/browser/src/browser/routes/*.ts"],
+      "rules": {
+        "oxc/no-async-endpoint-handlers": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/markdown-core/**/*.ts",
+        "packages/net-policy/**/*.ts",
+        "packages/media-understanding-common/**/*.ts",
+        "packages/terminal-core/**/*.ts",
+        "packages/normalization-core/**/*.ts",
+        "packages/model-catalog-core/**/*.ts",
+        "packages/web-content-core/**/*.ts",
+        "packages/agent-core/**/*.ts",
+        "packages/acp-core/**/*.ts",
+        "packages/ai/**/*.ts",
+        "packages/gateway-client/**/*.ts",
+        "packages/gateway-protocol/**/*.ts",
+        "packages/llm-core/**/*.ts",
+        "packages/media-core/**/*.ts",
+        "packages/media-generation-core/**/*.ts",
+        "packages/plugin-package-contract/**/*.ts",
+        "packages/sdk/**/*.ts"
+      ],
+      "rules": {
+        "typescript/no-non-null-assertion": "error"
+      }
+    },
     {
       "files": [
         "**/*.test.ts",
@@ -240,6 +271,96 @@
       ],
       "rules": {
         "typescript/no-explicit-any": "off"
+      }
+    },
+    {
+      "files": [
+        "src/**/*.{js,ts,mts,cts}",
+        "ui/src/**/*.{js,ts,mts,cts}",
+        "packages/**/*.{js,ts,mts,cts}",
+        "extensions/**/*.{js,ts,mts,cts}"
+      ],
+      "excludeFiles": [
+        "**/*.test.*",
+        "**/*.spec.*",
+        "**/__generated__/**",
+        "**/generated/**",
+        "**/protocol-gen/**",
+        "**/*.generated.*",
+        "**/dist/**",
+        "ui/src/i18n/locales/**",
+        "src/wizard/i18n/locales/**"
+      ],
+      "rules": {
+        "max-lines": ["error", { "max": 700, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": [
+        "src/**/*.{jsx,tsx}",
+        "ui/src/**/*.{jsx,tsx}",
+        "packages/**/*.{jsx,tsx}",
+        "extensions/**/*.{jsx,tsx}"
+      ],
+      "excludeFiles": [
+        "**/*.test.*",
+        "**/*.spec.*",
+        "**/__generated__/**",
+        "**/generated/**",
+        "**/protocol-gen/**",
+        "**/*.generated.*",
+        "**/dist/**",
+        "ui/src/i18n/locales/**",
+        "src/wizard/i18n/locales/**"
+      ],
+      "rules": {
+        "max-lines": ["error", { "max": 700, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": [
+        "src/**/*.{mjs,cjs}",
+        "ui/src/**/*.{mjs,cjs}",
+        "packages/**/*.{mjs,cjs}",
+        "extensions/**/*.{mjs,cjs}"
+      ],
+      "excludeFiles": [
+        "**/*.test.*",
+        "**/*.spec.*",
+        "**/__generated__/**",
+        "**/generated/**",
+        "**/protocol-gen/**",
+        "**/*.generated.*",
+        "**/dist/**",
+        "ui/src/i18n/locales/**",
+        "src/wizard/i18n/locales/**"
+      ],
+      "rules": {
+        "max-lines": ["error", { "max": 800, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": [
+        "src/**/*.test.*",
+        "src/**/*.spec.*",
+        "ui/src/**/*.test.*",
+        "ui/src/**/*.spec.*",
+        "packages/**/*.test.*",
+        "packages/**/*.spec.*",
+        "extensions/**/*.test.*",
+        "extensions/**/*.spec.*"
+      ],
+      "excludeFiles": [
+        "**/__generated__/**",
+        "**/generated/**",
+        "**/protocol-gen/**",
+        "**/*.generated.*",
+        "**/dist/**",
+        "ui/src/i18n/locales/**",
+        "src/wizard/i18n/locales/**"
+      ],
+      "rules": {
+        "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
       }
     }
   ]

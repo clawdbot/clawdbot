@@ -23,10 +23,10 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import { resolveSubagentController, steerControlledSubagentRun } from "./subagent-control.js";
-import { listSubagentRunsForRequester } from "./subagent-registry.js";
+import { listSubagentRunsForRequester } from "./subagent-registry.test-helpers.js";
 
 const LIVE = isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_SUBAGENT_E2E);
 const describeLive = LIVE ? describe : describe.skip;
@@ -57,7 +57,7 @@ type LiveSubagentModelConfig = {
 type LiveSubagentModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
 function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
-  const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.5";
+  const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.6-luna";
   if (modelKey.startsWith("google/")) {
     return {
       modelKey,
@@ -295,7 +295,6 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CANVAS_HOST: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
@@ -304,7 +303,7 @@ describeLive("subagent announce live", () => {
       });
       await state.writeConfig(
         liveSubagentConfig(modelKey, state.workspaceDir, port, token, {
-          queue: { mode: "collect", debounceMs: 2_500 },
+          queue: { mode: "collect" },
           toolAllow: ["sessions_spawn", "bash"],
         }),
       );
@@ -489,7 +488,6 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CANVAS_HOST: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
@@ -685,7 +683,6 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CANVAS_HOST: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,

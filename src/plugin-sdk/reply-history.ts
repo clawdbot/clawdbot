@@ -18,11 +18,9 @@ export {
   buildInboundHistoryFromEntries,
   buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
-  clearHistoryEntries,
   clearHistoryEntriesIfEnabled,
   evictOldHistoryKeys,
   normalizeHistoryMediaEntries,
-  recordPendingHistoryEntry,
   recordPendingHistoryEntryWithMedia,
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";

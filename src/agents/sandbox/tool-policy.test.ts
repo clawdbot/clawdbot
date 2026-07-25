@@ -2,12 +2,46 @@
 // guidance for sandboxed agent sessions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSandboxConfigForAgent } from "./config.js";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
+import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
 import {
-  formatSandboxToolPolicyBlockedMessage,
-  resolveSandboxRuntimeStatus,
+  formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
+  resolveSandboxRuntimeStatus as resolveSandboxRuntimeStatusBase,
 } from "./runtime-status.js";
-import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
+import {
+  isToolAllowed,
+  resolveSandboxToolPolicyForAgent as resolveSandboxToolPolicyForAgentBase,
+} from "./tool-policy.js";
+
+function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
+  return migratePersistedImplicitMainRoster(config ?? {}).config as OpenClawConfig;
+}
+
+function resolveSandboxConfigForAgent(config: OpenClawConfig, agentId: string) {
+  return resolveSandboxConfigForAgentBase(loadedConfig(config), agentId);
+}
+
+function resolveSandboxToolPolicyForAgent(config: OpenClawConfig, agentId: string) {
+  return resolveSandboxToolPolicyForAgentBase(loadedConfig(config), agentId);
+}
+
+function resolveSandboxRuntimeStatus(
+  params: Parameters<typeof resolveSandboxRuntimeStatusBase>[0],
+) {
+  return resolveSandboxRuntimeStatusBase({
+    ...params,
+    cfg: loadedConfig(params.cfg),
+  });
+}
+
+function formatSandboxToolPolicyBlockedMessage(
+  params: Parameters<typeof formatSandboxToolPolicyBlockedMessageBase>[0],
+) {
+  return formatSandboxToolPolicyBlockedMessageBase({
+    ...params,
+    cfg: loadedConfig(params.cfg),
+  });
+}
 
 describe("sandbox/tool-policy", () => {
   it("merges sandbox alsoAllow into the default sandbox allowlist", () => {
@@ -36,7 +70,7 @@ describe("sandbox/tool-policy", () => {
     expect(resolved.allow).toContain("tts");
     expect(resolved.sources.allow).toEqual({
       source: "agent",
-      key: "agents.list[].tools.sandbox.tools.alsoAllow",
+      key: "agents.entries.*.tools.sandbox.tools.alsoAllow",
     });
   });
 
@@ -110,6 +144,16 @@ describe("sandbox/tool-policy", () => {
         "browser",
       ),
     ).toBe(true);
+    expect(resolved.deny).toContain("computer");
+    expect(
+      isToolAllowed(
+        {
+          allow: resolved.allow,
+          deny: resolved.deny,
+        },
+        "computer",
+      ),
+    ).toBe(false);
   });
 
   it("keeps canonical sandbox config and runtime status aligned with the effective resolver", () => {
@@ -321,40 +365,40 @@ describe("sandbox/tool-policy", () => {
       sessionKey: `abcde\u{1f600}middle\u{1f600}12345`,
       expectedLabel: "abcde…12345",
     },
-  ])("keeps redacted session keys UTF-16 safe at the $boundary boundary", ({
-    sessionKey,
-    expectedLabel,
-  }) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            deny: ["browser"],
+  ])(
+    "keeps redacted session keys UTF-16 safe at the $boundary boundary",
+    ({ sessionKey, expectedLabel }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent" },
           },
         },
-      },
-    };
+        tools: {
+          sandbox: {
+            tools: {
+              deny: ["browser"],
+            },
+          },
+        },
+      };
 
-    const message = formatSandboxToolPolicyBlockedMessage({
-      cfg,
-      sessionKey,
-      toolName: "browser",
-    });
+      const message = formatSandboxToolPolicyBlockedMessage({
+        cfg,
+        sessionKey,
+        toolName: "browser",
+      });
 
-    const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
-    const sessionLabel = sessionLine?.slice("Session: ".length);
-    expect(sessionLabel).toBe(expectedLabel);
-    expect(sessionLabel?.length).toBeLessThanOrEqual(13);
-    expect(sessionLabel).not.toMatch(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
-    );
-    expect(message).toContain(`openclaw sandbox explain --session '${sessionKey}'`);
-  });
+      const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
+      const sessionLabel = sessionLine?.slice("Session: ".length);
+      expect(sessionLabel).toBe(expectedLabel);
+      expect(sessionLabel?.length).toBeLessThanOrEqual(13);
+      expect(sessionLabel).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+      expect(message).toContain(`openclaw sandbox explain --session '${sessionKey}'`);
+    },
+  );
 
   it("avoids terminal injection for control-character session keys", () => {
     const sessionKey = "agent:main:abcde\n12345";

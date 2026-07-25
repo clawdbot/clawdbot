@@ -15,7 +15,7 @@ contain, which files get injected, and how sessions bootstrap against it.
 ## Workspace (required)
 
 Each agent uses a single workspace directory (`agents.defaults.workspace`, or
-`agents.list[].workspace` per agent) as its **only** working directory (`cwd`)
+`agents.entries.*.workspace` per agent) as its **only** working directory (`cwd`)
 for tools and context.
 
 Recommended: use `openclaw setup` to create `~/.openclaw/openclaw.json` if missing and initialize the workspace files.
@@ -37,7 +37,6 @@ Inside the workspace, OpenClaw expects these user-editable files:
 | `TOOLS.md`     | User-maintained tool notes and conventions           |
 | `IDENTITY.md`  | Agent name/vibe/emoji                                |
 | `USER.md`      | User profile + preferred address                     |
-| `HEARTBEAT.md` | Heartbeat-specific instructions                      |
 | `BOOTSTRAP.md` | One-time first-run ritual (deleted after completion) |
 | `MEMORY.md`    | Root long-term memory file, if present               |
 
@@ -47,7 +46,16 @@ Blank files are skipped. Large files are trimmed and truncated with a marker so 
 
 `BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it is not recreated on later restarts.
 
-After a workspace has been observed, OpenClaw also keeps a state-dir attestation marker for the workspace path. If a recently attested workspace disappears or is wiped, startup refuses to silently reseed `BOOTSTRAP.md`; restore the workspace or use a full onboard reset so the workspace and marker are cleared together.
+After a workspace has been observed, OpenClaw stores its setup state and
+attestation in the shared SQLite database at
+`~/.openclaw/state/openclaw.sqlite`. If a recently attested workspace
+disappears or is wiped, startup refuses to silently reseed `BOOTSTRAP.md`;
+restore the workspace or use a full onboard reset so the workspace and its
+database state are cleared together.
+
+Older releases used workspace JSON and `.attested` sidecar files. Runtime does
+not read those files. Run `openclaw doctor --fix` to validate them, import their
+state into SQLite, and remove each source after the imported rows are verified.
 
 To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
@@ -87,11 +95,15 @@ runtime surface.
 
 ## Sessions
 
-Session transcripts are stored as JSONL at:
+Session rows are stored in the per-agent SQLite database:
 
-- `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
-The session ID is stable and chosen by OpenClaw. OpenClaw does not read session folders from other tools.
+Transcript JSONL files can still live under
+`~/.openclaw/agents/<agentId>/sessions/` as legacy migration inputs, deleted or
+reset archives, imports, exports, and support artifacts. Active agent history is
+stored in SQLite with the session rows. The session ID is stable and chosen by
+OpenClaw. OpenClaw does not read session folders from other tools.
 
 ## Steering while streaming
 
@@ -112,7 +124,8 @@ Control soft block chunking with `agents.defaults.blockStreamingChunk` (defaults
 800-1200 chars; prefers paragraph breaks, then newlines; sentences last).
 Coalesce streamed chunks with `agents.defaults.blockStreamingCoalesce` to reduce
 single-line spam (idle-based merging before send). Non-Telegram channels require
-explicit `*.blockStreaming: true` to enable block replies.
+explicit `*.streaming.block.enabled: true` to enable block replies (QQ Bot
+instead streams block replies unless `channels.qqbot.streaming.mode` is `"off"`).
 Verbose tool summaries are emitted at tool start (no debounce); Control UI
 streams tool output via agent events when available.
 More details: [Streaming + chunking](/concepts/streaming).

@@ -19,13 +19,13 @@ import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
-  resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
+import { resetPluginToolDescriptorCacheForTest } from "./tools.test-fixtures.js";
 
 describe("plugin tool descriptor cache keys", () => {
   afterEach(() => {
     hoisted.resolveRuntimeConfigCacheKey.mockClear();
-    resetPluginToolDescriptorCache();
+    resetPluginToolDescriptorCacheForTest();
   });
 
   it("memoizes config cache keys across plugin descriptor keys in one resolution pass", () => {
@@ -62,6 +62,7 @@ describe("plugin tool descriptor cache keys", () => {
   });
 
   it("preserves required gateway client capabilities in cached descriptors", () => {
+    const outputSchema = { type: "object", properties: { ok: { type: "boolean" } } } as const;
     const cached = capturePluginToolDescriptor({
       pluginId: "demo",
       optional: false,
@@ -70,12 +71,31 @@ describe("plugin tool descriptor cache keys", () => {
         label: "Inline demo",
         description: "Render a demo",
         parameters: { type: "object", properties: {} },
+        outputSchema,
         requiredClientCaps: ["inline-widgets"],
         execute: async () => ({ content: [], details: {} }),
       },
     });
 
     expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
+    expect(cached.descriptor.outputSchema).toBe(outputSchema);
+  });
+
+  it("isolates descriptor caches by declared gateway client capabilities", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["show_widget"],
+      ctx: { workspaceDir: "/tmp/workspace" },
+    };
+
+    const caplessKey = buildPluginToolDescriptorCacheKey(base);
+    const inlineKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      clientCaps: ["inline-widgets"],
+    });
+
+    expect(caplessKey).not.toBe(inlineKey);
   });
 
   it("keeps distinct config objects distinct within the memo", () => {
@@ -163,6 +183,29 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(ownerKey).not.toBe(nonOwnerKey);
+  });
+
+  it("varies descriptor keys by native channel identity", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["demo"],
+      ctx: {
+        messageChannel: "feishu",
+        nativeChannelId: "oc_first",
+      },
+    };
+
+    const firstKey = buildPluginToolDescriptorCacheKey(base);
+    const secondKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        nativeChannelId: "oc_second",
+      },
+    });
+
+    expect(firstKey).not.toBe(secondKey);
   });
 
   it("keeps descriptor keys stable across config bookkeeping writes", () => {

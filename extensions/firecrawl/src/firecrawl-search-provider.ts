@@ -6,7 +6,7 @@ import { buildFirecrawlWebSearchProviderBase } from "../web-search-shared.js";
 
 const loadFirecrawlClientModule = createLazyRuntimeModule(() => import("./firecrawl-client.js"));
 
-const GenericFirecrawlSearchSchema = {
+export const GenericFirecrawlSearchSchema = {
   type: "object",
   properties: {
     query: { type: "string", description: "Search query string." },

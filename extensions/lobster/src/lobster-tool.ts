@@ -238,8 +238,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
     description:
       "Run Lobster pipelines as a local-first workflow runtime (typed JSON envelope + resumable approvals).",
     parameters: Type.Object({
-      // NOTE: Prefer string enums in tool schemas; some providers reject unions/anyOf.
-      action: Type.Unsafe<"run" | "resume">({ type: "string", enum: ["run", "resume"] }),
+      action: Type.Enum(["run", "resume"], { type: "string" }),
       pipeline: Type.Optional(Type.String()),
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),

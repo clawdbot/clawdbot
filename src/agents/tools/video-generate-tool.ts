@@ -1,8 +1,4 @@
-/**
- * video_generate built-in tool.
- *
- * Validates media references, resolves provider/model capabilities, and schedules video generation.
- */
+/** Runs capability-aware video generation and persistence. */
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,6 +41,7 @@ import {
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
 import { getCustomProviderApiKey } from "../model-auth.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
@@ -65,6 +62,7 @@ import {
   applyVideoGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  createCapabilityProviderRuntimeDeps,
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
@@ -227,7 +225,7 @@ function createVideoGenerateToolSchema(params: { includeAudioReferences: boolean
   return Type.Object(properties);
 }
 
-export function resolveVideoGenerationModelConfigForTool(params: {
+function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
@@ -238,13 +236,19 @@ export function resolveVideoGenerationModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
+    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.video,
     providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.videoGenerateToolTestApi")] = {
+    resolveVideoGenerationModelConfigForTool,
+  };
+}
+
 function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.videoGenerationModel));
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.video));
 }
 
 function collectVideoGenerationModelProviderIds(params: {
@@ -308,7 +312,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
   const audioCandidateProviderIds = new Set<string>();
   const explicitProviderIds = collectVideoGenerationModelProviderIds({
     cfg: params.cfg,
-    modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.videoGenerationModel),
+    modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video),
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
 
@@ -437,11 +441,12 @@ function normalizeReferenceInputs(params: {
 
 function resolveSelectedVideoGenerationProvider(params: {
   config?: OpenClawConfig;
+  providers?: VideoGenerationProvider[];
   videoGenerationModelConfig: ToolModelConfig;
   modelOverride?: string;
 }): VideoGenerationProvider | undefined {
   return resolveSelectedCapabilityProvider({
-    providers: listRuntimeVideoGenerationProviders({ config: params.config }),
+    providers: params.providers ?? listRuntimeVideoGenerationProviders({ config: params.config }),
     modelConfig: params.videoGenerationModelConfig,
     modelOverride: params.modelOverride,
     parseModelRef: parseVideoGenerationModelRef,
@@ -700,6 +705,7 @@ async function executeVideoGenerationJob(params: {
   providerOptions?: Record<string, unknown>;
   autoProviderFallback?: boolean;
   timeoutMs?: number;
+  providers?: VideoGenerationProvider[];
 }): Promise<ExecutedVideoGeneration> {
   if (params.taskHandle) {
     recordVideoGenerationTaskProgress({
@@ -707,24 +713,27 @@ async function executeVideoGenerationJob(params: {
       progressSummary: "Generating video",
     });
   }
-  const result = await generateVideo({
-    cfg: params.effectiveCfg,
-    prompt: params.prompt,
-    agentDir: params.agentDir,
-    modelOverride: params.model,
-    size: params.size,
-    aspectRatio: params.aspectRatio,
-    resolution: params.resolution,
-    durationSeconds: params.durationSeconds,
-    audio: params.audio,
-    watermark: params.watermark,
-    inputImages: params.loadedReferenceImages.map((entry) => entry.sourceAsset),
-    inputVideos: params.loadedReferenceVideos.map((entry) => entry.sourceAsset),
-    inputAudios: params.loadedReferenceAudios.map((entry) => entry.sourceAsset),
-    autoProviderFallback: params.autoProviderFallback,
-    providerOptions: params.providerOptions,
-    timeoutMs: params.timeoutMs,
-  });
+  const result = await generateVideo(
+    {
+      cfg: params.effectiveCfg,
+      prompt: params.prompt,
+      agentDir: params.agentDir,
+      modelOverride: params.model,
+      size: params.size,
+      aspectRatio: params.aspectRatio,
+      resolution: params.resolution,
+      durationSeconds: params.durationSeconds,
+      audio: params.audio,
+      watermark: params.watermark,
+      inputImages: params.loadedReferenceImages.map((entry) => entry.sourceAsset),
+      inputVideos: params.loadedReferenceVideos.map((entry) => entry.sourceAsset),
+      inputAudios: params.loadedReferenceAudios.map((entry) => entry.sourceAsset),
+      autoProviderFallback: params.autoProviderFallback,
+      providerOptions: params.providerOptions,
+      timeoutMs: params.timeoutMs,
+    },
+    createCapabilityProviderRuntimeDeps(params.providers),
+  );
   if (params.taskHandle) {
     recordVideoGenerationTaskProgress({
       handle: params.taskHandle,
@@ -934,20 +943,26 @@ export function createVideoGenerateTool(options?: {
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: VideoGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
+  const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
+    ?.videoGenerationProviders
+    ? [...options.preparedModelRuntime.mediaCapabilityProviders.videoGenerationProviders]
+    : undefined;
   if (
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.videoGenerationModel,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.video,
       providerKey: "videoGenerationProviders",
+      providers: preparedProviders,
     })
   ) {
     return null;
@@ -974,7 +989,7 @@ export function createVideoGenerateTool(options?: {
     name: "video_generate",
     displaySummary: "Generate videos",
     description:
-      'Create videos. Session chats: background task; do not call video_generate again for same request; wait completion, then report through the current visible-reply contract with generated media attached using structured media fields. "status" checks active task. Duration may round to provider-supported value.',
+      "Create video. Session chat background: call once/request, await, then visible reply + structured media. status checks active task. Duration may round to provider value.",
     parameters: createVideoGenerateToolSchema({ includeAudioReferences }),
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
@@ -1086,6 +1101,7 @@ export function createVideoGenerateTool(options?: {
 
       const selectedProvider = resolveSelectedVideoGenerationProvider({
         config: effectiveCfg,
+        providers: preparedProviders,
         videoGenerationModelConfig,
         modelOverride: model,
       });
@@ -1133,8 +1149,9 @@ export function createVideoGenerateTool(options?: {
       // Attach roles to the loaded image assets (positional, by index into images[]).
       for (let i = 0; i < loadedReferenceImages.length; i++) {
         const role = imageRoles[i];
-        if (role) {
-          loadedReferenceImages[i].sourceAsset.role = role;
+        const asset = loadedReferenceImages.at(i);
+        if (role && asset) {
+          asset.sourceAsset.role = role;
         }
       }
       const loadedReferenceVideos = await loadReferenceAssets({
@@ -1146,8 +1163,9 @@ export function createVideoGenerateTool(options?: {
       });
       for (let i = 0; i < loadedReferenceVideos.length; i++) {
         const role = videoRoles[i];
-        if (role) {
-          loadedReferenceVideos[i].sourceAsset.role = role;
+        const asset = loadedReferenceVideos.at(i);
+        if (role && asset) {
+          asset.sourceAsset.role = role;
         }
       }
       const loadedReferenceAudios = await loadReferenceAssets({
@@ -1159,8 +1177,9 @@ export function createVideoGenerateTool(options?: {
       });
       for (let i = 0; i < loadedReferenceAudios.length; i++) {
         const role = audioRoles[i];
-        if (role) {
-          loadedReferenceAudios[i].sourceAsset.role = role;
+        const asset = loadedReferenceAudios.at(i);
+        if (role && asset) {
+          asset.sourceAsset.role = role;
         }
       }
       validateVideoGenerationCapabilities({
@@ -1227,6 +1246,7 @@ export function createVideoGenerateTool(options?: {
               providerOptions,
               autoProviderFallback: explicitModelConfig ? false : undefined,
               timeoutMs,
+              providers: preparedProviders,
             }),
         });
 
@@ -1290,6 +1310,7 @@ export function createVideoGenerateTool(options?: {
           providerOptions,
           autoProviderFallback: explicitModelConfig ? false : undefined,
           timeoutMs,
+          providers: preparedProviders,
         });
         completeVideoGenerationTaskRun({
           handle: taskHandle,
@@ -1313,3 +1334,4 @@ export function createVideoGenerateTool(options?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

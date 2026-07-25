@@ -24,7 +24,7 @@ type TrustedToolPolicyRegistry =
   | undefined;
 
 /** Diagnostic entry for an installed trusted tool policy. */
-export type TrustedToolPolicyDiagnosticEntry = {
+type TrustedToolPolicyDiagnosticEntry = {
   id: string;
   pluginId: string;
   pluginName?: string;

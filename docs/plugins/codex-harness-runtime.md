@@ -36,6 +36,11 @@ active agent workspace profile files. Skill catalogs and tool-routed
 instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
 and full `MEMORY.md` fall back to plain turn input context instead.
 
+Most OpenClaw dynamic tools use the searchable `openclaw` namespace. Tools
+marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
+directly model-visible as `DirectModelOnly` instead of exposing it to nested
+Code Mode execution.
+
 ## Thread bindings and model changes
 
 When an OpenClaw session is attached to an existing Codex thread, the next
@@ -43,6 +48,69 @@ turn resends the currently selected model, approval policy, sandbox,
 approvals reviewer, and service tier to app-server. Switching from
 `openai/gpt-5.5` to `openai/gpt-5.2` keeps the thread binding but asks Codex to
 continue with the newly selected model.
+
+Supervised bindings are the exception. The OpenClaw model picker stays locked,
+and resumes omit model and provider overrides so Codex restores the canonical
+thread's persisted model and provider. A separate native Codex control can
+change that persisted pair, and the initial snapshot can produce Codex's normal
+model-difference warning; the outer OpenClaw model and fallback chain never
+substitute for either.
+
+## Supervision and safe continuation
+
+Codex supervision is an opt-in capability of the same `codex` plugin. It discovers
+native threads through a separate connection and projects only non-archived
+sessions into the Gateway catalog. Without explicit `appServer` connection
+settings, that connection uses managed user-home stdio while the ordinary
+harness remains agent-scoped. Listing and metadata reads are passive: they do
+not resume a thread, subscribe OpenClaw to its live events, or answer its
+approvals.
+
+For a stored or idle session on the Gateway computer, **Continue as branch**
+creates a normal, model-locked Chat and mirrors bounded user and assistant
+history through the source's last terminal persisted turn. The first normal
+Chat turn installs the real approval handlers and uses a temporary native fork
+to pin the snapshot without a model or provider override. Codex App Server uses
+its current native configuration and returns the selected pair; it emits its
+normal warning if that model differs from the source's last recorded model.
+On the same supervision connection, OpenClaw starts the canonical
+`appServer`-source Codex harness thread under its cwd and runtime policy with
+exactly the returned model and provider for that initial start, injects the
+bounded visible history, and archives the temporary fork. The source is never
+resumed. The canonical thread has the full OpenClaw harness tool surface;
+reasoning, tool calls, and tool results from the source are not cloned into it.
+The private connection scope survives pending and committed binding states, so
+every later turn remains on that connection with native auth and provider
+configuration. Disabled supervision or binding/connection drift fails closed
+rather than switching to the ordinary agent-home harness.
+
+The original CLI, VS Code, Atlas, or ChatGPT source remains eligible for both
+catalogs. The canonical branch is a native Codex thread, but its source kind is
+`appServer`; native clients may filter that source kind, so its appearance in
+Codex Desktop is not guaranteed.
+
+Active sources cannot start a new branch or be archived; an existing supervised
+Chat can still be opened. `notLoaded` means activity is unknown, not idle;
+OpenClaw allows archive for a local `idle` or `notLoaded` row only after explicit
+no-other-runner confirmation and a fresh process-local status read. Codex
+serializes thread mutations within one App Server process but does not provide
+an exclusive cross-process runner or approval-owner lease, so that read cannot
+prove that another process is not using the thread. OpenClaw blocks a known
+active binding owner for the exact target or any non-archived spawned descendant
+returned by Codex's paginated descendant query. Enumeration errors, cycles, and
+safety-limit exhaustion fail closed. Native archive can still race a new turn
+in another process, so confirmation covers unknown clients and the gap between
+status read and archive. A supervised model-locked Chat cannot be deleted while
+it protects the native binding.
+
+Paired-node catalogs stay metadata-only in the initial release. The current
+node invoke boundary is request/response and cannot carry the long-lived turn
+events, approval requests, or streaming output required by a real Codex harness
+binding. Remote **Continue** and **Archive** therefore remain unavailable even
+when the row is idle.
+
+See [Codex supervision](/plugins/codex-supervision) for operator setup and the
+visible Control UI behavior.
 
 ## Visible replies and heartbeats
 
@@ -56,8 +124,8 @@ Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
 catalog by default so the agent can record whether the wake should stay quiet
 or notify. Heartbeat initiative guidance is sent as a Codex collaboration-mode
 developer instruction scoped to the heartbeat turn; ordinary chat turns stay
-in Codex Default mode. When `HEARTBEAT.md` is non-empty, the heartbeat
-instructions point Codex at the file instead of inlining its contents.
+in Codex Default mode. The heartbeat monitor's cron scratch is appended to the
+heartbeat prompt when present.
 
 ## Hook boundaries
 
@@ -81,10 +149,13 @@ hooks such as `SessionStart` and `UserPromptSubmit` remain Codex-level
 controls; they are not exposed as OpenClaw plugin hooks in the v1 contract.
 
 For OpenClaw dynamic tools, OpenClaw executes the tool after Codex asks for
-the call, so plugin and middleware behavior runs in the harness adapter. For
-Codex-native tools, Codex owns the canonical tool record; OpenClaw can mirror
-selected events but cannot rewrite the native thread unless Codex exposes that
-through app-server or native hook callbacks.
+the call, so plugin and middleware behavior runs in the harness adapter. Codex
+Code Mode receives generic dynamic results as text and serializes nested
+dynamic calls; callers must parse JSON-looking results and cannot rely on
+`Promise.all` for concurrent submission. For Codex-native tools, Codex owns the
+canonical tool record; OpenClaw can mirror selected events but cannot rewrite
+the native thread unless Codex exposes that through app-server or native hook
+callbacks.
 
 Codex app-server report-mode `PreToolUse` events defer plugin approval to the
 matching app-server approval. If an OpenClaw `before_tool_call` hook returns
@@ -159,9 +230,14 @@ cwd creates a fresh approval.
 
 Codex MCP tool approval elicitations route through OpenClaw's plugin approval
 flow when Codex marks `_meta.codex_approval_kind` as `"mcp_tool_call"`. Codex
-`request_user_input` prompts are sent back to the originating chat, and the
-next queued follow-up message answers that native server request instead of
-being steered as extra context. Other MCP elicitation requests fail closed.
+`request_user_input` registers a provider-neutral gateway question for the
+originating session. The Control UI renders the gateway question card, and a
+single non-secret choice uses typed channel buttons when the channel supports
+them. Button taps, Control UI answers, and the next queued plain-text reply all
+resolve the same gateway record before OpenClaw returns the app-server answer.
+Codex auto-resolution and attempt aborts bound the wait and cancel the record.
+Secret questions stay entirely on the warned text-reply path. Other MCP
+elicitation requests fail closed.
 
 For the general plugin approval flow that carries these prompts, see
 [Plugin permission requests](/plugins/plugin-permission-requests).
@@ -244,8 +320,8 @@ writes an OpenClaw-owned session transcript tool result.
 
 OpenClaw continues to own media delivery and media provider selection. Image,
 video, music, PDF, TTS, and media understanding use matching provider/model
-settings such as `agents.defaults.imageGenerationModel`,
-`videoGenerationModel`, `pdfModel`, and `messages.tts`.
+settings such as `agents.defaults.mediaModels.image`,
+`agents.defaults.mediaModels.video`, `pdfModel`, and `tts`.
 
 Text, images, video, music, TTS, approvals, and messaging-tool output continue
 through the normal OpenClaw delivery path; media generation does not require
@@ -257,6 +333,7 @@ path even if the Codex turn has no assistant text.
 
 - [Codex harness](/plugins/codex-harness)
 - [Codex harness reference](/plugins/codex-harness-reference)
+- [Codex supervision](/plugins/codex-supervision)
 - [Native Codex plugins](/plugins/codex-native-plugins)
 - [Plugin hooks](/plugins/hooks)
 - [Agent harness plugins](/plugins/sdk-agent-harness)

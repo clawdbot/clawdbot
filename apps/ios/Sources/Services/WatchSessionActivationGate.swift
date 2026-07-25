@@ -1,5 +1,28 @@
 import Foundation
 
+enum WatchMessageAcknowledgmentError: LocalizedError {
+    case rejected(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .rejected(reason):
+            "WATCH_DELIVERY_REJECTED: \(reason)"
+        }
+    }
+}
+
+func requireAcceptedWatchMessageReply(_ reply: [String: Any]) throws {
+    guard let accepted = reply["ok"] as? Bool else {
+        throw WatchMessageAcknowledgmentError.rejected("malformed acknowledgment")
+    }
+    guard accepted else {
+        let reason = (reply["error"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        throw WatchMessageAcknowledgmentError.rejected(
+            reason.flatMap { $0.isEmpty ? nil : $0 } ?? "payload was rejected")
+    }
+}
+
 enum WatchSessionActivationError: LocalizedError {
     case failed(String)
     case timedOut

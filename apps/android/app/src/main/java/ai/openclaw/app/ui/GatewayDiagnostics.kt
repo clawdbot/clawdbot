@@ -5,6 +5,8 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
+import ai.openclaw.app.gatewayConnectionStatusForDisplay
+import ai.openclaw.app.i18n.nativeString
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -22,7 +24,7 @@ internal fun openClawAndroidVersionLabel(): String {
 }
 
 /** Normalizes blank gateway status text for display and diagnostics copy. */
-internal fun gatewayStatusForDisplay(statusText: String): String = statusText.trim().ifEmpty { "Offline" }
+internal fun gatewayStatusForDisplay(statusText: String): String = gatewayConnectionStatusForDisplay(statusText)
 
 /** Resolves the best non-secret endpoint label available to diagnostics surfaces. */
 internal fun gatewayDiagnosticsEndpoint(
@@ -37,7 +39,7 @@ internal fun gatewayDiagnosticsEndpoint(
 
 /** Detects pairing/approval status text so UI can offer pairing-specific actions. */
 internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
-  val lower = gatewayStatusForDisplay(statusText).lowercase()
+  val lower = statusText.trim().lowercase()
   return lower.contains("pair") || lower.contains("approve")
 }
 
@@ -77,15 +79,15 @@ private enum class GatewayAuthRecoveryLabelKind {
 
 private fun gatewayAuthRecoveryLabel(kind: GatewayAuthRecoveryLabelKind): String =
   when (kind) {
-    GatewayAuthRecoveryLabelKind.SETUP_CODE_EXPIRED -> "Setup code expired"
-    GatewayAuthRecoveryLabelKind.TOKEN_NEEDED -> "Gateway token needed"
-    GatewayAuthRecoveryLabelKind.TOKEN_NOT_CONFIGURED -> "Gateway token not configured"
-    GatewayAuthRecoveryLabelKind.PASSWORD_NEEDED -> "Gateway password needed"
-    GatewayAuthRecoveryLabelKind.PASSWORD_INVALID -> "Gateway password invalid"
-    GatewayAuthRecoveryLabelKind.PASSWORD_NOT_CONFIGURED -> "Gateway password not configured"
-    GatewayAuthRecoveryLabelKind.ACCESS_NEEDS_REVIEW -> "Gateway access needs review"
-    GatewayAuthRecoveryLabelKind.SAVED_AUTH_INVALID -> "Saved auth invalid"
-    GatewayAuthRecoveryLabelKind.DEVICE_IDENTITY_REQUIRED -> "Device identity required"
+    GatewayAuthRecoveryLabelKind.SETUP_CODE_EXPIRED -> nativeString("Setup code expired")
+    GatewayAuthRecoveryLabelKind.TOKEN_NEEDED -> nativeString("Gateway token needed")
+    GatewayAuthRecoveryLabelKind.TOKEN_NOT_CONFIGURED -> nativeString("Gateway token not configured")
+    GatewayAuthRecoveryLabelKind.PASSWORD_NEEDED -> nativeString("Gateway password needed")
+    GatewayAuthRecoveryLabelKind.PASSWORD_INVALID -> nativeString("Gateway password invalid")
+    GatewayAuthRecoveryLabelKind.PASSWORD_NOT_CONFIGURED -> nativeString("Gateway password not configured")
+    GatewayAuthRecoveryLabelKind.ACCESS_NEEDS_REVIEW -> nativeString("Gateway access needs review")
+    GatewayAuthRecoveryLabelKind.SAVED_AUTH_INVALID -> nativeString("Saved auth invalid")
+    GatewayAuthRecoveryLabelKind.DEVICE_IDENTITY_REQUIRED -> nativeString("Device identity required")
   }
 
 /** Returns the exact host command for one node's approval state when available. */
@@ -135,27 +137,32 @@ internal fun buildGatewayDiagnosticsReport(
       .orEmpty()
       .ifEmpty { Build.VERSION.SDK_INT.toString() }
   val endpoint = gatewayAddress.trim().ifEmpty { "unknown" }
-  val status = gatewayStatusForDisplay(statusText)
-  return """
-    Help diagnose this OpenClaw Android gateway connection failure.
-
-    Please:
-    - pick one route only: same machine, same LAN, Tailscale, or public URL
-    - classify this as pairing/auth, TLS trust, wrong advertised route, wrong address/port, or gateway down
-    - remember: public routes require wss:// or Tailscale Serve; ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs
-    - quote the exact app status/error below
-    - tell me whether `openclaw devices list` should show a pending pairing request
-    - if more signal is needed, ask for `openclaw qr --json`, `openclaw devices list`, and `openclaw nodes status`
-    - give the next exact command or tap
-
-    Debug info:
-    - screen: $screen
-    - app version: ${openClawAndroidVersionLabel()}
-    - device: $device
-    - android: $androidVersion (SDK ${Build.VERSION.SDK_INT})
-    - gateway address: $endpoint
-    - status/error: $status
-    """.trimIndent()
+  val status = statusText.trim().ifEmpty { "Offline" }
+  return nativeString(
+    "Help diagnose this OpenClaw Android gateway connection failure.\n\n" +
+      "Please:\n" +
+      "- pick one route only: same machine, same LAN, Tailscale, or public URL\n" +
+      "- classify this as pairing/auth, TLS trust, wrong advertised route, wrong address/port, or gateway down\n" +
+      "- remember: public routes require wss:// or Tailscale Serve; ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs\n" +
+      "- quote the exact app status/error below\n" +
+      "- tell me whether `openclaw devices list` should show a pending pairing request\n" +
+      "- if more signal is needed, ask for `openclaw qr --json`, `openclaw devices list`, and `openclaw nodes status`\n" +
+      "- give the next exact command or tap\n\n" +
+      "Debug info:\n" +
+      "- screen: \$screen\n" +
+      "- app version: \$appVersion\n" +
+      "- device: \$device\n" +
+      "- android: \$androidVersion (SDK \$sdkVersion)\n" +
+      "- gateway address: \$endpoint\n" +
+      "- status/error: \$status",
+    screen,
+    openClawAndroidVersionLabel(),
+    device,
+    androidVersion,
+    Build.VERSION.SDK_INT,
+    endpoint,
+    status,
+  )
 }
 
 /** Copies the diagnostics report to Android clipboard and shows a short confirmation toast. */
@@ -168,5 +175,5 @@ internal fun copyGatewayDiagnosticsReport(
   val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
   val report = buildGatewayDiagnosticsReport(screen = screen, gatewayAddress = gatewayAddress, statusText = statusText)
   clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway diagnostics", report))
-  Toast.makeText(context, "Copied gateway diagnostics", Toast.LENGTH_SHORT).show()
+  Toast.makeText(context, nativeString("Copied gateway diagnostics"), Toast.LENGTH_SHORT).show()
 }

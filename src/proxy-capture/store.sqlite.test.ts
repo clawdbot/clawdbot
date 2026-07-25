@@ -137,6 +137,19 @@ describe("DebugProxyCaptureStore", () => {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'capture_blobs'")
         .get(),
     ).toBeUndefined();
+    expect(
+      lease.store.db
+        .prepare(
+          `SELECT name, strict FROM pragma_table_list
+           WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
+           ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([
+      { name: "capture_events", strict: 1 },
+      { name: "capture_sessions", strict: 1 },
+    ]);
+    expect(lease.store.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     expect(lease.store.deleteSessions(["legacy-sdk-session"])).toEqual({
       sessions: 1,
       events: 1,

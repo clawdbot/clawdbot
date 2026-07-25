@@ -1040,3 +1040,4 @@ export function resolveReadOnlyChannelPluginsForConfig(
   }
   return cloneReadOnlyChannelPluginResolution(resolution);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

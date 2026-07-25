@@ -1,4 +1,4 @@
-/** Markdown chunk helpers shared by prompt and streaming tests. */
+import { expectDefined } from "@openclaw/normalization-core"; /** Markdown chunk helpers shared by prompt and streaming tests. */
 export function countLines(text: string): number {
   return text.split("\n").length;
 }
@@ -10,9 +10,9 @@ export function hasBalancedFences(chunk: string): boolean {
     if (!match) {
       continue;
     }
-    const marker = match[2];
+    const marker = expectDefined(match[2], "chunk test helpers regex capture 2");
     if (!open) {
-      open = { markerChar: marker[0], markerLen: marker.length };
+      open = { markerChar: marker.charAt(0), markerLen: marker.length };
       continue;
     }
     if (open.markerChar === marker[0] && marker.length >= open.markerLen) {

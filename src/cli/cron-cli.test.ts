@@ -59,7 +59,16 @@ vi.mock("../runtime.js", () => ({
 
 type CronUpdatePatch = {
   patch?: {
-    schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
+    deleteAfterRun?: boolean;
+    schedule?: {
+      kind?: string;
+      expr?: string;
+      tz?: string;
+      staggerMs?: number;
+      command?: string[];
+      mode?: string;
+      match?: string;
+    };
     payload?: {
       kind?: string;
       argv?: string[];
@@ -89,7 +98,19 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   name?: string;
-  schedule?: { kind?: string; at?: string; expr?: string; everyMs?: number; staggerMs?: number };
+  schedule?: {
+    kind?: string;
+    at?: string;
+    expr?: string;
+    everyMs?: number;
+    staggerMs?: number;
+    command?: string[];
+    cwd?: string;
+    mode?: string;
+    match?: string;
+    batchMs?: number;
+    maxBatchBytes?: number;
+  };
   payload?: {
     kind?: string;
     argv?: string[];
@@ -630,6 +651,41 @@ describe("cron cli", () => {
     expect(params?.delivery?.mode).toBe("none");
   });
 
+  it("creates stream schedules from exact argv flags", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "events",
+      "--stream-command",
+      '["node","events.mjs"]',
+      "--stream-cwd",
+      "/srv/app",
+      "--stream-mode",
+      "match",
+      "--stream-match",
+      "^ready:",
+      "--stream-batch-ms",
+      "100",
+      "--stream-max-batch-bytes",
+      "2048",
+      "--message",
+      "handle events",
+      "--session",
+      "isolated",
+    ]);
+
+    expect(getGatewayCallParams<CronAddParams>("cron.add")?.schedule).toEqual({
+      kind: "stream",
+      command: ["node", "events.mjs"],
+      cwd: "/srv/app",
+      mode: "match",
+      match: "^ready:",
+      batchMs: 100,
+      maxBatchBytes: 2_048,
+    });
+  });
+
   it.each(["", "0", "-1", "1.5", "1000ms"])(
     "rejects invalid cron add --timeout-seconds value %j",
     async (timeoutSeconds) => {
@@ -772,21 +828,29 @@ describe("cron cli", () => {
     expect(params?.delivery?.threadId).toBe(42);
   });
 
-  it("rejects --account on non-isolated/systemEvent cron add", async () => {
+  it.each([
+    ["--channel", "telegram"],
+    ["--to", "+1234567890"],
+    ["--account", "coordinator"],
+    ["--thread-id", "42"],
+  ])("rejects explicit chat delivery %s on main systemEvent cron add", async (flag, value) => {
     await expectCronCommandExit([
       "cron",
       "add",
       "--name",
-      "invalid account add",
+      "invalid delivery add",
       "--cron",
       "* * * * *",
       "--session",
       "main",
       "--system-event",
       "tick",
-      "--account",
-      "coordinator",
+      flag,
+      value,
     ]);
+    expectRuntimeErrorContaining(
+      "--channel, --to, --account, and --thread-id require a non-main agentTurn, command, or script job with delivery",
+    );
   });
 
   it("rejects invalid --thread-id on cron add", async () => {
@@ -1007,6 +1071,21 @@ describe("cron cli", () => {
       "* * * * *",
       "--system-event",
       "tick",
+    ]);
+
+    expectNoRuntimeErrorContaining("No --agent specified");
+  });
+
+  it("does not warn when --command is used (no agent needed)", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "Command",
+      "--cron",
+      "* * * * *",
+      "--command",
+      "printf ok",
     ]);
 
     expectNoRuntimeErrorContaining("No --agent specified");
@@ -1572,6 +1651,40 @@ describe("cron cli", () => {
     expect(patch?.patch?.schedule?.staggerMs).toBe(30_000);
   });
 
+  it("merges partial match metadata when replacing a stream command", async () => {
+    const existing = {
+      kind: "stream",
+      command: ["node", "events.mjs"],
+      mode: "match",
+      match: "^ready:",
+    };
+    const replacedMatch = await runCronEditWithScheduleLookup(existing, [
+      "--stream-command",
+      '["node","replacement.mjs"]',
+      "--stream-match",
+      "^updated:",
+    ]);
+    expect(replacedMatch.patch?.schedule).toMatchObject({
+      kind: "stream",
+      command: ["node", "replacement.mjs"],
+      mode: "match",
+      match: "^updated:",
+    });
+
+    const preservedMatch = await runCronEditWithScheduleLookup(existing, [
+      "--stream-command",
+      '["node","replacement.mjs"]',
+      "--stream-mode",
+      "match",
+    ]);
+    expect(preservedMatch.patch?.schedule).toMatchObject({
+      kind: "stream",
+      command: ["node", "replacement.mjs"],
+      mode: "match",
+      match: "^ready:",
+    });
+  });
+
   it("applies --exact to existing cron job without requiring --cron on edit", async () => {
     const patch = await runCronEditWithScheduleLookup(
       { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
@@ -1608,6 +1721,21 @@ describe("cron cli", () => {
       kind: "at",
       at: "2026-03-23T22:00:00.000Z",
     });
+    expect(patch?.patch).not.toHaveProperty("deleteAfterRun");
+  });
+
+  it("preserves an explicit keep policy when converting to --at", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--at",
+      "2026-03-23T23:00:00Z",
+      "--keep-after-run",
+    ]);
+
+    expect(patch?.patch?.schedule).toEqual({
+      kind: "at",
+      at: "2026-03-23T23:00:00.000Z",
+    });
+    expect(patch?.patch?.deleteAfterRun).toBe(false);
   });
 
   it("rejects --tz with --every on cron edit", async () => {
@@ -1751,3 +1879,4 @@ describe("cron cli", () => {
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

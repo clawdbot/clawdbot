@@ -1,12 +1,13 @@
+import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 // Shared exec approval analysis types and Windows-only shell enforcement helpers.
 import { rebuildWindowsShellCommandFromSource, windowsEscapeArg } from "./windows-shell-command.js";
-import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 
 export { analyzeArgvCommand } from "./exec-argv-analysis.js";
 
 export {
   matchAllowlist,
   parseExecArgvToken,
+  buildHashedArgPatternFromArgv,
   resolveAllowlistCandidatePath,
   resolveApprovalAuditCandidatePath,
   resolveApprovalAuditTrustPath,

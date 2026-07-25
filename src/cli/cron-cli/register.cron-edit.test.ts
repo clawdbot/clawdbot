@@ -37,6 +37,23 @@ describe("cron edit command", () => {
     expect(help).toMatch(/also\s+implies --announce when used alone/);
   });
 
+  it("updates one pacing bound while preserving the other", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return { id: "job-1", pacing: { min: "15m", max: "4h" } };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--pacing-min", "30m"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { pacing: { min: "30m", max: "4h" } },
+    });
+  });
+
   it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {
     const program = createCronProgram();
 
@@ -306,6 +323,26 @@ describe("cron edit command", () => {
     );
   });
 
+  it("stores an explicit wildcard with --clear-tools", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-tools"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearTools: true }),
+      {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            toolsAllow: ["*"],
+          },
+        },
+      },
+    );
+  });
+
   it("clears the thinking override with --clear-thinking (CLI parity with cron.update thinking:null)", async () => {
     const program = createCronProgram();
 
@@ -461,5 +498,31 @@ describe("cron edit command", () => {
     expect(help).toContain("--clear-to");
     expect(help).toContain("--clear-thread-id");
     expect(help).toContain("--clear-account");
+  });
+
+  it.each([
+    ["--channel", "telegram"],
+    ["--to", "+1234567890"],
+    ["--account", "coordinator"],
+    ["--thread-id", "42"],
+  ])("rejects explicit chat delivery %s on main systemEvent cron edit", async (flag, value) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    const program = createCronProgram();
+
+    await program.parseAsync(
+      ["edit", "job-1", "--session", "main", "--system-event", "wakeup", flag, value],
+      { from: "user" },
+    );
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+      ),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
   });
 });

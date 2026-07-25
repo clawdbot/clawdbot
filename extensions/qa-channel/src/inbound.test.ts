@@ -3,7 +3,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
 import { deleteQaBusMessage, editQaBusMessage, sendQaBusMessage } from "./bus-client.js";
-import { handleQaInbound, isHttpMediaUrl } from "./inbound.js";
+import { handleQaInbound } from "./inbound.js";
 
 vi.mock("./bus-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bus-client.js")>();
@@ -59,22 +59,12 @@ function createQaInboundParams(
 }
 
 function firstRunAssembledParams(runtime: ReturnType<typeof createPluginRuntimeMock>) {
-  const call = vi.mocked(runtime.channel.inbound.dispatchReply).mock.calls[0];
+  const call = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0];
   if (!call) {
     throw new Error("expected assembled turn call");
   }
   return call[0];
 }
-
-describe("isHttpMediaUrl", () => {
-  it("accepts only http and https urls", () => {
-    expect(isHttpMediaUrl("https://example.com/image.png")).toBe(true);
-    expect(isHttpMediaUrl("http://example.com/image.png")).toBe(true);
-    expect(isHttpMediaUrl("file:///etc/passwd")).toBe(false);
-    expect(isHttpMediaUrl("/etc/passwd")).toBe(false);
-    expect(isHttpMediaUrl("data:text/plain;base64,SGVsbG8=")).toBe(false);
-  });
-});
 
 describe("handleQaInbound", () => {
   beforeEach(() => {
@@ -180,7 +170,9 @@ describe("handleQaInbound", () => {
 
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
-    assembled.delivery.onError?.(new Error("model failed"), { kind: "final" });
+    await Promise.resolve(
+      assembled.delivery.onError?.(new Error("model failed"), { kind: "final" }),
+    );
 
     await vi.waitFor(() => {
       expect(deleteQaBusMessage).toHaveBeenCalledWith(
@@ -201,7 +193,9 @@ describe("handleQaInbound", () => {
     await expect(
       assembled.replyOptions?.onPartialReply?.({ text: "broken preview" }),
     ).rejects.toThrow("edit failed");
-    assembled.delivery.onError?.(new Error("dispatch failed"), { kind: "final" });
+    await Promise.resolve(
+      assembled.delivery.onError?.(new Error("dispatch failed"), { kind: "final" }),
+    );
 
     await vi.waitFor(() => {
       expect(deleteQaBusMessage).toHaveBeenCalledWith(
@@ -226,14 +220,16 @@ describe("handleQaInbound", () => {
 
       const assembled = firstRunAssembledParams(runtime);
       await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
-      assembled.delivery.onError?.(new Error(`dispatch\r\nforged${paragraphSeparator}next`), {
-        kind: "final",
-      });
+      await Promise.resolve(
+        assembled.delivery.onError?.(new Error(`dispatch\r\nforged${paragraphSeparator}next`), {
+          kind: "final",
+        }),
+      );
 
       await vi.waitFor(() => {
         expect(warn).toHaveBeenCalledTimes(2);
       });
-      assembled.delivery.onError?.(undefined, { kind: "final" });
+      await Promise.resolve(assembled.delivery.onError?.(undefined, { kind: "final" }));
       await vi.waitFor(() => {
         expect(warn).toHaveBeenCalledTimes(3);
       });
@@ -246,7 +242,7 @@ describe("handleQaInbound", () => {
       expect(output).not.toContain(paragraphSeparator);
       expect(output).toContain("dispatch\\u000d\\u000aforged\\u2029next");
       expect(output).toContain("cleanup\\u000aforged\\u001b[31m\\u009b32m\\u2028next");
-      expect(output).toContain("[object Undefined]");
+      expect(output).toContain("reply dispatch failed: undefined");
     } finally {
       warn.mockRestore();
     }
@@ -272,7 +268,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const assembled = firstRunAssembledParams(runtime);
     expect(assembled.replyPipeline).toEqual({});
     expect(assembled.ctxPayload.WasMentioned).toBe(true);
@@ -290,7 +286,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
   it("allows direct messages from configured senders", async () => {
@@ -305,7 +301,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
     expect(ctxPayload?.CommandAuthorized).toBe(true);
     expect(ctxPayload?.SenderId).toBe("alice");
@@ -328,14 +324,14 @@ describe("handleQaInbound", () => {
     expect(assembled.ctxPayload).toMatchObject({
       CommandAuthorized: true,
       CommandSource: "native",
-      CommandTargetSessionKey: assembled.routeSessionKey,
+      CommandTargetSessionKey: assembled.route.sessionKey,
       CommandTurn: {
         body: "/stop",
         source: "native",
       },
     });
     expect(assembled.ctxPayload.SessionKey).toContain("qa-channel:slash:alice");
-    expect(assembled.ctxPayload.SessionKey).not.toBe(assembled.routeSessionKey);
+    expect(assembled.ctxPayload.SessionKey).not.toBe(assembled.route.sessionKey);
   });
 
   it("skips malformed inline attachment base64 without dropping the message", async () => {
@@ -357,10 +353,45 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
-    expect(ctxPayload.MediaPath).toBeUndefined();
-    expect(ctxPayload.MediaPaths).toBeUndefined();
+    expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
+  });
+
+  it("rejects non-http attachment URLs without dropping the message", async () => {
+    const runtime = createPluginRuntimeMock();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setQaChannelRuntime(runtime);
+
+    try {
+      await handleQaInbound(
+        createQaInboundParams({
+          message: {
+            attachments: [
+              {
+                id: "attachment-1",
+                kind: "image",
+                mimeType: "image/png",
+                url: "file:///etc/passwd",
+              },
+              {
+                id: "attachment-2",
+                kind: "file",
+                mimeType: "text/plain",
+                url: "data:text/plain;base64,SGVsbG8=",
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+      const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
+      expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("uses allowFrom as the group sender fallback for allowlist policy", async () => {
@@ -383,7 +414,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("skips configured group messages that miss mention activation", async () => {
@@ -411,6 +442,6 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 });

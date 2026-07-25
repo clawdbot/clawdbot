@@ -1,6 +1,10 @@
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/core";
 // Qqbot tests cover remind plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RemindCronAction } from "../../engine/tools/remind-logic.js";
 
 const { callGatewayToolMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(),
@@ -10,7 +14,23 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   callGatewayTool: callGatewayToolMock,
 }));
 
-import { createRemindTool } from "./remind.js";
+import { registerRemindTool } from "./remind.js";
+
+function createRegisteredRemindTool(context: OpenClawPluginToolContext = {}): AnyAgentTool {
+  let factory: ((ctx: OpenClawPluginToolContext) => AnyAgentTool) | undefined;
+  const api = {
+    registerTool(tool: AnyAgentTool | ((ctx: OpenClawPluginToolContext) => AnyAgentTool)) {
+      if (typeof tool === "function") {
+        factory = tool;
+      }
+    },
+  } as unknown as OpenClawPluginApi;
+  registerRemindTool(api);
+  if (!factory) {
+    throw new Error("Expected QQBot reminder tool factory");
+  }
+  return factory(context);
+}
 
 type CronAddToolPayload = {
   job?: {
@@ -18,6 +38,7 @@ type CronAddToolPayload = {
     payload?: {
       kind?: string;
       message?: string;
+      toolsAllow?: string[];
     };
     delivery?: {
       mode?: string;
@@ -36,7 +57,7 @@ describe("bridge/tools/remind", () => {
 
   it("schedules reminders directly through Gateway cron with ambient QQ delivery context", async () => {
     callGatewayToolMock.mockResolvedValue({ id: "job-1" });
-    const tool = createRemindTool({
+    const tool = createRegisteredRemindTool({
       deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },
     });
 
@@ -53,6 +74,7 @@ describe("bridge/tools/remind", () => {
     expect(addPayload?.job?.sessionTarget).toBe("isolated");
     expect(addPayload?.job?.payload?.kind).toBe("agentTurn");
     expect(addPayload?.job?.payload?.message).toContain("drink water");
+    expect(addPayload?.job?.payload?.toolsAllow).toEqual([]);
     expect(addPayload?.job?.delivery).toEqual({
       mode: "announce",
       channel: "qqbot",
@@ -68,7 +90,7 @@ describe("bridge/tools/remind", () => {
   });
 
   it("routes list and remove through Gateway cron without exposing generic cron to the model", async () => {
-    const tool = createRemindTool({});
+    const tool = createRegisteredRemindTool();
 
     await tool.execute("tool-call-1", { action: "list" });
     await tool.execute("tool-call-2", { action: "remove", jobId: "job-1" });
@@ -80,53 +102,5 @@ describe("bridge/tools/remind", () => {
       { timeoutMs: 60_000 },
       { jobId: "job-1" },
     );
-  });
-
-  it("supports injected cron scheduler dependencies for engine-level tests", async () => {
-    const callCron = vi.fn(async (_params: unknown) => ({ id: "job-1" }));
-    const tool = createRemindTool(
-      {
-        deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },
-      },
-      { callCron },
-    );
-
-    await tool.execute("tool-call-1", {
-      action: "add",
-      content: "drink water",
-      time: "5m",
-    });
-
-    const cronParams = callCron.mock.calls.at(0)?.[0] as RemindCronAction | undefined;
-    expect(cronParams?.action).toBe("add");
-    if (cronParams?.action !== "add") {
-      throw new Error("Expected add reminder cron params");
-    }
-    expect(cronParams.job.delivery).toEqual({
-      mode: "announce",
-      channel: "qqbot",
-      to: "qqbot:c2c:user-openid",
-      accountId: "bot2",
-    });
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("schedules when sender ownership is missing", async () => {
-    const callCron = vi.fn(async (_params: unknown) => ({ id: "job-1" }));
-    const tool = createRemindTool(
-      {
-        deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },
-      },
-      { callCron },
-    );
-
-    await tool.execute("tool-call-1", {
-      action: "add",
-      content: "drink water",
-      time: "5m",
-    });
-
-    expect(callCron).toHaveBeenCalledTimes(1);
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 });

@@ -52,15 +52,16 @@ There is only ONE skill: `open-prose`. There are NO separate skills like `prose-
 3. Run with: `prose run examples/28-gas-town.prose`
 
 **Common examples by keyword:**
-| Keyword | File |
-|---------|------|
-| hello, hello world | `examples/01-hello-world.prose` |
-| gas town, gastown | `examples/28-gas-town.prose` |
-| captain, chair | `examples/29-captains-chair.prose` |
-| forge, browser | `examples/37-the-forge.prose` |
-| parallel | `examples/16-parallel-reviews.prose` |
-| pipeline | `examples/21-pipeline-operations.prose` |
-| error, retry | `examples/22-error-handling.prose` |
+
+| Keyword            | File                                    |
+| ------------------ | --------------------------------------- |
+| hello, hello world | `examples/01-hello-world.prose`         |
+| gas town, gastown  | `examples/28-gas-town.prose`            |
+| captain, chair     | `examples/29-captains-chair.prose`      |
+| forge, browser     | `examples/37-the-forge.prose`           |
+| parallel           | `examples/16-parallel-reviews.prose`    |
+| pipeline           | `examples/21-pipeline-operations.prose` |
+| error, retry       | `examples/22-error-handling.prose`      |
 
 ### Remote Programs
 

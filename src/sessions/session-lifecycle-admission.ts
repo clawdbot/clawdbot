@@ -1,10 +1,28 @@
 // Serializes lifecycle mutations and work admission for logical session identities.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+} from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { decodeSessionIdentity, normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import {
+  clearSessionWorkAdmissionHandoffs,
+  createSessionWorkAdmissionHandoff,
+  type HandoffSessionWorkAdmission,
+  type SessionWorkAdmissionLease,
+} from "./session-work-admission-handoff.js";
+
+export {
+  cancelSessionWorkAdmissionHandoff,
+  consumeSessionWorkAdmissionHandoff,
+  type SessionWorkAdmissionLease,
+} from "./session-work-admission-handoff.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
-type SessionWorkAdmission = {
+type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   interrupt?: () => void;
   released: Promise<void>;
 };
@@ -14,12 +32,13 @@ type SessionLifecycleAdmissionState = {
   mutationQueues: Map<string, StoreWriterQueue>;
   activeAdmissions: Map<string, Set<SessionWorkAdmission>>;
   activeMutations: Map<string, number>;
+  activeMutationRuns?: Set<object>;
   activeMutationKinds: Map<string, Map<SessionLifecycleMutationKind, number>>;
   idleWaiters: Map<string, Set<() => void>>;
   currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
 };
 
-export type SessionLifecycleMutationKind = "compaction";
+type SessionLifecycleMutationKind = "compaction";
 
 // Runtime chunks can load separate module instances while still coordinating
 // the same sessions. One shared state keeps every lock and admission visible.
@@ -30,6 +49,7 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
     mutationQueues: new Map(),
     activeAdmissions: new Map(),
     activeMutations: new Map(),
+    activeMutationRuns: new Set(),
     activeMutationKinds: new Map(),
     idleWaiters: new Map(),
     currentAdmissions: new AsyncLocalStorage(),
@@ -44,30 +64,9 @@ const {
   idleWaiters: SESSION_LIFECYCLE_IDLE_WAITERS,
   currentAdmissions: CURRENT_SESSION_WORK_ADMISSIONS,
 } = SESSION_LIFECYCLE_ADMISSION_STATE;
-
-export type SessionWorkAdmissionLease = {
-  release: () => void;
-  run: <T>(run: () => Promise<T>) => Promise<T>;
-};
-
-function normalizeSessionIdentities(
-  scope: string,
-  identities: Iterable<string | undefined>,
-): string[] {
-  const normalizedScope = scope.trim();
-  if (!normalizedScope) {
-    throw new Error("session lifecycle scope is required");
-  }
-  return Array.from(
-    new Set(
-      Array.from(identities, (identity) => identity?.trim()).filter(
-        (identity): identity is string => Boolean(identity),
-      ),
-    ),
-  )
-    .map((identity) => JSON.stringify([normalizedScope, identity]))
-    .toSorted();
-}
+// Older runtime chunks can create the shared state without this newer index.
+const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
+  (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
 
 async function runWithSessionIdentityLocks<T>(
   identities: readonly string[],
@@ -169,7 +168,7 @@ async function waitForNormalizedSessionLifecycleMutationIdle(
   }
 }
 
-export async function runExclusiveSessionLifecycle<T>(params: {
+async function runExclusiveSessionLifecycle<T>(params: {
   scope: string;
   identities: Iterable<string | undefined>;
   signal?: AbortSignal;
@@ -208,6 +207,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(params: {
   const signal = params.signal;
   signal?.throwIfAborted();
   const callerAdmissions = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
+  const mutationRun = {};
   let mutationActivated = false;
   let removeAbortListener = () => {};
   const mutation = runWithSessionMutationIdentityLocks(
@@ -219,6 +219,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(params: {
           signal?.throwIfAborted();
           mutationActivated = true;
           removeAbortListener();
+          ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.add(mutationRun);
           for (const identity of identities) {
             ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(
               identity,
@@ -263,6 +264,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(params: {
                 resolve();
               }
             }
+            ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
           });
         }
       }),
@@ -324,13 +326,71 @@ export function isSessionWorkAdmissionActive(
   );
 }
 
+/** Whether another admitted turn currently owns any of these session identities. */
+export function isCompetingSessionWorkAdmissionActive(
+  scope: string,
+  identities: Iterable<string | undefined>,
+): boolean {
+  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
+  return normalizeSessionIdentities(scope, identities).some((identity) =>
+    Array.from(
+      ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? [],
+      (admission) => !currentAdmissions?.has(admission),
+    ).some(Boolean),
+  );
+}
+
+/** Active session identities for one store/lifecycle scope. */
+export function collectActiveSessionWorkAdmissionIdentities(scope: string): Set<string> {
+  const normalizedScope = scope.trim();
+  if (!normalizedScope) {
+    throw new Error("session lifecycle scope is required");
+  }
+  const identities = new Set<string>();
+  for (const [normalizedIdentity, admissions] of ACTIVE_SESSION_WORK_ADMISSIONS) {
+    if (admissions.size === 0) {
+      continue;
+    }
+    const decoded = decodeSessionIdentity(normalizedIdentity);
+    if (decoded?.scope === normalizedScope) {
+      identities.add(decoded.identity);
+    }
+  }
+  return identities;
+}
+
+/** Unique admitted turns; one lease can be indexed under several identities. */
+export function getActiveSessionWorkAdmissionCount(): number {
+  const admissions = new Set<SessionWorkAdmission>();
+  for (const active of ACTIVE_SESSION_WORK_ADMISSIONS.values()) {
+    for (const admission of active) {
+      admissions.add(admission);
+    }
+  }
+  return admissions.size;
+}
+
+/** Unique active lifecycle mutations; one run can be indexed under several identities. */
+export function getActiveSessionLifecycleMutationCount(): number {
+  if (ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size > 0) {
+    return ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size;
+  }
+  // A mutation from an older loaded chunk may only populate the identity index.
+  return ACTIVE_SESSION_LIFECYCLE_MUTATIONS.size > 0 ? 1 : 0;
+}
+
 export async function beginSessionWorkAdmission(params: {
   scope: string;
   identities: Iterable<string | undefined>;
   assertAllowed: () => Promise<void> | void;
+  /** Final writer-ordered validation; use when one-time effects must not run during the first check. */
+  revalidateAllowed?: () => Promise<void> | void;
   onInterrupt?: () => void;
   signal?: AbortSignal;
 }): Promise<SessionWorkAdmissionLease> {
+  if (isGatewaySubordinateWorkAdmissionClosed()) {
+    throw new GatewayDrainingError();
+  }
   const identities = normalizeSessionIdentities(params.scope, params.identities);
   return await runExclusiveSessionLifecycle({
     scope: params.scope,
@@ -338,9 +398,17 @@ export async function beginSessionWorkAdmission(params: {
     signal: params.signal,
     run: async () => {
       await params.assertAllowed();
+      // assertAllowed can yield while a host suspension acquires its fence.
+      // Recheck immediately before registration to close that admission race.
+      if (isGatewaySubordinateWorkAdmissionClosed()) {
+        throw new GatewayDrainingError();
+      }
       let resolveReleased = () => {};
       const admission: SessionWorkAdmission = {
+        handoffIds: new Set(),
+        identities: new Set(identities),
         interrupt: params.onInterrupt,
+        interrupted: false,
         released: new Promise<void>((resolve) => {
           resolveReleased = resolve;
         }),
@@ -363,16 +431,68 @@ export async function beginSessionWorkAdmission(params: {
             ACTIVE_SESSION_WORK_ADMISSIONS.delete(identity);
           }
         }
+        clearSessionWorkAdmissionHandoffs(admission);
         resolveReleased();
       };
-      return {
+      const lease: SessionWorkAdmissionLease = {
+        createHandoff: () => {
+          if (released) {
+            throw new Error("cannot hand off a released session work admission");
+          }
+          return createSessionWorkAdmissionHandoff(admission, lease);
+        },
         release,
+        released: admission.released,
         run: async <T>(run: () => Promise<T>) => {
           const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
           current.add(admission);
           return await CURRENT_SESSION_WORK_ADMISSIONS.run(current, run);
         },
       };
+      const signal = params.signal;
+      let writerBarrierStarted = false;
+      let removeAbortListener = () => {};
+      try {
+        const queuedAbort = signal
+          ? new Promise<never>((_, reject) => {
+              const onAbort = () => {
+                if (writerBarrierStarted) {
+                  return;
+                }
+                reject(
+                  signal.reason instanceof Error
+                    ? signal.reason
+                    : new Error("session work admission aborted"),
+                );
+              };
+              removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+              signal.addEventListener("abort", onAbort, { once: true });
+              if (signal.aborted) {
+                onAbort();
+              }
+            })
+          : undefined;
+        // Register before crossing the writer barrier. Earlier maintenance then
+        // either preserves this admission or commits first and fails revalidation.
+        const writerBarrier = runExclusiveSessionStoreWrite(
+          params.scope,
+          async () => {
+            writerBarrierStarted = true;
+            params.signal?.throwIfAborted();
+            await (params.revalidateAllowed ?? params.assertAllowed)();
+          },
+          // Writer-owned rollover callbacks can open replacement admissions.
+          // Reenter that lane or the writer waits on work queued behind itself.
+          { reentrant: true },
+        );
+        await (queuedAbort ? Promise.race([writerBarrier, queuedAbort]) : writerBarrier);
+        return lease;
+      } catch (error) {
+        release();
+        throw error;
+      } finally {
+        removeAbortListener();
+      }
     },
   });
 }
@@ -395,6 +515,7 @@ export async function interruptSessionWorkAdmissions(params: {
     }
   }
   for (const admission of admissions) {
+    admission.interrupted = true;
     admission.interrupt?.();
   }
   const released = Promise.all(Array.from(admissions, (admission) => admission.released));
@@ -417,4 +538,10 @@ export async function interruptSessionWorkAdmissions(params: {
       clearTimeout(timer);
     }
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.sessionLifecycleAdmissionTestApi")
+  ] = { runExclusiveSessionLifecycle };
 }

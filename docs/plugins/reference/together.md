@@ -16,7 +16,7 @@ Adds Together model provider support to OpenClaw.
 
 ## Surface
 
-providers: together; contracts: videoGenerationProviders
+providers: `together`; contracts: `videoGenerationProviders`
 
 ## Related docs
 

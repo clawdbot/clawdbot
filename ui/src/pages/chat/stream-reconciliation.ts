@@ -1,4 +1,5 @@
 // Control UI chat module implements stream reconciliation behavior.
+import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -17,7 +18,7 @@ import {
 } from "../../lib/string-coerce.ts";
 import { resetToolStream } from "./tool-stream.ts";
 
-export type StreamReconciliationState = {
+type StreamReconciliationState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
 };
@@ -48,12 +49,6 @@ type ToolMessageRef = {
 };
 
 const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
-
-function asToolRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function addToolRef(refs: ToolMessageRef[], seen: Set<string>, id: string | undefined) {
   if (!id || seen.has(id)) {
@@ -118,6 +113,7 @@ type MaterializeVisibleStreamOptions = {
   requirePersistedTool?: boolean;
   replacementMessages?: unknown[];
   persistCommentary?: boolean;
+  keyedStartIndex?: number;
   isHiddenAssistantMessage: AssistantMessageVisibility;
   isHiddenStreamText: StreamVisibility;
 };
@@ -143,6 +139,13 @@ function lastUserMessageIndex(messages: unknown[]): number {
     }
   }
   return -1;
+}
+
+export function streamReconciliationStartIndex(
+  messages: unknown[],
+  beforeIndex = messages.length,
+): number {
+  return lastUserMessageIndex(messages.slice(0, beforeIndex)) + 1;
 }
 
 export function maybeResetToolStream(
@@ -278,12 +281,12 @@ function hasAssistantStreamReplacement(
   messages: unknown[],
   stream: string,
   isHiddenAssistantMessage: AssistantMessageVisibility,
+  startIndex: number,
 ): boolean {
   const expected = stream.trim();
   if (!expected) {
     return false;
   }
-  const startIndex = lastUserMessageIndex(messages) + 1;
   return messages.slice(startIndex).some((message) => {
     if (!message || typeof message !== "object") {
       return false;
@@ -312,8 +315,11 @@ function streamFallbackItemId(message: unknown): string | null {
   return typeof itemId === "string" && itemId.trim() ? itemId.trim() : null;
 }
 
-function hasKeyedAssistantStreamReplacement(messages: unknown[], itemId: string): boolean {
-  const startIndex = lastUserMessageIndex(messages) + 1;
+function hasKeyedAssistantStreamReplacement(
+  messages: unknown[],
+  itemId: string,
+  startIndex: number,
+): boolean {
   return messages.slice(startIndex).some((message) => streamFallbackItemId(message) === itemId);
 }
 
@@ -412,13 +418,18 @@ function hasAssistantStreamPartReplacement(
   messages: unknown[],
   part: VisibleAssistantStreamPart,
   isHiddenAssistantMessage: AssistantMessageVisibility,
+  startIndex: number,
 ): boolean {
   if (part.itemId) {
-    return hasKeyedAssistantStreamReplacement(messages, part.itemId);
+    return hasKeyedAssistantStreamReplacement(messages, part.itemId, startIndex);
   }
   return (
-    hasAssistantStreamReplacement(messages, part.replacementText, isHiddenAssistantMessage) ||
-    hasAssistantStreamReplacement(messages, part.text, isHiddenAssistantMessage)
+    hasAssistantStreamReplacement(
+      messages,
+      part.replacementText,
+      isHiddenAssistantMessage,
+      startIndex,
+    ) || hasAssistantStreamReplacement(messages, part.text, isHiddenAssistantMessage, startIndex)
   );
 }
 
@@ -455,7 +466,12 @@ export function historyReplacedVisibleStream(
     (requiredParts.length > 0 ||
       hasVisibleAssistantMessageAfterUser(messages, opts.isHiddenAssistantMessage)) &&
     requiredParts.every((part) =>
-      hasAssistantStreamPartReplacement(messages, part, opts.isHiddenAssistantMessage),
+      hasAssistantStreamPartReplacement(
+        messages,
+        part,
+        opts.isHiddenAssistantMessage,
+        streamReconciliationStartIndex(messages),
+      ),
     )
   );
 }
@@ -467,16 +483,47 @@ export function hasVisibleStreamParts(
   return visibleAssistantStreamParts(state, opts).length > 0;
 }
 
+export function terminalMessageReplacesVisibleStream(
+  message: unknown,
+  state: StreamReconciliationState,
+  opts: Pick<MaterializeVisibleStreamOptions, "isHiddenStreamText" | "persistCommentary">,
+): boolean {
+  const terminalText = extractText(message)?.trim();
+  if (!terminalText) {
+    return false;
+  }
+  const parts = visibleAssistantStreamParts(state, {
+    includeCurrent: true,
+    isHiddenStreamText: opts.isHiddenStreamText,
+  }).filter((part) => opts.persistCommentary === true || !part.itemId);
+  if (parts.length === 0) {
+    return false;
+  }
+
+  let searchStart = 0;
+  for (const [index, part] of parts.entries()) {
+    const text = part.text.trim();
+    const matchIndex = terminalText.indexOf(text, searchStart);
+    // A terminal replacement must preserve the complete visible stream in order,
+    // beginning with its first part. Otherwise both outputs are user-visible.
+    if (matchIndex < 0 || (index === 0 && matchIndex !== 0)) {
+      return false;
+    }
+    searchStart = matchIndex + text.length;
+  }
+  return true;
+}
+
 function currentToolStreamMessageIndex(
   messages: unknown[],
   state: StreamReconciliationState,
+  startIndex: number,
   toolCallId?: string,
 ): number {
   const liveToolIds = toolCallId ? new Set([toolCallId]) : new Set(currentLiveToolCallIds(state));
   if (liveToolIds.size === 0) {
     return -1;
   }
-  const startIndex = lastUserMessageIndex(messages) + 1;
   for (let index = startIndex; index < messages.length; index++) {
     if (extractToolMessageRefs(messages[index]).some((ref) => liveToolIds.has(ref.id))) {
       return index;
@@ -489,8 +536,11 @@ function insertMessageAtIndex(messages: unknown[], message: unknown, index: numb
   return [...messages.slice(0, index), message, ...messages.slice(index)];
 }
 
-function timestampOrderedInsertIndex(messages: unknown[], desiredTimestamp: number): number {
-  const startIndex = lastUserMessageIndex(messages) + 1;
+function timestampOrderedInsertIndex(
+  messages: unknown[],
+  desiredTimestamp: number,
+  startIndex: number,
+): number {
   for (let index = startIndex; index < messages.length; index++) {
     const timestamp = messageTimestampMs(messages[index]);
     if (timestamp != null && timestamp > desiredTimestamp) {
@@ -553,18 +603,23 @@ export function materializeVisibleStreamState(
       continue;
     }
     const replacementMessages = opts.replacementMessages ?? [];
+    const defaultStartIndex = streamReconciliationStartIndex(nextMessages);
+    const startIndex = part.itemId
+      ? (opts.keyedStartIndex ?? defaultStartIndex)
+      : defaultStartIndex;
     if (
       hasAssistantStreamPartReplacement(
         [...nextMessages, ...replacementMessages],
         part,
         opts.isHiddenAssistantMessage,
+        startIndex,
       )
     ) {
       continue;
     }
     const toolIndex =
       part.source === "segment" && part.toolCallId
-        ? currentToolStreamMessageIndex(nextMessages, state, part.toolCallId)
+        ? currentToolStreamMessageIndex(nextMessages, state, startIndex, part.toolCallId)
         : -1;
     if (opts.requirePersistedTool && toolIndex < 0) {
       continue;
@@ -573,7 +628,7 @@ export function materializeVisibleStreamState(
       toolIndex >= 0
         ? toolIndex
         : part.source === "segment"
-          ? timestampOrderedInsertIndex(nextMessages, part.timestamp)
+          ? timestampOrderedInsertIndex(nextMessages, part.timestamp, startIndex)
           : nextMessages.length;
     const streamMessage = buildAssistantStreamMessage(
       part.text,

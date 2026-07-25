@@ -1,13 +1,15 @@
 // Sms plugin module implements twilio behavior.
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
 import {
   readResponseTextPrefix,
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
+import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
 
 const TWILIO_ACCOUNTS_URL = "https://api.twilio.com/2010-04-01/Accounts";
@@ -38,6 +40,8 @@ type TwilioMessagePayload = {
   from?: string;
   status?: string;
 };
+
+const TWILIO_CHANNEL_ADDRESS_RE = /^([a-z][a-z0-9-]*):(.*)$/i;
 
 export type TwilioIncomingPhoneNumber = {
   sid: string;
@@ -133,31 +137,29 @@ function requestSearch(req: IncomingMessage): string {
   }
 }
 
-function configuredUrlHasQuery(url: string): boolean {
+function stripUrlFragment(url: string): string {
   const hashIndex = url.indexOf("#");
-  const beforeHash = hashIndex === -1 ? url : url.slice(0, hashIndex);
-  return beforeHash.includes("?");
+  return hashIndex === -1 ? url : url.slice(0, hashIndex);
 }
 
 export function resolveTwilioWebhookSignatureUrl(params: {
   req: IncomingMessage;
   publicWebhookUrl: string;
 }): string {
-  if (configuredUrlHasQuery(params.publicWebhookUrl)) {
-    return params.publicWebhookUrl;
+  // Twilio connection overrides live in the fragment but are excluded from its
+  // signature input. Strip without URL reserialization so exact port/path bytes survive.
+  const signatureBaseUrl = stripUrlFragment(params.publicWebhookUrl);
+  if (signatureBaseUrl.includes("?")) {
+    return signatureBaseUrl;
   }
   const search = requestSearch(params.req);
   if (!search) {
-    return params.publicWebhookUrl;
+    return signatureBaseUrl;
   }
-  const hashIndex = params.publicWebhookUrl.indexOf("#");
-  if (hashIndex === -1) {
-    return `${params.publicWebhookUrl}${search}`;
-  }
-  return `${params.publicWebhookUrl.slice(0, hashIndex)}${search}${params.publicWebhookUrl.slice(hashIndex)}`;
+  return `${signatureBaseUrl}${search}`;
 }
 
-export class TwilioSmsApiError extends Error {
+class TwilioSmsApiError extends Error {
   readonly httpStatus: number;
   readonly responseText: string;
   readonly twilioCode?: number;
@@ -173,7 +175,7 @@ export class TwilioSmsApiError extends Error {
   }
 }
 
-export function parseTwilioFormBody(body: string): Record<string, string> {
+function parseTwilioFormBody(body: string): Record<string, string> {
   const parsed = querystring.parse(body);
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -182,7 +184,7 @@ export function parseTwilioFormBody(body: string): Record<string, string> {
   return out;
 }
 
-export function computeTwilioSignature(params: {
+function computeTwilioSignature(params: {
   url: string;
   authToken: string;
   form: Record<string, string>;
@@ -196,12 +198,6 @@ export function computeTwilioSignature(params: {
   return createHmac("sha1", params.authToken).update(data).digest("base64");
 }
 
-function safeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
 export function verifyTwilioSignature(params: {
   signature: string | undefined;
   url: string;
@@ -211,7 +207,7 @@ export function verifyTwilioSignature(params: {
   if (!params.signature || !params.url || !params.authToken) {
     return false;
   }
-  return safeEqual(
+  return safeEqualSecret(
     params.signature,
     computeTwilioSignature({
       url: params.url,
@@ -221,19 +217,47 @@ export function verifyTwilioSignature(params: {
   );
 }
 
+function parseTwilioInboundFrom(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const channelAddress = trimmed.match(TWILIO_CHANNEL_ADDRESS_RE);
+  const kind = channelAddress?.[1]?.toLowerCase();
+  if (kind && kind !== "rcs") {
+    return null;
+  }
+  const phoneNumber = normalizeSmsPhoneNumber(channelAddress?.[2] ?? trimmed);
+  if (!looksLikeSmsPhoneNumber(phoneNumber)) {
+    return null;
+  }
+  return phoneNumber;
+}
+
+export function resolveTwilioInboundSender(form: Record<string, string>): string {
+  return parseTwilioInboundFrom(firstTrimmedString(form.From)) ?? "";
+}
+
 export function buildTwilioInboundMessage(form: Record<string, string>): SmsInboundMessage | null {
-  const from = firstTrimmedString(form.From);
+  // Signature verification owns the untouched form. Canonicalize only after
+  // that boundary so Twilio channel prefixes never change its signed input.
+  const from = resolveTwilioInboundSender(form);
   const to = firstTrimmedString(form.To);
   const body = firstString(form.Body);
   const accountSid = firstTrimmedString(form.AccountSid);
-  const messageSid =
-    firstTrimmedString(form.MessageSid) ||
-    firstTrimmedString(form.SmsSid) ||
-    firstTrimmedString(form.SmsMessageSid);
+  const messageSid = resolveTwilioMessageSid(form);
   if (!from || !to || !body || !messageSid) {
     return null;
   }
   return { accountSid, from, to, body, messageSid };
+}
+
+export function resolveTwilioMessageSid(form: Record<string, string>): string {
+  return (
+    firstTrimmedString(form.MessageSid) ||
+    firstTrimmedString(form.SmsSid) ||
+    firstTrimmedString(form.SmsMessageSid)
+  );
 }
 
 export async function readTwilioWebhookForm(req: IncomingMessage): Promise<Record<string, string>> {

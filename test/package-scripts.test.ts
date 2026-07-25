@@ -1,5 +1,6 @@
 // Package script tests validate root package script invariants.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 type RootPackageJson = {
@@ -120,11 +121,14 @@ describe("package scripts", () => {
   });
 
   it.each([
-    { scriptName: "build:docker", expectedCount: 5 },
+    { scriptName: "build:docker", expectedCount: 4 },
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
   ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
-    const script = readPackageJson().scripts[scriptName];
+    const script = expectDefined(
+      readPackageJson().scripts[scriptName],
+      `package script ${scriptName}`,
+    );
 
     expect(script).not.toContain("--experimental-strip-types");
     expect(script.match(/node --import tsx scripts\/[^\s]+\.ts/gu)).toHaveLength(expectedCount);
@@ -155,7 +159,7 @@ describe("package scripts", () => {
   it("builds iOS against a generic simulator by default", () => {
     const script = readPackageJson().scripts["ios:build"];
 
-    expect(script).toContain('${IOS_DEST:-generic/platform=iOS Simulator}');
+    expect(script).toContain("${IOS_DEST:-generic/platform=iOS Simulator}");
     expect(script).not.toContain("name=iPhone");
   });
 
@@ -165,9 +169,57 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs Docker package process-tree coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
+    );
+  });
+
+  it("runs legacy session importer atomicity coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/state-migrations.legacy-session-store.test.ts",
+    );
+  });
+
+  it("runs SQLite snapshot path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/sqlite-snapshot.test.ts",
+    );
+  });
+
+  it("runs shared test-state cleanup coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/test-utils/openclaw-test-state.test.ts",
+    );
+  });
+
+  it("runs snapshot repository verification coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/snapshot/local-repository.windows.test.ts",
+    );
+  });
+
+  it("runs backup verification coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/commands/backup-verify.test.ts",
+    );
+  });
+
+  it("runs cross-OS installer behavior coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/openclaw-cross-os-installer.windows.test.ts",
+    );
+  });
+
   it("runs env launcher coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/run-with-env.test.ts",
+    );
+  });
+
+  it("runs ts-topology entrypoint coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/ts-topology.test.ts",
     );
   });
 });

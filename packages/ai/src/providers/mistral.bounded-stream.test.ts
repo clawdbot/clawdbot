@@ -69,7 +69,7 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
         /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
       );
       expect(match).not.toBeNull();
-      const got = Number(match![1]);
+      const got = Number(match?.[1]);
       expect(got).toBeGreaterThan(MAX);
       expect(got).toBeLessThan(TOTAL);
       // Print to vitest stdout for PR-body real behavior proof capture.
@@ -160,7 +160,7 @@ describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => 
       /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
     );
     expect(match).not.toBeNull();
-    const got = Number(match![1]);
+    const got = Number(match?.[1]);
     // Synthetic stream chunks are exactly 1 MiB aligned, so cap+1 reads
     // give exactly cap + 1 MiB = 16 MiB + 1 MiB = 17 825 792 bytes.
     expect(got).toBe(16777216 + CHUNK);

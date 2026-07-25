@@ -6,8 +6,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
-  clearGoogleChatApprovalCardBindingsForTest,
   shouldSuppressGoogleChatManualExecApprovalFollowupText,
+  unregisterGoogleChatManualApprovalFollowupSuppression,
 } from "./approval-card-actions.js";
 
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
@@ -26,7 +26,7 @@ const { googleChatApprovalNativeRuntime } = await import("./approval-handler.run
 
 beforeEach(() => {
   vi.clearAllMocks();
-  clearGoogleChatApprovalCardBindingsForTest();
+  unregisterGoogleChatManualApprovalFollowupSuppression("approval-1");
 });
 
 const account = {
@@ -52,7 +52,7 @@ const cfg: OpenClawConfig = {
       audienceType: "app-url",
       audience: "https://chat-app.example.test/googlechat",
       appPrincipal: "123456789012345678901",
-      dm: { allowFrom: ["users/123"] },
+      allowFrom: ["users/123"],
     },
   },
 };
@@ -83,6 +83,12 @@ function createPendingView(): ExecApprovalPendingView {
         label: "Allow Once",
         style: "success",
         command: "/approve approval-1 allow-once",
+        action: {
+          type: "approval",
+          approvalId: "approval-1",
+          approvalKind: "exec",
+          decision: "allow-once",
+        },
       },
       {
         kind: "decision",
@@ -90,6 +96,12 @@ function createPendingView(): ExecApprovalPendingView {
         label: "Deny",
         style: "danger",
         command: "/approve approval-1 deny",
+        action: {
+          type: "approval",
+          approvalId: "approval-1",
+          approvalKind: "exec",
+          decision: "deny",
+        },
       },
     ],
     expiresAtMs: Date.now() + 60_000,
@@ -419,7 +431,7 @@ describe("googleChatApprovalNativeRuntime", () => {
             },
             audienceType: "app-url",
             audience: "https://chat-app.example.test/googlechat",
-            dm: { allowFrom: ["users/123"] },
+            allowFrom: ["users/123"],
           },
         },
       },

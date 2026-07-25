@@ -29,7 +29,7 @@ import {
 } from "../../lib/chat/thinking.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -40,8 +40,12 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import {
+  patchChatCommandSessionSettings as patchSession,
+  selectedGlobalScope,
+} from "./chat-settings-patches.ts";
 
-export type SlashCommandResult = {
+type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content: string;
   /** Side-effect action the caller should perform after displaying the result. */
@@ -54,9 +58,11 @@ export type SlashCommandResult = {
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
   pendingCurrentRun?: boolean;
+  /** The command did not complete and a durable queued invocation may be retried. */
+  failed?: boolean;
 };
 
-export type SlashCommandContext = {
+type SlashCommandContext = {
   sessions: SessionCapability;
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];
@@ -102,9 +108,9 @@ export async function executeSlashCommand(
     case "help":
       return executeHelp();
     case "new":
-      return { content: "Starting new session...", action: "new-session" };
+      return { content: "Starting new thread...", action: "new-session" };
     case "reset":
-      return { content: "Resetting session...", action: "reset" };
+      return { content: "Resetting thread...", action: "reset" };
     case "stop":
       return { content: "Stopping current run...", action: "stop" };
     case "clear":
@@ -120,7 +126,7 @@ export async function executeSlashCommand(
     case "verbose":
       return await executeVerbose(client, sessionKey, args, context);
     case "export-session":
-      return { content: "Exporting session...", action: "export" };
+      return { content: "Exporting thread...", action: "export" };
     case "usage":
       return await executeUsage(sessionKey, context);
     case "agents":
@@ -166,7 +172,10 @@ async function executeCompact(
     );
     if (result?.ok !== true) {
       const reason = typeof result?.reason === "string" ? result.reason.trim() : "";
-      return { content: reason ? `Compaction failed: ${reason}` : "Compaction failed." };
+      return {
+        content: reason ? `Compaction failed: ${reason}` : "Compaction failed.",
+        failed: true,
+      };
     }
     if (result?.compacted) {
       const before = result.result?.tokensBefore;
@@ -182,7 +191,7 @@ async function executeCompact(
     }
     return { content: "Compaction skipped.", action: "refresh" };
   } catch (err) {
-    return { content: `Compaction failed: ${String(err)}` };
+    return { content: `Compaction failed: ${String(err)}`, failed: true };
   }
 }
 
@@ -215,7 +224,7 @@ async function executeModel(
       }
       return { content: lines.join("\n") };
     } catch (err) {
-      return { content: `Failed to get model info: ${String(err)}` };
+      return { content: `Failed to get model info: ${String(err)}`, failed: true };
     }
   }
 
@@ -252,7 +261,7 @@ async function executeModel(
       sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
     };
   } catch (err) {
-    return { content: `Failed to set model: ${String(err)}` };
+    return { content: `Failed to set model: ${String(err)}`, failed: true };
   }
 }
 
@@ -278,7 +287,7 @@ async function executeThink(
         ),
       };
     } catch (err) {
-      return { content: `Failed to get thinking level: ${String(err)}` };
+      return { content: `Failed to get thinking level: ${String(err)}`, failed: true };
     }
   }
 
@@ -292,7 +301,7 @@ async function executeThink(
         action: "refresh",
       };
     } catch (err) {
-      return { content: `Failed to reset thinking level: ${String(err)}` };
+      return { content: `Failed to reset thinking level: ${String(err)}`, failed: true };
     }
   }
 
@@ -317,7 +326,7 @@ async function executeThink(
       action: "refresh",
     };
   } catch (err) {
-    return { content: `Failed to set thinking level: ${String(err)}` };
+    return { content: `Failed to set thinking level: ${String(err)}`, failed: true };
   }
 }
 
@@ -339,7 +348,7 @@ async function executeVerbose(
         ),
       };
     } catch (err) {
-      return { content: `Failed to get verbose level: ${String(err)}` };
+      return { content: `Failed to get verbose level: ${String(err)}`, failed: true };
     }
   }
 
@@ -359,7 +368,7 @@ async function executeVerbose(
       action: "refresh",
     };
   } catch (err) {
-    return { content: `Failed to set verbose mode: ${String(err)}` };
+    return { content: `Failed to set verbose mode: ${String(err)}`, failed: true };
   }
 }
 
@@ -383,7 +392,7 @@ async function executeFast(
         ),
       };
     } catch (err) {
-      return { content: `Failed to get fast mode: ${String(err)}` };
+      return { content: `Failed to get fast mode: ${String(err)}`, failed: true };
     }
   }
 
@@ -397,7 +406,7 @@ async function executeFast(
         action: "refresh",
       };
     } catch (err) {
-      return { content: `Failed to reset fast mode: ${String(err)}` };
+      return { content: `Failed to reset fast mode: ${String(err)}`, failed: true };
     }
   }
 
@@ -420,7 +429,7 @@ async function executeFast(
       action: "refresh",
     };
   } catch (err) {
-    return { content: `Failed to set fast mode: ${String(err)}` };
+    return { content: `Failed to set fast mode: ${String(err)}`, failed: true };
   }
 }
 
@@ -432,7 +441,7 @@ async function executeUsage(
     const sessions = await listSessions(context);
     const session = resolveCurrentSession(sessions, sessionKey);
     if (!session) {
-      return { content: "No active session." };
+      return { content: "No active thread." };
     }
     const hasInputTokens = Number.isFinite(session.inputTokens);
     const hasOutputTokens = Number.isFinite(session.outputTokens);
@@ -454,7 +463,7 @@ async function executeUsage(
         : `${totalTokensFresh ? "" : "~"}${formatCompactTokenCount(cumulativeTotal)}`;
 
     const lines = [
-      "**Session Usage**",
+      "**Thread Usage**",
       `Input: **${formatCompactTokenCount(input)}** tokens`,
       `Output: **${formatCompactTokenCount(output)}** tokens`,
       `Total: **${totalDisplay}** tokens`,
@@ -467,7 +476,7 @@ async function executeUsage(
     }
     return { content: lines.join("\n") };
   } catch (err) {
-    return { content: `Failed to get usage: ${String(err)}` };
+    return { content: `Failed to get usage: ${String(err)}`, failed: true };
   }
 }
 
@@ -488,28 +497,12 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
     }
     return { content: lines.join("\n") };
   } catch (err) {
-    return { content: `Failed to list agents: ${String(err)}` };
+    return { content: `Failed to list agents: ${String(err)}`, failed: true };
   }
 }
 
 function normalizeSessionKey(key?: string | null): string | undefined {
   return normalizeOptionalLowercaseString(key);
-}
-
-function selectedGlobalScope(
-  sessionKey: string,
-  context: SlashCommandContext,
-): { agentId?: string } {
-  const normalizedSessionKey = normalizeSessionKey(sessionKey);
-  const parsed = parseAgentSessionKey(normalizedSessionKey ?? "");
-  const aliasAgentId =
-    parsed &&
-    parsed.agentId !== DEFAULT_AGENT_ID &&
-    (parsed.rest === DEFAULT_MAIN_KEY || parsed.rest === "global")
-      ? parsed.agentId
-      : undefined;
-  const agentId = aliasAgentId ?? normalizeOptionalLowercaseString(context.agentId);
-  return (normalizedSessionKey === "global" || aliasAgentId) && agentId ? { agentId } : {};
 }
 
 function selectedAgentListScope(
@@ -567,22 +560,6 @@ async function listSessions(
   options?: Parameters<SessionCapability["list"]>[0],
 ): Promise<SessionsListResult> {
   const result = await context.sessions.list(options);
-  if (!result) {
-    throw new Error("Session capability is unavailable");
-  }
-  return result;
-}
-
-async function patchSession(
-  context: SlashCommandContext,
-  sessionKey: string,
-  patch: SessionPatch,
-): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
-  const result = await context.sessions.patch(
-    sessionKey,
-    patch,
-    selectedGlobalScope(sessionKey, context),
-  );
   if (!result) {
     throw new Error("Session capability is unavailable");
   }
@@ -761,6 +738,7 @@ async function executeSteer(
         ...selectedGlobalScope(resolved.key, context),
         message: resolved.message,
         deliver: false,
+        queueMode: "steer",
         idempotencyKey: generateUUID(),
       }),
     );
@@ -774,7 +752,7 @@ async function executeSteer(
     }
     return result;
   } catch (err) {
-    return { content: `Failed to steer: ${String(err)}` };
+    return { content: `Failed to steer: ${String(err)}`, failed: true };
   }
 }
 
@@ -808,6 +786,7 @@ async function executeRedirect(
       ...(ackStatus === "started" || ackStatus === "in_flight" ? { trackRunId: runId } : {}),
     };
   } catch (err) {
-    return { content: `Failed to redirect: ${String(err)}` };
+    return { content: `Failed to redirect: ${String(err)}`, failed: true };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

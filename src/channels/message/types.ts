@@ -39,7 +39,7 @@ export type DurableFinalDeliveryRequirementMap = Partial<
 >;
 
 /** Minimal payload facts used to derive required durable-delivery capabilities. */
-export type DurableFinalDeliveryPayloadShape = {
+type DurableFinalDeliveryPayloadShape = {
   text?: string | null;
   replyToId?: string | null;
   mediaUrl?: string | null;
@@ -134,7 +134,7 @@ export type RenderedMessageBatch<TPayload = unknown> = {
 };
 
 /** Lifecycle phase for a live preview or streaming message send. */
-export type LiveMessagePhase = "idle" | "previewing" | "finalizing" | "finalized" | "cancelled";
+type LiveMessagePhase = "idle" | "previewing" | "finalizing" | "finalized" | "cancelled";
 
 /** Mutable state snapshot for live preview/finalization flows. */
 export type LiveMessageState<TPayload = unknown> = {
@@ -181,7 +181,11 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
   deliveryQueueId?: string;
-  /** @internal Refresh durable timing after provider serialization and before I/O. */
+  /** @internal Stable platform-send index within one durable payload. */
+  deliveryPartIndex?: number;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
+  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Report each completed platform sub-send before another fallible step. */
   onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
@@ -240,7 +244,7 @@ export const unknownSendReconciliationKinds = [
   "batch",
 ] as const;
 
-export type UnknownSendReconciliationKind = (typeof unknownSendReconciliationKinds)[number];
+type UnknownSendReconciliationKind = (typeof unknownSendReconciliationKinds)[number];
 
 /** Send-attempt context tagged with the adapter method core is about to call. */
 export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> =
@@ -250,7 +254,7 @@ export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> =
   | (ChannelMessageSendPollContext<TConfig> & { kind: "poll" });
 
 /** Lifecycle context emitted after an adapter send succeeds but before commit finishes. */
-export type ChannelMessageSendSuccessContext<
+type ChannelMessageSendSuccessContext<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
 > = ChannelMessageSendAttemptContext<TConfig> & {
@@ -259,7 +263,7 @@ export type ChannelMessageSendSuccessContext<
 };
 
 /** Lifecycle context emitted after an adapter send throws or rejects. */
-export type ChannelMessageSendFailureContext<TConfig = OpenClawConfig> =
+type ChannelMessageSendFailureContext<TConfig = OpenClawConfig> =
   ChannelMessageSendAttemptContext<TConfig> & {
     error: unknown;
     attemptToken?: unknown;
@@ -337,7 +341,7 @@ export type ChannelMessageSendLifecycleAdapter<
 };
 
 /** Adapter methods a message channel can implement for outbound text/media/payload/poll sends. */
-export type ChannelMessageSendAdapter<
+type ChannelMessageSendAdapter<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
 > = {
@@ -403,7 +407,7 @@ export type LivePreviewFinalizerCapabilityMap = Partial<
 >;
 
 /** Adapter shape for finalizing live previews. */
-export type ChannelMessageLiveFinalizerAdapterShape = {
+type ChannelMessageLiveFinalizerAdapterShape = {
   capabilities?: LivePreviewFinalizerCapabilityMap;
 };
 
@@ -452,7 +456,7 @@ export type ChannelMessageAdapter<
 > = TAdapter;
 
 /** Extra durable-final requirement map for caller-derived capability checks. */
-export type DurableFinalRequirementExtras = DurableFinalDeliveryRequirementMap;
+type DurableFinalRequirementExtras = DurableFinalDeliveryRequirementMap;
 
 /** Inputs used to derive durable final-delivery requirements for a planned send. */
 export type DeriveDurableFinalDeliveryRequirementsParams = {

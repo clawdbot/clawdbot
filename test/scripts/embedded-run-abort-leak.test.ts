@@ -55,15 +55,7 @@ describe("scripts/embedded-run-abort-leak", () => {
 
   it("rejects duplicate thresholds before writing heap snapshots", () => {
     const snapDir = makeTempRoot();
-    const result = runHarness([
-      "--snap-dir",
-      snapDir,
-      "--iters",
-      "1",
-      "--iters",
-      "2",
-      "--quiet",
-    ]);
+    const result = runHarness(["--snap-dir", snapDir, "--iters", "1", "--iters", "2", "--quiet"]);
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");

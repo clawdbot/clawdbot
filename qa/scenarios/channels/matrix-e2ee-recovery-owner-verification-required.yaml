@@ -1,0 +1,35 @@
+title: Matrix E2EE recovery key backup access still requires Matrix identity trust
+scenario:
+  id: matrix-e2ee-recovery-owner-verification-required
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 62, "matrix:e2ee-smoke": 4 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-recovery-owner-verification-required
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Recovery Owner Verification Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js
+  call: runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario
+  args:
+    - expr: "scenarioContext"

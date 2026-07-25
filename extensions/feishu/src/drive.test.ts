@@ -436,6 +436,137 @@ describe("registerFeishuDriveTools", () => {
     });
   });
 
+  it("looks up file info directly by token and type", async () => {
+    const listFiles = vi.fn();
+    const batchQuery = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        metas: [
+          {
+            doc_token: "doc_1",
+            doc_type: "docx",
+            title: "Project Plan",
+            url: "https://example.test/doc_1",
+            create_time: "1710000000",
+            latest_modify_time: "1710001000",
+            owner_id: "ou_owner",
+          },
+        ],
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: listFiles }, meta: { batchQuery } },
+    });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-info", {
+      action: "info",
+      file_token: "doc_1",
+      type: "docx",
+    });
+
+    expect(batchQuery).toHaveBeenCalledWith({
+      data: {
+        request_docs: [{ doc_token: "doc_1", doc_type: "docx" }],
+        with_url: true,
+      },
+    });
+    expect(listFiles).not.toHaveBeenCalled();
+    expect(result.details).toEqual({
+      token: "doc_1",
+      name: "Project Plan",
+      type: "docx",
+      url: "https://example.test/doc_1",
+      created_time: "1710000000",
+      modified_time: "1710001000",
+      owner_id: "ou_owner",
+    });
+  });
+
+  it("reports a missing file when metadata lookup returns a failed entry", async () => {
+    const batchQuery = vi.fn().mockResolvedValue({
+      code: 0,
+      data: { metas: [], failed_list: [{ code: 970005, token: "missing_doc" }] },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { meta: { batchQuery } },
+    });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-info-missing", {
+      action: "info",
+      file_token: "missing_doc",
+      type: "docx",
+    });
+
+    expect(result.details).toMatchObject({ error: "File not found: missing_doc" });
+  });
+
+  it("keeps root-list lookup for shortcut info", async () => {
+    const batchQuery = vi.fn();
+    const listFiles = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        files: [
+          {
+            token: "shortcut_1",
+            name: "Project shortcut",
+            type: "shortcut",
+            url: "https://example.test/shortcut_1",
+          },
+        ],
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: listFiles }, meta: { batchQuery } },
+    });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-info-shortcut", {
+      action: "info",
+      file_token: "shortcut_1",
+      type: "shortcut",
+    });
+
+    expect(listFiles).toHaveBeenCalledWith({ params: {} });
+    expect(batchQuery).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      token: "shortcut_1",
+      name: "Project shortcut",
+      type: "shortcut",
+    });
+  });
+
+  it("falls back to root lookup when the metadata scope is missing", async () => {
+    const batchQuery = vi.fn().mockRejectedValue({
+      response: {
+        data: {
+          code: 99991672,
+          msg: "permission denied: drive:drive.metadata:readonly",
+        },
+      },
+    });
+    const listFiles = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        files: [{ token: "doc_1", name: "Project Plan", type: "docx" }],
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: listFiles }, meta: { batchQuery } },
+    });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-info-missing-scope", {
+      action: "info",
+      file_token: "doc_1",
+      type: "docx",
+    });
+
+    expect(listFiles).toHaveBeenCalledWith({ params: {} });
+    expect(result.details).toMatchObject({ token: "doc_1", name: "Project Plan", type: "docx" });
+  });
+
   it("normalizes folder pagination and suppresses it for root listings", async () => {
     const listFiles = vi.fn().mockResolvedValue({ code: 0, data: { files: [] } });
     createFeishuToolClientMock.mockReturnValue({ drive: { file: { list: listFiles } } });
@@ -1363,3 +1494,4 @@ describe("registerFeishuDriveTools", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,16 +7,25 @@ import AppKit
 enum OpenClawChatTypography {
     static let bodySize: CGFloat = 17
 
-    static var title3: Font {
-        display(size: 22, weight: .bold, relativeTo: .title2)
-    }
-
-    static var title3SemiBold: Font {
-        display(size: 22, weight: .semibold, relativeTo: .title2)
-    }
-
     static var headline: Font {
         display(size: 17, weight: .semibold, relativeTo: .headline)
+    }
+
+    static func heading(level: Int) -> Font {
+        switch level {
+        case 1:
+            self.display(size: 24, weight: .bold, relativeTo: .title2)
+        case 2:
+            self.display(size: 21, weight: .bold, relativeTo: .title3)
+        case 3:
+            self.display(size: 19, weight: .semibold, relativeTo: .headline)
+        case 4:
+            self.body(size: 17, weight: .semibold, relativeTo: .body)
+        case 5:
+            self.body(size: 16, weight: .semibold, relativeTo: .callout)
+        default:
+            self.body(size: 15, weight: .semibold, relativeTo: .subheadline)
+        }
     }
 
     static var callout: Font {

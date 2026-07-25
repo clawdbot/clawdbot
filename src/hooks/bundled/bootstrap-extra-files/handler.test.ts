@@ -4,8 +4,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
-import type { AgentBootstrapHookContext } from "../../hooks.js";
-import { createHookEvent } from "../../hooks.js";
+import {
+  type AgentBootstrapHookContext,
+  createInternalHookEvent as createHookEvent,
+} from "../../internal-hooks.js";
 import handler from "./handler.js";
 
 function createBootstrapExtraConfig(paths: string[]): OpenClawConfig {

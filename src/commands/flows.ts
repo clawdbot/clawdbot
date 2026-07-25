@@ -154,7 +154,7 @@ export async function flowsListCommand(
   opts: { json?: boolean; status?: string },
   runtime: RuntimeEnv,
 ) {
-  const statusFilter = opts.status?.trim();
+  const statusFilter = normalizeOptionalString(opts.status);
   const flows = listTaskFlowRecords().filter((flow) => {
     if (statusFilter && flow.status !== statusFilter) {
       return false;

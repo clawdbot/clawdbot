@@ -20,6 +20,7 @@ import {
   hasAttemptTerminalState,
   isIncompleteTerminalAssistantTurn,
 } from "./embedded-agent-runner/run/incomplete-turn.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   consumePendingToolMediaReply,
   hasAssistantVisibleReply,
@@ -51,9 +52,14 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
       startedAt: Date.now(),
     },
   });
-  void ctx.params.onAgentEvent?.({
-    stream: "lifecycle",
-    data: { phase: "start" },
+  runBestEffortCallback({
+    label: "lifecycle agent event",
+    log: ctx.log,
+    callback: () =>
+      ctx.params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start" },
+      }),
   });
 }
 
@@ -213,15 +219,20 @@ export function handleAgentEnd(
         endedAt: Date.now(),
       },
     });
-    void ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: {
-        phase,
-        ...errorData,
-        ...terminalMeta,
-        ...(livenessState ? { livenessState } : {}),
-        ...(replayInvalid ? { replayInvalid } : {}),
-      },
+    runBestEffortCallback({
+      label: "lifecycle agent event",
+      log: ctx.log,
+      callback: () =>
+        ctx.params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: {
+            phase,
+            ...errorData,
+            ...terminalMeta,
+            ...(livenessState ? { livenessState } : {}),
+            ...(replayInvalid ? { replayInvalid } : {}),
+          },
+        }),
     });
   };
 

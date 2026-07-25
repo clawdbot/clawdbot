@@ -1,5 +1,6 @@
 // Interactive payload tests cover validation of interactive response payloads.
 import { describe, expect, it } from "vitest";
+import type { MessagePresentationAction } from "./payload.js";
 import {
   hasReplyChannelData,
   hasReplyContent,
@@ -9,6 +10,9 @@ import {
   presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationButtonAction,
+  resolveMessagePresentationControlValue,
+  resolveMessagePresentationOptionAction,
   resolveInteractiveTextFallback,
 } from "./payload.js";
 
@@ -57,6 +61,14 @@ describe("hasReplyContent", () => {
 });
 
 describe("hasReplyPayloadContent", () => {
+  it("treats portable locations as content", () => {
+    expect(
+      hasReplyPayloadContent({
+        location: { latitude: 1, longitude: 2 },
+      }),
+    ).toBe(true);
+  });
+
   it("trims text and falls back to channel data by default", () => {
     expect(
       hasReplyPayloadContent({
@@ -180,6 +192,23 @@ describe("interactive payload helpers", () => {
               label: "Approve",
               action: { type: "callback", value: "/approve req allow-once" },
             },
+            {
+              label: "Allow once",
+              action: {
+                type: "approval",
+                approvalId: "approval/😀",
+                approvalKind: "exec",
+                decision: "allow-once",
+              },
+            },
+            {
+              label: "Review",
+              action: { type: "url", url: "https://example.com/approve/id" },
+            },
+            {
+              label: "Open app",
+              action: { type: "web-app", url: "https://example.com/app" },
+            },
           ],
         },
       ],
@@ -197,6 +226,23 @@ describe("interactive payload helpers", () => {
             {
               label: "Approve",
               action: { type: "callback", value: "/approve req allow-once" },
+            },
+            {
+              label: "Allow once",
+              action: {
+                type: "approval",
+                approvalId: "approval/😀",
+                approvalKind: "exec",
+                decision: "allow-once",
+              },
+            },
+            {
+              label: "Review",
+              action: { type: "url", url: "https://example.com/approve/id" },
+            },
+            {
+              label: "Open app",
+              action: { type: "web-app", url: "https://example.com/app" },
             },
           ],
         },
@@ -216,6 +262,394 @@ describe("interactive payload helpers", () => {
               label: "Approve",
               action: { type: "callback", value: "/approve req allow-once" },
               value: "/approve req allow-once",
+            },
+            {
+              label: "Allow once",
+              action: {
+                type: "approval",
+                approvalId: "approval/😀",
+                approvalKind: "exec",
+                decision: "allow-once",
+              },
+            },
+            {
+              label: "Review",
+              action: { type: "url", url: "https://example.com/approve/id" },
+              url: "https://example.com/approve/id",
+            },
+            {
+              label: "Open app",
+              action: { type: "web-app", url: "https://example.com/app" },
+              webApp: { url: "https://example.com/app" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("requires a web-app target and preserves hosted widget ids", () => {
+    const normalized = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Hosted widget",
+              action: { type: "web-app", widgetId: " AAAAAAAAAAAAAAAAAAAAAA " },
+            },
+            {
+              label: "Hosted fallback",
+              action: {
+                type: "web-app",
+                widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+                url: " https://example.com/app ",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalized).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Hosted widget",
+              action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+            },
+            {
+              label: "Hosted fallback",
+              action: {
+                type: "web-app",
+                widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+                url: "https://example.com/app",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const interactive = presentationToInteractiveReply(normalized!);
+    expect(interactive?.blocks[0]).toMatchObject({
+      type: "buttons",
+      buttons: [
+        {
+          label: "Hosted widget",
+          action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+        },
+        {
+          label: "Hosted fallback",
+          action: {
+            type: "web-app",
+            widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+            url: "https://example.com/app",
+          },
+          webApp: { url: "https://example.com/app" },
+        },
+      ],
+    });
+    expect(interactive?.blocks[0]).not.toHaveProperty("buttons.0.webApp");
+    expect(renderMessagePresentationFallbackText({ presentation: normalized })).toBe(
+      "- Hosted widget\n- Hosted fallback: https://example.com/app",
+    );
+    expect(
+      resolveMessagePresentationButtonAction({
+        // Boundary input missing both url and widgetId; the union forbids this statically.
+        action: { type: "web-app" } as unknown as MessagePresentationAction,
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeMessagePresentation({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Missing", action: { type: "web-app" } }],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("resolves deprecated button inputs without overriding a canonical action", () => {
+    expect(
+      resolveMessagePresentationButtonAction({
+        action: {
+          type: "approval",
+          approvalId: "approval:1",
+          approvalKind: "plugin",
+          decision: "deny",
+        },
+        value: "legacy",
+        url: "https://ignored.example",
+      }),
+    ).toEqual({
+      type: "approval",
+      approvalId: "approval:1",
+      approvalKind: "plugin",
+      decision: "deny",
+    });
+    expect(
+      resolveMessagePresentationButtonAction({
+        value: "legacy",
+        url: "https://example.com",
+        webApp: { url: "https://app.example.com" },
+      }),
+    ).toEqual({ type: "url", url: "https://example.com" });
+    expect(
+      resolveMessagePresentationButtonAction({
+        value: "legacy",
+        web_app: { url: "https://app.example.com" },
+      }),
+    ).toEqual({ type: "web-app", url: "https://app.example.com" });
+    expect(resolveMessagePresentationButtonAction({ value: "legacy" })).toEqual({
+      type: "callback",
+      value: "legacy",
+    });
+    expect(resolveMessagePresentationOptionAction({ value: "option" })).toEqual({
+      type: "callback",
+      value: "option",
+    });
+    const invalidButton = {
+      action: null,
+      value: "legacy",
+      url: "https://legacy.example",
+    } as unknown as Parameters<typeof resolveMessagePresentationButtonAction>[0];
+    const invalidControl = {
+      action: null,
+      value: "legacy",
+    } as unknown as Parameters<typeof resolveMessagePresentationControlValue>[0];
+    const invalidOption = {
+      action: null,
+      value: "legacy",
+    } as unknown as Parameters<typeof resolveMessagePresentationOptionAction>[0];
+    expect(resolveMessagePresentationButtonAction(invalidButton)).toBeUndefined();
+    expect(resolveMessagePresentationControlValue(invalidControl)).toBeUndefined();
+    expect(resolveMessagePresentationOptionAction(invalidOption)).toBeUndefined();
+  });
+
+  it("does not restore deprecated select values behind invalid explicit actions", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "select",
+          options: [{ label: "Invalid", action: null, value: "legacy" }],
+        },
+      ],
+    } as unknown as Parameters<typeof presentationToInteractiveReply>[0];
+
+    const interactive = presentationToInteractiveReply(presentation);
+    expect(interactive?.blocks[0]).toMatchObject({
+      type: "select",
+      options: [{ label: "Invalid" }],
+    });
+    expect(interactive?.blocks[0]).not.toHaveProperty("options.0.value");
+  });
+
+  it("never exposes approval data through generic scalar resolution or fallback text", () => {
+    const action = {
+      type: "approval" as const,
+      approvalId: "approval:secret-transport-id",
+      approvalKind: "plugin" as const,
+      decision: "allow-always" as const,
+    };
+    expect(resolveMessagePresentationControlValue({ action, value: "legacy-shadow" })).toBe(
+      undefined,
+    );
+    expect(
+      renderMessagePresentationFallbackText({
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Approve",
+                  action,
+                  value: "legacy-shadow",
+                  url: "https://ignored.example",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toBe("- Approve");
+    expect(
+      presentationToInteractiveReply({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Approve",
+                action,
+                value: "legacy-shadow",
+                url: "https://ignored.example",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [{ type: "buttons", buttons: [{ label: "Approve", action }] }],
+    });
+  });
+
+  it("normalizes question actions without exposing their transport data", () => {
+    const action = {
+      type: "question" as const,
+      questionId: "ask_0123456789abcdef0123456789abcdef",
+      optionValue: "Production",
+    };
+    const presentation = normalizeMessagePresentation({
+      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
+    });
+
+    expect(presentation).toEqual({
+      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
+    });
+    expect(resolveMessagePresentationControlValue({ action })).toBeUndefined();
+    expect(renderMessagePresentationFallbackText({ presentation: presentation ?? undefined })).toBe(
+      "- Production",
+    );
+    expect(presentationToInteractiveReply(presentation ?? { blocks: [] })).toEqual({
+      blocks: [{ type: "buttons", buttons: [{ label: "Production", action }] }],
+    });
+  });
+
+  it.each([
+    { type: "Question", questionId: "ask_1", optionValue: "Yes" },
+    { type: "question", questionId: "", optionValue: "Yes" },
+    { type: "question", questionId: "ask_\ud800", optionValue: "Yes" },
+    { type: "question", questionId: "ask_1", optionValue: "   " },
+  ])("rejects malformed question action %#", (action) => {
+    expect(
+      normalizeMessagePresentation({
+        blocks: [{ type: "buttons", buttons: [{ label: "Yes", action }] }],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects malformed canonical actions instead of falling back to legacy fields", () => {
+    expect(
+      normalizeMessagePresentation({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Approve",
+                action: {
+                  type: "approval",
+                  approvalId: "approval:1",
+                  approvalKind: "exec",
+                  decision: "yes",
+                },
+                value: "legacy",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+
+    expect(
+      normalizeMessagePresentation({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Approve",
+                action: {
+                  type: "approval",
+                  approvalId: "\ud800",
+                  approvalKind: "exec",
+                  decision: "allow-once",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+
+    expect(
+      normalizeMessagePresentation({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Approve",
+                action: {
+                  type: " APPROVAL ",
+                  approvalId: " approval:1 ",
+                  approvalKind: " EXEC ",
+                  decision: " ALLOW-ONCE ",
+                },
+                value: "legacy",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+
+    expect(
+      normalizeMessagePresentation({
+        blocks: [
+          {
+            type: "select",
+            options: [
+              {
+                label: "Approve",
+                action: {
+                  type: "approval",
+                  approvalId: "approval:1",
+                  approvalKind: "exec",
+                  decision: "allow-once",
+                },
+                value: "legacy",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves protocol-valid boundary whitespace in typed approval actions", () => {
+    const approvalId = "\uFEFF";
+
+    expect(
+      normalizeMessagePresentation({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Deny",
+                action: {
+                  type: "approval",
+                  approvalId,
+                  approvalKind: "exec",
+                  decision: "deny",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      blocks: [
+        {
+          buttons: [
+            {
+              action: { type: "approval", approvalId, approvalKind: "exec", decision: "deny" },
             },
           ],
         },
@@ -288,6 +722,11 @@ describe("interactive payload helpers", () => {
             { label: "Deny", action: { type: "command" as const, command: "/approve req_1 deny" } },
             { label: "Ignore", action: { type: "callback" as const, value: "ignore_123" } },
             { label: "Docs", url: "https://example.com/docs" },
+            {
+              label: "Legacy link override",
+              action: { type: "command" as const, command: "/approve req_1" },
+              url: "https://example.com/review",
+            },
             { label: "Disabled", disabled: true },
             {
               label: "DisabledCmd",
@@ -305,6 +744,7 @@ describe("interactive payload helpers", () => {
         "- Deny: `/approve req_1 deny`",
         "- Ignore",
         "- Docs: https://example.com/docs",
+        "- Legacy link override: `/approve req_1`",
         "- Disabled",
         "- DisabledCmd",
       ].join("\n"),
@@ -454,6 +894,104 @@ describe("interactive payload helpers", () => {
       },
     },
   ])("drops chart blocks with $name instead of changing their data", ({ block }) => {
+    expect(normalizeMessagePresentation({ blocks: [block] })).toBeUndefined();
+  });
+
+  it("normalizes tables and renders deterministic linear fallback text", () => {
+    const presentation = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "table",
+          caption: " Pipeline report ",
+          headers: [" Account ", "Stage", "ARR"],
+          rows: [
+            [" Acme\nCorp ", "Won", 125000],
+            ["Globex", "Review", 82000],
+          ],
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    });
+
+    expect(presentation).toEqual({
+      blocks: [
+        {
+          type: "table",
+          caption: "Pipeline report",
+          headers: ["Account", "Stage", "ARR"],
+          rows: [
+            ["Acme\nCorp", "Won", 125000],
+            ["Globex", "Review", 82000],
+          ],
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    });
+    const fallback = [
+      "Pipeline report (table)",
+      "- Account: Acme Corp; Stage: Won; ARR: 125000",
+      "- Account: Globex; Stage: Review; ARR: 82000",
+    ].join("\n");
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(fallback);
+    expect(presentationToInteractiveReply(presentation!)).toEqual({
+      blocks: [{ type: "text", text: fallback }],
+    });
+  });
+
+  it.each([
+    {
+      name: "missing caption",
+      block: { type: "table", headers: ["Name"], rows: [["Acme"]] },
+    },
+    {
+      name: "empty headers",
+      block: { type: "table", caption: "Report", headers: [], rows: [["Acme"]] },
+    },
+    {
+      name: "duplicate headers",
+      block: {
+        type: "table",
+        caption: "Report",
+        headers: ["Name", "Name"],
+        rows: [["Acme", "Won"]],
+      },
+    },
+    {
+      name: "empty rows",
+      block: { type: "table", caption: "Report", headers: ["Name"], rows: [] },
+    },
+    {
+      name: "mismatched row width",
+      block: {
+        type: "table",
+        caption: "Report",
+        headers: ["Name", "Stage"],
+        rows: [["Acme"]],
+      },
+    },
+    {
+      name: "empty string cell",
+      block: { type: "table", caption: "Report", headers: ["Name"], rows: [[" "]] },
+    },
+    {
+      name: "non-finite numeric cell",
+      block: { type: "table", caption: "Report", headers: ["ARR"], rows: [[Infinity]] },
+    },
+    {
+      name: "non-scalar cell",
+      block: { type: "table", caption: "Report", headers: ["Name"], rows: [[true]] },
+    },
+    {
+      name: "out-of-range row header column",
+      block: {
+        type: "table",
+        caption: "Report",
+        headers: ["Name"],
+        rows: [["Acme"]],
+        rowHeaderColumnIndex: 1,
+      },
+    },
+  ])("drops table blocks with $name instead of repairing their data", ({ block }) => {
     expect(normalizeMessagePresentation({ blocks: [block] })).toBeUndefined();
   });
 });

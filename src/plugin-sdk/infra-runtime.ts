@@ -19,11 +19,173 @@ export {
 export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
 export * from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+
+/** @deprecated Shipped compat only (removed from core in #104546); no core caller. Removal with the next plugin-SDK major. */
+export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";
+
+/**
+ * @deprecated Shipped compat only; preserves the old substring semantics for
+ * external plugins. Core chat classification now maps canonical failover
+ * reasons (see gateway resolveChatErrorKindFromError). Removal with the next
+ * plugin-SDK major.
+ */
+export function detectErrorKind(err: unknown): ErrorKind | undefined {
+  if (err === undefined) {
+    return undefined;
+  }
+  const message = formatErrorMessage(err).toLowerCase();
+  const code = extractErrorCode(err)?.toLowerCase();
+  if (
+    message.includes("refusal") ||
+    message.includes("content_filter") ||
+    message.includes("sensitive") ||
+    message.includes("unhandled stop reason: refusal_policy")
+  ) {
+    return "refusal";
+  }
+  if (
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    message.includes("429") ||
+    code === "429"
+  ) {
+    return "rate_limit";
+  }
+  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
+    return "timeout";
+  }
+  if (
+    message.includes("context length") ||
+    message.includes("too many tokens") ||
+    message.includes("token limit") ||
+    message.includes("context_window")
+  ) {
+    return "context_length";
+  }
+  return undefined;
+}
 export * from "../infra/exec-approval-command-display.ts";
 export * from "../infra/exec-approval-channel-runtime.ts";
 export * from "../infra/exec-approval-reply.ts";
 export * from "../infra/exec-approval-session-target.ts";
-export * from "../infra/exec-approvals.ts";
+// Keep this deprecated barrel pinned to its shipped approval surface. Internal
+// store/locking exports must not become plugin contracts accidentally.
+export {
+  addAllowlistEntry,
+  addDurableCommandApproval,
+  analyzeArgvCommand,
+  analyzeWindowsShellCommand,
+  buildEnforcedShellCommand,
+  commandRequiresSecurityAuditSuppressionApproval,
+  DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
+  DEFAULT_EXEC_APPROVAL_DECISIONS,
+  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  ensureExecApprovals,
+  evaluateExecAllowlist,
+  evaluateExecAllowlistWithAuthorization,
+  evaluateShellAllowlist,
+  evaluateShellAllowlistWithAuthorization,
+  EXEC_TARGET_VALUES,
+  hasDurableExecApproval,
+  hasExactCommandDurableExecApproval,
+  hasNodeCommandAllowAlwaysMarker,
+  isExecApprovalDecisionAllowed,
+  isSafeBinUsage,
+  isWindowsPlatform,
+  loadExecApprovals,
+  matchAllowlist,
+  maxAsk,
+  mergeExecApprovalsSocketDefaults,
+  minSecurity,
+  normalizeExecApprovals,
+  normalizeExecApprovalUnavailableDecisions,
+  normalizeExecAsk,
+  normalizeExecHost,
+  normalizeExecMode,
+  normalizeExecSecurity,
+  normalizeExecTarget,
+  normalizeSafeBins,
+  OPTIONAL_EXEC_APPROVAL_DECISIONS,
+  parseExecArgvToken,
+  persistAllowAlwaysDecision,
+  persistAllowAlwaysPatterns,
+  readExecApprovalsSnapshot,
+  recordAllowlistMatchesUse,
+  recordAllowlistUse,
+  requestExecApprovalViaSocket,
+  requiresExecApproval,
+  requireValidExecTarget,
+  resolveAllowAlwaysPatternCoverage,
+  resolveAllowAlwaysPatternEntries,
+  resolveAllowAlwaysPatterns,
+  resolveAllowAlwaysPersistenceDecision,
+  resolveAllowlistCandidatePath,
+  resolveApprovalAuditCandidatePath,
+  resolveApprovalAuditTrustPath,
+  resolveCommandResolution,
+  resolveCommandResolutionFromArgv,
+  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
+  resolveExecApprovals,
+  resolveExecApprovalsDisplayPath,
+  resolveExecApprovalsFromFile,
+  resolveExecApprovalsPath,
+  resolveExecApprovalsSocketPath,
+  resolveExecApprovalsTranscriptPath,
+  resolveExecApprovalUnavailableDecisions,
+  resolveExecModeFromPolicy,
+  resolveExecModePolicy,
+  resolveExecPolicyForMode,
+  resolveExecutableTrustPath,
+  resolveExecutionTargetCandidatePath,
+  resolveExecutionTargetResolution,
+  resolveExecutionTargetTrustPath,
+  resolvePlannedSegmentArgv,
+  resolvePolicyAllowlistCandidatePath,
+  resolvePolicyTargetCandidatePath,
+  resolvePolicyTargetResolution,
+  resolvePolicyTargetTrustPath,
+  resolveSafeBins,
+  restoreExecApprovalsSnapshot,
+  saveExecApprovals,
+  tokenizeWindowsSegment,
+  windowsEscapeArg,
+  type AllowAlwaysPattern,
+  type AllowAlwaysPersistenceDecision,
+  type AllowAlwaysPersistenceReason,
+  type CommandResolution,
+  type ExecAllowlistAnalysis,
+  type ExecAllowlistEntry,
+  type ExecAllowlistEvaluation,
+  type ExecApprovalCommandSpan,
+  type ExecApprovalDecision,
+  type ExecApprovalRequest,
+  type ExecApprovalRequestPayload,
+  type ExecApprovalResolved,
+  type ExecApprovalsAgent,
+  type ExecApprovalsDefaultOverrides,
+  type ExecApprovalsDefaults,
+  type ExecApprovalsFile,
+  type ExecApprovalsResolved,
+  type ExecApprovalsSnapshot,
+  type ExecApprovalUnavailableDecision,
+  type ExecArgvToken,
+  type ExecAsk,
+  type ExecCommandAnalysis,
+  type ExecCommandSegment,
+  type ExecHost,
+  type ExecMode,
+  type ExecSecurity,
+  type ExecSegmentSatisfiedBy,
+  type ExecTarget,
+  type ExecutableResolution,
+  type ShellChainOperator,
+  type SkillBinTrustEntry,
+  type SystemRunApprovalBinding,
+  type SystemRunApprovalFileOperand,
+  type SystemRunApprovalPlan,
+} from "../infra/exec-approvals.js";
 export * from "../infra/approval-native-delivery.ts";
 export * from "../infra/approval-native-runtime.ts";
 export * from "../infra/approval-display-paths.ts";

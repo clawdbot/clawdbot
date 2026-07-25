@@ -1,4 +1,5 @@
 // Mock Openai Http tests cover mock openai http script behavior.
+import { spawnSync } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
@@ -15,6 +16,17 @@ function bodyStream(text: string) {
 }
 
 describe("mock OpenAI HTTP helpers", () => {
+  it("loads under raw Node without a TypeScript loader", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--input-type=module", "--eval", "await import('./scripts/e2e/lib/mock-openai-http.mjs')"],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.signal).toBeNull();
+  });
+
   it("reads request bodies within the configured ceiling", async () => {
     await expect(readBody(bodyStream("small"), { requestMaxBytes: 8 })).resolves.toBe("small");
   });
@@ -40,6 +52,20 @@ describe("mock OpenAI HTTP helpers", () => {
       truncated: true,
       byteLength: 27,
       preview: '{"full":"xxxxxxxxxxxxxxxx"}',
+    });
+  });
+
+  it("does not split emoji in request-log previews", () => {
+    const bodyText = `${"a".repeat(4095)}😀tail`;
+
+    expect(
+      boundedRequestLogBody({ full: bodyText }, bodyText, {
+        requestLogBodyMaxBytes: 8,
+      }),
+    ).toEqual({
+      truncated: true,
+      byteLength: Buffer.byteLength(bodyText, "utf8"),
+      preview: "a".repeat(4095),
     });
   });
 

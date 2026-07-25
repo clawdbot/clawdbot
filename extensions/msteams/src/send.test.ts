@@ -260,6 +260,7 @@ describe("sendMessageMSTeams", () => {
 
   it("loads media through shared helper and forwards mediaLocalRoots", async () => {
     const mediaBuffer = Buffer.from("tiny-image");
+    mockState.sendMSTeamsMessages.mockResolvedValueOnce(["message-text", "message-media"]);
     mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
       buffer: mediaBuffer,
       contentType: "image/png",
@@ -285,14 +286,19 @@ describe("sendMessageMSTeams", () => {
 
     const sendPayload = firstObjectArg(mockState.sendMSTeamsMessages);
     const messages = sendPayload.messages as Array<Record<string, unknown>>;
-    expect(messages).toHaveLength(1);
+    expect(messages).toHaveLength(2);
     expect(messages[0]?.text).toBe("hello");
-    expect(messages[0]?.mediaUrl).toBe(`data:image/png;base64,${mediaBuffer.toString("base64")}`);
-    expect(result.receipt?.primaryPlatformMessageId).toBe("message-1");
-    expect(result.receipt?.platformMessageIds).toEqual(["message-1"]);
-    expect(result.receipt?.parts).toHaveLength(1);
-    expect(result.receipt?.parts[0]?.platformMessageId).toBe("message-1");
-    expect(result.receipt?.parts[0]?.kind).toBe("media");
+    expect(messages[0]?.mediaUrl).toBeUndefined();
+    expect(messages[1]?.text).toBeUndefined();
+    expect(messages[1]?.mediaUrl).toBe(`data:image/png;base64,${mediaBuffer.toString("base64")}`);
+    expect(result.messageId).toBe("message-text");
+    expect(result.receipt?.primaryPlatformMessageId).toBe("message-text");
+    expect(result.receipt?.platformMessageIds).toEqual(["message-text", "message-media"]);
+    expect(result.receipt?.parts).toHaveLength(2);
+    expect(result.receipt?.parts[0]?.platformMessageId).toBe("message-text");
+    expect(result.receipt?.parts[1]?.platformMessageId).toBe("message-media");
+    expect(result.receipt?.parts[0]?.kind).toBe("text");
+    expect(result.receipt?.parts[1]?.kind).toBe("media");
   });
 
   it("sends with provided cfg even when Teams runtime text helpers are unavailable", async () => {

@@ -7,7 +7,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
-APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+source "$ROOT_DIR/scripts/lib/build-metadata.sh"
+DEFAULT_APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+APP_ROOT="${OPENCLAW_PACKAGE_APP_ROOT:-$DEFAULT_APP_ROOT}"
+case "$APP_ROOT" in
+  "$ROOT_DIR/dist/"*) ;;
+  *)
+    echo "ERROR: OPENCLAW_PACKAGE_APP_ROOT must stay under $ROOT_DIR/dist" >&2
+    exit 1
+    ;;
+esac
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 MLX_TTS_HELPER_PRODUCT="openclaw-mlx-tts"
@@ -15,12 +24,26 @@ MLX_TTS_HELPER_ROOT="$ROOT_DIR/apps/macos-mlx-tts"
 MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
-BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+BUILD_TS="$(openclaw_resolve_build_timestamp)"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  OPENCLAW_REQUIRE_BUILD_METADATA=1
+fi
+BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  bash "$ROOT_DIR/scripts/apple-release-source-check.sh" \
+    --root "$ROOT_DIR" \
+    --expected-commit "$BUILD_GIT_COMMIT"
+fi
+export OPENCLAW_BUILD_TIMESTAMP="$BUILD_TS"
+if openclaw_is_full_git_commit "$BUILD_GIT_COMMIT"; then
+  export GIT_COMMIT="$BUILD_GIT_COMMIT"
+else
+  unset GIT_COMMIT
+fi
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-}"
-BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 if [[ -n "${BUILD_ARCHS:-}" ]]; then
   BUILD_ARCHS_VALUE="${BUILD_ARCHS}"
 elif [[ "$BUILD_CONFIG" == "release" ]]; then
@@ -64,6 +87,28 @@ helper_bin_for_arch() {
 
 sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
+}
+
+run_with_locked_swift_packages() {
+  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  local resolved_snapshot
+  local command_status=0
+
+  if [[ ! -f "$resolved_file" ]]; then
+    echo "ERROR: Swift package lockfile not found at $resolved_file" >&2
+    return 1
+  fi
+  resolved_snapshot="$(mktemp)"
+  cp "$resolved_file" "$resolved_snapshot"
+  "$@" || command_status=$?
+  if ! cmp -s "$resolved_snapshot" "$resolved_file"; then
+    cp "$resolved_snapshot" "$resolved_file"
+    rm "$resolved_snapshot"
+    echo "ERROR: Swift package resolution changed Package.resolved; update it in a separate reviewed change" >&2
+    return 1
+  fi
+  rm "$resolved_snapshot"
+  return "$command_status"
 }
 
 PNPM_CMD=()
@@ -197,8 +242,10 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  echo "📦 Resolving Swift packages [$arch]"
+  run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
@@ -218,11 +265,23 @@ if [ ! -f "$INFO_PLIST_SRC" ]; then
   exit 1
 fi
 cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
+PORT_GUARDIAN_STORAGE_VERSION="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawPortGuardianStorageVersion)"
+if [[ ! "$PORT_GUARDIAN_STORAGE_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: OpenClawPortGuardianStorageVersion must be a positive integer." >&2
+  exit 1
+fi
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier "$BUNDLE_ID"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString "$APP_VERSION"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
-plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$GIT_COMMIT"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
+  if [[ "$EMBEDDED_GIT_COMMIT" != "$BUILD_GIT_COMMIT" ]]; then
+    echo "ERROR: Release app embedded Git commit '$EMBEDDED_GIT_COMMIT', expected '$BUILD_GIT_COMMIT'." >&2
+    exit 1
+  fi
+fi
 plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUFeedURL "$SPARKLE_FEED_URL"
 plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUPublicEDKey "$SPARKLE_PUBLIC_ED_KEY"
 plist_set_or_add_bool "$APP_ROOT/Contents/Info.plist" SUEnableAutomaticChecks "$AUTO_CHECKS"
@@ -288,6 +347,15 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
+echo "📦 Copying provider icon resources"
+PROVIDER_ICONS_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/ProviderIcons"
+if [ ! -d "$PROVIDER_ICONS_SRC" ]; then
+  echo "ERROR: Provider icon resources missing at $PROVIDER_ICONS_SRC" >&2
+  exit 1
+fi
+rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
+cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
+
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
 if [ ! -f "$INSTALL_CLI_SRC" ]; then
@@ -319,6 +387,18 @@ if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
   cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
 else
   echo "ERROR: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE" >&2
+  exit 1
+fi
+
+echo "⌨️  Copying KeyboardShortcuts resources"
+KEYBOARD_SHORTCUTS_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/KeyboardShortcuts_KeyboardShortcuts.bundle"
+if [ -d "$KEYBOARD_SHORTCUTS_BUNDLE" ]; then
+  # SwiftPM's generated Bundle.module accessor searches Bundle.main.resourceURL for app resources.
+  # Keep this under Contents/Resources or Recorder localization traps before Settings renders.
+  rm -rf "$APP_ROOT/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle"
+  cp -R "$KEYBOARD_SHORTCUTS_BUNDLE" "$APP_ROOT/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle"
+else
+  echo "ERROR: KeyboardShortcuts resource bundle not found at $KEYBOARD_SHORTCUTS_BUNDLE" >&2
   exit 1
 fi
 

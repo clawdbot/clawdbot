@@ -62,10 +62,7 @@ export function normalizeChatModelOverrideValue(
   return resolveUniqueCatalogValueById(trimmed, catalog) || trimmed;
 }
 
-export function resolveServerChatModelValue(
-  model?: string | null,
-  provider?: string | null,
-): string {
+function resolveServerChatModelValue(model?: string | null, provider?: string | null): string {
   if (typeof model !== "string") {
     return "";
   }
@@ -182,7 +179,7 @@ export function resolvePreferredServerChatModelValue(
   return resolveServerChatModelValue(trimmedModel, trimmedProvider);
 }
 
-export function formatChatModelDisplay(value: string): string {
+function formatChatModelDisplay(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
@@ -280,17 +277,6 @@ export function formatCatalogChatModelDisplayFromLookup(
   }
 
   return displayLookup.get(trimmed.toLowerCase()) ?? formatChatModelDisplay(trimmed);
-}
-
-export function formatCatalogChatModelDisplay(value: string, catalog: ModelCatalogEntry[]): string {
-  return formatCatalogChatModelDisplayFromLookup(value, buildCatalogDisplayLookup(catalog));
-}
-
-export function buildChatModelOption(
-  entry: ModelCatalogEntry,
-  catalog: ModelCatalogEntry[] = [entry],
-): { value: string; label: string } {
-  return buildChatModelOptionFromLookup(entry, buildCatalogDisplayLookup(catalog));
 }
 
 export function buildChatModelOptionFromLookup(

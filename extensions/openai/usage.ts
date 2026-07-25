@@ -3,6 +3,7 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   buildUsageHttpErrorSnapshot,
   fetchCodexUsage,
@@ -10,7 +11,7 @@ import {
   type ProviderUsageModelBreakdown,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 
 const OPENAI_COSTS_URL = "https://api.openai.com/v1/organization/costs";
 const OPENAI_COMPLETIONS_USAGE_URL = "https://api.openai.com/v1/organization/usage/completions";
@@ -117,14 +118,13 @@ function resolveDailyRange(now: number, periodDays: number) {
 }
 
 async function readPage(response: Response, timeoutMs: number): Promise<OpenAIUsagePage> {
-  const buffer = await readResponseWithLimit(response, OPENAI_USAGE_RESPONSE_MAX_BYTES, {
+  const payload = await readProviderJsonObjectResponse(response, "OpenAI usage", {
+    maxBytes: OPENAI_USAGE_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ maxBytes }) => new Error(`OpenAI usage response exceeds ${maxBytes} bytes`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`OpenAI usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  const payload = objectRecord(JSON.parse(new TextDecoder().decode(buffer)));
-  if (!payload || !Array.isArray(payload.data)) {
+  if (!Array.isArray(payload.data)) {
     throw new Error("OpenAI usage response is not an object with data");
   }
   const nextPage =
@@ -355,7 +355,7 @@ function aggregateHistory(params: {
   };
 }
 
-export async function fetchOpenAIAdminUsage(params: {
+async function fetchOpenAIAdminUsage(params: {
   apiKey: string;
   projectId?: string;
   timeoutMs: number;
@@ -433,7 +433,16 @@ export async function fetchOpenAIUsage(
 ): Promise<ProviderUsageSnapshot> {
   const adminKey = decodeAdminToken(ctx.token);
   if (!adminKey) {
-    return await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn);
+    const snapshot = await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn);
+    if (snapshot.error) {
+      return snapshot;
+    }
+    // ChatGPT access tokens carry the account email as a JWT claim; the auth
+    // profile stores no email for these logins.
+    const { token: accessToken, email: profileEmail } = ctx;
+    const accountEmail =
+      resolveCodexAuthIdentity({ accessToken, email: profileEmail }).email ?? profileEmail;
+    return accountEmail ? { ...snapshot, accountEmail } : snapshot;
   }
   return await fetchOpenAIAdminUsage({
     apiKey: adminKey,

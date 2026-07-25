@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
-export type GatewayServiceSystemdRuntime = {
+type GatewayServiceSystemdRuntime = {
   unit?: string;
   killMode?: string;
   tasksCurrent?: number;

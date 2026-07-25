@@ -1,15 +1,16 @@
 // Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
+  beginTuiShutdown,
   createBackspaceDeduper,
-  canSubmitTuiChatMessage,
   createDeferredTuiFinish,
+  createTuiSignalHandlers,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
   isIgnorableTuiStopError,
@@ -25,7 +26,6 @@ import {
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
-  resolveTuiFooterHostLabel,
   resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
   scheduleProcessExitAfterTuiReturn,
@@ -67,40 +67,6 @@ describe("resolveFinalAssistantText", () => {
   });
 });
 
-describe("resolveTuiFooterHostLabel", () => {
-  it("hides connection host by default", () => {
-    expect(
-      resolveTuiFooterHostLabel({
-        config: {},
-        connectionUrl: "wss://gateway.example.com/ws",
-      }),
-    ).toBeNull();
-  });
-
-  it("renders only remote hosts when explicitly enabled", () => {
-    const config = { tui: { footer: { showRemoteHost: true } } } satisfies OpenClawConfig;
-
-    expect(
-      resolveTuiFooterHostLabel({
-        config,
-        connectionUrl: "wss://user:secret@gateway.example.com/ws?token=hidden",
-      }),
-    ).toBe("host gateway.example.com");
-    expect(
-      resolveTuiFooterHostLabel({
-        config,
-        connectionUrl: "ws://127.0.0.1:18789",
-      }),
-    ).toBeNull();
-    expect(
-      resolveTuiFooterHostLabel({
-        config,
-        connectionUrl: "local embedded",
-      }),
-    ).toBeNull();
-  });
-});
-
 describe("tui slash commands", () => {
   it("treats /elev as an alias for /elevated", () => {
     expect(parseCommand("/elev on")).toEqual({ name: "elevated", args: "on" });
@@ -123,64 +89,6 @@ describe("tui slash commands", () => {
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
     expect(commands.map((command) => command.name)).toContain("auth");
-  });
-});
-
-describe("canSubmitTuiChatMessage", () => {
-  it("allows submit when no run registration is pending", () => {
-    expect(canSubmitTuiChatMessage({})).toBe(true);
-  });
-
-  it("allows submit while a run is active so the backend owns queue policy", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        activeChatRunId: "run-active",
-      }),
-    ).toBe(true);
-  });
-
-  it("allows stop text while a run is active", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        activeChatRunId: "run-active",
-        message: "please stop",
-      }),
-    ).toBe(true);
-  });
-
-  it("allows stop text while a queued run is pending", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        activeChatRunId: "run-active",
-        pendingChatRunId: "run-queued",
-        message: "please stop",
-      }),
-    ).toBe(true);
-  });
-
-  it("blocks submits with pending optimistic state", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        pendingOptimisticUserMessage: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("blocks submits with a pending chat run id", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        pendingChatRunId: "run-pending",
-      }),
-    ).toBe(false);
-  });
-
-  it("blocks submit while optimistic state is pending during an active run", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        activeChatRunId: "run-active",
-        pendingOptimisticUserMessage: true,
-      }),
-    ).toBe(false);
   });
 });
 
@@ -485,6 +393,24 @@ describe("resolveTuiCtrlCAction", () => {
 });
 
 describe("TUI shutdown safety", () => {
+  const beginTestShutdown = (overrides: Partial<Parameters<typeof beginTuiShutdown>[0]> = {}) =>
+    beginTuiShutdown({
+      stopClient: vi.fn(),
+      stopTui: vi.fn(),
+      stopStatusTimeout: vi.fn(),
+      requestFinish: vi.fn(),
+      forceExit: vi.fn(),
+      hardExitMs: 2000,
+      keepHardExitArmed: true,
+      onError: vi.fn(),
+      ...overrides,
+    });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("drains terminal input before stopping the TUI", async () => {
     const calls: string[] = [];
     const drainInput = vi.fn(async () => {
@@ -602,12 +528,102 @@ describe("TUI shutdown safety", () => {
     expect(finish).toHaveBeenCalledTimes(1);
   });
 
-  it("schedules a process-exit guard after standalone TUI return", () => {
-    let callback: (() => void) | undefined;
+  it("forces process exit when gateway teardown never settles", async () => {
+    vi.useFakeTimers();
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const requestFinish = vi.fn();
+    const timer = beginTestShutdown({
+      stopClient: () => new Promise<void>(() => {}),
+      requestFinish,
+      forceExit: () => process.exit(130),
+    });
+
+    expect((timer as NodeJS.Timeout).hasRef()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(exit).toHaveBeenCalledWith(130);
+    expect(requestFinish).not.toHaveBeenCalled();
+  });
+
+  it("forces process exit after SIGTERM when gateway teardown never settles", async () => {
+    vi.useFakeTimers();
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const requestExit = vi.fn(() => {
+      beginTestShutdown({
+        stopClient: () => new Promise<void>(() => {}),
+        forceExit: () => process.exit(130),
+      });
+    });
+    const { sigtermHandler } = createTuiSignalHandlers({
+      handleCtrlC: vi.fn(),
+      requestExit,
+    });
+
+    sigtermHandler();
+    expect(requestExit).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(exit).toHaveBeenCalledWith(130);
+  });
+
+  it("keeps the force-exit deadline armed after already-drained teardown settles", async () => {
+    vi.useFakeTimers();
+    const forceExit = vi.fn();
+    const requestFinish = vi.fn();
+    beginTestShutdown({
+      requestFinish,
+      forceExit,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requestFinish).toHaveBeenCalledOnce();
+    expect(forceExit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(forceExit).toHaveBeenCalledOnce();
+  });
+
+  it("completes healthy shutdown promptly without waiting for the force-exit deadline", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const forceExit = vi.fn();
+    beginTestShutdown({
+      stopClient: async () => {
+        calls.push("client");
+      },
+      stopTui: async () => {
+        calls.push("tui");
+      },
+      stopStatusTimeout: () => {
+        calls.push("status");
+      },
+      requestFinish: () => {
+        calls.push("finish");
+      },
+      forceExit,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["client", "tui", "status", "finish"]);
+    expect(forceExit).not.toHaveBeenCalled();
+  });
+
+  it("cancels the hard-exit deadline for embedded TUI callers after clean shutdown", async () => {
+    vi.useFakeTimers();
+    const forceExit = vi.fn();
+    beginTestShutdown({
+      forceExit,
+      keepHardExitArmed: false,
+      onError: vi.fn(),
+    });
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(forceExit).not.toHaveBeenCalled();
+  });
+
+  it("does not keep a clean standalone TUI alive for the watchdog deadline", () => {
     const unref = vi.fn();
-    const setTimeoutFn = vi.fn((fn: () => void, ms: number) => {
-      callback = fn;
-      expect(ms).toBe(2000);
+    const setTimeoutFn = vi.fn((_callback: () => void, delayMs: number) => {
+      expect(delayMs).toBe(2000);
       return { unref };
     });
     const exit = vi.fn();
@@ -617,15 +633,31 @@ describe("TUI shutdown safety", () => {
 
     expect(setTimeoutFn).toHaveBeenCalledOnce();
     expect(unref).toHaveBeenCalledOnce();
-    callback?.();
+    expect(writeStderr).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("forces standalone TUI exit on deadline while another handle lingers", async () => {
+    vi.useFakeTimers();
+    const lingeringHandle = setInterval(() => {}, 60_000);
+    const exit = vi.fn();
+    const writeStderr = vi.fn();
+
+    const timer = scheduleProcessExitAfterTuiReturn({ exit, writeStderr });
+
+    expect((timer as NodeJS.Timeout).hasRef()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(writeStderr).toHaveBeenCalledWith("openclaw tui forcing process exit after return\n");
     expect(exit).toHaveBeenCalledWith(0);
+    clearInterval(lingeringHandle);
   });
 });
 
 describe("resolveCodexCliBin", () => {
-  it("returns a string path when codex CLI is installed", () => {
-    const result = resolveCodexCliBin();
+  it("returns a string path when codex CLI is installed", async () => {
+    const result = await resolveCodexCliBin();
     // In this test environment codex is installed; verify it returns a non-empty path
     if (result !== null) {
       expect(typeof result).toBe("string");
@@ -634,8 +666,8 @@ describe("resolveCodexCliBin", () => {
     }
   });
 
-  it("returns null or a valid path (never throws)", () => {
-    const result = resolveCodexCliBin();
+  it("returns null or a valid path (never throws)", async () => {
+    const result = await resolveCodexCliBin();
     if (result === null) {
       expect(result).toBeNull();
     } else {

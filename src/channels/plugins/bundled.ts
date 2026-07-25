@@ -375,7 +375,7 @@ function findMissingModuleCodeInChain(error: unknown): string | undefined {
   return undefined;
 }
 
-export function describeBundledChannelLoadError(error: unknown, channelId: string): string {
+function describeBundledChannelLoadError(error: unknown, channelId: string): string {
   const detail = formatErrorMessage(error);
   if (findMissingModuleCodeInChain(error) !== undefined) {
     return `${detail} (run \`openclaw doctor --fix\` to install missing bundled runtime dependencies for channel ${channelId})`;
@@ -957,3 +957,4 @@ export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime):
   }
   setter(runtime);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

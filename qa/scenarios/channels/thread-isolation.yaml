@@ -5,8 +5,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
-      - memory.thread-isolation
+      - channels.native-threads
+      - channels.native-threads-thread-isolation
   objective: Verify a fresh top-level prompt does not inherit the prior thread relation.
   successCriteria:
     - A threaded prompt receives a threaded reply.
@@ -18,10 +18,17 @@ scenario:
   codeRefs:
     - extensions/qa-lab/src/qa-transport.ts
     - extensions/qa-lab/src/live-transports/slack/adapter.runtime.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "matrix:adapter": 9,
+        "matrix:all": 4,
+        "matrix:fast": 2,
+        "matrix:transport": 3,
+        "slack:adapter": 5,
+      }
     kind: flow
-    channel: matrix
     summary: Establish a thread, then require a fresh top-level reply without stale relation metadata.
     config:
       threadMarker: QA-THREAD-ISOLATION-THREAD-OK

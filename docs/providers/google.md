@@ -22,6 +22,9 @@ Choose your preferred auth method and follow the setup steps.
     **Best for:** standard Gemini API access through Google AI Studio.
 
     <Steps>
+      <Step title="Get an API key">
+        Create a free key in [Google AI Studio](https://aistudio.google.com/apikey).
+      </Step>
       <Step title="Run onboarding">
         ```bash
         openclaw onboard --auth-choice gemini-api-key
@@ -58,10 +61,17 @@ Choose your preferred auth method and follow the setup steps.
     `GEMINI_API_KEY` and `GOOGLE_API_KEY` are both accepted. Use whichever you already have configured.
     </Tip>
 
+    With a configured API key, OpenClaw refreshes Google AI Studio's text-model
+    catalog from the Gemini `models.list` API. Newly released Gemini 3 Pro, Flash,
+    and Flash-Lite variants therefore appear in
+    `openclaw models list --provider google` without waiting for an OpenClaw
+    release. If discovery is unavailable, OpenClaw keeps the bundled fallback
+    catalog.
+
   </Tab>
 
   <Tab title="Gemini CLI (OAuth)">
-    **Best for:** reusing an existing Gemini CLI login via PKCE OAuth instead of a separate API key.
+    **Best for:** signing in with your Google account through Gemini CLI OAuth instead of using a separate API key.
 
     <Warning>
     The `google-gemini-cli` provider is an unofficial integration. Some users
@@ -115,6 +125,10 @@ Choose your preferred auth method and follow the setup steps.
     If login fails before the browser flow starts, make sure the local `gemini`
     command is installed and on `PATH`.
     </Note>
+
+    Onboarding auto-detection lists an existing Gemini CLI login but never
+    auto-tests it because Gemini CLI has no tool-free probe. Choose Gemini CLI
+    OAuth or a Gemini API key to continue.
 
     `google-gemini-cli/*` model refs are legacy compatibility aliases. New
     configs should use `google/*` model refs plus the `google-gemini-cli`
@@ -197,9 +211,9 @@ instead of sending it.
 ## Image generation
 
 The bundled `google` image-generation provider defaults to
-`google/gemini-3.1-flash-image-preview`.
+`google/gemini-3.1-flash-image`.
 
-- Also supports `google/gemini-3-pro-image-preview`
+- Also supports `google/gemini-3-pro-image`
 - Generate: up to 4 images per request
 - Edit mode: enabled, up to 5 input images
 - Geometry controls: `size`, `aspectRatio`, and `resolution`
@@ -211,7 +225,7 @@ To use Google as the default image provider:
   agents: {
     defaults: {
       imageGenerationModel: {
-        primary: "google/gemini-3.1-flash-image-preview",
+        primary: "google/gemini-3.1-flash-image",
       },
     },
   },
@@ -286,7 +300,7 @@ The bundled `google` speech provider uses the Gemini API TTS path with
 `gemini-3.1-flash-tts-preview`.
 
 - Default voice: `Kore`
-- Auth: `messages.tts.providers.google.apiKey`, `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
+- Auth: `tts.providers.google.apiKey`, `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
 
@@ -299,16 +313,14 @@ To use Google as the default TTS provider:
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "google",
-      providers: {
-        google: {
-          model: "gemini-3.1-flash-tts-preview",
-          speakerVoice: "Kore",
-          audioProfile: "Speak professionally with a calm tone.",
-        },
+  tts: {
+    auto: "always",
+    provider: "google",
+    providers: {
+      google: {
+        model: "gemini-3.1-flash-tts-preview",
+        speakerVoice: "Kore",
+        audioProfile: "Speak professionally with a calm tone.",
       },
     },
   },
@@ -404,16 +416,20 @@ nearest supported level, while `-1` leaves Google's default in place. See the
 
 <Note>
 Control UI Talk supports Google Live browser sessions with constrained one-use
-tokens. Backend-only realtime voice providers can also run through the generic
-Gateway relay transport, which keeps provider credentials on the Gateway.
+tokens. In Video Talk, the browser sends bounded JPEG frames directly to
+Google Live at the provider's maximum of one frame per second. The
+`describe_view` function reports whether that camera stream is active.
+Camera frames do not pass through the Gateway. Backend-only realtime voice
+providers can also run through the generic Gateway relay transport, which
+keeps provider credentials on the Gateway.
 </Note>
 
 For maintainer live verification, run
 `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`.
 The smoke also covers OpenAI backend/WebRTC paths; the Google leg mints the same
 constrained Live API token shape used by Control UI Talk, opens the browser
-WebSocket endpoint, sends the initial setup payload, and waits for
-`setupComplete`.
+WebSocket endpoint, sends the initial setup payload plus a JPEG frame, and
+verifies a text response and `describe_view` function roundtrip.
 
 ## Advanced configuration
 

@@ -14,6 +14,7 @@ import {
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveTwitchAccountContext } from "./config.js";
+import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { sendMessageTwitchInternal } from "./send.js";
 import type {
   ChannelOutboundAdapter,
@@ -42,7 +43,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
   },
 
   /** Twitch chat message limit is 500 characters */
-  textChunkLimit: 500,
+  textChunkLimit: TWITCH_CHAT_MESSAGE_LIMIT,
 
   /** Strip internal assistant tool-trace scaffolding before delivery */
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),

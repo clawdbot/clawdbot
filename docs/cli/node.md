@@ -11,6 +11,11 @@ title: "Node"
 Run a **headless node host** that connects to the Gateway WebSocket and exposes
 `system.run` / `system.which` on this machine.
 
+On macOS, the menu bar app already embeds this node-host runtime into its own
+node connection and adds native Mac capabilities. Use `openclaw node run` on a
+Mac only when you intentionally want a headless node without the app. Running
+both creates two node identities for the same machine.
+
 ## Why use a node host?
 
 Use a node host when you want agents to **run commands on other machines** in your
@@ -24,6 +29,21 @@ Common use cases:
 
 Execution is still guarded by **exec approvals** and per-agent allowlists on the
 node host, so you can keep command access scoped and explicit.
+
+`openclaw node run` can publish plugin or MCP-backed tools after it connects.
+The Gateway trusts descriptors from the paired node by default, while requiring
+each descriptor's command to remain in the node's approved command surface. The
+agent sees each accepted descriptor as a normal plugin tool, but execution still
+goes through `node.invoke`, so disconnecting the node removes the tool from new
+agent runs. Gateway operators can disable publication with
+`gateway.nodes.pluginTools.enabled: false`.
+
+For declarative MCP tools, add the normal MCP server shape under
+`nodeHost.mcp.servers` in `openclaw.json` on the node machine, then restart the
+node host. The node declares the approval-gated `mcp.tools.call.v1` command
+family and publishes listed tools after connecting; changing the server list
+later does not require re-pairing. See
+[Node-hosted MCP servers](/nodes#node-hosted-mcp-servers).
 
 ## Browser proxy (zero-config)
 
@@ -62,7 +82,7 @@ Options:
 - `--tls`: Use TLS for the gateway connection
 - `--no-tls`: Force a plaintext Gateway connection even when the local Gateway config enables TLS
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override node id (clears pairing token)
+- `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
 
 ## Gateway auth for node host
@@ -101,9 +121,9 @@ Options:
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override node id (clears pairing token)
+- `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
-- `--runtime <runtime>`: Service runtime (`node` or `bun`)
+- `--runtime <runtime>`: Service runtime (`node`)
 - `--force`: Reinstall/overwrite if already installed
 
 Manage the service:
@@ -129,12 +149,29 @@ the foreground flow so the pending request can be approved.
 ## Pairing
 
 The first connection creates a pending device pairing request (`role: node`) on the Gateway.
-Approve it via:
+
+When the Gateway host can SSH to the node host non-interactively (same user,
+trusted host key), the pending request is approved automatically: the Gateway
+runs `openclaw node identity --json` on the node host over SSH and approves on
+an exact device-key match. This is on by default; see
+[SSH-verified device auto-approval](/gateway/pairing#ssh-verified-device-auto-approval-default)
+for requirements and how to disable it (`gateway.nodes.pairing.sshVerify: false`).
+
+Otherwise approve manually via:
 
 ```bash
 openclaw devices list
 openclaw devices approve <requestId>
 ```
+
+Inspect the local node identity the Gateway verifies against:
+
+```bash
+openclaw node identity --json
+```
+
+It prints the device ID and public key from the `primary` row in
+`state/openclaw.sqlite` and never creates the database or a new identity.
 
 On tightly controlled node networks, the Gateway operator can explicitly opt in
 to auto-approving first-time node pairing from trusted CIDRs:
@@ -160,9 +197,51 @@ If the node retries pairing with changed auth details (role/scopes/public key),
 the previous pending request is superseded and a new `requestId` is created.
 Run `openclaw devices list` again before approval.
 
-The node host stores its node id, token, display name, and gateway connection
-info in `node.json` in the OpenClaw state directory (`~/.openclaw` by default,
-or `$OPENCLAW_STATE_DIR` when set).
+### Identity and pairing state
+
+The headless node separates its client instance ID from the signed device
+identity that the Gateway uses for pairing and routing. This state lives in the
+OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
+when set):
+
+| State                                                    | Purpose                                                                                                                          |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `state/openclaw.sqlite` (`node_host_config`)             | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
+| `state/openclaw.sqlite` (`device_identities`, `primary`) | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
+| `state/openclaw.sqlite` (`device_auth_tokens`)           | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
+
+`--node-id` changes only the client instance ID in shared SQLite state. It does
+not change the cryptographic device ID or clear pairing auth. Migrating a retired
+`node.json` with `openclaw doctor --fix` likewise does not reset pairing. To
+revoke and re-pair a node:
+
+1. On the Gateway, run `openclaw nodes remove --node <id|name|ip>`.
+2. On the node, restart the installed service with `openclaw node restart`, or
+   stop and rerun the foreground `openclaw node run` command. This starts the
+   device-pairing flow. If `openclaw devices list` does not show a request
+   and the node reports `AUTH_DEVICE_TOKEN_MISMATCH`, restart or rerun it once
+   more. The rejected attempt clears the now-revoked local token; the next
+   attempt can request pairing.
+3. On the Gateway, run `openclaw devices list`, then
+   `openclaw devices approve <deviceRequestId>`.
+4. Restart or rerun the node again. A client paused for pairing does not resume
+   automatically after approval; this reconnect creates the separate
+   command-surface request.
+5. On the Gateway, run `openclaw nodes pending`, then
+   `openclaw nodes approve <nodeRequestId>`.
+
+The two request IDs are distinct. An applicable trusted-CIDR policy can
+auto-approve the first-time device-pairing step; command-surface approval remains
+a separate check.
+
+Older OpenClaw releases stored node-host state in `node.json`, the signed
+identity in `identity/device.json`, and paired auth in
+`identity/device-auth.json`. Stop the node host and run
+`openclaw doctor --fix` once; Doctor claims each retired source, validates it,
+imports and verifies the canonical SQLite row, then removes the old file. Normal
+node commands fail closed with this repair instruction while either retired file
+or an interrupted Doctor claim remains. Keep `state/openclaw.sqlite` private;
+it contains the device keypair and auth tokens.
 
 ## Exec approvals
 

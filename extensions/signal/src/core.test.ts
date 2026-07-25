@@ -5,17 +5,22 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginSetupWizardStatus,
+  createTestWizardPrompter,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listSignalAccountIds } from "./accounts.js";
 import {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
-import { classifySignalCliLogLine } from "./daemon.js";
 import {
+  isSignalSenderAllowed,
   looksLikeUuid,
   normalizeSignalAllowRecipient,
   resolveSignalPeerId,
@@ -23,15 +28,23 @@ import {
   resolveSignalSender,
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
-import { clearSignalRuntime } from "./runtime.js";
 import {
+  registerSignalReplyContext,
+  resolveSignalReplyContextWithPersistence,
+} from "./reply-authors.js";
+import {
+  buildSignalSetupPatch,
   createSignalCliPathTextInput,
   normalizeSignalAccountInput,
-  parseSignalAllowFromEntries,
   signalDmPolicy,
 } from "./setup-core.js";
+import * as transportDetectionModule from "./transport-detection.js";
 
 const getSignalSetupStatus = createPluginSetupWizardStatus(signalPlugin);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("looksLikeUuid", () => {
   it("accepts hyphenated UUIDs", () => {
@@ -53,7 +66,26 @@ describe("looksLikeUuid", () => {
 });
 
 describe("signal sender identity", () => {
-  it("prefers sourceNumber over sourceUuid", () => {
+  it("keeps IPv6 bind hosts on the managed transport", () => {
+    expect(buildSignalSetupPatch({ httpHost: "::1", httpPort: "9090" })).toMatchObject({
+      transport: {
+        kind: "managed-native",
+        httpHost: "::1",
+        httpPort: 9090,
+      },
+    });
+  });
+
+  it("uses external-native ownership for an explicit HTTP URL", () => {
+    expect(buildSignalSetupPatch({ httpUrl: "http://signal.example:9090" })).toMatchObject({
+      transport: {
+        kind: "external-native",
+        url: "http://signal.example:9090",
+      },
+    });
+  });
+
+  it("prefers sourceNumber over sourceUuid and keeps the uuid as an alias", () => {
     const sender = resolveSignalSender({
       sourceNumber: " +15550001111 ",
       sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
@@ -62,6 +94,7 @@ describe("signal sender identity", () => {
       kind: "phone",
       raw: "+15550001111",
       e164: "+15550001111",
+      aliases: { uuid: "123e4567-e89b-12d3-a456-426614174000" },
     });
   });
 
@@ -98,9 +131,32 @@ describe("signal sender identity", () => {
   });
 });
 
+describe("isSignalSenderAllowed", () => {
+  const uuid = "f4d0fe67-3b38-446d-828e-317c285ffa75";
+  const e164 = "+34688329273";
+
+  it("matches a phone-primary sender against a uuid allow entry via the alias", () => {
+    const sender = resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid });
+    if (!sender) {
+      throw new Error("expected Signal sender");
+    }
+    expect(isSignalSenderAllowed(sender, [`uuid:${uuid}`])).toBe(true);
+  });
+
+  it("does not match unrelated allow entries even when an alias is present", () => {
+    const sender = resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid });
+    if (!sender) {
+      throw new Error("expected Signal sender");
+    }
+    expect(isSignalSenderAllowed(sender, ["+15550009999"])).toBe(false);
+    expect(isSignalSenderAllowed(sender, ["uuid:00000000-0000-0000-0000-000000000000"])).toBe(
+      false,
+    );
+  });
+});
+
 describe("probeSignal", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
-    clearSignalRuntime();
     vi.spyOn(clientModule, "signalCheck")
       .mockResolvedValueOnce({
         ok: true,
@@ -123,6 +179,14 @@ describe("probeSignal", () => {
         enabled: true,
         configured: true,
         baseUrl: "http://127.0.0.1:8080",
+        transport: {
+          kind: "managed-native",
+          baseUrl: "http://127.0.0.1:8080",
+          cliPath: "signal-cli",
+          httpHost: "127.0.0.1",
+          httpPort: 8080,
+          startupTimeoutMs: 30_000,
+        },
       } as never,
       timeoutMs: 1000,
     };
@@ -166,15 +230,31 @@ describe("probeSignal", () => {
     expect(res.version).toBe(null);
   });
 
+  it("returns auto transport detection failures as probe data", async () => {
+    vi.spyOn(transportDetectionModule, "detectSignalTransport").mockRejectedValueOnce(
+      new Error("Signal transport not reachable at http://127.0.0.1:8080"),
+    );
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, { apiMode: "auto" });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: null,
+      error: "Signal transport not reachable at http://127.0.0.1:8080",
+      version: null,
+    });
+    expect(res.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("setup status lines use the selected account cliPath", async () => {
     const status = await getSignalSetupStatus({
       cfg: {
         channels: {
           signal: {
-            cliPath: "/tmp/root-signal-cli",
+            transport: { kind: "managed-native", cliPath: "/tmp/root-signal-cli" },
             accounts: {
               work: {
-                cliPath: "/tmp/work-signal-cli",
+                transport: { kind: "managed-native", cliPath: "/tmp/work-signal-cli" },
               },
             },
           },
@@ -191,11 +271,11 @@ describe("probeSignal", () => {
       cfg: {
         channels: {
           signal: {
-            cliPath: "/tmp/root-signal-cli",
+            transport: { kind: "managed-native", cliPath: "/tmp/root-signal-cli" },
             defaultAccount: "work",
             accounts: {
               work: {
-                cliPath: "/tmp/work-signal-cli",
+                transport: { kind: "managed-native", cliPath: "/tmp/work-signal-cli" },
               },
             },
           },
@@ -213,16 +293,13 @@ describe("probeSignal", () => {
         channels: {
           signal: {
             defaultAccount: "work",
-            cliPath: "/tmp/root-signal-cli",
+            transport: { kind: "managed-native", cliPath: "/tmp/root-signal-cli" },
             accounts: {
               alerts: {
-                cliPath: "/tmp/alerts-signal-cli",
+                transport: { kind: "managed-native", cliPath: "/tmp/alerts-signal-cli" },
               },
               work: {
-                cliPath: "",
                 account: "",
-                httpHost: "",
-                httpUrl: "",
               },
             },
           },
@@ -369,15 +446,25 @@ describe("signal outbound", () => {
 
     await expect(
       signalPlugin.outbound?.sendFormattedText?.({
-        cfg: {} as OpenClawConfig,
+        cfg: { channels: { signal: { replyToMode: "first" } } } as OpenClawConfig,
         to: "+15551234567",
         text: "a".repeat(5000),
         deps: { signal: send },
+        replyToId: "1700000000004",
+        replyToIdSource: "implicit",
         onDeliveryResult,
       }),
     ).rejects.toThrow("second Signal chunk failed");
 
     expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenNthCalledWith(
+      2,
+      "+15551234567",
+      expect.any(String),
+      expect.not.objectContaining({
+        replyToId: "1700000000004",
+      }),
+    );
     expect(onDeliveryResult).toHaveBeenCalledTimes(1);
     expect(onDeliveryResult).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "signal", messageId: "signal-1" }),
@@ -575,8 +662,52 @@ describe("signal outbound", () => {
     expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("first");
   });
 
+  it("builds same-conversation reply context for message tool sends", () => {
+    const buildToolContext = signalPlugin.threading?.buildToolContext;
+    if (!buildToolContext) {
+      throw new Error("signal threading.buildToolContext unavailable");
+    }
+
+    const hasRepliedRef = { value: false };
+    const context = buildToolContext({
+      cfg: {
+        channels: {
+          signal: {
+            replyToModeByChatType: { direct: "first" },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      context: {
+        Channel: "signal",
+        To: "signal:+15550001111",
+        ChatType: "direct",
+        CurrentMessageId: "1783831798122",
+        ReplyToId: "1783831798000",
+      },
+      hasRepliedRef,
+    });
+    if (!context) {
+      throw new Error("signal threading tool context unavailable");
+    }
+
+    expect(context).toEqual({
+      currentChannelId: "signal:+15550001111",
+      currentChatType: "direct",
+      currentMessagingTarget: "signal:+15550001111",
+      currentMessageId: "1783831798000",
+      replyToMode: "first",
+      hasRepliedRef,
+    });
+    expect(
+      signalPlugin.threading?.matchesToolContextTarget?.({
+        target: "+15550001111",
+        toolContext: context,
+      }),
+    ).toBe(true);
+  });
+
   it("chunks outbound text without requiring Signal runtime initialization", () => {
-    clearSignalRuntime();
     const chunker = signalPlugin.outbound?.chunker;
     if (!chunker) {
       throw new Error("signal outbound.chunker unavailable");
@@ -778,6 +909,68 @@ describe("signal outbound", () => {
     ).toBeNull();
   });
 
+  it("materializes mixed approval presentation before adding reaction guidance", async () => {
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15550009999",
+          allowFrom: ["+15551230000"],
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    } as OpenClawConfig;
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "exec-mixed-presentation",
+      approvalSlug: "exec-mixed-presentation",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "printf test",
+      host: "gateway",
+    });
+    const presentation = {
+      ...payload.presentation!,
+      blocks: [
+        { type: "context" as const, text: "Deployment audit context" },
+        {
+          type: "table" as const,
+          caption: "Targets",
+          headers: ["Host", "State"],
+          rows: [
+            ["alpha", "ready"],
+            ["omega", "waiting"],
+          ],
+        },
+        ...payload.presentation!.blocks,
+      ],
+    };
+
+    const rendered = await signalPlugin.outbound?.renderPresentation?.({
+      payload: { ...payload, presentation },
+      presentation,
+      ctx: {
+        cfg,
+        to: "+15551230000",
+        text: payload.text ?? "",
+        accountId: "default",
+        payload,
+      },
+    });
+
+    expect(rendered?.text).toContain("Deployment audit context");
+    expect(rendered?.text).toContain("- Host: alpha; State: ready");
+    expect(rendered?.text).toContain("- Host: omega; State: waiting");
+    expect(rendered?.text?.match(/React with:/g)).toHaveLength(1);
+    expect(rendered?.text?.match(/\/approve exec-mixed-presentation allow-once/g)).toHaveLength(1);
+    expect(rendered?.text?.match(/\/approve exec-mixed-presentation deny/g)).toHaveLength(1);
+    expect(rendered?.text).not.toContain("- Allow Once:");
+    expect(rendered?.text).not.toContain("- Deny:");
+  });
+
   it("registers delivered approval reactions under the resolved default account", async () => {
     const renderPresentation = signalPlugin.outbound?.renderPresentation;
     const afterDeliverPayload = signalPlugin.outbound?.afterDeliverPayload;
@@ -869,6 +1062,78 @@ describe("signal outbound", () => {
     clearSignalApprovalReactionTargetsForTest();
   });
 
+  it("resolves only proven direct reply authors", async () => {
+    const replyContext = { to: "signal:+15551234567", replyToId: "1700000000001" };
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      sourceTimestamp: 100,
+    });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15550001111",
+      sourceTimestamp: 200,
+    });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      sourceTimestamp: 300,
+    });
+    await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
+      ambiguous: true,
+    });
+  });
+
+  it("keeps newer reply context when older events arrive out of order", async () => {
+    const replyContext = { to: "signal:+15551234567", replyToId: "1700000000002" };
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      body: "newer",
+      sourceTimestamp: 200,
+    });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      body: "older",
+      sourceTimestamp: 100,
+    });
+
+    await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
+      author: "+15551234567",
+      body: "newer",
+    });
+  });
+
+  it("hydrates durable Signal sends with stored native quote context", async () => {
+    await registerSignalReplyContext({
+      to: "signal:+15555550123",
+      replyToId: "1700000000001",
+      author: "+15555550123",
+      body: "original message",
+    });
+    const send = vi.fn(async () => ({ messageId: "signal-text-1" }));
+
+    await signalPlugin.message?.send?.text?.({
+      cfg: {} as OpenClawConfig,
+      to: "signal:+15555550123",
+      text: "reply",
+      replyToId: "1700000000001",
+      deps: { signal: send },
+    } as Parameters<NonNullable<typeof signalPlugin.message.send.text>>[0] & {
+      deps: { signal: typeof send };
+    });
+
+    expect(send).toHaveBeenCalledWith("+15555550123", "reply", {
+      cfg: {},
+      maxBytes: undefined,
+      accountId: undefined,
+      replyToId: "1700000000001",
+      replyToAuthor: "+15555550123",
+      replyToBody: "original message",
+    });
+  });
+
   it("declares message adapter durable text and media with receipt proofs", async () => {
     const send = vi.fn(async (_to: string, _text: string, opts: { mediaUrl?: string } = {}) => {
       const messageId = opts.mediaUrl ? "signal-media-1" : "signal-text-1";
@@ -941,30 +1206,25 @@ describe("signal outbound", () => {
   });
 });
 
-describe("classifySignalCliLogLine", () => {
-  it("treats INFO/DEBUG as log", () => {
-    expect(classifySignalCliLogLine("INFO  DaemonCommand - Started")).toBe("log");
-    expect(classifySignalCliLogLine("DEBUG Something")).toBe("log");
-  });
-
-  it("treats routine warnings as logs and errors as error state", () => {
-    expect(classifySignalCliLogLine("WARN  Something")).toBe("log");
-    expect(classifySignalCliLogLine("WARNING Something")).toBe("log");
-    expect(classifySignalCliLogLine("ERROR Something")).toBe("error");
-  });
-
-  it("treats failures without explicit severity as error", () => {
-    expect(classifySignalCliLogLine("Failed to initialize HTTP Server - oops")).toBe("error");
-    expect(classifySignalCliLogLine('Exception in thread "main"')).toBe("error");
-  });
-
-  it("returns null for empty lines", () => {
-    expect(classifySignalCliLogLine("")).toBe(null);
-    expect(classifySignalCliLogLine("   ")).toBe(null);
-  });
-});
-
 describe("signal setup parsing", () => {
+  it("removes an accountUuid-only default account when named accounts remain", () => {
+    const next = signalPlugin.config?.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            transport: { kind: "managed-native" },
+            accounts: { work: { account: "+15555550123" } },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(next?.channels?.signal?.accountUuid).toBeUndefined();
+    expect(listSignalAccountIds(next ?? {})).toEqual(["work"]);
+  });
+
   it("accepts already normalized numbers", () => {
     expect(normalizeSignalAccountInput("+15555550123")).toBe("+15555550123");
   });
@@ -992,31 +1252,22 @@ describe("signal setup parsing", () => {
     expect(normalizeSignalAccountInput("+1234567890123456")).toBeNull();
   });
 
-  it("parses e164, uuid and wildcard entries", () => {
-    expect(
-      parseSignalAllowFromEntries(
-        "signal:+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000, *",
-      ),
-    ).toEqual({
-      entries: ["+15555550123", "uuid:123e4567-e89b-12d3-a456-426614174000", "*"],
+  it("validates and applies allowlist entries through the DM policy prompt", async () => {
+    const text = vi.fn(async (params: Parameters<WizardPrompter["text"]>[0]) => {
+      expect(params.validate?.("uuid:")).toBe("Invalid uuid entry");
+      expect(params.validate?.("invalid")).toBe("Invalid entry: invalid");
+      return "signal:+15555550123, 123e4567-e89b-12d3-a456-426614174000, *";
+    }) as WizardPrompter["text"];
+    const next = await signalDmPolicy.promptAllowFrom({
+      cfg: { channels: { signal: {} } },
+      prompter: createTestWizardPrompter({ text }),
     });
-  });
 
-  it("normalizes bare uuid values", () => {
-    expect(parseSignalAllowFromEntries("123e4567-e89b-12d3-a456-426614174000")).toEqual({
-      entries: ["uuid:123e4567-e89b-12d3-a456-426614174000"],
-    });
-  });
-
-  it("returns validation errors for invalid entries", () => {
-    expect(parseSignalAllowFromEntries("uuid:")).toEqual({
-      entries: [],
-      error: "Invalid uuid entry",
-    });
-    expect(parseSignalAllowFromEntries("invalid")).toEqual({
-      entries: [],
-      error: "Invalid entry: invalid",
-    });
+    expect(next.channels?.signal?.allowFrom).toEqual([
+      "+15555550123",
+      "uuid:123e4567-e89b-12d3-a456-426614174000",
+      "*",
+    ]);
   });
 
   it("reads the named-account DM policy instead of the channel root", () => {
@@ -1099,3 +1350,4 @@ describe("signal setup parsing", () => {
     expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

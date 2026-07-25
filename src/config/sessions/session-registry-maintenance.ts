@@ -1,17 +1,24 @@
 // Storage-neutral session registry maintenance for task-owned cron run cleanup.
 import fs from "node:fs";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { loadSessionStore, pruneStaleEntries, updateSessionStore } from "./store.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntries,
+  type SessionEntryLifecycleRemoval,
+} from "./session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
+import { pruneStaleEntries } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionRegistryMaintenanceStoreSummary = {
+type SessionRegistryMaintenanceStoreSummary = {
   afterCount: number;
   beforeCount: number;
   preservedRunning: number;
   pruned: number;
 };
 
-export type SessionRegistryMaintenanceStoreOptions = {
+type SessionRegistryMaintenanceStoreOptions = {
   /** Apply pruning to the backing store; false previews against a clone. */
   apply: boolean;
   /** Retention window for cron-run session entries. */
@@ -27,14 +34,19 @@ function parseCronRunSessionJobId(sessionKey: string): string | undefined {
   if (!parsed) {
     return undefined;
   }
-  return /^cron:([^:]+):run:[^:]+$/u.exec(parsed.rest)?.[1];
+  return /^cron:([^:]+):run:[^:]+(?:$|:)/u.exec(parsed.rest)?.[1];
 }
 
 function buildSessionRegistryPreserveKeys(params: {
   runningCronJobIds: ReadonlySet<string>;
+  storePath: string;
   store: Record<string, SessionEntry>;
 }): { preserveKeys: Set<string>; preservedRunning: number } {
-  const preserveKeys = new Set<string>();
+  const preserveKeys =
+    collectActiveSessionWorkAdmissionKeys({
+      storePath: params.storePath,
+      store: params.store,
+    }) ?? new Set<string>();
   let preservedRunning = 0;
   for (const key of Object.keys(params.store)) {
     const jobId = parseCronRunSessionJobId(key);
@@ -53,15 +65,23 @@ function buildSessionRegistryPreserveKeys(params: {
 
 function pruneSessionRegistryStore(params: {
   retentionMs: number;
+  removals?: SessionEntryLifecycleRemoval[];
   runningCronJobIds: ReadonlySet<string>;
+  storePath: string;
   store: Record<string, SessionEntry>;
 }): Omit<SessionRegistryMaintenanceStoreSummary, "beforeCount"> {
   const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
     runningCronJobIds: params.runningCronJobIds,
+    storePath: params.storePath,
     store: params.store,
   });
   const pruned = pruneStaleEntries(params.store, params.retentionMs, {
     log: false,
+    onPruned: params.removals
+      ? ({ key, entry }) => {
+          params.removals?.push({ sessionKey: key, expectedEntry: entry });
+        }
+      : undefined,
     preserveKeys,
   });
   return {
@@ -79,16 +99,21 @@ function pruneSessionRegistryStore(params: {
 export async function runSessionRegistryMaintenanceForStore(
   params: SessionRegistryMaintenanceStoreOptions,
 ): Promise<SessionRegistryMaintenanceStoreSummary> {
-  if (!fs.existsSync(params.storePath)) {
+  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(params.storePath);
+  if (sqliteTarget.path && !fs.existsSync(sqliteTarget.path)) {
     return {
-      afterCount: 0,
       beforeCount: 0,
+      afterCount: 0,
       preservedRunning: 0,
       pruned: 0,
     };
   }
-
-  const beforeStore = loadSessionStore(params.storePath, { skipCache: true });
+  const beforeStore = Object.fromEntries(
+    listSessionEntries({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
   const beforeCount = Object.keys(beforeStore).length;
   if (!params.apply) {
     const previewStore = structuredClone(beforeStore);
@@ -97,21 +122,34 @@ export async function runSessionRegistryMaintenanceForStore(
       ...pruneSessionRegistryStore({
         retentionMs: params.retentionMs,
         runningCronJobIds: params.runningCronJobIds,
+        storePath: params.storePath,
         store: previewStore,
       }),
     };
   }
 
-  const applied = await updateSessionStore(
-    params.storePath,
-    (store) =>
-      pruneSessionRegistryStore({
-        retentionMs: params.retentionMs,
-        runningCronJobIds: params.runningCronJobIds,
-        store,
-      }),
-    { skipMaintenance: true },
-  );
+  const applyStore = structuredClone(beforeStore);
+  const removals: SessionEntryLifecycleRemoval[] = [];
+  const applied = pruneSessionRegistryStore({
+    retentionMs: params.retentionMs,
+    removals,
+    runningCronJobIds: params.runningCronJobIds,
+    storePath: params.storePath,
+    store: applyStore,
+  });
+  if (removals.length > 0) {
+    const mutation = await applySessionEntryLifecycleMutation({
+      storePath: params.storePath,
+      removals,
+      skipMaintenance: true,
+    });
+    return {
+      afterCount: mutation.afterCount,
+      beforeCount,
+      preservedRunning: applied.preservedRunning,
+      pruned: mutation.removedEntries,
+    };
+  }
   return {
     beforeCount,
     ...applied,

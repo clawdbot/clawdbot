@@ -13,8 +13,8 @@ import {
   makePersistedCall,
   writeCallsToStore,
 } from "./manager.test-harness.js";
-import { flushPendingCallRecordWritesForTest, loadActiveCallsFromStore } from "./manager/store.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
+import { loadActiveCallsFromStore } from "./manager/store.js";
+import { setVoiceCallStateRuntime } from "./runtime-state.js";
 
 function installStateRuntime(): void {
   setVoiceCallStateRuntime({
@@ -27,6 +27,9 @@ function installStateRuntime(): void {
         createPluginStateSyncKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
+      }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call restore tests");
       }) as never,
     },
   });
@@ -63,7 +66,6 @@ describe("CallManager verification on restore", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
   });
 
@@ -182,7 +184,6 @@ describe("CallManager verification on restore", () => {
     const hangupCall = requireSingleHangupCall(provider);
     expect(hangupCall.reason).toBe("timeout");
 
-    await flushPendingCallRecordWritesForTest();
     expect(loadActiveCallsFromStore(storePath).activeCalls.size).toBe(0);
   });
 

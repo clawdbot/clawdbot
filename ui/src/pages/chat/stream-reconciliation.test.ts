@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover stream reconciliation behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -5,8 +6,9 @@ import {
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
   prunePersistedToolStreamMessages,
-  type StreamReconciliationState,
 } from "./stream-reconciliation.ts";
+
+type StreamReconciliationState = Parameters<typeof materializeVisibleStreamState>[1];
 
 const visibleStreamOptions = {
   isHiddenAssistantMessage: () => false,
@@ -75,6 +77,78 @@ describe("stream reconciliation", () => {
       "first preamble",
       "second preamble",
       "final reply",
+    ]);
+  });
+
+  it("does not replay a keyed preamble across a same-run steer boundary", () => {
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [
+        { text: "already visible", ts: 2, itemId: "preamble-1" },
+        { text: "distinct item", ts: 4, itemId: "preamble-2" },
+        { text: "already visible", ts: 5 },
+      ],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId?: string }>;
+    };
+    const messages = [
+      { role: "user", content: "original ask", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "already visible" }],
+        timestamp: 2,
+        openclawStreamFallback: {
+          itemId: "preamble-1",
+          replacementText: "already visible",
+          source: "segment",
+        },
+      },
+      { role: "user", content: "steer this run", timestamp: 3 },
+    ];
+
+    const next = materializeVisibleStreamState(messages, state, {
+      ...visibleStreamOptions,
+      keyedStartIndex: 1,
+    });
+
+    expect(next.map(messageText)).toEqual([
+      "original ask",
+      "already visible",
+      "steer this run",
+      "distinct item",
+      "already visible",
+    ]);
+  });
+
+  it("recomputes the unkeyed boundary after keyed insertions before a steer", () => {
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [
+        { text: "first keyed", ts: 2, itemId: "preamble-1" },
+        { text: "repeatable", ts: 3, itemId: "preamble-2" },
+        { text: "repeatable", ts: 5 },
+      ],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId?: string }>;
+    };
+    const messages = [
+      { role: "user", content: "original ask", timestamp: 1 },
+      { role: "user", content: "steer this run", timestamp: 4 },
+    ];
+
+    const next = materializeVisibleStreamState(messages, state, {
+      ...visibleStreamOptions,
+      keyedStartIndex: 1,
+    });
+
+    expect(next.map(messageText)).toEqual([
+      "original ask",
+      "first keyed",
+      "repeatable",
+      "steer this run",
+      "repeatable",
     ]);
   });
 

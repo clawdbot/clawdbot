@@ -40,6 +40,8 @@ public enum OpenClawComputerScrollDirection: String, Codable, Sendable {
 /// modifier keys held during pointer actions; `scrollAmount` is wheel ticks.
 public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
     public var action: OpenClawComputerAction
+    /// Opaque identity returned with the screenshot that supplied coordinates.
+    public var displayFrameId: String?
     public var x: Double?
     public var y: Double?
     public var fromX: Double?
@@ -55,6 +57,7 @@ public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
 
     public init(
         action: OpenClawComputerAction,
+        displayFrameId: String? = nil,
         x: Double? = nil,
         y: Double? = nil,
         fromX: Double? = nil,
@@ -69,6 +72,7 @@ public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
         refWidth: Int? = nil)
     {
         self.action = action
+        self.displayFrameId = displayFrameId
         self.x = x
         self.y = y
         self.fromX = fromX

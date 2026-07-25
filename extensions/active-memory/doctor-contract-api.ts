@@ -28,6 +28,10 @@ function activeMemoryToggleKey(sessionKey: string): string {
   return crypto.createHash("sha256").update(sessionKey, "utf8").digest("hex");
 }
 
+function normalizeLegacyUpdatedAt(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
+}
+
 async function readLegacyToggleEntries(filePath: string): Promise<ActiveMemoryToggleEntry[]> {
   try {
     const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
@@ -46,10 +50,7 @@ async function readLegacyToggleEntries(filePath: string): Promise<ActiveMemoryTo
       if ((value as { disabled?: unknown }).disabled !== true) {
         continue;
       }
-      const updatedAt =
-        typeof (value as { updatedAt?: unknown }).updatedAt === "number"
-          ? (value as { updatedAt: number }).updatedAt
-          : Date.now();
+      const updatedAt = normalizeLegacyUpdatedAt((value as { updatedAt?: unknown }).updatedAt);
       entries.push({ sessionKey, disabled: true, updatedAt });
     }
     return entries;

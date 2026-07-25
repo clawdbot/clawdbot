@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
+  clearSessionSuspensionTimers: vi.fn(() => 0),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -62,8 +63,13 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
   disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
 }));
 
+vi.mock("../agents/session-suspension.js", () => ({
+  clearSessionSuspensionTimers: mocks.clearSessionSuspensionTimers,
+}));
+
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
+    debug: vi.fn(),
     info: mocks.logInfo,
     warn: mocks.logWarn,
   })),
@@ -71,12 +77,8 @@ vi.mock("../logging/subsystem.js", () => ({
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
-const {
-  finishGatewayRestartTrace,
-  recordGatewayRestartTraceSpan,
-  resetGatewayRestartTraceForTest,
-  startGatewayRestartTrace,
-} = await import("./restart-trace.js");
+const { finishGatewayRestartTrace, recordGatewayRestartTraceSpan, startGatewayRestartTrace } =
+  await import("./restart-trace.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
 type MarkMainSessionsAbortedForRestart = NonNullable<
@@ -160,11 +162,12 @@ describe("createGatewayCloseHandler", () => {
     mocks.triggerInternalHook.mockResolvedValue(undefined);
     mocks.disposeAllBundleLspRuntimes.mockClear();
     mocks.disposeAllBundleLspRuntimes.mockResolvedValue(undefined);
+    mocks.clearSessionSuspensionTimers.mockReset();
+    mocks.clearSessionSuspensionTimers.mockReturnValue(0);
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    resetGatewayRestartTraceForTest();
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
     } else {
@@ -183,6 +186,67 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins an in-flight config reload before mutable runtime teardown", async () => {
+    const events: string[] = [];
+    mocks.clearSessionSuspensionTimers.mockImplementation(() => {
+      events.push("session-suspension-timers");
+      return 1;
+    });
+    let releaseReload!: () => void;
+    const reloadStopped = new Promise<void>((resolve) => {
+      releaseReload = resolve;
+    });
+    const configReloader = {
+      stop: vi.fn(async () => {
+        events.push("reload:stopping");
+        await reloadStopped;
+        events.push("reload:stopped");
+      }),
+    };
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        events.push("sidecar:stopped");
+      }),
+    };
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugins:stopped");
+      }),
+    };
+    const stopChannel = vi.fn(async () => {
+      events.push("channel:stopped");
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        configReloader,
+        postReadySidecars: [postReadySidecar],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    const closePromise = close({ reason: "test" });
+    await vi.waitFor(() => {
+      expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
+    });
+    expect(postReadySidecar.stop).not.toHaveBeenCalled();
+    expect(pluginServices.stop).not.toHaveBeenCalled();
+    expect(stopChannel).not.toHaveBeenCalled();
+
+    releaseReload();
+    await closePromise;
+
+    expect(events).toEqual([
+      "session-suspension-timers",
+      "reload:stopping",
+      "reload:stopped",
+      "sidecar:stopped",
+      "plugins:stopped",
+      "channel:stopped",
+    ]);
   });
 
   it("stops plugin services before channel runtimes", async () => {
@@ -249,6 +313,45 @@ describe("createGatewayCloseHandler", () => {
 
     expect(events).toEqual(["sidecar:start", "sidecar:end", "plugin-services", "channel:discord"]);
     expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears session suspension timers before sidecars, plugin services, and channels stop", async () => {
+    const events: string[] = [];
+    mocks.clearSessionSuspensionTimers.mockImplementation(() => {
+      events.push("session-suspension-timers");
+      return 1;
+    });
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        events.push("sidecar");
+      }),
+    };
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugin-services");
+      }),
+    };
+    const stopChannel = vi.fn(async (channelId: string) => {
+      events.push(`channel:${channelId}`);
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        postReadySidecars: [postReadySidecar],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    await close({ reason: "test shutdown" });
+
+    expect(mocks.clearSessionSuspensionTimers).toHaveBeenCalledOnce();
+    expect(events).toEqual([
+      "session-suspension-timers",
+      "sidecar",
+      "plugin-services",
+      "channel:discord",
+    ]);
   });
 
   it("emits gateway shutdown and pre-restart hooks", async () => {
@@ -512,15 +615,17 @@ describe("createGatewayCloseHandler", () => {
     const controller = new AbortController();
     const agentController = new AbortController();
     const chatRunState = createChatRunState();
-    chatRunState.buffers.set("run-1", "partial reply");
-    chatRunState.deltaSentAt.set("run-1", Date.now());
-    chatRunState.deltaLastBroadcastLen.set("run-1", 3);
-    chatRunState.deltaLastBroadcastText.set("run-1", "par");
-    chatRunState.agentDeltaSentAt.set("run-1:assistant", Date.now());
-    chatRunState.bufferedAgentEvents.set("run-1:assistant", {
-      sessionKey: "session-1",
-      payload: {} as never,
-    });
+    const run = chatRunState.getOrCreate("run-1");
+    run.buffer = "partial reply";
+    run.deltaSentAt = Date.now();
+    run.deltaLastBroadcastLen = 3;
+    run.deltaLastBroadcastText = "par";
+    run.agentText = {
+      assistant: {
+        lastSentAt: Date.now(),
+        bufferedEvent: { sessionKey: "session-1", payload: {} as never },
+      },
+    };
     const chatAbortControllers = new Map([
       [
         "run-1",
@@ -574,12 +679,11 @@ describe("createGatewayCloseHandler", () => {
     expect(agentController.signal.aborted).toBe(true);
     expect(chatAbortControllers.has("run-1")).toBe(false);
     expect(chatAbortControllers.has("agent-run-1")).toBe(false);
-    expect(chatRunState.buffers.has("run-1")).toBe(false);
-    expect(chatRunState.deltaSentAt.has("run-1")).toBe(false);
-    expect(chatRunState.deltaLastBroadcastLen.has("run-1")).toBe(false);
-    expect(chatRunState.deltaLastBroadcastText.has("run-1")).toBe(false);
-    expect(chatRunState.agentDeltaSentAt.has("run-1:assistant")).toBe(false);
-    expect(chatRunState.bufferedAgentEvents.has("run-1:assistant")).toBe(false);
+    expect(chatRunState.runs.get("run-1")?.buffer).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.deltaSentAt).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastLen).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastText).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes(
@@ -595,6 +699,7 @@ describe("createGatewayCloseHandler", () => {
     expect(broadcast).toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted", stopReason: "restart" }),
+      { sessionKeys: ["session-1"] },
     );
     expect(nodeSendToSession).toHaveBeenCalledWith(
       "session-1",
@@ -608,6 +713,7 @@ describe("createGatewayCloseHandler", () => {
         state: "aborted",
         stopReason: "restart",
       }),
+      { sessionKeys: ["session-1"] },
     );
     expect(nodeSendToSession).toHaveBeenCalledWith(
       "session-1",
@@ -823,7 +929,7 @@ describe("createGatewayCloseHandler", () => {
       ],
     ]);
     const chatRunState = createTestChatRunState();
-    const abortedRunsSet = vi.spyOn(chatRunState.abortedRuns, "set");
+    const completedRun = chatRunState.getOrCreate("completed-run");
     const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(async () => {
       events.push("marker");
     });
@@ -891,9 +997,7 @@ describe("createGatewayCloseHandler", () => {
     expect(agentController.signal.aborted).toBe(true);
     expect(completedController.signal.aborted).toBe(true);
     expect(hiddenController.signal.aborted).toBe(true);
-    const completedMarker = abortedRunsSet.mock.calls.find(
-      ([runId]) => runId === "completed-run",
-    )?.[1];
+    const completedMarker = completedRun.abortMarker;
     expect(completedMarker).toEqual({
       abortedAtMs: expect.any(Number),
       sequence: expect.any(Number),
@@ -1584,3 +1688,4 @@ describe("createGatewayCloseHandler", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

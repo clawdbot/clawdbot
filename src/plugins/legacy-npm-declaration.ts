@@ -9,7 +9,7 @@ import { validatePluginId } from "./install-paths.js";
 const LEGACY_NPM_DECLARATION_FILE = "openclaw.extension.json";
 
 /** Parsed legacy npm declaration stored beside an installed plugin. */
-export type LegacyNpmPluginDeclaration = {
+type LegacyNpmPluginDeclaration = {
   pluginId: string;
   npmSpec: string;
   source: string;

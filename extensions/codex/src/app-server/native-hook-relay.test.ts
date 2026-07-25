@@ -5,14 +5,11 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
   emitCodexNativePreToolUseFailureDiagnostic,
-  resolveCodexNativeHookRelayCommandTimeoutMs,
-  resolveCodexNativeHookRelayUnregisterGraceMs,
 } from "./native-hook-relay.js";
 
 afterEach(() => resetDiagnosticEventsForTest());
@@ -28,6 +25,7 @@ describe("Codex native hook relay config", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay(),
       hookTimeoutSec: 7,
+      loopDetectionPreToolUseRelay: true,
     });
 
     expect(config).toEqual({
@@ -134,6 +132,7 @@ describe("Codex native hook relay config", () => {
       buildCodexNativeHookRelayConfig({
         relay: createRelay(),
         events: ["permission_request"],
+        loopDetectionPreToolUseRelay: true,
       }),
     ).toEqual({
       "features.hooks": true,
@@ -169,6 +168,7 @@ describe("Codex native hook relay config", () => {
       buildCodexNativeHookRelayConfig({
         relay: createRelay({ inactiveEvents: ["post_tool_use", "before_agent_finalize"] }),
         events: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
+        loopDetectionPreToolUseRelay: true,
       }),
     ).toEqual({
       "features.hooks": true,
@@ -206,6 +206,7 @@ describe("Codex native hook relay config", () => {
       buildCodexNativeHookRelayConfig({
         relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
         events: ["pre_tool_use"],
+        loopDetectionPreToolUseRelay: true,
       }),
     ).toEqual({
       "features.hooks": true,
@@ -236,12 +237,27 @@ describe("Codex native hook relay config", () => {
     });
   });
 
+  it("clears selected inactive PreToolUse when Codex loop relay installation is disabled", () => {
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
+        events: ["pre_tool_use"],
+        loopDetectionPreToolUseRelay: false,
+      }),
+    ).toEqual({
+      "features.hooks": true,
+      "hooks.PreToolUse": [],
+      "hooks.state": {},
+    });
+  });
+
   it("clears omitted hook events when requested", () => {
     expect(
       buildCodexNativeHookRelayConfig({
         relay: createRelay(),
         events: ["permission_request"],
         clearOmittedEvents: true,
+        loopDetectionPreToolUseRelay: true,
       }),
     ).toEqual({
       "features.hooks": true,
@@ -281,16 +297,11 @@ describe("Codex native hook relay config", () => {
     });
   });
 
-  it("reserves relay timeout margin before Codex can kill the hook subprocess", () => {
-    expect(resolveCodexNativeHookRelayCommandTimeoutMs(undefined)).toBe(9000);
-    expect(resolveCodexNativeHookRelayCommandTimeoutMs(1)).toBe(750);
-    expect(resolveCodexNativeHookRelayCommandTimeoutMs(7)).toBe(6000);
-  });
-
   it("omits matchers so Codex MCP tool names reach the relay with a stable trust hash", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay(),
       events: ["pre_tool_use", "post_tool_use"],
+      loopDetectionPreToolUseRelay: true,
     });
 
     expect((config["hooks.PreToolUse"] as Array<{ matcher?: unknown }>)[0]).not.toHaveProperty(
@@ -309,12 +320,6 @@ describe("Codex native hook relay config", () => {
       "hooks.PermissionRequest": [],
       "hooks.Stop": [],
     });
-  });
-
-  it("caps oversized native hook cleanup grace before scheduling", () => {
-    expect(resolveCodexNativeHookRelayUnregisterGraceMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
   });
 
   it.each([

@@ -12,6 +12,9 @@ export type ActivityEntry = {
   runId: string;
   sessionKey?: string;
   toolName: string;
+  entryKind: "tool" | "answer_candidate";
+  itemId?: string;
+  candidateStatus?: "candidate" | "superseded" | "selected";
   status: ActivityStatus;
   startedAt: number;
   updatedAt: number;
@@ -28,7 +31,8 @@ const ACTIVITY_STATUS_SUMMARY_LABELS: Record<ActivityStatus, string> = {
   error: "failed",
 };
 
-type ToolActivityEvent = {
+type ActivityEvent = {
+  stream: "tool" | "item";
   runId: string;
   ts: number;
   receivedAt: number;
@@ -74,19 +78,23 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
-export function parseToolActivityEvent(
+export function parseActivityEvent(
   payload: unknown,
   receivedAt = Date.now(),
-): ToolActivityEvent | null {
+): ActivityEvent | null {
   const record = readRecord(payload);
   const runId = toTrimmedString(record?.runId);
   const data = readRecord(record?.data);
-  if (!record || record.stream !== "tool" || !runId || !data) {
+  const isTool = record?.stream === "tool";
+  const isAnswerCandidate =
+    record?.stream === "item" && toTrimmedString(data?.kind) === "answer_candidate";
+  if (!record || (!isTool && !isAnswerCandidate) || !runId || !data) {
     return null;
   }
   const sessionKey = toTrimmedString(record.sessionKey);
   const agentId = toTrimmedString(record.agentId);
   return {
+    stream: isTool ? "tool" : "item",
     runId,
     ts: typeof record.ts === "number" ? record.ts : receivedAt,
     receivedAt,
@@ -204,9 +212,12 @@ function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: 
 
 export function updateToolActivity(
   entries: ActivityEntry[],
-  payload: ToolActivityEvent,
+  payload: ActivityEvent,
 ): ActivityEntry[] {
   const data = payload.data ?? {};
+  if (payload.stream === "item") {
+    return updateAnswerCandidateActivity(entries, payload);
+  }
   const toolCallId = toTrimmedString(data.toolCallId);
   if (!toolCallId) {
     return entries;
@@ -229,6 +240,7 @@ export function updateToolActivity(
     runId: payload.runId,
     ...(payload.sessionKey ? { sessionKey: payload.sessionKey } : {}),
     toolName,
+    entryKind: "tool",
     status,
     startedAt: existing?.startedAt ?? startedAt,
     updatedAt: now,
@@ -237,6 +249,48 @@ export function updateToolActivity(
     summary: buildSummary(toolName, status, hiddenArgCount),
     hiddenArgumentCount: hiddenArgCount,
     ...(outputPreview ? { outputPreview } : {}),
+  };
+  const next = existing
+    ? entries.map((entry) => (entry.id === id ? nextEntry : entry))
+    : [...entries, nextEntry];
+  return next.slice(-ACTIVITY_ENTRY_LIMIT);
+}
+
+function readAnswerCandidateStatus(value: unknown): "candidate" | "superseded" | "selected" | null {
+  return value === "candidate" || value === "superseded" || value === "selected" ? value : null;
+}
+
+function updateAnswerCandidateActivity(
+  entries: ActivityEntry[],
+  payload: ActivityEvent,
+): ActivityEntry[] {
+  const itemId = toTrimmedString(payload.data.itemId);
+  const candidateStatus = readAnswerCandidateStatus(payload.data.status);
+  if (!itemId || !candidateStatus) {
+    return entries;
+  }
+  const id = `${payload.runId}:answer_candidate:${itemId}`;
+  const existing = entries.find((entry) => entry.id === id);
+  const now = payload.receivedAt;
+  const startedAt = existing?.startedAt ?? payload.ts;
+  const preview = buildOutputPreview(payload.data.progressText);
+  const nextEntry: ActivityEntry = {
+    id,
+    toolCallId: itemId,
+    itemId,
+    runId: payload.runId,
+    ...(payload.sessionKey ? { sessionKey: payload.sessionKey } : {}),
+    toolName: "answer_candidate",
+    entryKind: "answer_candidate",
+    candidateStatus,
+    status: candidateStatus === "candidate" ? "running" : "done",
+    startedAt,
+    updatedAt: now,
+    durationMs: Math.max(0, now - startedAt),
+    outputTruncated: preview.truncated || existing?.outputTruncated === true,
+    summary: `answer_candidate.${candidateStatus}`,
+    hiddenArgumentCount: 0,
+    ...(preview.text ? { outputPreview: preview.text } : {}),
   };
   const next = existing
     ? entries.map((entry) => (entry.id === id ? nextEntry : entry))

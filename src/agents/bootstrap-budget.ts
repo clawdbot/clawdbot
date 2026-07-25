@@ -233,9 +233,7 @@ export function analyzeBootstrapBudget(params: {
 }
 
 /** Builds a stable signature for once-per-truncation warning suppression. */
-function buildBootstrapTruncationSignature(
-  analysis: BootstrapBudgetAnalysis,
-): string | undefined {
+function buildBootstrapTruncationSignature(analysis: BootstrapBudgetAnalysis): string | undefined {
   if (!analysis.hasTruncation) {
     return undefined;
   }

@@ -31,13 +31,6 @@ import type {
   TaskFlowDetail,
   TaskRunCancelResult,
 } from "./runtime-tasks.types.js";
-export type {
-  BoundTaskFlowsRuntime,
-  BoundTaskRunsRuntime,
-  PluginRuntimeTaskFlows,
-  PluginRuntimeTaskRuns,
-  PluginRuntimeTasks,
-} from "./runtime-tasks.types.js";
 
 function assertSessionKey(sessionKey: string | undefined, errorMessage: string): string {
   const normalized = sessionKey?.trim();
@@ -176,7 +169,7 @@ function createBoundTaskFlowsRuntime(params: {
   };
 }
 
-export function createRuntimeTaskRuns(): PluginRuntimeTaskRuns {
+function createRuntimeTaskRuns(): PluginRuntimeTaskRuns {
   return {
     bindSession: (params) =>
       createBoundTaskRunsRuntime({
@@ -194,7 +187,7 @@ export function createRuntimeTaskRuns(): PluginRuntimeTaskRuns {
   };
 }
 
-export function createRuntimeTaskFlows(): PluginRuntimeTaskFlows {
+function createRuntimeTaskFlows(): PluginRuntimeTaskFlows {
   return {
     bindSession: (params) =>
       createBoundTaskFlowsRuntime({
@@ -213,12 +206,11 @@ export function createRuntimeTaskFlows(): PluginRuntimeTaskFlows {
 }
 
 export function createRuntimeTasks(params: {
-  legacyTaskFlow: PluginRuntimeTaskFlow;
+  managedTaskFlow: PluginRuntimeTaskFlow;
 }): PluginRuntimeTasks {
   return {
     runs: createRuntimeTaskRuns(),
     flows: createRuntimeTaskFlows(),
-    managedFlows: params.legacyTaskFlow,
-    flow: params.legacyTaskFlow,
+    managedFlows: params.managedTaskFlow,
   };
 }

@@ -4,39 +4,51 @@ import { describe, expect, it } from "vitest";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
-  parseCliJson,
-  parseCliJsonl,
+  formatCliOutputError,
   parseCliOutput,
-  supportsCliJsonlToolEvents,
   type CliThinkingProgress,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
-describe("supportsCliJsonlToolEvents", () => {
-  it.each([
-    ["Claude provider", { command: "claude", output: "jsonl" as const }, "claude-cli", true],
-    [
-      "explicit Claude dialect",
-      { command: "custom", output: "jsonl" as const, jsonlDialect: "claude-stream-json" as const },
-      "custom-cli",
-      true,
-    ],
-    ["Gemini provider", { command: "gemini", output: "jsonl" as const }, "google-gemini-cli", true],
-    [
-      "explicit Gemini dialect",
-      { command: "custom", output: "jsonl" as const, jsonlDialect: "gemini-stream-json" as const },
-      "custom-cli",
-      true,
-    ],
-    ["generic JSONL", { command: "custom", output: "jsonl" as const }, "custom-cli", false],
-  ])("%s: %s", (_name, backend, providerId, expected) => {
-    expect(supportsCliJsonlToolEvents({ backend, providerId })).toBe(expected);
-  });
-});
+type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
+
+function parseCliJson(raw: string, backend: ParseCliOutputParams["backend"], providerId = "") {
+  return parseCliOutput({ raw, backend, providerId, outputMode: "json" });
+}
+
+function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], providerId: string) {
+  return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
+}
 
 describe("parseCliJson", () => {
+  it("preserves Claude max-turn terminal context in JSON mode", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: "session-json-max-turns",
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (3)"],
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-json-max-turns",
+      usage: undefined,
+      errorText: "Reached maximum number of turns (3)",
+      terminalFailure: { reason: "max_turns", limit: 3 },
+    });
+  });
+
   it("classifies Claude is_error JSON results as provider errors", () => {
     const result = parseCliJson(
       JSON.stringify({
@@ -930,12 +942,16 @@ describe("parseCliJsonl", () => {
     });
   });
 
-  it("uses Claude error subtypes when result text is absent", () => {
+  it("preserves Claude max-turn terminal context for actionable run errors", () => {
     const result = parseCliJsonl(
       JSON.stringify({
         type: "result",
         subtype: "error_max_turns",
         session_id: "session-max-turns",
+        num_turns: 2,
+        stop_reason: "tool_use",
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (1)"],
       }),
       {
         command: "claude",
@@ -949,8 +965,72 @@ describe("parseCliJsonl", () => {
       text: "",
       sessionId: "session-max-turns",
       usage: undefined,
-      errorText: "Claude CLI result subtype error_max_turns.",
+      errorText: "Reached maximum number of turns (1)",
+      terminalFailure: {
+        reason: "max_turns",
+        limit: 1,
+      },
     });
+    expect(
+      formatCliOutputError(result!, {
+        runId: "run-max-turns",
+        sessionId: "openclaw-session-max-turns",
+      }),
+    ).toBe(
+      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+        "OpenClaw run: run-max-turns. OpenClaw session: openclaw-session-max-turns. " +
+        "Claude session: session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+    );
+  });
+
+  it("warns that terminal_reason-only max-turn results may have run tools", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        session_id: "session-terminal-reason-only",
+        terminal_reason: "max_turns",
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-terminal-reason-only",
+      usage: undefined,
+      errorText: "Reached maximum number of turns.",
+      terminalFailure: { reason: "max_turns" },
+    });
+    expect(formatCliOutputError(result!)).toBe(
+      "Claude CLI stopped after reaching the maximum number of turns. " +
+        "Claude session: session-terminal-reason-only. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+    );
+  });
+
+  it("does not apply Claude terminal semantics to an explicit Gemini dialect", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (1)"],
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      "claude-cli",
+    );
+
+    expect(result?.terminalFailure).toBeUndefined();
   });
 });
 
@@ -1009,8 +1089,41 @@ describe("parseCliOutput", () => {
 });
 
 describe("createCliJsonlStreamingParser", () => {
+  it("surfaces codex-exec todo snapshots as typed plan updates", () => {
+    const plans: Array<{ steps: Array<{ step: string; status: string }> }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "codex", output: "jsonl", sessionIdFields: ["thread_id"] },
+      providerId: "codex-cli",
+      onAssistantDelta: () => {},
+      onPlanUpdate: (plan) => plans.push(plan),
+    });
+
+    parser.push(
+      `${JSON.stringify({
+        type: "item.updated",
+        item: {
+          type: "todo_list",
+          items: [
+            { text: "Inspect", completed: true },
+            { text: "Patch", completed: false },
+          ],
+        },
+      })}\n`,
+    );
+
+    expect(plans).toEqual([
+      {
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "pending" },
+        ],
+      },
+    ]);
+  });
+
   it("streams Claude stream-json deltas for an explicit backend dialect", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const sessionIds: string[] = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "local-cli",
@@ -1020,6 +1133,7 @@ describe("createCliJsonlStreamingParser", () => {
       },
       providerId: "local-cli",
       onAssistantDelta: (delta) => deltas.push(delta),
+      onSessionId: (sessionId) => sessionIds.push(sessionId),
     });
 
     parser.push(
@@ -1039,6 +1153,7 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+    expect(sessionIds).toEqual(["session-stream"]);
   });
 
   it("uses streamed Claude assistant text when no result envelope arrives", () => {
@@ -1113,33 +1228,6 @@ describe("createCliJsonlStreamingParser", () => {
       text: "hello world",
       sessionId: "session-stream",
       usage: undefined,
-    });
-  });
-
-  it("reports an output-limit error and ignores later chunks", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        reliability: { outputLimits: { maxTurnRawChars: 1024 } },
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push("x".repeat(1025));
-    parser.push(`${JSON.stringify({ type: "result", result: "late" })}\n`);
-    parser.finish();
-
-    expect(parser.getErrorText()).toBe(
-      "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
-    );
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
     });
   });
 
@@ -1896,6 +1984,13 @@ describe("createCliJsonlStreamingParser", () => {
       cacheWrite: undefined,
       total: undefined,
     });
+    expect(output?.diagnosticUsage).toEqual({
+      input: 30,
+      output: 15,
+      cacheRead: 300,
+      cacheWrite: undefined,
+      total: undefined,
+    });
   });
 
   it("surfaces Claude tool_use start and result events", () => {
@@ -2509,3 +2604,4 @@ describe("createCliJsonlStreamingParser", () => {
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

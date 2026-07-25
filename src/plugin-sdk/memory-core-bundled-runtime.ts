@@ -1,4 +1,6 @@
 // Manual facade. Keep loader boundary explicit.
+import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
@@ -16,6 +18,71 @@ type EmbeddingProviderResult = {
   fallbackReason?: string;
   providerUnavailableReason?: string;
   runtime?: MemoryEmbeddingProviderRuntime;
+};
+
+export type DreamingArtifactsAuditIssue = {
+  severity: "warn" | "error";
+  code:
+    | "dreaming-session-corpus-unreadable"
+    | "dreaming-session-corpus-self-ingested"
+    | "dreaming-session-ingestion-unreadable"
+    | "dreaming-diary-unreadable";
+  message: string;
+  fixable: boolean;
+};
+
+export type DreamingArtifactsAuditSummary = {
+  dreamsPath?: string;
+  sessionCorpusDir: string;
+  sessionCorpusFileCount: number;
+  suspiciousSessionCorpusFileCount: number;
+  suspiciousSessionCorpusLineCount: number;
+  sessionIngestionPath: string;
+  sessionIngestionExists: boolean;
+  issues: DreamingArtifactsAuditIssue[];
+};
+
+export type ShortTermAuditIssue = {
+  severity: "warn" | "error";
+  code:
+    | "recall-store-unreadable"
+    | "recall-store-empty"
+    | "recall-store-invalid"
+    | "recall-store-over-limit"
+    | "recall-lock-stale"
+    | "recall-lock-unreadable"
+    | "qmd-index-missing"
+    | "qmd-index-empty"
+    | "qmd-collections-empty";
+  message: string;
+  fixable: boolean;
+};
+
+export type ShortTermAuditSummary = {
+  storePath: string;
+  lockPath: string;
+  updatedAt?: string;
+  exists: boolean;
+  entryCount: number;
+  promotedCount: number;
+  spacedEntryCount: number;
+  conceptTaggedEntryCount: number;
+  conceptTagScripts?: Record<string, unknown>;
+  invalidEntryCount: number;
+  issues: ShortTermAuditIssue[];
+  qmd?: {
+    dbPath?: string;
+    collections?: number;
+    dbBytes?: number;
+  };
+};
+
+export type RepairShortTermPromotionArtifactsResult = {
+  changed: boolean;
+  removedInvalidEntries: number;
+  removedOverflowEntries?: number;
+  rewroteStore: boolean;
+  removedStaleLock: boolean;
 };
 
 type RuntimeFacadeModule = {
@@ -36,11 +103,24 @@ type RuntimeFacadeModule = {
     nowMs: number;
     timezone?: string;
   }) => Promise<ShortTermDreamingStats>;
+  auditDreamingArtifacts: (params: {
+    workspaceDir: string;
+  }) => Promise<DreamingArtifactsAuditSummary>;
+  auditShortTermPromotionArtifacts: (params: {
+    workspaceDir: string;
+    qmd?: {
+      dbPath?: string;
+      collections?: number;
+    };
+  }) => Promise<ShortTermAuditSummary>;
   repairDreamingArtifacts: (params: {
     workspaceDir: string;
     archiveDiary?: boolean;
     now?: Date;
   }) => Promise<RepairDreamingArtifactsResult>;
+  repairShortTermPromotionArtifacts: (params: {
+    workspaceDir: string;
+  }) => Promise<RepairShortTermPromotionArtifactsResult>;
 };
 
 type GroundedRemPreviewItem = {
@@ -203,7 +283,7 @@ type ApiFacadeModule = {
   }) => Promise<RemHarnessPreviewResult>;
 };
 
-type RepairDreamingArtifactsResult = {
+export type RepairDreamingArtifactsResult = {
   changed: boolean;
   archiveDir?: string;
   archivedDreamsDiary: boolean;
@@ -235,11 +315,18 @@ function loadRuntimeFacadeModule(): RuntimeFacadeModule {
   return module;
 }
 
+const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);
+
 /** Create a memory embedding provider with built-in fallback metadata. */
-export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((...args) =>
-  loadRuntimeFacadeModule().createEmbeddingProvider(
-    ...args,
-  )) as RuntimeFacadeModule["createEmbeddingProvider"];
+export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((
+  options,
+) => {
+  const createOptions = {
+    ...options,
+    acquireLocalService,
+  };
+  return loadRuntimeFacadeModule().createEmbeddingProvider(createOptions);
+}) as RuntimeFacadeModule["createEmbeddingProvider"];
 
 /** Remove short-term recall candidates already grounded into durable memory. */
 export const removeGroundedShortTermCandidates: RuntimeFacadeModule["removeGroundedShortTermCandidates"] =
@@ -253,11 +340,28 @@ export const loadShortTermPromotionDreamingStats: RuntimeFacadeModule["loadShort
     loadRuntimeFacadeModule().loadShortTermPromotionDreamingStats(
       ...args,
     )) as RuntimeFacadeModule["loadShortTermPromotionDreamingStats"];
+/** Audit dreaming diary and session-corpus artifacts through the bundled runtime facade. */
+export const auditDreamingArtifacts: RuntimeFacadeModule["auditDreamingArtifacts"] = ((...args) =>
+  loadRuntimeFacadeModule().auditDreamingArtifacts(
+    ...args,
+  )) as RuntimeFacadeModule["auditDreamingArtifacts"];
+/** Audit short-term promotion artifacts through the bundled runtime facade. */
+export const auditShortTermPromotionArtifacts: RuntimeFacadeModule["auditShortTermPromotionArtifacts"] =
+  ((...args) =>
+    loadRuntimeFacadeModule().auditShortTermPromotionArtifacts(
+      ...args,
+    )) as RuntimeFacadeModule["auditShortTermPromotionArtifacts"];
 /** Repair or archive problematic dreaming artifacts through the bundled runtime facade. */
 export const repairDreamingArtifacts: RuntimeFacadeModule["repairDreamingArtifacts"] = ((...args) =>
   loadRuntimeFacadeModule().repairDreamingArtifacts(
     ...args,
   )) as RuntimeFacadeModule["repairDreamingArtifacts"];
+/** Repair short-term promotion artifacts through the bundled runtime facade. */
+export const repairShortTermPromotionArtifacts: RuntimeFacadeModule["repairShortTermPromotionArtifacts"] =
+  ((...args) =>
+    loadRuntimeFacadeModule().repairShortTermPromotionArtifacts(
+      ...args,
+    )) as RuntimeFacadeModule["repairShortTermPromotionArtifacts"];
 
 /** Preview grounded REM markdown facts and candidates for selected input files. */
 export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMarkdown"] = ((

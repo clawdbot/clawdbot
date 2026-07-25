@@ -1,56 +1,144 @@
-/**
- * Manages transient transcripts used for internal session side effects.
- */
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
+/** Manages hidden SQLite sessions used for suppressed agent side effects. */
+import {
+  applySessionEntryLifecycleMutation,
+  forkSessionFromParentTranscript,
+  loadExactSessionEntry,
+  replaceTranscriptEvents,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 
-/** Resolves the private transcript path for an internal session-effect run. */
-export function resolveInternalSessionEffectsTranscriptPath(runId: string): string {
-  const safeRunId = runId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "run";
-  return path.join(resolveStateDir(), "internal-agent-runs", `${safeRunId}.jsonl`);
-}
+type InternalSessionEffectsTarget = Required<
+  Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">
+> & {
+  sessionEntry: SessionEntry;
+  sessionFile: string;
+};
 
-/** Copies or creates a private transcript for internal session-effect recovery. */
-export async function prepareInternalSessionEffectsTranscript(params: {
-  sessionFile?: string;
+type InternalSessionEffectsSource = Required<
+  Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">
+>;
+
+/** Resolves the deterministic SQLite target owned by one internal-effects run. */
+export function resolveInternalSessionEffectsTarget(params: {
+  agentId: string;
   runId: string;
-}): Promise<string> {
-  // Callers must persist this path in an owning lifecycle record and invoke
-  // removeInternalSessionEffectsTranscript once the recovered output is no longer needed.
-  const sessionFile = resolveInternalSessionEffectsTranscriptPath(params.runId);
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true, mode: 0o700 });
-  if (!params.sessionFile) {
-    await fs.writeFile(sessionFile, "", { mode: 0o600 });
-    await fs.chmod(sessionFile, 0o600);
-    return sessionFile;
-  }
-  try {
-    const contents = await fs.readFile(params.sessionFile);
-    await fs.writeFile(sessionFile, contents, { mode: 0o600 });
-    await fs.chmod(sessionFile, 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-    await fs.writeFile(sessionFile, "", { mode: 0o600 });
-    await fs.chmod(sessionFile, 0o600);
-  }
-  return sessionFile;
+  storePath: string;
+}): Required<Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">> {
+  const incognito = isIncognitoOpenClawAgentSqlitePath(params.storePath, {
+    agentId: params.agentId,
+  });
+  return {
+    agentId: params.agentId,
+    storePath: params.storePath,
+    ...resolveInternalSessionEffectsIdentity({
+      agentId: params.agentId,
+      runId: params.runId,
+      ...(incognito ? { incognito: true } : {}),
+    }),
+  };
 }
 
-/** Removes an internal session-effect transcript if it is inside the owned dir. */
-export async function removeInternalSessionEffectsTranscript(
-  sessionFile: string | undefined,
+function toInternalSessionEffectsTarget(params: {
+  agentId: string;
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): InternalSessionEffectsTarget {
+  return {
+    agentId: params.agentId,
+    sessionId: params.entry.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    sessionEntry: params.entry,
+    sessionFile: formatSqliteSessionFileMarker({
+      agentId: params.agentId,
+      sessionId: params.entry.sessionId,
+      storePath: params.storePath,
+    }),
+  };
+}
+
+/** Creates or reopens the hidden SQLite session owned by one internal-effects run. */
+export async function prepareInternalSessionEffectsSession(params: {
+  agentId: string;
+  cwd?: string;
+  runId: string;
+  source?: InternalSessionEffectsSource;
+  storePath: string;
+}): Promise<InternalSessionEffectsTarget> {
+  const scope = resolveInternalSessionEffectsTarget(params);
+  const existing = loadExactSessionEntry(scope)?.entry;
+  if (existing?.sessionId === scope.sessionId) {
+    return toInternalSessionEffectsTarget({
+      agentId: params.agentId,
+      entry: existing,
+      sessionKey: scope.sessionKey,
+      storePath: params.storePath,
+    });
+  }
+
+  const fork = params.source
+    ? await forkSessionFromParentTranscript({
+        agentId: params.source.agentId,
+        parentEntry: { sessionId: params.source.sessionId, updatedAt: Date.now() },
+        parentSessionKey: params.source.sessionKey,
+        sessionKey: scope.sessionKey,
+        storePath: params.source.storePath,
+        targetSessionId: scope.sessionId,
+        targetStorePath: params.storePath,
+      })
+    : undefined;
+  if (fork?.status !== "created") {
+    await replaceTranscriptEvents(scope, [
+      createSessionTranscriptHeader({ cwd: params.cwd, sessionId: scope.sessionId }),
+    ]);
+  }
+  const now = Date.now();
+  const entry = await upsertSessionEntry(scope, {
+    ...buildSessionCreationStamp({ via: "internal", actor: { type: "system" } }),
+    delivery: { kind: "internal" },
+    sessionId: scope.sessionId,
+    ...(isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId })
+      ? { incognito: true as const }
+      : {}),
+    sessionStartedAt: now,
+    updatedAt: now,
+  });
+  if (!entry) {
+    throw new Error(`Failed to create internal SQLite session for run ${params.runId}`);
+  }
+  return toInternalSessionEffectsTarget({
+    agentId: params.agentId,
+    entry,
+    sessionKey: scope.sessionKey,
+    storePath: params.storePath,
+  });
+}
+
+/** Hard-deletes a run-owned hidden session and its SQLite transcript rows. */
+export async function removeInternalSessionEffectsSession(
+  target: AgentRunSessionTarget | undefined,
 ): Promise<void> {
-  const dir = path.join(resolveStateDir(), "internal-agent-runs");
-  const resolved = sessionFile ? path.resolve(sessionFile) : "";
-  if (!resolved || path.dirname(resolved) !== path.resolve(dir)) {
+  if (!target?.sessionKey || !target.storePath) {
     return;
   }
-  try {
-    await fs.rm(resolved, { force: true });
-  } catch {
-    // Best-effort privacy/disk cleanup; run cleanup must not fail on temp-file races.
-  }
+  await applySessionEntryLifecycleMutation({
+    ...(target.agentId ? { agentId: target.agentId } : {}),
+    storePath: target.storePath,
+    removals: [
+      {
+        sessionKey: target.sessionKey,
+        ...(target.sessionId ? { expectedSessionId: target.sessionId } : {}),
+        archiveRemovedTranscript: false,
+      },
+    ],
+    skipMaintenance: true,
+  });
 }

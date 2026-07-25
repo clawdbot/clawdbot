@@ -32,7 +32,7 @@ type OpenAIReasoningModel = {
 const GPT_5_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
 const GPT_51_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
 const GPT_52_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
-const GPT_56_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+const GPT_56_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"] as const;
 const GPT_CODEX_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 const GPT_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
 const GPT_5_PRO_REASONING_EFFORTS = ["high"] as const;
@@ -65,6 +65,13 @@ export function isOpenAIGpt55Model(model: OpenAIReasoningModel): boolean {
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
   const name = normalizeModelId(typeof model.name === "string" ? model.name : undefined);
   return /^gpt-5\.5(?:-|$)/u.test(id) || /^gpt-5\.5(?:\s|\(|-|$)/u.test(name);
+}
+
+/** Return whether a model is the GPT-5.6 family. */
+export function isOpenAIGpt56Model(model: OpenAIReasoningModel): boolean {
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  const name = normalizeModelId(typeof model.name === "string" ? model.name : undefined);
+  return /^gpt-5\.6(?:-|$)/u.test(id) || /^gpt-5\.6(?:\s|\(|-|$)/u.test(name);
 }
 
 /** Normalize user-facing reasoning effort names to API effort names. */
@@ -136,6 +143,22 @@ export function resolveOpenAISupportedReasoningEfforts(
   return GENERIC_REASONING_EFFORTS;
 }
 
+/**
+ * Return whether a model accepts the temperature parameter. The GPT-5.6
+ * family rejects it with a 400; catalog compat can override per model.
+ */
+export function supportsOpenAITemperature(model: OpenAIReasoningModel): boolean {
+  const compat = model.compat;
+  if (compat && typeof compat === "object") {
+    const declared = (compat as { supportsTemperature?: unknown }).supportsTemperature;
+    if (typeof declared === "boolean") {
+      return declared;
+    }
+  }
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  return !/^gpt-5\.6(?:-|$)/u.test(id);
+}
+
 /** Return whether a model accepts a requested reasoning effort. */
 export function supportsOpenAIReasoningEffort(
   model: OpenAIReasoningModel,
@@ -166,6 +189,9 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   const supported = resolveOpenAISupportedReasoningEfforts(params.model);
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
     return normalized as OpenAIApiReasoningEffort;
+  }
+  if (requested === "off" && supported.includes("none")) {
+    return "none";
   }
   if (isDisabledReasoningEffort(requested) || isDisabledReasoningEffort(normalized)) {
     return undefined;

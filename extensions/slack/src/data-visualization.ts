@@ -5,12 +5,14 @@ import {
   renderMessagePresentationChartFallbackText,
   type MessagePresentationChartBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 
-export const SLACK_CHART_TITLE_MAX = 50;
-export const SLACK_CHART_LABEL_MAX = 20;
-export const SLACK_CHART_AXIS_LABEL_MAX = 50;
-export const SLACK_CHART_SERIES_MAX = 12;
-export const SLACK_CHART_DATA_POINTS_MAX = 20;
+const SLACK_CHART_TITLE_MAX = 50;
+const SLACK_CHART_LABEL_MAX = 20;
+const SLACK_CHART_AXIS_LABEL_MAX = 50;
+const SLACK_CHART_SERIES_MAX = 12;
+const SLACK_CHART_DATA_POINTS_MAX = 20;
 // Slack's API rejects a third data_visualization block even though its public
 // reference does not currently document this per-message subtype limit.
 export const SLACK_DATA_VISUALIZATION_BLOCKS_MAX = 2;
@@ -32,7 +34,7 @@ type SlackSeriesChart = {
   };
 };
 
-export type SlackDataVisualizationBlock = Block & {
+type SlackDataVisualizationBlock = Block & {
   type: "data_visualization";
   title: string;
   chart: SlackPieChart | SlackSeriesChart;
@@ -47,22 +49,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 /** Detect native chart blocks without depending on unreleased Slack SDK types. */
 export function hasSlackDataVisualizationBlock(blocks?: readonly unknown[]): boolean {
   return blocks?.some((block) => asRecord(block)?.type === "data_visualization") ?? false;
-}
-
-/** Match Slack's Web API and response_url `invalid_blocks` error shapes. */
-export function isSlackInvalidBlocksError(error: unknown): boolean {
-  const record = asRecord(error);
-  const rawData = record?.data;
-  const data = asRecord(rawData);
-  const rawResponseData = asRecord(record?.response)?.data;
-  const responseData = asRecord(rawResponseData);
-  const code =
-    data?.error ??
-    (typeof rawData === "string" ? rawData : undefined) ??
-    responseData?.error ??
-    (typeof rawResponseData === "string" ? rawResponseData : undefined) ??
-    record?.error;
-  return typeof code === "string" && code.trim().toLowerCase() === "invalid_blocks";
 }
 
 function isStringWithin(value: unknown, maxLength: number): value is string {
@@ -248,16 +234,17 @@ export function renderSlackDataVisualizationFallbackText(value: unknown): string
   return typeof block.title === "string" && block.title.trim() ? block.title.trim() : undefined;
 }
 
-/** Preserve every native chart's data when Slack requires a text-only retry. */
-export function appendSlackDataVisualizationFallbackText(
-  text: string,
-  blocks?: readonly unknown[],
-): string {
-  const base = text.trim();
-  const comparableBase = base.replace(/\s+/gu, " ");
-  const chartTexts = (blocks ?? [])
-    .map(renderSlackDataVisualizationFallbackText)
-    .filter((chartText): chartText is string => Boolean(chartText))
-    .filter((chartText) => !comparableBase.includes(chartText.replace(/\s+/gu, " ")));
-  return [base, ...chartTexts].filter(Boolean).join("\n\n");
+/** Render a native chart as mrkdwn without activating raw data control tokens. */
+export function renderSlackDataVisualizationMrkdwnFallbackText(value: unknown): string | undefined {
+  const block = asRecord(value);
+  if (block?.type !== "data_visualization") {
+    return undefined;
+  }
+  const parsed = parseSlackDataVisualizationBlock(block);
+  if (parsed) {
+    return renderSlackMessagePresentationChartFallbackText(parsed);
+  }
+  return typeof block.title === "string" && block.title.trim()
+    ? escapeSlackMrkdwn(block.title.trim())
+    : undefined;
 }

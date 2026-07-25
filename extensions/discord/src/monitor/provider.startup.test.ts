@@ -77,6 +77,15 @@ vi.mock("./listeners.js", () => ({
   DiscordPresenceListener: function DiscordPresenceListener() {
     return { type: "presence" };
   },
+  DiscordPresenceGuildCreateListener: function DiscordPresenceGuildCreateListener() {
+    return { type: "presence-guild-create" };
+  },
+  DiscordPresenceGuildDeleteListener: function DiscordPresenceGuildDeleteListener() {
+    return { type: "presence-guild-delete" };
+  },
+  DiscordPresenceReadyListener: function DiscordPresenceReadyListener() {
+    return { type: "presence-ready" };
+  },
   DiscordReactionListener: function DiscordReactionListener() {
     return { type: "reaction-add" };
   },
@@ -230,6 +239,10 @@ describe("createDiscordMonitorClient", () => {
 
   it("configures internal Discord REST options explicitly", async () => {
     const createClient = vi.fn(createClientWithPlugins);
+    const commandDeployHashStore = {
+      lookup: vi.fn(async () => undefined),
+      register: vi.fn(async () => undefined),
+    };
 
     await createDiscordMonitorClient({
       accountId: "default",
@@ -241,6 +254,7 @@ describe("createDiscordMonitorClient", () => {
       voiceEnabled: false,
       discordConfig: {},
       runtime: createRuntime(),
+      commandDeployHashStore,
       createClient,
       createGatewayPlugin: () => ({ id: "gateway" }) as never,
       createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
@@ -255,6 +269,9 @@ describe("createDiscordMonitorClient", () => {
       runtimeProfile: "persistent",
       maxQueueSize: 1000,
     });
+    expect((options as { commandDeployHashStore?: unknown }).commandDeployHashStore).toBe(
+      commandDeployHashStore,
+    );
     if (!handlers) {
       throw new Error("expected Discord client handlers");
     }
@@ -412,6 +429,22 @@ describe("registerDiscordMonitorListeners", () => {
 
     expect(registeredListenerTypes()).toContain("reaction-add");
     expect(registeredListenerTypes()).toContain("reaction-remove");
+  });
+
+  it("resets presence transition state on fresh ready gateway sessions", () => {
+    registerDiscordMonitorListeners(
+      createListenerParams({ discordConfig: { intents: { presence: true } } }),
+    );
+
+    expect(registeredListenerTypes()).toEqual([
+      "interaction",
+      "message",
+      "thread-update",
+      "presence",
+      "presence-guild-create",
+      "presence-guild-delete",
+      "presence-ready",
+    ]);
   });
 });
 

@@ -87,7 +87,8 @@ function resolveSlackMessageText(message: {
   attachments?: SlackAttachment[];
 }): string | undefined {
   const messageText =
-    normalizeOptionalString(message.text) ?? resolveSlackAttachmentFallbackText(message.attachments);
+    normalizeOptionalString(message.text) ??
+    resolveSlackAttachmentFallbackText(message.attachments);
   return chooseSlackPrimaryText({
     messageText,
     blocksText: resolveSlackBlocksText(message.blocks),
@@ -172,7 +173,7 @@ export function resetSlackThreadStarterCacheForTest(): void {
   THREAD_STARTER_CACHE.clear();
 }
 
-export type SlackThreadMessage = {
+type SlackThreadMessage = {
   text: string;
   userId?: string;
   ts?: string;

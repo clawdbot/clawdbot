@@ -343,15 +343,20 @@ The first message should create a pairing request. The second message should rec
 
 ## Webhook security
 
-By default, OpenClaw validates `X-Twilio-Signature` using `publicWebhookUrl` and `authToken`. Keep `publicWebhookUrl` byte-for-byte aligned with the URL configured in Twilio, including scheme, host, path, and query string.
+By default, OpenClaw validates `X-Twilio-Signature` using `publicWebhookUrl` and `authToken`. Keep the endpoint portion of `publicWebhookUrl` byte-for-byte aligned with the URL configured in Twilio, including scheme, host, path, and query string. OpenClaw excludes Twilio [connection-override](https://www.twilio.com/docs/usage/webhooks/webhooks-connection-overrides) fragments (`#...`) from signature computation, as Twilio requires.
 
 The webhook route also enforces, independent of signature validation:
 
 - `POST` only.
-- Rate limit of 30 requests per minute per source IP (HTTP 429 above that).
+- Failed-request budget of 300 requests per minute per SMS account, webhook route, and resolved client address. All requests count toward this budget, but HTTP 429 is applied only after a request fails body parsing, Twilio validation, or AccountSid matching.
+- Dispatchable callback rate limit of 30 accepted callbacks per minute per SMS account, webhook route, and resolved client address after those checks pass (HTTP 429 above that). If signature validation is disabled, this 30/min limit is the unauthenticated dispatch cap.
+- Client addresses are resolved through the shared Gateway trusted-proxy rules. If `gateway.trustedProxies` contains the reverse proxy that forwards Twilio callbacks, OpenClaw keys these limits from the forwarded client address; otherwise it falls back to the direct socket address.
 - The payload `AccountSid` must match the configured `accountSid` (HTTP 403 otherwise).
 - Replayed `MessageSid` values are deduplicated for 10 minutes.
+- Each SMS account's replay cache retains up to 10,000 live message SIDs. When every slot is live, new webhooks for that account fail closed with HTTP 429 and a `Retry-After` header until the oldest slot expires.
 - Request bodies over 32 KB are rejected.
+
+Twilio does not retry HTTP 429 by default or document support for `Retry-After`. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds, so retries can still finish before a replay-cache slot expires. Configure a fallback URL when another handler must receive failed deliveries; treat a 429 as a fail-closed rejection, not reliable backpressure.
 
 For local tunnel testing only, you can set:
 

@@ -1,0 +1,35 @@
+title: Matrix E2EE CLI encryption setup targets one account in a multi-account config
+scenario:
+  id: matrix-e2ee-cli-encryption-setup-multi-account
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 90, "matrix:e2ee-cli": 6 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 120000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-cli-encryption-setup-multi-account
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE CLI Multi Account Setup Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js
+  call: runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario
+  args:
+    - expr: "scenarioContext"

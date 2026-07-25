@@ -50,7 +50,9 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
                     timestamp: 1),
                 Self.message(
                     role: "assistant",
-                    text: "Gateway is reachable. The only notable item is that push relay is still using local distribution, so device tests should stay on the local lane.",
+                    text: "Gateway is reachable. The only notable item is that push relay "
+                        + "is still using local distribution, so device tests should stay "
+                        + "on the local lane.",
                     timestamp: 2),
                 Self.toolCall(
                     id: "tool-preview-1",
@@ -69,8 +71,8 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
     func listModels() async throws -> [OpenClawChatModelChoice] {
         [
             OpenClawChatModelChoice(
-                modelID: "gpt-5.5",
-                name: "GPT-5.5",
+                modelID: "gpt-5.6-luna",
+                name: "GPT-5.6 Luna",
                 provider: "openai",
                 contextWindow: 400_000),
             OpenClawChatModelChoice(
@@ -102,7 +104,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             count: 2,
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "openai",
-                model: "gpt-5.5",
+                model: "gpt-5.6-luna",
                 contextTokens: 400_000,
                 thinkingLevels: [
                     OpenClawChatThinkingLevelOption(id: "off", label: "off"),
@@ -200,11 +202,12 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             outputTokens: 900,
             totalTokens: 3400,
             modelProvider: "openai",
-            model: "gpt-5.5",
+            model: "gpt-5.6-luna",
             contextTokens: 400_000)
     }
 }
 
+#if os(iOS)
 #Preview("Chat") {
     OpenClawChatPreview(scenario: .connected)
 }
@@ -241,6 +244,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         markdownVariant: .standard,
         userAccent: OpenClawChatTheme.accent)
 }
+#endif
 
 private struct OpenClawChatPreview: View {
     let scenario: OpenClawChatPreviewTransport.Scenario

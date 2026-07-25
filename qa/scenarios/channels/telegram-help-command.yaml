@@ -2,11 +2,11 @@ title: Telegram help command reply
 
 scenario:
   id: telegram-help-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
     primary:
-      - channels.native-commands
+      - channels.channel-native-commands
   objective: Verify the Telegram help command returns the concise command guide.
   successCriteria:
     - The help command is accepted in the Telegram group command path.
@@ -15,6 +15,13 @@ scenario:
     - src/auto-reply/reply/commands-core.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "telegram:adapter": 3,
+        "telegram:all": 2,
+        "telegram:mock-release": 2,
+        "telegram:release": 2,
+      }
     kind: flow
     channel: telegram
     summary: Send Telegram help and verify the concise native command guide.

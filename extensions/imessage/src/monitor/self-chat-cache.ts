@@ -1,5 +1,6 @@
 // Imessage plugin module implements self chat cache behavior.
 import { createHash } from "node:crypto";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { formatIMessageChatTarget } from "../targets.js";
 
 type SelfChatCacheKeyParts = {
@@ -134,7 +135,10 @@ class DefaultSelfChatCache implements SelfChatCache {
       this.entryCount > MAX_SELF_CHAT_CACHE_ENTRIES &&
       this.insertionOrderOffset < this.insertionOrder.length
     ) {
-      const oldest = this.insertionOrder[this.insertionOrderOffset];
+      const oldest = expectDefined(
+        this.insertionOrder[this.insertionOrderOffset],
+        "oldest iMessage self-chat cache entry",
+      );
       this.insertionOrderOffset += 1;
       const entries = this.cache.get(oldest.key);
       if (!entries) {

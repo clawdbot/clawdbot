@@ -209,8 +209,7 @@ plus a small set of env defaults inside `extensions/copilot/src/`:
 | `enableSessionTelemetry` | Optional SDK session telemetry flag.                                                                                                                                                                                                                                                            |
 
 OpenClaw plugin hooks need no Copilot-specific attempt configuration. The
-harness runs `before_prompt_build` (and the legacy `before_agent_start`
-compatibility hook), `llm_input`, `llm_output`, and `agent_end` through the
+harness runs `before_prompt_build`, `llm_input`, `llm_output`, and `agent_end` through the
 standard harness helpers. Successful SDK compactions also run
 `before_compaction` and `after_compaction`. Bridged OpenClaw tools run
 `before_tool_call` and report `after_tool_call`; `hooksConfig` remains for
@@ -279,10 +278,10 @@ keeps `/btw` behavior identical to other non-Codex runtimes.
   surface.
 - PI session state does not migrate when an agent switches to `copilot`.
   Selection is per attempt; existing PI sessions remain valid.
-- `ask_user` uses the same OpenClaw prompt-and-reply path as the Codex
-  harness: when the Copilot SDK asks for user input, OpenClaw posts a
-  blocking prompt to the active channel/TUI, and the next queued user
-  message resolves the SDK request.
+- `ask_user` uses the provider-neutral gateway question runtime. The Control
+  UI shows the same question card as other OpenClaw questions, supported
+  channels render choice buttons, and the next queued plain-text message
+  resolves that gateway record before the SDK request returns.
 
 ## Permissions and ask_user
 
@@ -295,7 +294,7 @@ plugin policies, before-tool-call hooks, and two-phase plugin approvals via
 the gateway (`plugin.approval.request`) all run through the exact same code
 path as native PI attempts.
 
-The SDK Tool returned by `convertOpenClawToolToSdkTool` is marked with:
+Each SDK tool returned by the Copilot tool bridge is marked with:
 
 - `overridesBuiltInTool: true` — replaces the Copilot CLI's built-in tool of
   the same name (edit, read, write, bash, ...) so every tool call routes back
@@ -361,10 +360,11 @@ a configured `github-copilot` auth profile). When the resolved mode is
 `useLoggedInUser`, the session-level field is omitted so the SDK keeps
 deriving identity from the logged-in identity.
 
-`ask_user` uses `SessionConfig.onUserInputRequest`. The bridge accepts choice
-indexes or labels for fixed-choice requests, accepts free-form answers when
-the SDK request allows them, and cancels a pending request when the OpenClaw
-attempt is aborted.
+`ask_user` uses `SessionConfig.onUserInputRequest`. The bridge registers SDK
+choices or option-less free-text prompts as gateway questions, accepts choice
+indexes or labels for fixed-choice requests, and accepts free-form answers
+when the SDK request allows them. Aborting the OpenClaw attempt cancels the
+gateway record and returns an empty SDK answer.
 
 ## Related
 

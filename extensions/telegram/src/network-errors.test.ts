@@ -1,7 +1,6 @@
 // Telegram tests cover network errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
   isRetryableTelegramApiError,
   isTelegramRateLimitError,
@@ -74,10 +73,6 @@ describe("isRecoverableTelegramNetworkError", () => {
 
     tagTelegramNetworkError(slackDnsError, {
       method: "getUpdates",
-      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
-    });
-    expect(getTelegramNetworkErrorOrigin(slackDnsError)).toEqual({
-      method: "getupdates",
       url: "https://api.telegram.org/bot123456:ABC/getUpdates",
     });
     expect(isTelegramPollingNetworkError(slackDnsError)).toBe(true);
@@ -174,7 +169,6 @@ describe("isRecoverableTelegramNetworkError", () => {
     const inner = new Error("inner");
     tagTelegramNetworkError(inner, { method: " ", url: " " });
     const outer = Object.assign(new Error("outer"), { cause: inner });
-    expect(getTelegramNetworkErrorOrigin(outer)).toEqual({ method: null, url: null });
     expect(isTelegramPollingNetworkError(outer)).toBe(false);
   });
 

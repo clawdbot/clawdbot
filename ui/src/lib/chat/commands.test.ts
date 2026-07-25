@@ -1,21 +1,18 @@
 // @vitest-environment node
+import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   getRemoteCommandEntries,
   parseSlashCommand,
   replaceSlashCommands,
-  resetSlashCommandsForTest,
   SLASH_COMMANDS,
 } from "./commands.ts";
 
 afterEach(() => {
-  resetSlashCommandsForTest();
+  replaceSlashCommands(buildFallbackSlashCommands());
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
@@ -267,7 +264,7 @@ describe("parseSlashCommand", () => {
 
     const remoteCommands = SLASH_COMMANDS.filter((entry) => entry.name.startsWith("plugin-"));
     expect(remoteCommands).toHaveLength(500);
-    const first = remoteCommands[0];
+    const first = expectDefined(remoteCommands[0], "first capped remote command");
     expect(first.aliases).toHaveLength(19);
     expect(first.description).toBe("d".repeat(1_999));
     expect(first.args?.split(" ")).toHaveLength(20);

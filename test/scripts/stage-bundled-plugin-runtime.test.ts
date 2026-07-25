@@ -28,7 +28,7 @@ describe("stageBundledPluginRuntime", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const symlinkSpy = vi
         .spyOn(fs, "symlinkSync")
-        .mockImplementation((target, targetPath, type) => {
+        .mockImplementation((_target, targetPath, type) => {
           if (
             String(targetPath).includes(`${path.sep}dist-runtime${path.sep}`) &&
             type !== "junction"

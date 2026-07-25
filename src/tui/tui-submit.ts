@@ -1,5 +1,6 @@
 // Handles TUI input submission and command dispatch.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { TuiChatSubmitAdmission } from "./tui-submit-state.js";
 
 export type TuiSubmitAction = "local shell" | "command" | "message";
 
@@ -26,8 +27,11 @@ export function createEditorSubmitHandler(params: {
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
   onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
-  canSubmitMessage?: (value: string) => boolean;
-  onBlockedMessageSubmit?: (value: string) => void;
+  admitMessage?: (value: string) => TuiChatSubmitAdmission;
+  onBlockedMessageSubmit?: (
+    value: string,
+    reason: Exclude<TuiChatSubmitAdmission, "allowed">,
+  ) => void;
 }) {
   return (text: string) => {
     const raw = text;
@@ -57,9 +61,10 @@ export function createEditorSubmitHandler(params: {
       return;
     }
 
-    if (params.canSubmitMessage && !params.canSubmitMessage(value)) {
+    const admission = params.admitMessage?.(value) ?? "allowed";
+    if (admission !== "allowed") {
       params.editor.setText(value);
-      params.onBlockedMessageSubmit?.(value);
+      params.onBlockedMessageSubmit?.(value, admission);
       return;
     }
 

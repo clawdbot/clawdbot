@@ -1,8 +1,13 @@
 // Cron protocol schema tests cover runtime validation for cron protocol payloads.
 import { describe, expect, it } from "vitest";
-import { CronJobStateSchema } from "../../packages/gateway-protocol/src/schema.js";
+import {
+  CronJobStateSchema,
+  CronPacingSchema,
+  CronUpdateParamsSchema,
+} from "../../packages/gateway-protocol/src/schema.js";
 
 type SchemaLike = {
+  description?: string;
   properties?: Record<string, unknown>;
   deprecated?: boolean;
 };
@@ -22,5 +27,22 @@ describe("cron protocol schema", () => {
     expect(properties.lastFailureNotificationDelivered).toBeDefined();
     expect(properties.lastFailureNotificationDeliveryStatus).toBeDefined();
     expect(properties.lastFailureNotificationDeliveryError).toBeDefined();
+  });
+
+  it("reports stream identity without accepting it in state patches", () => {
+    const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    expect(stateProperties.streamSourceIdentity).toBeDefined();
+
+    const updateProperties = (CronUpdateParamsSchema as SchemaLike).properties ?? {};
+    const patchProperties = (updateProperties.patch as SchemaLike | undefined)?.properties ?? {};
+    const patchStateProperties =
+      (patchProperties.state as SchemaLike | undefined)?.properties ?? {};
+    expect(patchStateProperties.streamSourceIdentity).toBeUndefined();
+  });
+
+  it("documents that pacing requires at least one bound", () => {
+    expect((CronPacingSchema as SchemaLike).description).toContain(
+      "at least one of min or max is required",
+    );
   });
 });

@@ -41,8 +41,8 @@ export function installBrowserCommonMiddleware(app: Express) {
     });
     next();
   });
-  app.use(express.json({ limit: "1mb" }));
   app.use(browserMutationGuardMiddleware());
+  app.use(express.json({ limit: "1mb" }));
 }
 
 /** Installs optional token/password auth for Browser control-server requests. */

@@ -6,7 +6,7 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -29,7 +29,7 @@ const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-export type MattermostRequestInit = RequestInit & {
+type MattermostRequestInit = RequestInit & {
   timeoutMs?: number;
 };
 
@@ -91,10 +91,22 @@ export function normalizeMattermostBaseUrl(raw?: string | null): string | undefi
   return withoutTrailing.replace(/\/api\/v4$/i, "");
 }
 
-function buildMattermostApiUrl(baseUrl: string, path: string): string {
+export function buildMattermostApiUrl(baseUrl: string, path: string): string {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
     throw new Error("Mattermost baseUrl is required");
+  }
+  const pathname = (path.split(/[?#]/, 1)[0] ?? "").replace(/[\t\r\n]/g, "").replace(/\\/g, "/");
+  for (const segment of pathname.split("/")) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment).replace(/[\t\r\n]/g, "");
+    } catch {
+      throw new Error("Mattermost API path must not contain unsafe path segments");
+    }
+    if (decoded.split(/[\\/]/).some((part) => part === "." || part === "..")) {
+      throw new Error("Mattermost API path must not contain unsafe path segments");
+    }
   }
   const suffix = path.startsWith("/") ? path : `/${path}`;
   return `${normalized}/api/v4${suffix}`;
@@ -328,7 +340,7 @@ export async function sendMattermostTyping(
   });
 }
 
-export async function createMattermostDirectChannel(
+async function createMattermostDirectChannel(
   client: MattermostClient,
   userIds: string[],
   signal?: AbortSignal,
@@ -444,55 +456,35 @@ export async function createMattermostDirectChannelWithRetry(
   } = options;
   const timeoutMs = resolveTimerTimeoutMs(rawTimeoutMs, 30000);
 
-  let lastError: Error | undefined;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
+  return await retryAsync(
+    async () => {
       // Use AbortController for per-request timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
       try {
-        const result = await createMattermostDirectChannel(
-          client,
-          userIds,
-          controller.signal,
-          timeoutMs,
-        );
-        return result;
+        return await createMattermostDirectChannel(client, userIds, controller.signal, timeoutMs);
+      } catch (err) {
+        // Normalize before rethrowing so shouldRetry/onRetry below always see Errors.
+        throw err instanceof Error ? err : new Error(String(err));
       } finally {
         clearTimeout(timeoutId);
       }
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-
-      // Don't retry on the last attempt
-      if (attempt >= maxRetries) {
-        break;
-      }
-
-      // Check if error is retryable
-      if (!isRetryableError(lastError)) {
-        throw lastError;
-      }
-
-      // Calculate exponential backoff delay with full-jitter
-      // Jitter is proportional to the exponential delay, not a fixed 1000ms
-      // This ensures backoff behaves correctly for small delay configurations
-      const exponentialDelay = initialDelayMs * 2 ** attempt;
-      const jitter = Math.random() * exponentialDelay;
-      const delayMs = Math.min(exponentialDelay + jitter, maxDelayMs);
-
-      if (onRetry) {
-        onRetry(attempt + 1, delayMs, lastError);
-      }
-
-      // Wait before retrying
-      await sleep(delayMs);
-    }
-  }
-
-  throw lastError ?? new Error("Failed to create DM channel after retries");
+    },
+    {
+      attempts: maxRetries + 1,
+      // Core retry raises maxDelayMs to the minDelayMs floor, but the schema
+      // allows initialDelayMs above the (defaulted) maxDelayMs cap. The cap is
+      // the documented contract here and the reply-delivery barrier budgets
+      // with it, so clamp the base instead of letting the floor win.
+      minDelayMs: Math.min(initialDelayMs, maxDelayMs),
+      maxDelayMs,
+      // Full jitter (uniform [delay, 2*delay) with maxDelayMs applied after
+      // the draw) preserves the schedule pinned by client.retry.test.ts.
+      jitter: "full",
+      shouldRetry: (err) => isRetryableError(err as Error),
+      onRetry: (info) => onRetry?.(info.attempt, info.delayMs, info.err as Error),
+    },
+  );
 }
 
 function isRetryableError(error: Error): boolean {
@@ -527,7 +519,11 @@ function isRetryableError(error: Error): boolean {
     if (!clientErrorMatch) {
       continue;
     }
-    const statusCode = Number.parseInt(clientErrorMatch[1], 10);
+    const statusCodeText = clientErrorMatch[1];
+    if (!statusCodeText) {
+      continue;
+    }
+    const statusCode = Number.parseInt(statusCodeText, 10);
     if (statusCode >= 400 && statusCode < 500) {
       return false;
     }

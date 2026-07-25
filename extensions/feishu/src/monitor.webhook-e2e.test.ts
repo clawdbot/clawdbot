@@ -1,6 +1,7 @@
 // Feishu tests cover monitor.webhook e2e plugin behavior.
 import crypto from "node:crypto";
 import type { Server } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
@@ -14,6 +15,7 @@ const probeFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
+  registerFeishuAiAgent: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock("./client.js", async () => {
@@ -26,7 +28,8 @@ vi.mock("./client.js", async () => {
 
 vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
-import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
+import { monitorFeishuProvider } from "./monitor.js";
 import { httpServers } from "./monitor.state.js";
 
 beforeAll(async () => {
@@ -71,8 +74,8 @@ async function postSignedPayload(url: string, payload: Record<string, unknown>) 
   });
 }
 
-afterEach(async () => {
-  await stopFeishuMonitor();
+afterEach(() => {
+  cleanupFeishuMonitorStateForTests();
 });
 
 afterAll(() => {
@@ -254,7 +257,10 @@ describe("Feishu webhook signed-request e2e", () => {
           encryptKey: "encrypt_key",
           rawBody: JSON.stringify(payload),
         });
-        headers["x-lark-signature"] = headers["x-lark-signature"].slice(0, 12);
+        headers["x-lark-signature"] = expectDefined(
+          headers["x-lark-signature"],
+          "Feishu webhook signature",
+        ).slice(0, 12);
 
         const response = await fetch(url, {
           method: "POST",

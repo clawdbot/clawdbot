@@ -1,18 +1,32 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
-import {
-  clearUsageBarTemplateCacheForTest,
-  loadUsageBarTemplate,
-} from "./template.js";
+import { loadUsageBarTemplate } from "./template.js";
+import { clearUsageBarTemplateCacheForTest } from "./template.test-support.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: warnSpy }),
 }));
+
+const capturedWatchers = vi.hoisted(() => [] as Array<ReturnType<typeof import("node:fs").watch>>);
+
+vi.mock("node:fs", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("node:fs")>();
+  const origWatch = orig.watch;
+  return {
+    ...orig,
+    watch: ((path: unknown, opts: unknown, cb: unknown) => {
+      const w = origWatch(path as never, opts as never, cb as never);
+      capturedWatchers.push(w);
+      return w;
+    }) as typeof orig.watch,
+  };
+});
 
 const tplA = { segments: [{ text: "A" }] };
 const tplB = { output: { default: [{ text: "B" }] } };
@@ -22,6 +36,7 @@ const cleanups: Array<() => void> = [];
 afterEach(() => {
   clearUsageBarTemplateCacheForTest();
   warnSpy.mockClear();
+  capturedWatchers.splice(0);
   for (const fn of cleanups.splice(0)) {
     fn();
   }
@@ -179,10 +194,62 @@ describe("loadUsageBarTemplate", () => {
       // disk — not return stale in-memory data. This proves both eviction and
       // watcher closure. Re-accessing paths[0] may evict another entry, but
       // the non-evicted check above has already completed.
-      writeFileSync(paths[0], JSON.stringify({ segments: [{ text: "v2-0" }] }));
+      writeFileSync(
+        expectDefined(paths[0], "paths[0] test invariant"),
+        JSON.stringify({ segments: [{ text: "v2-0" }] }),
+      );
       expect(loadUsageBarTemplate(paths[0])).toMatchObject({
         segments: [{ text: "v2-0" }],
       });
+    });
+
+    it("recovers after watcher error by clearing the dead watcher reference", async () => {
+      const path = tmpFile("t.json", JSON.stringify(tplA));
+
+      // Load valid template → creates a watcher in the cache.
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
+      expect(capturedWatchers.length).toBe(1);
+
+      // Write invalid JSON to trigger the change handler, which sets
+      // entry.template = undefined.
+      writeFileSync(path, "{ not json");
+      // Wait for the watcher to deliver the change event.
+      await new Promise((r) => {
+        setTimeout(r, 200);
+      });
+
+      // The template is now invalid — served as DEFAULT.
+      expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+
+      // Simulate a transient watcher error.
+      // Without the fix: entry.watcher stays truthy → permanent DEFAULT.
+      // With the fix: entry.watcher is cleared → recovery on next access.
+      capturedWatchers[0]?.emit("error", new Error("simulated watcher error"));
+
+      // Write valid content to disk.
+      writeFileSync(path, JSON.stringify(tplB));
+
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
+    });
+
+    it("reloads a still-valid template after watcher error", async () => {
+      const path = tmpFile("t.json", JSON.stringify(tplA));
+
+      // Load valid template → creates a watcher in the cache.
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
+      expect(capturedWatchers.length).toBe(1);
+
+      // Simulate a transient watcher error while the template is still valid.
+      capturedWatchers[0]?.emit("error", new Error("simulated watcher error"));
+
+      // Without the fix (entry.template cleared): the stale tplA is still
+      // served from cache because entry.template is truthy.  File edits
+      // are never observed because the dead watcher doesn't fire and
+      // loadUsageBarTemplate never calls cacheTemplateFile() again.
+      // With the fix: entry.template is also cleared, so the next load
+      // re-reads from disk and creates a fresh watcher.
+      writeFileSync(path, JSON.stringify(tplB));
+      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
     });
 
     it("does not evict when retrying the same key after a prior miss", () => {
@@ -211,7 +278,10 @@ describe("loadUsageBarTemplate", () => {
       expect(loadUsageBarTemplate(invalidPath)).toMatchObject(tplB);
 
       // validPaths[0] should still be cached — not evicted by the retry.
-      writeFileSync(validPaths[0], JSON.stringify({ segments: [{ text: "changed" }] }));
+      writeFileSync(
+        expectDefined(validPaths[0], "validPaths[0] test invariant"),
+        JSON.stringify({ segments: [{ text: "changed" }] }),
+      );
       expect(loadUsageBarTemplate(validPaths[0])).toMatchObject({
         segments: [{ text: `v1-0` }],
       });

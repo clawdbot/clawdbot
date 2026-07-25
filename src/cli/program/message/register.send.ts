@@ -22,7 +22,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         )
         .option(
           "--presentation <json>",
-          "Shared presentation payload as JSON (text, context, dividers, charts, buttons, selects)",
+          "Shared presentation payload as JSON (text, context, dividers, charts, tables, buttons, selects)",
         )
         .option("--delivery <json>", "Shared delivery preferences as JSON")
         .option("--pin", "Request that the delivered message be pinned when supported", false)

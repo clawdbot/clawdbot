@@ -3,7 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfigMock: vi.fn<() => OpenClawConfig>(),
@@ -40,13 +40,13 @@ describe("resolveSessionKeyForRun", () => {
   beforeEach(() => {
     hoisted.loadConfigMock.mockReset();
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest();
     resetResolvedSessionKeyForRunCacheForTest();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest();
     resetResolvedSessionKeyForRunCacheForTest();
   });
 

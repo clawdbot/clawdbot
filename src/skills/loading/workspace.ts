@@ -22,6 +22,7 @@ import {
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
 import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
+import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -33,9 +34,22 @@ import type {
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
+import {
+  hasUnavailableSkillSecretOwners,
+  isSkillSecretOwnerUnavailable,
+  resolveBundledAllowlist,
+  shouldIncludeSkill,
+} from "./config.js";
+import {
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+  resolveSkillKey,
+} from "./frontmatter.js";
+import {
+  loadSkillsFromDirSafe,
+  readSkillFrontmatterSafe,
+  type LocalSkillLoadDiagnostic,
+} from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
@@ -169,6 +183,17 @@ function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string
 
 function compactPathForConsoleMessage(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
+}
+
+function warnInvalidSkillFrontmatter(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
+  skillsLogger.warn("Skipping skill with invalid frontmatter.", {
+    source,
+    filePath: diagnostic.path,
+    error: diagnostic.message,
+    consoleMessage:
+      `Skipping skill with invalid frontmatter: ` +
+      `file=${compactPathForConsoleMessage(diagnostic.path)} error=${diagnostic.message}`,
+  });
 }
 
 function filterSkillEntries(
@@ -621,6 +646,7 @@ function loadContainedSkillRecords(params: {
     dir: params.skillDir,
     source: params.source,
     maxBytes: params.maxSkillFileBytes,
+    onDiagnostic: (diagnostic) => warnInvalidSkillFrontmatter(params.source, diagnostic),
   });
   const records = unwrapLoadedSkillRecords(loaded).filter(
     (record) => path.resolve(record.skill.baseDir) === expectedBaseDir,
@@ -1349,6 +1375,9 @@ export function formatSkillsCompact(
       }
     }
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    if (skill.locationNote) {
+      lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
+    }
     if (skill.promptVersion) {
       lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
     }
@@ -1482,10 +1511,14 @@ export function buildWorkspaceSkillSnapshot(
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
+      skillKey: resolveSkillKey(entry.skill, entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
+    ...(opts?.eligibility?.nodeSkills
+      ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
+      : {}),
     resolvedSkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
@@ -1540,7 +1573,10 @@ function resolveWorkspaceSkillPromptState(
   }
   const skillEntries = opts?.entries
     ? filterArchivedSkillEntries(opts.entries)
-    : loadSkillEntries(workspaceDir, opts);
+    : mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+        canExec: opts?.eligibility?.nodeSkills?.canExec,
+        node: opts?.eligibility?.nodeSkills?.node,
+      });
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,
@@ -1581,8 +1617,72 @@ export function resolveSkillsPromptForRun(params: {
   eligibility?: SkillEligibilityContext;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
+  if (params.skillsSnapshot && !snapshotPrompt) {
+    return "";
+  }
+  const snapshotHasLegacySkillIdentity = params.skillsSnapshot?.skills.some(
+    (skill) => !skill.skillKey,
+  );
   if (snapshotPrompt) {
-    return snapshotPrompt;
+    const snapshotHasUnavailableSkill =
+      params.skillsSnapshot?.skills.some((skill) =>
+        isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name),
+      ) ||
+      (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners());
+    if (
+      snapshotHasUnavailableSkill &&
+      params.skillsSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
+    ) {
+      return "";
+    }
+    if (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners()) {
+      return "";
+    }
+    const unavailableNames = new Set(
+      params.skillsSnapshot?.skills
+        .filter(
+          (skill) => skill.skillKey !== undefined && isSkillSecretOwnerUnavailable(skill.skillKey),
+        )
+        .map((skill) => escapeXml(skill.name)),
+    );
+    if (unavailableNames.size === 0) {
+      return snapshotPrompt;
+    }
+    const catalogOpen = "<available_skills>";
+    const catalogClose = "</available_skills>";
+    const catalogStart = snapshotPrompt.indexOf(catalogOpen);
+    const catalogEnd = snapshotPrompt.indexOf(catalogClose, catalogStart + catalogOpen.length);
+    if (
+      catalogStart < 0 ||
+      catalogEnd < 0 ||
+      snapshotPrompt.includes(catalogOpen, catalogStart + catalogOpen.length) ||
+      snapshotPrompt.includes(catalogClose, catalogEnd + catalogClose.length)
+    ) {
+      return "";
+    }
+    const bodyStart = catalogStart + catalogOpen.length;
+    const catalogBody = snapshotPrompt.slice(bodyStart, catalogEnd);
+    const blockPattern = /\n[ ]{2}<skill>\n[\s\S]*?\n[ ]{2}<\/skill>/g;
+    let cursor = 0;
+    let filteredBody = "";
+    for (const match of catalogBody.matchAll(blockPattern)) {
+      const gap = catalogBody.slice(cursor, match.index);
+      const block = match[0];
+      const name = /^[ ]{4}<name>(.*)<\/name>$/m.exec(block)?.[1];
+      if (gap.trim() || !name) {
+        return "";
+      }
+      filteredBody += gap;
+      if (!unavailableNames.has(name)) {
+        filteredBody += block;
+      }
+      cursor = (match.index ?? 0) + block.length;
+    }
+    const tail = catalogBody.slice(cursor);
+    if (tail.trim()) {
+      return "";
+    }
+    return `${snapshotPrompt.slice(0, bodyStart)}${filteredBody}${tail}${snapshotPrompt.slice(catalogEnd)}`.trim();
   }
   if (params.entries && params.entries.length > 0) {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
@@ -1610,7 +1710,10 @@ export function loadWorkspaceSkillEntries(
     includeArchived?: boolean;
   },
 ): SkillEntry[] {
-  const entries = loadSkillEntries(workspaceDir, opts);
+  const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+    canExec: opts?.eligibility?.nodeSkills?.canExec,
+    node: opts?.eligibility?.nodeSkills?.node,
+  });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   if (effectiveSkillFilter === undefined && opts?.eligibility === undefined) {
     return entries;
@@ -1629,7 +1732,10 @@ export function loadVisibleWorkspaceSkillEntries(
     eligibility?: SkillEligibilityContext;
   },
 ): SkillEntry[] {
-  const entries = loadSkillEntries(workspaceDir, opts);
+  const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+    canExec: opts?.eligibility?.nodeSkills?.canExec,
+    node: opts?.eligibility?.nodeSkills?.node,
+  });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
 }
@@ -1786,4 +1892,4 @@ export function filterWorkspaceSkillEntriesWithOptions(
 ): SkillEntry[] {
   return filterSkillEntries(entries, opts?.config, opts?.skillFilter, opts?.eligibility);
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

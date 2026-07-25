@@ -18,7 +18,6 @@ import {
 const SCENARIO_ID = "clawhub-release-candidate-checklist";
 const SCENARIO_TITLE = "ClawHub release candidate npm package install proof";
 const SOURCE_PATH = "test/e2e/qa-lab/plugins/clawhub-release-candidate-install.ts";
-const COVERAGE_ID = "clawhub.npm-pack-local-release-candidate-installs";
 const DEFAULT_TARBALL_ENV = "OPENCLAW_QA_RELEASE_CANDIDATE_TARBALL";
 const CHECKOUT_BUILD_RESULT_PREFIX = "__OPENCLAW_QA_RELEASE_CANDIDATE_TARBALL__";
 const execFileAsync = promisify(execFile);
@@ -361,14 +360,13 @@ function createClawHubEvidenceWriter(options: ProducerOptions) {
   return createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "parallels-npm-update.log",
-    primaryModel: "mock-openai/gpt-5.5",
+    primaryModel: "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
       id: SCENARIO_ID,
       title: SCENARIO_TITLE,
       sourcePath: SOURCE_PATH,
-      primaryCoverageIds: [COVERAGE_ID],
       docsRefs: ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"],
       codeRefs: [
         SOURCE_PATH,

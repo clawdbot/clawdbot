@@ -10,6 +10,17 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+"plugin: linux-node":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/linux-node/**"
+          - "docs/nodes/camera.md"
+          - "docs/nodes/location-command.md"
+          - "docs/platforms/linux.md"
+"plugin: cua-computer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cua-computer/**"
 "plugin: pixverse":
   - changed-files:
       - any-glob-to-any-file:
@@ -25,6 +36,11 @@
       - any-glob-to-any-file:
           - "extensions/irc/**"
           - "docs/channels/irc.md"
+"channel: reef":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/reef/**"
+          - "docs/channels/reef.md"
 "channel: feishu":
   - changed-files:
       - any-glob-to-any-file:
@@ -46,6 +62,18 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: teams-meetings":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/teams-meetings/**"
+          - "docs/plugins/teams-meetings.md"
+          - "docs/plugins/reference/teams-meetings.md"
+"plugin: zoom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zoom-meetings/**"
+          - "docs/plugins/zoom-meetings.md"
+          - "docs/plugins/reference/zoom-meetings.md"
 "plugin: workboard":
   - changed-files:
       - any-glob-to-any-file:
@@ -63,6 +91,10 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mxc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mxc/**"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
@@ -191,6 +223,11 @@
       - any-glob-to-any-file:
           - "apps/android/**"
           - "docs/platforms/android.md"
+"app: wearos":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/android/wear/**"
+          - "apps/android/wear-shared/**"
 "app: ios":
   - changed-files:
       - any-glob-to-any-file:
@@ -202,6 +239,12 @@
           - "apps/macos/**"
           - "docs/platforms/macos.md"
           - "docs/platforms/mac/**"
+"app: linux":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/linux/**"
+          - "docs/platforms/linux.md"
+          - "extensions/linux-canvas/**"
 "app: web-ui":
   - changed-files:
       - any-glob-to-any-file:
@@ -219,6 +262,14 @@
           - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
+
+"fleet":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/fleet/**"
+          - "src/cli/fleet-cli/**"
+          - "docs/gateway/multi-tenant-hosting.md"
+          - "docs/cli/fleet.md"
 
 "docs":
   - changed-files:
@@ -341,6 +392,12 @@
           - "extensions/vault/**"
           - "docs/plugins/vault.md"
           - "docs/plugins/reference/vault.md"
+"extensions: onepassword":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/onepassword/**"
+          - "docs/plugins/onepassword.md"
+          - "docs/plugins/reference/onepassword.md"
 "extensions: webhooks":
   - changed-files:
       - any-glob-to-any-file:
@@ -370,11 +427,20 @@
       - any-glob-to-any-file:
           - "extensions/cerebras/**"
           - "docs/providers/cerebras.md"
+"extensions: baseten":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/baseten/**"
+          - "docs/providers/baseten.md"
 "extensions: clawrouter":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/clawrouter/**"
           - "docs/providers/clawrouter.md"
+"extensions: crabbox":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/crabbox/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
@@ -406,6 +472,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic/**"
+          - "docs/providers/anthropic.md"
+          - "docs/plugins/reference/anthropic.md"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:
@@ -444,12 +512,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
-"extensions: codex-supervisor":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/codex-supervisor/**"
-          - "docs/plugins/reference/codex-supervisor.md"
-          - "docs/specs/claw-supervisor.md"
+          - "docs/plugins/codex-harness.md"
+          - "docs/plugins/codex-harness-reference.md"
+          - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-supervision.md"
+          - "docs/specs/codex-supervision.md"
 "extensions: copilot":
   - changed-files:
       - any-glob-to-any-file:

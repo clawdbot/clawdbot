@@ -1,7 +1,14 @@
 /**
  * Dispatches embedded attempts to native harness or OpenClaw backend execution.
  */
-import { runAgentHarnessAttempt } from "../../harness/selection.js";
+import {
+  runAgentHarnessAttempt,
+  runAgentHarnessSettledTurnFinalization,
+} from "../../harness/selection.js";
+import type {
+  AgentHarness,
+  AgentHarnessSettledTurnFinalizationResult,
+} from "../../harness/types.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**
@@ -11,4 +18,13 @@ export async function runEmbeddedAttemptWithBackend(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   return runAgentHarnessAttempt(params);
+}
+
+/** Runs one operation-specific settled-turn finalization through the selected harness. */
+export async function runEmbeddedSettledTurnFinalizationWithBackend(
+  params: EmbeddedRunAttemptParams,
+  settledAttempt: EmbeddedRunAttemptResult,
+  harness: AgentHarness,
+): Promise<AgentHarnessSettledTurnFinalizationResult> {
+  return runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness);
 }

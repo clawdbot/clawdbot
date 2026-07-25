@@ -80,6 +80,8 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 
 In generic issue/PR triage, hot queues, landable shortlists, or "what is still open", exclude PRs authored by maintainers with broad repository access until 14 days after `created_at`. Prefer external contributors' PRs. An ordinary request for landing candidates does not override the age gate. Continue suppressing maintainer-authored issues by default.
 
+Treat live repository permission as the source of truth. Before surfacing a finalist whose access is not already known, check `gh api repos/openclaw/openclaw/collaborators/<login>/permission`; suppress write, maintain, or admin access even when the login is absent from the fast-path list below. Read or triage access alone does not trigger suppression unless the login is explicitly listed.
+
 Suppress by default when the opener/author is one of:
 
 - `@vincentkoc`
@@ -89,6 +91,8 @@ Suppress by default when the opener/author is one of:
 - `@shakkernerd`
 - `@mbelinky`
 - `@joshavant`
+- `@pgondhi987`
+- `@mmaps`
 - `@ngutman`
 - `@vignesh07`
 - `@huntharo`
@@ -305,7 +309,7 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
 - Before landing any PR with non-trivial code changes, run `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already covered it, the change is trivial/docs-only, or the user opts out.
-- When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents: it verifies exact-head hosted CI/Testbox instead of running full `pnpm` gates locally.
+- When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents: it verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full `pnpm` gates locally. Do not rebase only because `main` advanced; behind-main drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts.
 - Use `scripts/committer "<msg>" <file...>` for scoped commits instead of manual `git add` and `git commit`.
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-gateway-action"
+description = "Enables the gateway_action command without any pre-configured scope."
+commands.allow = ["gateway_action"]
+
+[[permission]]
+identifier = "deny-gateway-action"
+description = "Denies the gateway_action command without any pre-configured scope."
+commands.deny = ["gateway_action"]

@@ -1,10 +1,6 @@
 // Verifies cron-isolated sessions suppress run-mode subagent acceptance notes.
 import { describe, expect, it } from "vitest";
-import {
-  resolveSubagentSpawnAcceptedNote,
-  SUBAGENT_SPAWN_ACCEPTED_NOTE,
-  SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
-} from "./subagent-spawn-accepted-note.js";
+import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 
 describe("sessions_spawn: cron isolated session note suppression", () => {
   it("suppresses ACCEPTED_NOTE for cron isolated sessions (mode=run)", () => {
@@ -17,43 +13,41 @@ describe("sessions_spawn: cron isolated session note suppression", () => {
   });
 
   it("preserves ACCEPTED_NOTE for regular sessions (mode=run)", () => {
-    expect(
-      resolveSubagentSpawnAcceptedNote({
-        spawnMode: "run",
-        agentSessionKey: "agent:main:telegram:63448508",
-      }),
-    ).toBe(SUBAGENT_SPAWN_ACCEPTED_NOTE);
+    const note = resolveSubagentSpawnAcceptedNote({
+      spawnMode: "run",
+      agentSessionKey: "agent:main:telegram:63448508",
+    });
+
+    expect(note).toContain("Auto-announce is push-based");
   });
 
   it("keeps regular run guidance push-based without recommending sessions_yield", () => {
     // Run-mode children announce completion asynchronously, not through polling.
-    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain("Auto-announce is push-based");
-    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain("Continue any independent work");
-    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain(
-      "wait for runtime completion events to arrive as user messages",
-    );
-    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain(
-      "only answer after completion events for ALL required children arrive",
-    );
-    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).not.toContain("sessions_yield");
+    const note = resolveSubagentSpawnAcceptedNote({ spawnMode: "run" });
+
+    expect(note).toContain("Auto-announce is push-based");
+    expect(note).toContain("Continue any independent work");
+    expect(note).toContain("wait for runtime completion events to arrive as user messages");
+    expect(note).toContain("only answer after completion events for ALL required children arrive");
+    expect(note).not.toContain("sessions_yield");
   });
 
   it("preserves ACCEPTED_NOTE for non-canonical cron-like keys", () => {
-    expect(
-      resolveSubagentSpawnAcceptedNote({
-        spawnMode: "run",
-        agentSessionKey: "agent:main:slack:cron:job:run:uuid",
-      }),
-    ).toBe(SUBAGENT_SPAWN_ACCEPTED_NOTE);
+    const note = resolveSubagentSpawnAcceptedNote({
+      spawnMode: "run",
+      agentSessionKey: "agent:main:slack:cron:job:run:uuid",
+    });
+
+    expect(note).toContain("Auto-announce is push-based");
   });
 
   it("preserves ACCEPTED_NOTE when agentSessionKey is undefined", () => {
-    expect(
-      resolveSubagentSpawnAcceptedNote({
-        spawnMode: "run",
-        agentSessionKey: undefined,
-      }),
-    ).toBe(SUBAGENT_SPAWN_ACCEPTED_NOTE);
+    const note = resolveSubagentSpawnAcceptedNote({
+      spawnMode: "run",
+      agentSessionKey: undefined,
+    });
+
+    expect(note).toContain("Auto-announce is push-based");
   });
 
   it("uses the session note for cron session-mode spawns", () => {
@@ -62,6 +56,6 @@ describe("sessions_spawn: cron isolated session note suppression", () => {
         spawnMode: "session",
         agentSessionKey: "agent:main:cron:dd871818:run:cf959c9f",
       }),
-    ).toBe(SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE);
+    ).toBe("thread-bound session stays active after this task; continue in-thread for follow-ups.");
   });
 });

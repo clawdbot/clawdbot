@@ -46,4 +46,25 @@ describe("SettingsManager runtime overrides", () => {
     expect(settingsManager.getPackages()).toEqual(["npm:@openclaw/example"]);
     expect(settingsManager.getCompactionReserveTokens()).toBe(50_000);
   });
+
+  it("recursively merges provider retry overrides and replaces arrays", () => {
+    const settingsManager = SettingsManager.inMemory({
+      retry: {
+        provider: { timeoutMs: 30_000, maxRetries: 2, maxRetryDelayMs: 60_000 },
+      },
+      packages: ["npm:@openclaw/base"],
+    });
+
+    settingsManager.applyOverrides({
+      retry: { provider: { maxRetries: 5 } },
+      packages: ["npm:@openclaw/override"],
+    });
+
+    expect(settingsManager.getProviderRetrySettings()).toEqual({
+      timeoutMs: 30_000,
+      maxRetries: 5,
+      maxRetryDelayMs: 60_000,
+    });
+    expect(settingsManager.getPackages()).toEqual(["npm:@openclaw/override"]);
+  });
 });

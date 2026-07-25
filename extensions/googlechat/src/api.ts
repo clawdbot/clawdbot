@@ -1,5 +1,4 @@
 // Googlechat API module exposes the plugin public contract.
-import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   parseMediaContentLength,
@@ -10,10 +9,9 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
 import { getGoogleChatAccessToken } from "./auth.js";
-import type { GoogleChatCardV2, GoogleChatReaction, GoogleChatSpace } from "./types.js";
+import type { GoogleChatCardV2, GoogleChatSpace } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
-const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 const GOOGLECHAT_API_TIMEOUT_MS = 30_000;
 const GOOGLECHAT_MEDIA_TIMEOUT_GRACE_MS = 30_000;
 const GOOGLECHAT_MEDIA_MIN_BYTES_PER_SECOND = 256 * 1024;
@@ -184,13 +182,11 @@ export async function sendGoogleChatMessage(params: {
   text?: string;
   thread?: string;
   cardsV2?: GoogleChatCardV2[];
-  attachments?: Array<{ attachmentUploadToken: string; contentName?: string }>;
 }): Promise<{ messageName?: string; threadName?: string } | null> {
-  const { account, space, text, thread, cardsV2, attachments } = params;
+  const { account, space, text, thread, cardsV2 } = params;
   if (
     text &&
     (!cardsV2 || cardsV2.length === 0) &&
-    (!attachments || attachments.length === 0) &&
     shouldSuppressGoogleChatManualExecApprovalFollowupText(text)
   ) {
     return null;
@@ -204,14 +200,6 @@ export async function sendGoogleChatMessage(params: {
   }
   if (thread) {
     body.thread = { name: thread };
-  }
-  if (attachments && attachments.length > 0) {
-    body.attachment = attachments.map((item) =>
-      Object.assign(
-        { attachmentDataRef: { attachmentUploadToken: item.attachmentUploadToken } },
-        item.contentName ? { contentName: item.contentName } : {},
-      ),
-    );
   }
   const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
   if (thread) {
@@ -263,52 +251,6 @@ export async function deleteGoogleChatMessage(params: {
   await fetchOk(account, url, { method: "DELETE" });
 }
 
-export async function uploadGoogleChatAttachment(params: {
-  account: ResolvedGoogleChatAccount;
-  space: string;
-  filename: string;
-  buffer: Buffer;
-  contentType?: string;
-}): Promise<{ attachmentUploadToken?: string }> {
-  const { account, space, filename, buffer, contentType } = params;
-  const boundary = `openclaw-${crypto.randomUUID()}`;
-  const metadata = JSON.stringify({ filename });
-  const header = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`;
-  const mediaHeader = `--${boundary}\r\nContent-Type: ${contentType ?? "application/octet-stream"}\r\n\r\n`;
-  const footer = `\r\n--${boundary}--\r\n`;
-  const body = Buffer.concat([
-    Buffer.from(header, "utf8"),
-    Buffer.from(mediaHeader, "utf8"),
-    buffer,
-    Buffer.from(footer, "utf8"),
-  ]);
-
-  const url = `${CHAT_UPLOAD_BASE}/${space}/attachments:upload?uploadType=multipart`;
-  const payload = await withGoogleChatResponse<{
-    attachmentDataRef?: { attachmentUploadToken?: string };
-  }>({
-    account,
-    url,
-    init: {
-      method: "POST",
-      headers: {
-        "Content-Type": `multipart/related; boundary=${boundary}`,
-      },
-      body,
-    },
-    auditContext: "googlechat.upload",
-    errorPrefix: "Google Chat upload",
-    timeoutMs: resolveGoogleChatMediaTimeoutMs(body.length),
-    handleResponse: async (response) =>
-      await readGoogleChatJsonResponse<{
-        attachmentDataRef?: { attachmentUploadToken?: string };
-      }>(response, "Google Chat upload failed"),
-  });
-  return {
-    attachmentUploadToken: payload.attachmentDataRef?.attachmentUploadToken,
-  };
-}
-
 export async function downloadGoogleChatMedia(params: {
   account: ResolvedGoogleChatAccount;
   resourceName: string;
@@ -317,44 +259,6 @@ export async function downloadGoogleChatMedia(params: {
   const { account, resourceName, maxBytes } = params;
   const url = `${CHAT_API_BASE}/media/${resourceName}?alt=media`;
   return await fetchBuffer(account, url, undefined, { maxBytes });
-}
-
-export async function createGoogleChatReaction(params: {
-  account: ResolvedGoogleChatAccount;
-  messageName: string;
-  emoji: string;
-}): Promise<GoogleChatReaction> {
-  const { account, messageName, emoji } = params;
-  const url = `${CHAT_API_BASE}/${messageName}/reactions`;
-  return await fetchJson<GoogleChatReaction>(account, url, {
-    method: "POST",
-    body: JSON.stringify({ emoji: { unicode: emoji } }),
-  });
-}
-
-export async function listGoogleChatReactions(params: {
-  account: ResolvedGoogleChatAccount;
-  messageName: string;
-  limit?: number;
-}): Promise<GoogleChatReaction[]> {
-  const { account, messageName, limit } = params;
-  const url = new URL(`${CHAT_API_BASE}/${messageName}/reactions`);
-  if (limit && limit > 0) {
-    url.searchParams.set("pageSize", String(limit));
-  }
-  const result = await fetchJson<{ reactions?: GoogleChatReaction[] }>(account, url.toString(), {
-    method: "GET",
-  });
-  return result.reactions ?? [];
-}
-
-export async function deleteGoogleChatReaction(params: {
-  account: ResolvedGoogleChatAccount;
-  reactionName: string;
-}): Promise<void> {
-  const { account, reactionName } = params;
-  const url = `${CHAT_API_BASE}/${reactionName}`;
-  await fetchOk(account, url, { method: "DELETE" });
 }
 
 export async function findGoogleChatDirectMessage(params: {

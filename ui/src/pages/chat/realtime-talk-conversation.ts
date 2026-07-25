@@ -112,6 +112,9 @@ function upsertRealtimeConversationEntry(
     return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
   }
   const entry = state.entries[targetIndex];
+  if (!entry) {
+    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
+  }
   const updatedText =
     role === "assistant"
       ? mergeAssistantTranscriptText(entry.text, text, isFinal)
@@ -145,7 +148,7 @@ function rememberRealtimeConversationEntry(
   return { ...state, assistantEntryId: isFinal ? null : entryId };
 }
 
-export function finishRealtimeConversationEntry(
+function finishRealtimeConversationEntry(
   state: RealtimeTalkConversationState,
   role: RealtimeTalkConversationRole,
   nowMs: number = Date.now(),

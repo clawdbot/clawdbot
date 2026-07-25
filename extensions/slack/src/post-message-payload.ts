@@ -26,6 +26,7 @@ export type SlackBasePostMessagePayload = SlackPostThreadPayload & {
   text: string;
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
+  mrkdwn?: boolean;
   unfurl_links?: boolean;
   unfurl_media?: boolean;
 };
@@ -51,6 +52,7 @@ export function buildSlackPostMessagePayload(params: {
   replyBroadcast?: boolean;
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
+  mrkdwn?: boolean;
   unfurl?: SlackUnfurlOptions;
 }): SlackBasePostMessagePayload {
   const threadPayload =
@@ -66,6 +68,7 @@ export function buildSlackPostMessagePayload(params: {
       text: params.text,
       blocks: params.blocks,
       ...(params.metadata ? { metadata: params.metadata } : {}),
+      ...(typeof params.mrkdwn === "boolean" ? { mrkdwn: params.mrkdwn } : {}),
       ...threadPayload,
       ...unfurlPayload,
     };
@@ -74,6 +77,7 @@ export function buildSlackPostMessagePayload(params: {
     channel: params.channelId,
     text: params.text,
     ...(params.metadata ? { metadata: params.metadata } : {}),
+    ...(typeof params.mrkdwn === "boolean" ? { mrkdwn: params.mrkdwn } : {}),
     ...threadPayload,
     ...unfurlPayload,
   };

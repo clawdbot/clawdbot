@@ -14,6 +14,7 @@ export type DevicePairingPendingRequest = {
   deviceFamily?: string;
   clientId?: string;
   clientMode?: string;
+  browserOrigin?: string;
   role?: string;
   roles?: string[];
   scopes?: string[];
@@ -50,11 +51,19 @@ export type DeviceAuthToken = {
  * How the latest pairing approval was granted. "silent" is a same-host local
  * policy approval and the only prune-eligible kind: local clients re-pair
  * silently and cannot collide with another machine's records. "trusted-cidr"
- * is also non-interactive but crosses hosts, so it is never pruned
- * automatically (display metadata is not a machine identity). "owner" and
- * "bootstrap" approvals required a user action and are never pruned.
+ * and "ssh-verified" are also non-interactive but cross hosts, so they are
+ * never pruned automatically (display metadata is not a machine identity).
+ * "trusted-proxy" records were approved from an authenticated proxy identity.
+ * "owner" and "bootstrap" approvals required a user action. None of these
+ * cross-host or interactive approval kinds are pruned automatically.
  */
-export type PairedDeviceApprovalKind = "owner" | "silent" | "trusted-cidr" | "bootstrap";
+export type PairedDeviceApprovalKind =
+  | "owner"
+  | "silent"
+  | "trusted-cidr"
+  | "trusted-proxy"
+  | "ssh-verified"
+  | "bootstrap";
 
 /**
  * Approved node capability surface for a node-role device. Device pairing
@@ -110,10 +119,12 @@ export type PairedDevice = {
   deviceId: string;
   publicKey: string;
   displayName?: string;
+  operatorLabel?: string;
   platform?: string;
   deviceFamily?: string;
   clientId?: string;
   clientMode?: string;
+  browserOrigin?: string;
   role?: string;
   roles?: string[];
   scopes?: string[];

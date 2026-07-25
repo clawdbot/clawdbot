@@ -27,9 +27,14 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
         accountId && accountId !== DEFAULT_ACCOUNT_ID
           ? (lineConfig.accounts?.[accountId] ?? {})
           : lineConfig;
-      const hasToken =
-        Boolean((entry as any).channelAccessToken) || Boolean((entry as any).tokenFile);
-      const hasSecret = Boolean((entry as any).channelSecret) || Boolean((entry as any).secretFile);
+      const credentials = entry as {
+        channelAccessToken?: unknown;
+        channelSecret?: unknown;
+        secretFile?: unknown;
+        tokenFile?: unknown;
+      };
+      const hasToken = Boolean(credentials.channelAccessToken) || Boolean(credentials.tokenFile);
+      const hasSecret = Boolean(credentials.channelSecret) || Boolean(credentials.secretFile);
       return { tokenSource: hasToken && hasSecret ? "config" : "none" };
     },
   );

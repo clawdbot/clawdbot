@@ -73,6 +73,14 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist(entries, resolution, ["python3"])).toBe(entry);
     });
 
+    it("ignores legacy generated path-only allow-always entries", () => {
+      const legacyGenerated = { pattern: "/usr/bin/python3", source: "allow-always" as const };
+      const manual = { pattern: "/usr/bin/python3" };
+
+      expect(matchAllowlist([legacyGenerated], resolution, ["python3", "b.py"])).toBeNull();
+      expect(matchAllowlist([manual], resolution, ["python3", "b.py"])).toBe(manual);
+    });
+
     it("matches argPattern entries with regex", () => {
       const entry = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
       const entries: ExecAllowlistEntry[] = [entry];
@@ -80,6 +88,18 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBe(entry);
       expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toBeNull();
       expect(matchAllowlist(entries, resolution, ["python3", "a.py", "--verbose"])).toBeNull();
+    });
+
+    it("does not discard redirect-shaped direct argv literals", () => {
+      const restricted = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
+      const explicit = {
+        pattern: "/usr/bin/python3",
+        argPattern: "^a\\.py 2>/dev/null$",
+      };
+      const argv = ["python3", "a.py", "2>/dev/null"];
+
+      expect(matchAllowlist([restricted], resolution, argv)).toBeNull();
+      expect(matchAllowlist([explicit], resolution, argv)).toBe(explicit);
     });
 
     it.each(["linux", "darwin", "win32"])(
@@ -120,9 +140,7 @@ describe("exec allowlist matching", () => {
         ];
 
         expect(matchAllowlist(restrictedEntries, resolution, undefined, platform)).toBeNull();
-        expect(matchAllowlist(mixedEntries, resolution, undefined, platform)).toBe(
-          mixedEntries[1],
-        );
+        expect(matchAllowlist(mixedEntries, resolution, undefined, platform)).toBe(mixedEntries[1]);
       },
     );
 

@@ -21,7 +21,7 @@ describe("Discord directory contract", () => {
       channels: {
         discord: {
           token: "discord-test",
-          dm: { allowFrom: ["<@111>", "<@!333>", "nope"] },
+          allowFrom: ["<@111>", "<@!333>", "nope"],
           dms: { "222": {} },
           guilds: {
             "123": {
@@ -62,7 +62,7 @@ describe("Discord directory contract", () => {
       channels: {
         discord: {
           token: envSecret,
-          dm: { allowFrom: ["<@111>"] },
+          allowFrom: ["<@111>"],
           guilds: {
             "123": {
               channels: {
@@ -78,14 +78,14 @@ describe("Discord directory contract", () => {
     await expectDirectoryIds(listDiscordDirectoryGroupsFromConfig, cfg, ["channel:555"]);
   });
 
-  it("uses account legacy dm.allowFrom before inherited root allowFrom", async () => {
+  it("uses account allowFrom before inherited root allowFrom", async () => {
     const cfg = {
       channels: {
         discord: {
           allowFrom: ["<@111>"],
           accounts: {
             work: {
-              dm: { allowFrom: ["<@222>"] },
+              allowFrom: ["<@222>"],
             },
           },
         },

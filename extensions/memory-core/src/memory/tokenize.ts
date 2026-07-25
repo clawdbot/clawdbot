@@ -34,17 +34,18 @@ export function tokenize(text: string): Set<string> {
   // Track CJK characters with their original positions
   const chars = Array.from(lower);
   const cjkData: { char: string; index: number }[] = [];
-  for (let i = 0; i < chars.length; i++) {
-    if (CJK_RE.test(chars[i])) {
-      cjkData.push({ char: chars[i], index: i });
+  for (const [i, char] of chars.entries()) {
+    if (CJK_RE.test(char)) {
+      cjkData.push({ char, index: i });
     }
   }
 
   // Build bigrams only from originally adjacent CJK characters
   const bigrams: string[] = [];
-  for (let i = 0; i < cjkData.length - 1; i++) {
-    if (cjkData[i + 1].index === cjkData[i].index + 1) {
-      bigrams.push(cjkData[i].char + cjkData[i + 1].char);
+  for (const [i, next] of cjkData.slice(1).entries()) {
+    const previous = cjkData[i];
+    if (previous !== undefined && next.index === previous.index + 1) {
+      bigrams.push(previous.char + next.char);
     }
   }
 

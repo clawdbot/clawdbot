@@ -89,16 +89,17 @@ Notes:
 - `node.pair.approve` uses the pending request's declared commands to enforce
   extra approval scopes:
   - commandless request: `operator.pairing`
-  - non-exec command request: `operator.pairing` + `operator.write`
-  - `system.run` / `system.run.prepare` / `system.which` request:
-    `operator.pairing` + `operator.admin`
+  - ordinary command request: `operator.pairing` + `operator.write`
+  - admin-sensitive request containing `system.run`, `system.run.prepare`,
+    `system.which`, `browser.proxy`, `fs.listDir`, or
+    `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
 
 <Warning>
 Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.
 
 - Live node commands come from what the node declares on connect, filtered by
-  the gateway's global node command policy (`gateway.nodes.allowCommands` and
-  `denyCommands`).
+  the gateway's global node command policy (`gateway.nodes.commands.allow` and
+  `gateway.nodes.commands.deny`).
 - Per-node `system.run` allow and ask policy lives on the node in
   `exec.approvals.node.*`, not in the pairing record.
 
@@ -139,11 +140,63 @@ sessions, and updates pairing metadata only when the device/node identity is
 already paired. A self-declared `client.id` value is not enough to write
 last-seen state.
 
+## SSH-verified device auto-approval (default)
+
+First-time `role: node` device pairing from a private/CGNAT address is
+auto-approved when the gateway can **prove machine ownership over SSH**: it
+connects back to the pairing host (`BatchMode`, `StrictHostKeyChecking=yes`),
+runs `openclaw node identity --json` there, and approves only when the remote
+device id and public key match the pending request exactly. The key match is
+what makes this safe: reachability alone never approves, so NAT co-tenants,
+other users on a shared host, and LAN spoofing all fall through to the normal
+prompt.
+
+Enabled by default. Requirements for it to fire:
+
+- The gateway process user (or `sshVerify.user`) can SSH to the node host
+  non-interactively (keys/agent; Tailscale SSH works too), and the host key is
+  already trusted.
+- `openclaw` resolves on the remote `PATH` for non-interactive `sh -lc`.
+- The connecting IP is a direct (non-proxied, non-loopback) private, ULA,
+  link-local, or CGNAT address, or matches `sshVerify.cidrs` when set.
+- Same eligibility floor as trusted-CIDR approval: fresh scopeless node
+  pairing only; upgrades, browsers, Control UI, and WebChat always prompt.
+
+While a probe is running, the node client is told to keep retrying
+(`wait_then_retry`) instead of pausing for manual approval; if the probe
+fails, the next attempt falls back to the normal prompt flow. Failed targets
+get a short cooldown (5 minutes after a key mismatch).
+
+Approved devices record `approvedVia: "ssh-verified"` and their first declared
+capability surface is approved in the same step — the key match already proves
+the node runs under the operator's account on a machine they own, which is the
+same claim a manual capability approval asserts. Later surface upgrades still
+prompt.
+
+Harden or disable:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        // Disable entirely:
+        sshVerify: false,
+        // ...or scope/tune the probe:
+        // sshVerify: { user: "me", identity: "~/.ssh/probe", timeoutMs: 7000, cidrs: ["10.0.0.0/8"] },
+      },
+    },
+  },
+}
+```
+
 ## Auto-approval (macOS app)
 
-The macOS app can attempt a **silent approval** when:
+The macOS app can attempt a **silent approval** of node capability requests
+when:
 
-- the request is marked `silent`, and
+- the request is marked `silent` (the gateway marks the first capability
+  surface silent when device pairing was approved non-interactively), and
 - the app can verify an SSH connection to the gateway host using the same
   user.
 
@@ -170,7 +223,9 @@ in with explicit CIDRs or exact IPs:
 Security boundary:
 
 - Disabled when `gateway.nodes.pairing.autoApproveCidrs` is unset.
-- No blanket LAN or private-network auto-approve mode exists.
+- No blanket LAN or private-network auto-approve mode exists; SSH-verified
+  auto-approval (above) requires a cryptographic device-key match, never
+  network locality alone.
 - Only a fresh `role: node` device pairing request with no requested scopes is
   eligible.
 - Operator, browser, Control UI, and WebChat clients stay manual.
@@ -182,7 +237,7 @@ Security boundary:
 
 Non-interactive approvals record their provenance on the paired-device row:
 same-host local policy approvals as `silent`, trusted-CIDR node approvals as
-`trusted-cidr`. Clients whose state directory is ephemeral (temporary homes,
+`trusted-cidr`, SSH-verified node approvals as `ssh-verified`. Clients whose state directory is ephemeral (temporary homes,
 containers, per-run sandboxes) mint a fresh device keypair per run, and every
 run silently re-pairs as a brand-new device — without cleanup the paired list
 grows one stale row per run.
@@ -198,10 +253,10 @@ removal event is broadcast.
 Boundaries:
 
 - Only records whose latest approval was same-host local (`silent`) are
-  eligible, as trigger and as target. Trusted-CIDR pairings cross hosts where
-  display metadata is not a machine identity, so they are never removed
-  automatically — use the Control UI cleanup or `openclaw nodes remove` for
-  those.
+  eligible, as trigger and as target. Trusted-CIDR and SSH-verified pairings
+  cross hosts where display metadata is not a machine identity, so they are
+  never removed automatically — use the Control UI cleanup or
+  `openclaw nodes remove` for those.
 - Owner-approved and QR/setup-code (bootstrap) pairings are never removed
   automatically. Records approved before provenance existed stay protected,
   even after a later silent re-approval of the same device id.

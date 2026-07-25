@@ -2,6 +2,7 @@
 import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
+  formatMediaPlaceholderText,
   formatLocationText,
   implicitMentionKindWhen,
   logInboundDrop,
@@ -68,7 +69,7 @@ const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("./media-understanding.runtime.js"),
 );
 
-export type TelegramInboundBodyResult = {
+type TelegramInboundBodyResult = {
   bodyText: string;
   rawBody: string;
   historyKey?: string;
@@ -88,44 +89,6 @@ function formatAudioTranscriptForAgent(transcript: string): string {
   return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
 }
 
-type TelegramSavedMediaKind = "audio" | "document" | "image" | "video";
-
-function resolveSavedMediaKind(contentType: string | undefined): TelegramSavedMediaKind {
-  const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
-  if (normalized?.startsWith("audio/")) {
-    return "audio";
-  }
-  if (normalized?.startsWith("image/")) {
-    return "image";
-  }
-  if (normalized?.startsWith("video/")) {
-    return "video";
-  }
-  return "document";
-}
-
-function formatSavedMediaPlaceholder(allMedia: TelegramMediaRef[]): string | undefined {
-  if (allMedia.length === 0) {
-    return undefined;
-  }
-  const kinds = allMedia.map((media) => resolveSavedMediaKind(media.contentType));
-  const firstKind = kinds[0] ?? "document";
-  const kind = kinds.every((candidate) => candidate === firstKind) ? firstKind : "document";
-  if (allMedia.length === 1) {
-    return `<media:${kind}>`;
-  }
-  if (kind === "image") {
-    return `<media:image> (${allMedia.length} images)`;
-  }
-  if (kind === "video") {
-    return `<media:video> (${allMedia.length} videos)`;
-  }
-  if (kind === "audio") {
-    return `<media:audio> (${allMedia.length} audio attachments)`;
-  }
-  return `<media:document> (${allMedia.length} attachments)`;
-}
-
 function resolveTelegramMentionFacts(params: {
   canDetectMention: boolean;
   effectiveWasMentioned: boolean;
@@ -134,7 +97,6 @@ function resolveTelegramMentionFacts(params: {
   implicitMentionKinds: TelegramMentionFacts["implicitMentionKinds"];
   requireMention: boolean;
   shouldBypassMention: boolean;
-  shouldSkip: boolean;
 }): TelegramMentionFacts {
   let mentionSource: TelegramMentionFacts["mentionSource"];
   if (params.explicitlyMentionedBot) {
@@ -155,7 +117,6 @@ function resolveTelegramMentionFacts(params: {
     implicitMentionKinds: params.implicitMentionKinds,
     effectiveWasMentioned: params.effectiveWasMentioned,
     requireMention: params.requireMention,
-    shouldSkip: params.shouldSkip,
   };
 }
 
@@ -231,7 +192,7 @@ export async function resolveTelegramInboundBody(params: {
   });
   const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
     botUsername,
   });
@@ -257,17 +218,20 @@ export async function resolveTelegramInboundBody(params: {
   const originatingTo = providedOriginatingTo ?? buildTelegramInboundOriginTarget(chatId);
 
   const primaryMedia = resolveTelegramPrimaryMedia(msg);
-  let placeholder = primaryMedia?.placeholder ?? "";
+  const nativeMediaFacts =
+    allMedia.length > 0 ? allMedia : primaryMedia ? [{ kind: primaryMedia.kind }] : [];
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
-  const stickerSupportsVision = msg.sticker
-    ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })
-    : false;
+  const stickerSupportsVision =
+    msg.sticker && allMedia.some((media) => media.kind === "sticker" && media.path)
+      ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })
+      : false;
   const stickerCacheHit = Boolean(cachedStickerDescription) && !stickerSupportsVision;
+  let formattedStickerDescription: string | undefined;
   if (stickerCacheHit) {
     const emoji = allMedia[0]?.stickerMetadata?.emoji;
     const setName = allMedia[0]?.stickerMetadata?.setName;
     const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
-    placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
+    formattedStickerDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
   }
 
   const locationData = extractTelegramLocation(msg);
@@ -280,23 +244,23 @@ export async function resolveTelegramInboundBody(params: {
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
-    rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? placeholder;
+    rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? "";
   }
-  if (!rawBody && allMedia.length === 0) {
+  if (!rawBody && nativeMediaFacts.length === 0) {
     return null;
   }
 
   let bodyText = rawBody;
-  if (stickerCacheHit && placeholder && rawBody !== placeholder) {
-    bodyText = `${placeholder}\n${bodyText}`.trim();
+  if (formattedStickerDescription) {
+    bodyText = [formattedStickerDescription, rawBody].filter(Boolean).join("\n");
   }
-  if (allMedia.length === 0 && placeholder && rawBody !== placeholder) {
-    const mediaTag = primaryMedia?.fileRef.file_id
-      ? `${placeholder} [file_id:${primaryMedia.fileRef.file_id}]`
-      : placeholder;
-    bodyText = `${mediaTag}\n${bodyText}`.trim();
-  }
-  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
+  const isAudioMedia = (media: TelegramMediaRef) =>
+    media.kind === "audio" || media.contentType?.startsWith("audio/") === true;
+  const hasAudio = nativeMediaFacts.some(isAudioMedia);
+  const materializedMedia = allMedia.filter((media) => Boolean(media.path));
+  const materializedAudioIndex = allMedia.findIndex(
+    (media) => Boolean(media.path) && isAudioMedia(media),
+  );
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
@@ -306,6 +270,7 @@ export async function resolveTelegramInboundBody(params: {
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
     hasAudio &&
+    materializedAudioIndex >= 0 &&
     !hasUserText &&
     (!isGroup ||
       (requireMention &&
@@ -323,11 +288,7 @@ export async function resolveTelegramInboundBody(params: {
         OriginatingTo: originatingTo,
         AccountId: accountId,
         MessageThreadId: replyThreadId,
-        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-        MediaTypes:
-          allMedia.length > 0
-            ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
-            : undefined,
+        media: materializedMedia,
       };
       preflightTranscript = await transcribeFirstAudio({
         ctx: tempCtx,
@@ -339,33 +300,13 @@ export async function resolveTelegramInboundBody(params: {
     }
   }
   const audioTranscribedMediaIndex =
-    preflightTranscript === undefined
-      ? undefined
-      : allMedia.findIndex((media) => media.contentType?.startsWith("audio/"));
+    preflightTranscript === undefined ? undefined : materializedAudioIndex;
 
-  if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
+  if (hasAudio && !rawBody && preflightTranscript) {
     bodyText = formatAudioTranscriptForAgent(preflightTranscript);
   }
-
-  const savedMediaPlaceholder = formatSavedMediaPlaceholder(allMedia);
-  if (
-    !stickerCacheHit &&
-    !hasAudio &&
-    savedMediaPlaceholder &&
-    placeholder &&
-    bodyText === placeholder
-  ) {
-    bodyText = savedMediaPlaceholder;
-  }
-  if (!bodyText && allMedia.length > 0) {
-    if (hasAudio) {
-      bodyText = preflightTranscript
-        ? formatAudioTranscriptForAgent(preflightTranscript)
-        : "<media:audio>";
-    } else {
-      bodyText = savedMediaPlaceholder ?? "<media:document>";
-    }
-  }
+  const historyBody =
+    rawBody || formattedStickerDescription || formatMediaPlaceholderText(nativeMediaFacts);
 
   const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
   const explicitlyMentioned = botUsername
@@ -442,7 +383,7 @@ export async function resolveTelegramInboundBody(params: {
       limit: historyLimit,
       entry: {
         sender: buildSenderLabel(msg, senderId || chatId),
-        body: rawBody,
+        body: historyBody,
         timestamp: msg.date ? msg.date * 1000 : undefined,
         messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
       },
@@ -507,7 +448,6 @@ export async function resolveTelegramInboundBody(params: {
       implicitMentionKinds,
       requireMention: Boolean(requireMention),
       shouldBypassMention: mentionDecision.shouldBypassMention,
-      shouldSkip: mentionDecision.shouldSkip,
     }),
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,

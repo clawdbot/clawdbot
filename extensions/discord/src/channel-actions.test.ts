@@ -517,12 +517,14 @@ describe("discordMessageActions", () => {
       params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
+      requesterAccountId: "ops",
       requesterSenderId: "user-1",
       senderIsOwner: true,
       toolContext,
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
+      conversationReadOrigin: "delegated",
     });
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
@@ -530,12 +532,14 @@ describe("discordMessageActions", () => {
       params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
+      requesterAccountId: "ops",
       requesterSenderId: "user-1",
       senderIsOwner: true,
       toolContext,
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
+      conversationReadOrigin: "delegated",
     });
   });
 });

@@ -140,7 +140,7 @@ pnpm run repair:dispatch -- jobs/openclaw/inbox/clawsweeper-openclaw-openclaw-12
   --mode autonomous \
   --runner blacksmith-4vcpu-ubuntu-2404 \
   --execution-runner blacksmith-16vcpu-ubuntu-2404 \
-  --model gpt-5.5
+  --model gpt-5.6-sol
 ```
 
 Do not dispatch a just-created job before the job file is committed and pushed;

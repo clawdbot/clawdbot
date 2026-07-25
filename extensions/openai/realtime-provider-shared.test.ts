@@ -64,6 +64,9 @@ describe("createOpenAIRealtimeClientSecret", () => {
 
     expect(result.value).toBe("eph-secret-abc");
     expect(typeof result.expiresAt).toBe("number");
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
   });
 
   it("bounds oversized success response and cancels the stream", async () => {
@@ -114,6 +117,7 @@ describe("createOpenAIRealtimeClientSecret", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://api.openai.com/v1/realtime/client_secrets",
+        timeoutMs: 30_000,
         init: expect.objectContaining({
           body: JSON.stringify({ session: { type: "transcription" } }),
         }),

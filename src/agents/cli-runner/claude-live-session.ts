@@ -4,7 +4,6 @@
 import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
-import type { CliBackendConfig } from "../../config/types.js";
 import { createAbortError as createNamedAbortError } from "../../infra/abort-signal.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -19,17 +18,24 @@ import {
   minSecurity,
   normalizeExecAsk,
   resolveExecApprovalsFromFile,
+  resolveExecModePolicy,
   type ExecAsk,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import {
+  LEGACY_IMPLICIT_AGENT_ID,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "../agent-scope-config.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliUsage,
   type CliStreamJsonOutputLimits,
   type CliStreamingDelta,
   type CliThinkingDelta,
@@ -39,10 +45,22 @@ import {
   resolveCliStreamJsonOutputLimits,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
-import { FailoverError, isTimeoutError, resolveFailoverStatus } from "../failover-error.js";
+import {
+  type CliTimeoutContext,
+  FailoverError,
+  isTimeoutError,
+  resolveFailoverStatus,
+} from "../failover-error.js";
+import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import { LIVE_SESSION_LIMITS, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
+import {
+  requestClaudeNativeToolApproval,
+  resolveClaudeNativeToolApprovalPlan,
+} from "./claude-live-tool-approval.js";
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
+import { createCliOutputFailoverError } from "./output-error.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type ProcessSupervisor = ReturnType<
@@ -52,6 +70,8 @@ type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
   diagnosticRefs: ClaudeLiveDiagnosticRefs;
+  /** Enclosing run abort signal; authoritative for tool terminal reason on turn failure. */
+  abortSignal?: AbortSignal;
   outputLimits: ClaudeLiveOutputLimits;
   startedAtMs: number;
   rawLines: string[];
@@ -63,9 +83,20 @@ type ClaudeLiveTurn = {
   timeoutTimer: NodeJS.Timeout | null;
   activeTools: Map<string, ClaudeLiveActiveTool>;
   observedStdout: boolean;
+  /**
+   * Claude consumed queued session notifications before processing this turn.
+   * The following empty result is provisional; the same process can emit the
+   * real answer later, so a bounded grace observes whether output continues.
+   */
+  pendingSyntheticPlaceholder: boolean;
+  allowSyntheticContinuationGrace: boolean;
+  deferredSyntheticOutput: CliOutput | null;
+  syntheticContinuationTimer: NodeJS.Timeout | null;
   completedToolCallIds: Set<string>;
   toolEventCount: number;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onPhase?: (phase: "send" | "resolve") => void;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
@@ -77,6 +108,7 @@ type ClaudeLiveSession = {
   managedRun: ManagedRun;
   providerId: string;
   modelId: string;
+  sessionId?: string;
   noOutputTimeoutMs: number;
   stderr: string;
   stdoutBuffer: string;
@@ -86,6 +118,17 @@ type ClaudeLiveSession = {
   cleanupPromise: Promise<void> | null;
   closing: boolean;
   mcpCaptureKey?: string;
+  /**
+   * Native-tool allow-always grants are process-session scoped and in-memory only.
+   * They must not survive the Claude CLI process, so persistence is intentionally absent.
+   */
+  nativeToolApprovalGrants: Set<string>;
+  /**
+   * Subagent/workflow task ids from the latest background_tasks_changed event.
+   * That event lists all CLI background work, but only local_agent and
+   * local_workflow hold the final result (local_bash is killed at exit).
+   */
+  outstandingBackgroundTaskIds: Set<string>;
 };
 type ClaudeLiveSessionCreate = {
   generation: string;
@@ -116,9 +159,18 @@ type ClaudeLiveToolTerminalOutcome =
   | { outcome: "blocked"; deniedReason: string; reason?: string }
   | { outcome: "cancelled" | "failed" | "timed_out" | "unknown" };
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
-const CLAUDE_LIVE_MAX_SESSIONS = 16;
-const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
+// The observed queued-notification resume emits new process activity within
+// seconds. Cap this below the normal resumed no-output watchdog so terminal
+// placeholders still reach existing empty-response handling promptly.
+const CLAUDE_LIVE_SYNTHETIC_CONTINUATION_GRACE_MS = 30_000;
+// Claude Code uses these exact <synthetic> messages while draining internal
+// session work. Matching both the model sentinel and full text avoids treating
+// user-authored lookalikes as lifecycle signals.
+const CLAUDE_LIVE_PROVISIONAL_SYNTHETIC_PLACEHOLDERS = new Set([
+  "No response requested.",
+  "Continue from where you left off.",
+]);
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, ClaudeLiveSessionCreate>();
 
@@ -127,7 +179,7 @@ function sha256(value: string): string {
 }
 
 /** Closes all live Claude CLI sessions and clears creation promises for tests. */
-export function resetClaudeLiveSessionsForTest(): void {
+function resetClaudeLiveSessionsForTest(): void {
   for (const session of liveSessions.values()) {
     closeLiveSession(session, "restart");
   }
@@ -191,6 +243,7 @@ export async function rotateClaudeLiveMcpCaptureKeyForContext(
 /** Returns whether a prepared backend context is eligible for Claude live stdio reuse. */
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
   return (
+    context.params.sessionEntry?.execHost !== "node" &&
     context.backendResolved.id === "claude-cli" &&
     context.preparedBackend.backend.liveSession === "claude-stdio" &&
     context.preparedBackend.backend.output === "jsonl" &&
@@ -226,7 +279,6 @@ function stripLiveProcessArgs(
 ): string[] {
   const liveProcessFlags = new Set(
     [
-      backend.sessionArg,
       "--session-id",
       stripSystemPrompt ? backend.systemPromptArg : undefined,
       stripSystemPrompt ? backend.systemPromptFileArg : undefined,
@@ -248,7 +300,7 @@ function stripLiveProcessArgs(
 }
 
 /** Builds Claude CLI args for stream-json live sessions, stripping one-shot session flags. */
-export function buildClaudeLiveArgs(params: {
+function buildClaudeLiveArgs(params: {
   args: string[];
   backend: CliBackendConfig;
   systemPrompt: string;
@@ -280,6 +332,14 @@ export function buildClaudeLiveArgs(params: {
   return params.permissionMode
     ? upsertArgValue(liveArgs, "--permission-mode", params.permissionMode)
     : liveArgs;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.claudeLiveSessionTestApi")] = {
+    buildClaudeLiveArgs,
+    readConfiguredExecPolicy,
+    resetClaudeLiveSessionsForTest,
+  };
 }
 
 type ClaudeLiveSessionOwner = {
@@ -340,7 +400,6 @@ function buildClaudeLiveFingerprint(params: {
   );
   const unstableValueFlags = new Set(
     [
-      params.context.preparedBackend.backend.sessionArg,
       "--session-id",
       normalizeMcpConfigPath ? "--mcp-config" : undefined,
       normalizePluginDir ? "--plugin-dir" : undefined,
@@ -368,7 +427,7 @@ function buildClaudeLiveFingerprint(params: {
     stableArgv.push(entry);
   }
   return JSON.stringify({
-    command: params.context.preparedBackend.backend.command,
+    command: params.argv[0],
     workspaceDirHash: sha256(params.context.workspaceDir),
     cwdHash: params.context.cwdHash ?? sha256(params.context.cwd ?? params.context.workspaceDir),
     provider: params.context.params.provider,
@@ -381,6 +440,7 @@ function buildClaudeLiveFingerprint(params: {
     extraSystemPromptHash: params.context.extraSystemPromptHash,
     promptToolNamesHash: params.context.promptToolNamesHash,
     mcpConfigHash: params.context.preparedBackend.mcpConfigHash,
+    credentialFingerprint: params.context.preparedBackend.secretInput?.fingerprint,
     skillsFingerprint,
     argv: stableArgv,
     env: Object.keys(params.env)
@@ -419,6 +479,15 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
     clearTimeout(turn.timeoutTimer);
     turn.timeoutTimer = null;
   }
+  if (turn.syntheticContinuationTimer) {
+    clearTimeout(turn.syntheticContinuationTimer);
+    turn.syntheticContinuationTimer = null;
+  }
+  turn.deferredSyntheticOutput = null;
+}
+
+function clearOutstandingBackgroundTasks(session: ClaudeLiveSession): void {
+  session.outstandingBackgroundTaskIds.clear();
 }
 
 function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
@@ -432,6 +501,7 @@ function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
   turn.streamingParser.finish();
   failActiveClaudeLiveTools(turn, new Error("Tool result missing before turn completed"));
   clearTurnTimers(turn);
+  clearOutstandingBackgroundTasks(session);
   session.currentTurn = null;
   turn.resolve(output);
   scheduleIdleClose(session);
@@ -449,6 +519,7 @@ function failTurn(session: ClaudeLiveSession, error: unknown): void {
   turn.streamingParser.finish();
   failActiveClaudeLiveTools(turn, error);
   clearTurnTimers(turn);
+  clearOutstandingBackgroundTasks(session);
   session.currentTurn = null;
   turn.reject(error);
 }
@@ -491,6 +562,8 @@ function closeLiveSession(
   }
   if (error) {
     failTurn(session, error);
+  } else {
+    clearOutstandingBackgroundTasks(session);
   }
   session.managedRun.cancel("manual-cancel");
   void cleanupLiveSession(session);
@@ -511,6 +584,7 @@ function createTimeoutError(
   session: ClaudeLiveSession,
   message: string,
   code?: string,
+  cliTimeout?: CliTimeoutContext,
 ): FailoverError {
   return new FailoverError(message, {
     reason: "timeout",
@@ -518,6 +592,7 @@ function createTimeoutError(
     model: session.modelId,
     status: resolveFailoverStatus("timeout"),
     code,
+    cliTimeout,
   });
 }
 
@@ -670,11 +745,16 @@ function markClaudeLiveToolDenied(turn: ClaudeLiveTurn, tool: CliToolUseStartDel
 }
 
 function failActiveClaudeLiveTools(turn: ClaudeLiveTurn, error: unknown): void {
-  const timedOut =
-    isTimeoutError(error) || (error instanceof FailoverError && error.reason === "timeout");
-  const aborted = error instanceof Error && error.name === "AbortError";
-  const errorCategory = timedOut ? "timeout" : aborted ? "aborted" : "error";
-  const terminalReason = timedOut ? "timed_out" : aborted ? "cancelled" : "failed";
+  const terminalReason = resolveCliToolTerminalReason({
+    error,
+    abortSignal: turn.abortSignal,
+  });
+  const errorCategory =
+    terminalReason === "timed_out"
+      ? "timeout"
+      : terminalReason === "cancelled"
+        ? "aborted"
+        : "error";
   for (const activeTool of turn.activeTools.values()) {
     const event: Omit<DiagnosticToolExecutionErrorEvent, "seq" | "ts" | "type" | "errorCategory"> =
       {
@@ -721,15 +801,18 @@ function noteClaudeLiveProgress(
 
 // The CLI emits a tool_use line, then nothing until the tool result, so a
 // quiet long-running tool is indistinguishable from a wedged process at the
-// stdout level. While observed tool calls are outstanding, extend the quiet
-// window to the blocked-tool floor instead of killing mid-tool.
+// stdout level. While observed tool calls or CLI-reported background tasks
+// (background_tasks_changed) are outstanding, extend the quiet window to the
+// blocked-tool floor instead of killing mid-work.
 function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, delayMs: number): void {
   if (turn.noOutputTimer) {
     clearTimeout(turn.noOutputTimer);
   }
   turn.noOutputTimer = setTimeout(() => {
     const quietSinceMs = turn.lastOutputAtMs ?? turn.startedAtMs;
-    if (turn.activeTools.size > 0) {
+    const hasOutstandingBackgroundWork =
+      turn.activeTools.size > 0 || session.outstandingBackgroundTaskIds.size > 0;
+    if (hasOutstandingBackgroundWork) {
       const quietBudgetMs = Math.max(session.noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
       const remainingMs = quietSinceMs + quietBudgetMs - Date.now();
       if (remainingMs > 0) {
@@ -745,9 +828,131 @@ function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, dela
         `CLI produced no output for ${Math.round((Date.now() - quietSinceMs) / 1000)}s and was terminated.`,
         // Retryable only when the process never produced any output this turn.
         turn.lastOutputAtMs === null ? "cli_no_output_timeout" : undefined,
+        {
+          mode: "no-output",
+          timeoutSeconds: Math.round((Date.now() - quietSinceMs) / 1000),
+          observedActivity:
+            turn.lastOutputAtMs !== null || turn.toolEventCount > 0 || turn.rawLines.length > 0,
+          activeToolCount: turn.activeTools.size,
+          backgroundTaskCount: session.outstandingBackgroundTaskIds.size,
+        },
       ),
     );
   }, delayMs);
+}
+
+// Claude Code holds its final output for background subagents AND workflows
+// (headless "Background tasks at exit" contract); both continue the parent and
+// emit a post-drain result. Dropping either type here would finalize the turn
+// early and strand that work; the turn timeout stays the explicit hard bound.
+const CLAUDE_LIVE_RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
+
+/** Replace outstanding subagent/workflow task ids from background_tasks_changed. */
+function applyBackgroundTasksChanged(
+  session: ClaudeLiveSession,
+  parsed: Record<string, unknown>,
+): void {
+  if (parsed.type !== "system" || parsed.subtype !== "background_tasks_changed") {
+    return;
+  }
+  // tasks is the full authoritative list (not a delta). Only subagent/workflow
+  // types hold the final result; e.g. local_bash is listed but killed at exit.
+  const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+  session.outstandingBackgroundTaskIds.clear();
+  for (const task of tasks) {
+    if (!isRecord(task)) {
+      continue;
+    }
+    const taskType = typeof task.task_type === "string" ? task.task_type.trim() : "";
+    if (!CLAUDE_LIVE_RESULT_HOLDING_BACKGROUND_TASK_TYPES.has(taskType)) {
+      continue;
+    }
+    const taskId = typeof task.task_id === "string" ? task.task_id.trim() : "";
+    if (taskId) {
+      session.outstandingBackgroundTaskIds.add(taskId);
+    }
+  }
+}
+
+function isClaudeLiveProvisionalSyntheticPlaceholder(parsed: Record<string, unknown>): boolean {
+  if (parsed.type !== "assistant" || !isRecord(parsed.message)) {
+    return false;
+  }
+  const message = parsed.message;
+  if (message.model !== "<synthetic>") {
+    return false;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  const text = content
+    .flatMap((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? [block.text]
+        : [],
+    )
+    .join("")
+    .trim();
+  return CLAUDE_LIVE_PROVISIONAL_SYNTHETIC_PLACEHOLDERS.has(text);
+}
+
+function isClaudeLiveSubstantiveAssistantProgress(parsed: Record<string, unknown>): boolean {
+  if (parsed.type === "assistant" && isRecord(parsed.message)) {
+    return parsed.message.model !== "<synthetic>";
+  }
+  if (parsed.type !== "stream_event" || !isRecord(parsed.event)) {
+    return false;
+  }
+  const event = parsed.event;
+  return (
+    event.type === "content_block_delta" &&
+    isRecord(event.delta) &&
+    event.delta.type === "text_delta" &&
+    typeof event.delta.text === "string" &&
+    event.delta.text.length > 0
+  );
+}
+
+function deferClaudeLiveSyntheticResult(
+  session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
+  output: CliOutput,
+): void {
+  turn.pendingSyntheticPlaceholder = false;
+  turn.deferredSyntheticOutput = output;
+  if (turn.noOutputTimer) {
+    clearTimeout(turn.noOutputTimer);
+    turn.noOutputTimer = null;
+  }
+  if (turn.syntheticContinuationTimer) {
+    clearTimeout(turn.syntheticContinuationTimer);
+  }
+  const graceMs = Math.min(CLAUDE_LIVE_SYNTHETIC_CONTINUATION_GRACE_MS, session.noOutputTimeoutMs);
+  turn.syntheticContinuationTimer = setTimeout(() => {
+    if (session.currentTurn !== turn || !turn.deferredSyntheticOutput) {
+      return;
+    }
+    const terminalOutput = turn.deferredSyntheticOutput;
+    turn.syntheticContinuationTimer = null;
+    turn.deferredSyntheticOutput = null;
+    emitClaudeLiveProgress(turn, "cli_live:synthetic_placeholder_grace_expired");
+    finishTurn(session, terminalOutput);
+  }, graceMs);
+  emitClaudeLiveProgress(turn, "cli_live:result_deferred_synthetic_placeholder");
+}
+
+function noteClaudeLiveContinuationAfterSyntheticPlaceholder(
+  session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
+): void {
+  if (!turn.deferredSyntheticOutput) {
+    return;
+  }
+  if (turn.syntheticContinuationTimer) {
+    clearTimeout(turn.syntheticContinuationTimer);
+    turn.syntheticContinuationTimer = null;
+  }
+  turn.deferredSyntheticOutput = null;
+  armNoOutputTimer(session, turn, session.noOutputTimeoutMs);
+  emitClaudeLiveProgress(turn, "cli_live:synthetic_placeholder_continuation");
 }
 
 function resetNoOutputTimer(session: ClaudeLiveSession): void {
@@ -774,12 +979,25 @@ function readConfiguredExecPolicy(context: PreparedCliRunContext): {
   ask: ExecAsk;
   agentId: string;
 } {
-  const agentId = context.params.agentId ?? resolveAgentIdFromSessionKey(context.params.sessionKey);
-  const agentExec = context.params.config?.agents?.list?.find((agent) => agent.id === agentId)
-    ?.tools?.exec;
+  const agentId =
+    context.params.agentId ??
+    resolveAgentIdFromSessionKey(
+      context.params.sessionKey,
+      context.params.config
+        ? resolveDefaultAgentId(context.params.config)
+        : LEGACY_IMPLICIT_AGENT_ID,
+    );
+  const agentExec = context.params.config
+    ? resolveAgentConfig(context.params.config, agentId)?.tools?.exec
+    : undefined;
   const exec = agentExec ?? context.params.config?.tools?.exec;
-  const security = exec?.security ?? "full";
-  const configuredAsk = exec?.ask ?? "off";
+  const configured = resolveExecModePolicy({
+    mode: exec?.mode,
+    security: exec?.security ?? "full",
+    ask: exec?.ask ?? "off",
+  });
+  const security = configured.security;
+  const configuredAsk = configured.ask;
   const sessionAsk = normalizeExecAsk(context.params.sessionEntry?.execAsk);
   return {
     agentId,
@@ -803,7 +1021,7 @@ function resolveClaudeLiveExecPermission(context: PreparedCliRunContext): Claude
   return {
     security,
     ask,
-    permissionMode: security === "full" && ask === "off" ? "bypassPermissions" : "default",
+    permissionMode: resolveClaudeLiveMode(security, ask, process.getuid?.()),
   };
 }
 
@@ -831,25 +1049,57 @@ function parseClaudeLiveJsonLine(
   return isRecord(parsed) ? parsed : null;
 }
 
-function createParsedOutputError(session: ClaudeLiveSession, output: CliOutput): FailoverError {
-  const message = output.errorText || "Claude CLI failed.";
-  const reason = classifyFailoverReason(message, { provider: session.providerId }) ?? "unknown";
-  const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
-  return new FailoverError(message, {
-    reason,
-    provider: session.providerId,
-    model: session.modelId,
-    status: resolveFailoverStatus(reason),
-    code,
-  });
-}
-
 function writeClaudeLiveControlResponse(session: ClaudeLiveSession, response: unknown): void {
   const stdin = session.managedRun.stdin;
   if (!stdin) {
     throw new Error("Claude CLI live session stdin is unavailable");
   }
   stdin.write(`${JSON.stringify(response)}\n`);
+}
+
+function writeClaudeLiveToolControlResponse(params: {
+  session: ClaudeLiveSession;
+  requestId: string;
+  toolUseId?: string;
+  toolInput: Record<string, unknown>;
+  decision: { behavior: "allow" } | { behavior: "deny"; message: string };
+}): void {
+  writeClaudeLiveControlResponse(params.session, {
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: params.requestId,
+      response:
+        params.decision.behavior === "allow"
+          ? {
+              behavior: "allow",
+              updatedInput: params.toolInput,
+              ...(params.toolUseId ? { toolUseID: params.toolUseId } : {}),
+            }
+          : {
+              behavior: "deny",
+              decisionClassification: "user_reject",
+              message: params.decision.message,
+            },
+    },
+  });
+}
+
+function markClaudeLiveControlToolDenied(params: {
+  turn: ClaudeLiveTurn;
+  toolUseId?: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+}): void {
+  if (!params.toolUseId || !params.toolName) {
+    return;
+  }
+  markClaudeLiveToolDenied(params.turn, {
+    toolCallId: params.toolUseId,
+    name: params.toolName,
+    kind: "tool_use",
+    args: params.toolInput,
+  });
 }
 
 function handleClaudeLiveControlRequest(
@@ -871,33 +1121,80 @@ function handleClaudeLiveControlRequest(
   const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
   const toolName = typeof request.tool_name === "string" ? request.tool_name.trim() : "";
   const toolInput = isRecord(request.input) ? request.input : {};
-  const allowed = turn.execPermission.security === "full" && turn.execPermission.ask === "off";
-  if (!allowed && toolUseId && toolName) {
-    markClaudeLiveToolDenied(turn, {
-      toolCallId: toolUseId,
-      name: toolName,
-      kind: "tool_use",
-      args: toolInput,
+  const plan = resolveClaudeNativeToolApprovalPlan(turn.execPermission);
+  if (
+    plan === "allow" ||
+    (plan === "prompt" &&
+      turn.execPermission.ask !== "always" &&
+      session.nativeToolApprovalGrants.has(toolName))
+  ) {
+    writeClaudeLiveToolControlResponse({
+      session,
+      requestId,
+      toolUseId,
+      toolInput,
+      decision: { behavior: "allow" },
     });
+    return;
   }
-  writeClaudeLiveControlResponse(session, {
-    type: "control_response",
-    response: {
-      subtype: "success",
-      request_id: requestId,
-      response: allowed
-        ? {
-            behavior: "allow",
-            updatedInput: toolInput,
-            ...(toolUseId ? { toolUseID: toolUseId } : {}),
-          }
-        : {
-            behavior: "deny",
-            decisionClassification: "user_reject",
-            message: `OpenClaw exec policy denied Claude native tool use (security=${turn.execPermission.security}, ask=${turn.execPermission.ask}).`,
-          },
-    },
-  });
+  if (plan === "deny") {
+    markClaudeLiveControlToolDenied({ turn, toolUseId, toolName, toolInput });
+    writeClaudeLiveToolControlResponse({
+      session,
+      requestId,
+      toolUseId,
+      toolInput,
+      decision: {
+        behavior: "deny",
+        message: `OpenClaw exec policy denied Claude native tool use (security=${turn.execPermission.security}, ask=${turn.execPermission.ask}).`,
+      },
+    });
+    return;
+  }
+  void (async () => {
+    const outcome = await requestClaudeNativeToolApproval({
+      toolName,
+      toolInput,
+      pluginId: session.providerId,
+      sessionKey: turn.diagnosticRefs.sessionKey,
+      agentId: turn.diagnosticRefs.agentId,
+      toolCallId: toolUseId,
+      abortSignal: turn.abortSignal,
+      ask: turn.execPermission.ask,
+    });
+    const runAborted = turn.abortSignal?.aborted === true;
+    const allowed = !runAborted && outcome.kind === "allow";
+    if (!runAborted && outcome.kind === "allow" && outcome.grantAlways) {
+      session.nativeToolApprovalGrants.add(toolName);
+    }
+    if (!allowed) {
+      markClaudeLiveControlToolDenied({ turn, toolUseId, toolName, toolInput });
+    }
+    if (session.closing || !session.managedRun.stdin) {
+      return;
+    }
+    try {
+      writeClaudeLiveToolControlResponse({
+        session,
+        requestId,
+        toolUseId,
+        toolInput,
+        decision: allowed
+          ? { behavior: "allow" }
+          : {
+              behavior: "deny",
+              message:
+                outcome.kind === "deny" && outcome.reason === "policy-oversized"
+                  ? "OpenClaw denied Claude native tool use (Bash): the command is too large to display for out-of-band approval. Split it into smaller commands and retry."
+                  : outcome.kind === "deny" && outcome.reason === "user" && !runAborted
+                    ? `OpenClaw user denied Claude native tool use (${toolName}).`
+                    : `OpenClaw approval was not granted for Claude native tool use (${toolName}).`,
+            },
+      });
+    } catch {
+      // The live process may close while an out-of-band approval is pending.
+    }
+  })();
 }
 
 function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
@@ -913,9 +1210,14 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (!parsed) {
     return;
   }
+  const parsedSessionId = parseSessionId(parsed);
+  if (parsedSessionId) {
+    session.sessionId = parsedSessionId;
+  }
   if (!turn) {
     return;
   }
+  noteClaudeLiveContinuationAfterSyntheticPlaceholder(session, turn);
   turn.rawChars += trimmed.length + 1;
   if (
     turn.rawChars > turn.outputLimits.maxTurnRawChars ||
@@ -929,14 +1231,21 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   turn.rawLines.push(trimmed);
+  applyBackgroundTasksChanged(session, parsed);
+  if (turn.allowSyntheticContinuationGrace && isClaudeLiveProvisionalSyntheticPlaceholder(parsed)) {
+    turn.pendingSyntheticPlaceholder = true;
+  } else if (turn.pendingSyntheticPlaceholder && isClaudeLiveSubstantiveAssistantProgress(parsed)) {
+    turn.pendingSyntheticPlaceholder = false;
+  }
   const toolEventCountBefore = turn.toolEventCount;
   turn.streamingParser.push(`${trimmed}\n`);
-  turn.sessionId = parseSessionId(parsed) ?? turn.sessionId;
+  turn.sessionId = parsedSessionId ?? turn.sessionId;
   noteClaudeLiveProgress(turn, parsed, turn.toolEventCount !== toolEventCountBefore);
   handleClaudeLiveControlRequest(session, turn, parsed);
   if (parsed.type !== "result") {
     return;
   }
+  turn.onPhase?.("resolve");
   const raw = turn.rawLines.join("\n");
   // Reuse the parser that classified pre-tool text as commentary. Reparsing the
   // transcript loses that boundary when Claude's terminal result is empty.
@@ -950,14 +1259,40 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
       fallbackSessionId: turn.sessionId,
     });
   if (output.errorText) {
-    failTurn(session, createParsedOutputError(session, output));
+    const error = createCliOutputFailoverError({
+      output,
+      provider: session.providerId,
+      model: session.modelId,
+      runId: turn.diagnosticRefs.runId,
+      sessionId: turn.diagnosticRefs.sessionId,
+    });
+    if (error) {
+      failTurn(session, error);
+    }
     scheduleIdleClose(session);
+    return;
+  }
+  // Interim success result while background_tasks_changed still reports
+  // outstanding subagent/workflow tasks: keep the turn open for the final
+  // post-drain result. Other listed types (e.g. local_bash) do not hold it.
+  if (session.outstandingBackgroundTaskIds.size > 0) {
+    // An interim result is not terminal; background work returns the run to send.
+    turn.onPhase?.("send");
+    emitClaudeLiveProgress(turn, "cli_live:result_deferred_background_tasks");
+    return;
+  }
+  // A resumed Claude session can first consume queued task notifications and
+  // emit an empty synthetic result, then continue the same user turn. Keep the
+  // live process and watchdogs authoritative instead of racing it with fallback.
+  if (turn.pendingSyntheticPlaceholder && !output.text.trim()) {
+    deferClaudeLiveSyntheticResult(session, turn, output);
     return;
   }
   finishTurn(session, output);
 }
 
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
+  session.currentTurn?.onCliOutput?.(chunk, "stdout");
   resetNoOutputTimer(session);
   session.stdoutBuffer += chunk;
   const maxPendingLineChars =
@@ -1056,13 +1391,13 @@ function createClaudeUserInputMessage(content: string): string {
   })}\n`;
 }
 
-async function writeTurnInput(session: ClaudeLiveSession, prompt: string): Promise<void> {
+async function writeTurnInput(session: ClaudeLiveSession, payload: string): Promise<void> {
   const stdin = session.managedRun.stdin;
   if (!stdin) {
     throw new Error("Claude CLI live session stdin is unavailable");
   }
   await new Promise<void>((resolve, reject) => {
-    stdin.write(createClaudeUserInputMessage(prompt), (error) => {
+    stdin.write(payload, (error) => {
       if (error) {
         reject(error);
         return;
@@ -1103,6 +1438,7 @@ async function createClaudeLiveSession(params: {
       cwd: params.context.cwd ?? params.context.workspaceDir,
       env: mcpCaptureAttempt.env ?? params.env,
       stdinMode: "pipe-open",
+      secretInput: params.context.preparedBackend.secretInput,
       captureOutput: false,
       onStdout: (chunk) => {
         if (session) {
@@ -1111,8 +1447,9 @@ async function createClaudeLiveSession(params: {
       },
       onStderr: (chunk) => {
         if (session) {
+          session.currentTurn?.onCliOutput?.(chunk, "stderr");
           session.stderr += chunk;
-          if (session.stderr.length > CLAUDE_LIVE_MAX_STDERR_CHARS) {
+          if (session.stderr.length > LIVE_SESSION_LIMITS.maxStderrChars) {
             closeLiveSession(
               session,
               "abort",
@@ -1147,6 +1484,8 @@ async function createClaudeLiveSession(params: {
     cleanupPromise: null,
     closing: false,
     mcpCaptureKey: params.mcpCaptureKey,
+    nativeToolApprovalGrants: new Set(),
+    outstandingBackgroundTaskIds: new Set(),
   };
   void managedRun.wait().then(
     (exit) => handleClaudeExit(session, exit.exitCode),
@@ -1166,6 +1505,7 @@ async function createClaudeLiveSession(params: {
 function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
+  allowSyntheticContinuationGrace: boolean;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
@@ -1175,6 +1515,11 @@ function createTurn(params: {
     delta: CliToolResultDelta,
   ) => ClaudeLiveToolTerminalOutcome | undefined;
   onCommentaryText?: (text: string) => void;
+  onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onPhase?: (phase: "send" | "resolve") => void;
   session: ClaudeLiveSession;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
@@ -1188,6 +1533,7 @@ function createTurn(params: {
       ...(params.context.params.sessionKey ? { sessionKey: params.context.params.sessionKey } : {}),
       ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     },
+    abortSignal: params.context.params.abortSignal,
     outputLimits: resolveCliStreamJsonOutputLimits(params.context.preparedBackend.backend),
     startedAtMs: Date.now(),
     rawLines: [],
@@ -1197,6 +1543,10 @@ function createTurn(params: {
     timeoutTimer: null,
     activeTools: new Map(),
     observedStdout: false,
+    pendingSyntheticPlaceholder: false,
+    allowSyntheticContinuationGrace: params.allowSyntheticContinuationGrace,
+    deferredSyntheticOutput: null,
+    syntheticContinuationTimer: null,
     completedToolCallIds: new Set(),
     toolEventCount: 0,
     streamingParser: createCliJsonlStreamingParser({
@@ -1214,7 +1564,12 @@ function createTurn(params: {
         params.onToolResult?.(delta);
       },
       onCommentaryText: params.onCommentaryText,
+      onSessionId: params.onSessionId,
+      onAssistantMessage: params.onAssistantMessage,
+      onUsage: params.onUsage,
     }),
+    onCliOutput: params.onCliOutput,
+    onPhase: params.onPhase,
     execPermission: params.execPermission,
     resolve: params.resolve,
     reject: params.reject,
@@ -1227,6 +1582,15 @@ function createTurn(params: {
       createTimeoutError(
         params.session,
         `CLI exceeded timeout (${Math.round(params.context.params.timeoutMs / 1000)}s) and was terminated.`,
+        "cli_overall_timeout",
+        {
+          mode: "overall",
+          timeoutSeconds: Math.round(params.context.params.timeoutMs / 1000),
+          observedActivity:
+            turn.observedStdout || turn.rawLines.length > 0 || turn.toolEventCount > 0,
+          activeToolCount: turn.activeTools.size,
+          backgroundTaskCount: params.session.outstandingBackgroundTaskIds.size,
+        },
       ),
     );
   }, params.context.params.timeoutMs);
@@ -1247,7 +1611,7 @@ function ensureLiveSessionCapacity(key: string, context: PreparedCliRunContext):
   if (
     liveSessions.has(key) ||
     liveSessionCreates.has(key) ||
-    liveSessions.size + liveSessionCreates.size < CLAUDE_LIVE_MAX_SESSIONS
+    liveSessions.size + liveSessionCreates.size < LIVE_SESSION_LIMITS.maxSessions
   ) {
     return;
   }
@@ -1281,6 +1645,8 @@ function createRequiredLiveSessionError(params: {
 export async function runClaudeLiveSessionTurn(params: {
   context: PreparedCliRunContext;
   args: string[];
+  executableCommand?: string;
+  executableLeadingArgv?: readonly string[];
   env: Record<string, string>;
   prompt: string;
   useResume: boolean;
@@ -1298,13 +1664,20 @@ export async function runClaudeLiveSessionTurn(params: {
   ) => ClaudeLiveToolTerminalOutcome | undefined;
   onCommentaryText?: (text: string) => void;
   onMcpCaptureReady?: (captureKey: string) => void;
+  onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onRequestPayload?: (payload: string) => void;
+  onPhase?: (phase: "send" | "resolve") => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
   const execPermission = resolveClaudeLiveExecPermission(params.context);
   const argv = [
-    params.context.preparedBackend.backend.command,
+    params.executableCommand ?? params.context.preparedBackend.backend.command,
+    ...(params.executableLeadingArgv ?? []),
     ...buildClaudeLiveArgs({
       args: params.args,
       backend: params.context.preparedBackend.backend,
@@ -1319,6 +1692,7 @@ export async function runClaudeLiveSessionTurn(params: {
     env: params.env,
   });
   let cleanupDone = false;
+  let createdSessionForTurn = false;
   const cleanup = async () => {
     if (cleanupDone) {
       return;
@@ -1370,6 +1744,14 @@ export async function runClaudeLiveSessionTurn(params: {
     }
   }
   let cleanupTurnArtifacts = Boolean(session);
+  let notifiedMcpCaptureKey: string | undefined;
+  const notifyMcpCaptureReady = (captureKey: string | undefined) => {
+    if (!captureKey || notifiedMcpCaptureKey === captureKey) {
+      return;
+    }
+    params.onMcpCaptureReady?.(captureKey);
+    notifiedMcpCaptureKey = captureKey;
+  };
   try {
     ensureLiveSessionCapacity(key, params.context);
   } catch (error) {
@@ -1431,6 +1813,17 @@ export async function runClaudeLiveSessionTurn(params: {
         });
       }
       const generation = crypto.randomUUID();
+      const mcpCaptureKey = params.context.mcpDeliveryCapture ? crypto.randomUUID() : undefined;
+      if (mcpCaptureKey) {
+        // Fence the Gateway grant before the capture-bearing child can issue
+        // its first loopback request during process startup.
+        try {
+          notifyMcpCaptureReady(mcpCaptureKey);
+        } catch (error) {
+          await cleanup();
+          throw error;
+        }
+      }
       const createSession = createClaudeLiveSession({
         context: params.context,
         argv,
@@ -1438,7 +1831,7 @@ export async function runClaudeLiveSessionTurn(params: {
         generation,
         fingerprint,
         key,
-        mcpCaptureKey: params.context.mcpDeliveryCapture ? crypto.randomUUID() : undefined,
+        mcpCaptureKey,
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         supervisor: params.getProcessSupervisor(),
         cleanup,
@@ -1450,6 +1843,7 @@ export async function runClaudeLiveSessionTurn(params: {
       liveSessionCreates.set(key, { generation, promise: createSession });
       try {
         session = await createSession;
+        createdSessionForTurn = true;
       } catch (error) {
         await cleanup();
         throw error;
@@ -1480,9 +1874,10 @@ export async function runClaudeLiveSessionTurn(params: {
     throw new Error("Claude CLI live session is already handling a turn");
   }
   const liveSession = session;
-  if (liveSession.mcpCaptureKey) {
-    params.onMcpCaptureReady?.(liveSession.mcpCaptureKey);
+  if (liveSession.sessionId) {
+    params.onSessionId?.(liveSession.sessionId);
   }
+  notifyMcpCaptureReady(liveSession.mcpCaptureKey);
   liveSession.noOutputTimeoutMs = params.noOutputTimeoutMs;
   liveSession.stderr = "";
 
@@ -1490,6 +1885,7 @@ export async function runClaudeLiveSessionTurn(params: {
     liveSession.currentTurn = createTurn({
       context: params.context,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
+      allowSyntheticContinuationGrace: params.useResume && createdSessionForTurn,
       onAssistantDelta: params.onAssistantDelta,
       onThinkingDelta: params.onThinkingDelta,
       onThinkingProgress: params.onThinkingProgress,
@@ -1497,6 +1893,11 @@ export async function runClaudeLiveSessionTurn(params: {
       onToolResult: params.onToolResult,
       resolveToolResultTerminalOutcome: params.resolveToolResultTerminalOutcome,
       onCommentaryText: params.onCommentaryText,
+      onSessionId: params.onSessionId,
+      onAssistantMessage: params.onAssistantMessage,
+      onUsage: params.onUsage,
+      onCliOutput: params.onCliOutput,
+      onPhase: params.onPhase,
       session: liveSession,
       execPermission,
       resolve,
@@ -1525,7 +1926,9 @@ export async function runClaudeLiveSessionTurn(params: {
       abort();
     } else {
       try {
-        await Promise.race([writeTurnInput(liveSession, params.prompt), outputPromise]);
+        const requestPayload = createClaudeUserInputMessage(params.prompt);
+        params.onRequestPayload?.(requestPayload);
+        await Promise.race([writeTurnInput(liveSession, requestPayload), outputPromise]);
       } catch (error) {
         closeLiveSession(liveSession, "abort", error);
       }
@@ -1549,3 +1952,4 @@ export async function runClaudeLiveSessionTurn(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

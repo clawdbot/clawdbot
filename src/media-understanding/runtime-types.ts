@@ -15,6 +15,7 @@ export type RunMediaUnderstandingFileParams = {
   filePath: string;
   mediaUrl?: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   mime?: string;
@@ -24,7 +25,7 @@ export type RunMediaUnderstandingFileParams = {
   scopeContext?: MediaUnderstandingScopeContext;
 };
 
-export type MediaUnderstandingScopeContext = {
+type MediaUnderstandingScopeContext = {
   sessionKey?: string;
   channel?: string;
   chatType?: string;
@@ -42,6 +43,7 @@ export type DescribeImageFileParams = {
   filePath: string;
   mediaUrl?: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   mime?: string;
@@ -55,6 +57,7 @@ export type DescribeImageFileWithModelParams = {
   filePath: string;
   mediaUrl?: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   mime?: string;

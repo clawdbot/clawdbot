@@ -1,10 +1,10 @@
-/** Formats a short human-readable disjunction such as "A, B, or C". */
+import { expectDefined } from "@openclaw/normalization-core"; /** Formats a short human-readable disjunction such as "A, B, or C". */
 export function formatHumanList(values: readonly string[]): string {
   if (values.length === 0) {
     return "";
   }
   if (values.length === 1) {
-    return values[0];
+    return expectDefined(values[0], "values entry at 0");
   }
   if (values.length === 2) {
     return `${values[0]} or ${values[1]}`;

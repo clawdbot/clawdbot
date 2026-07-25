@@ -50,7 +50,9 @@ describe("tool mutation helpers", () => {
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
     expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
-    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBeUndefined();
+    expect(
+      buildToolMutationState(toolName, { command }, command).actionFingerprint,
+    ).toBeUndefined();
   });
 
   it.each([
@@ -128,13 +130,14 @@ describe("tool mutation helpers", () => {
       buildToolMutationState("message", { action: "send", to: "forum:1" }).mutatingAction,
     ).toBe(true);
     expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
-    expect(
-      buildToolMutationState("subagents", { action: "kill", target: "worker-1" }).mutatingAction,
-    ).toBe(true);
-    expect(
-      buildToolMutationState("subagents", { action: "steer", target: "worker-1" }).mutatingAction,
-    ).toBe(true);
+    for (const action of ["cancel", "kill", "steer"]) {
+      expect(
+        buildToolMutationState("subagents", { action, target: "worker-1" }).mutatingAction,
+      ).toBe(true);
+    }
     expect(buildToolMutationState("subagents", { action: "list" }).mutatingAction).toBe(false);
+    expect(buildToolMutationState("sessions", { action: "group_list" }).mutatingAction).toBe(false);
+    expect(buildToolMutationState("sessions", { action: "patch" }).mutatingAction).toBe(true);
     expect(
       buildToolMutationState("sessions_spawn", { task: "inspect the failure" }).mutatingAction,
     ).toBe(true);
@@ -185,14 +188,75 @@ describe("tool mutation helpers", () => {
     ).toBe(true);
   });
 
+  it("classifies computer observations as replay-safe and input as mutating", () => {
+    for (const action of ["screenshot", "wait"]) {
+      const state = buildToolMutationState("computer", { action });
+      expect(state.mutatingAction, action).toBe(false);
+      expect(state.replaySafe, action).toBe(true);
+      expect(state.actionFingerprint, action).toBeUndefined();
+    }
+    for (const action of [
+      "left_click",
+      "right_click",
+      "middle_click",
+      "double_click",
+      "triple_click",
+      "mouse_move",
+      "left_click_drag",
+      "left_mouse_down",
+      "left_mouse_up",
+      "scroll",
+      "type",
+      "key",
+      "hold_key",
+    ]) {
+      const state = buildToolMutationState("computer", { action });
+      expect(state.mutatingAction, action).toBe(true);
+      expect(state.replaySafe, action).toBe(false);
+      expect(state.actionFingerprint, action).toBe(`tool=computer|action=${action}`);
+    }
+    expect(isMutatingToolCall("computer", {})).toBe(true);
+    expect(isReplaySafeToolCall("computer", {})).toBe(false);
+  });
+
+  it("classifies mobile UI observation as replay-safe and act as mutating", () => {
+    expect(isReplaySafeToolCall("mobile_ui", { action: "observe" })).toBe(true);
+    expect(isMutatingToolCall("mobile_ui", { action: "observe" })).toBe(false);
+    expect(isReplaySafeToolCall("mobile_ui", { action: "act" })).toBe(false);
+    expect(isMutatingToolCall("mobile_ui", { action: "act" })).toBe(true);
+  });
+
+  it("keeps computer input fingerprints stable and target-specific", () => {
+    const first = buildToolMutationState(
+      "computer",
+      { action: "left_click", coordinate: [10, 20], node: "desk" },
+      "left_click 10,20 desk",
+    ).actionFingerprint;
+    const repeat = buildToolMutationState(
+      "computer",
+      { action: "left_click", coordinate: [10, 20], node: "desk" },
+      "left_click 10,20 desk",
+    ).actionFingerprint;
+    const otherTarget = buildToolMutationState(
+      "computer",
+      { action: "left_click", coordinate: [30, 40], node: "desk" },
+      "left_click 30,40 desk",
+    ).actionFingerprint;
+
+    expect(first).toBe(repeat);
+    expect(first).not.toBe(otherTarget);
+  });
+
   it("fails closed for replay unless the structured tool contract is read-only", () => {
     for (const toolName of [
       "agents_list",
       "image",
       "pdf",
       "read",
+      "conversations_list",
       "sessions_history",
       "sessions_list",
+      "sessions_search",
       "tool_describe",
       "tool_search",
     ]) {
@@ -422,6 +486,12 @@ describe("tool mutation helpers", () => {
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_spawn")).toBe(true);
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
+    expect(isLikelyMutatingToolName("conversations_send")).toBe(true);
+    expect(isLikelyMutatingToolName("conversations_turn")).toBe(true);
+    expect(isLikelyMutatingToolName("conversations_list")).toBe(false);
+    expect(isLikelyMutatingToolName("sessions")).toBe(true);
+    expect(isLikelyMutatingToolName("computer")).toBe(true);
+    expect(isLikelyMutatingToolName("mobile_ui")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
     expect(isLikelyMutatingToolName("message_slack")).toBe(true);
     expect(isLikelyMutatingToolName("browser")).toBe(false);

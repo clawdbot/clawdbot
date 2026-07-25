@@ -17,18 +17,23 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
 
 type CanvasToolOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  agentSessionKey?: string;
 };
 
 type CanvasImageSanitizationLimits = {
   maxDimensionPx?: number;
 };
+
+export const CANVAS_JSONL_MAX_BYTES = 16 * 1024 * 1024;
 
 function readGatewayCallOptions(params: Record<string, unknown>) {
   return {
@@ -76,7 +81,9 @@ async function readJsonlFromPath(jsonlPath: string, workspaceDir?: string): Prom
   if (!isPathInsideRoot(workspaceReal, resolvedReal)) {
     throw new Error("jsonlPath outside workspace");
   }
-  return await fs.readFile(resolvedReal, "utf8");
+  return (
+    await readRegularFile({ filePath: resolvedReal, maxBytes: CANVAS_JSONL_MAX_BYTES })
+  ).buffer.toString("utf8");
 }
 
 function resolveCanvasImageSanitizationLimits(
@@ -102,20 +109,18 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const gatewayOpts = readGatewayCallOptions(params);
+      const nodeQuery = readStringParam(params, "node", { trim: true });
 
-      const nodeId = await resolveNodeId(
-        gatewayOpts,
-        readStringParam(params, "node", { trim: true }),
-        true,
-      );
-
-      const invoke = async (command: string, invokeParams?: Record<string, unknown>) =>
-        await callGatewayTool("node.invoke", gatewayOpts, {
+      const invoke = async (command: string, invokeParams?: Record<string, unknown>) => {
+        const nodeId = await resolveNodeId(gatewayOpts, nodeQuery, true);
+        return await callGatewayTool("node.invoke", gatewayOpts, {
           nodeId,
           command,
           params: invokeParams,
           idempotencyKey: randomUUID(),
+          ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
         });
+      };
 
       switch (action) {
         case "present": {
@@ -161,7 +166,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             payload?: { result?: string };
           };
           const result = raw?.payload?.result;
-          if (result) {
+          if (typeof result === "string") {
             return {
               content: [{ type: "text", text: result }],
               details: { result },
@@ -207,6 +212,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");
           }
+          validateSupportedA2UIJsonl(jsonl);
           await invoke("canvas.a2ui.pushJSONL", { jsonl });
           return jsonResult({ ok: true });
         }

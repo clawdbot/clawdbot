@@ -1,9 +1,8 @@
 // Qa Lab plugin module implements docker harness behavior.
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { toQaErrorObject } from "./errors.js";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import {
   createQaChannelGatewayConfig,
@@ -345,15 +344,7 @@ export async function buildQaDockerHarnessImage(
   const runCommand =
     deps?.runCommand ??
     (async (command: string, args: string[], cwd: string) => {
-      return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-        execFile(command, args, { cwd }, (error, stdout, stderr) => {
-          if (error) {
-            reject(toQaErrorObject(error, "Non-Error rejection"));
-            return;
-          }
-          resolve({ stdout, stderr });
-        });
-      });
+      return await runExec(command, args, { cwd, logOutput: false });
     });
 
   await runCommand(

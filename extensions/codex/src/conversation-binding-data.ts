@@ -19,14 +19,14 @@ export type CodexAppServerConversationBindingData = {
   legacyBinding?: true;
 };
 
-export type CodexAppServerConversationSource = {
+type CodexAppServerConversationSource = {
   agentId: string;
   sessionId: string;
   threadId: string;
   sessionKey?: string;
 };
 
-export type CodexAppServerConversationStart = {
+type CodexAppServerConversationStart = {
   id: string;
   threadId?: string;
   model?: string;
@@ -34,7 +34,7 @@ export type CodexAppServerConversationStart = {
   authProfileId?: string;
 };
 
-export type CodexCliNodeConversationBindingData = {
+type CodexCliNodeConversationBindingData = {
   kind: "codex-cli-node-session";
   version: 1;
   nodeId: string;
@@ -43,7 +43,7 @@ export type CodexCliNodeConversationBindingData = {
   cwd?: string;
 };
 
-export type CodexConversationBindingData =
+type CodexConversationBindingData =
   | CodexAppServerConversationBindingData
   | CodexCliNodeConversationBindingData;
 

@@ -3,7 +3,7 @@ const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
 export const NAV_WIDTH_MIN = 240;
 export const NAV_WIDTH_MAX = 400;
-export const NAV_WIDTH_DEFAULT = 258;
+const NAV_WIDTH_DEFAULT = 258;
 const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
@@ -31,40 +31,119 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
 };
 
 import {
-  DEFAULT_SIDEBAR_PINNED_ROUTES,
-  normalizeSidebarPinnedRoutes,
-  type SidebarNavRoute,
+  DEFAULT_SIDEBAR_ENTRIES,
+  normalizeSidebarEntries,
+  SIDEBAR_NAV_ROUTES,
+  serializeSidebarEntry,
 } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
+import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
+import { normalizePinnedAgentIds } from "./settings-normalizers.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 
-const CHAT_AUTO_SCROLL_MODES = ["always", "near-bottom", "off"] as const;
-export type ChatAutoScrollMode = (typeof CHAT_AUTO_SCROLL_MODES)[number];
+const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
+const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
+const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);
+const CSS_WIDTH_ALLOWED_CHARS = /^[0-9A-Za-z.%+\-*/(),\s]+$/;
+const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
+const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
+const CSS_WIDTH_MAX_LENGTH = 96;
 
-export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode {
-  return CHAT_AUTO_SCROLL_MODES.includes(value as ChatAutoScrollMode)
-    ? (value as ChatAutoScrollMode)
-    : "near-bottom";
+function hasBalancedParentheses(value: string): boolean {
+  let depth = 0;
+  for (const char of value) {
+    if (char === "(") {
+      depth++;
+    } else if (char === ")") {
+      depth--;
+      if (depth < 0) {
+        return false;
+      }
+    }
+  }
+  return depth === 0;
+}
+
+function hasAllowedWidthIdentifiers(value: string): boolean {
+  for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
+    const identifier = match[0].toLowerCase();
+    if (
+      !CSS_WIDTH_FUNCTIONS.has(identifier) &&
+      !CSS_WIDTH_KEYWORDS.has(identifier) &&
+      !CSS_WIDTH_UNITS.has(identifier)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function normalizeChatMessageMaxWidth(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  if (normalized.length > CSS_WIDTH_MAX_LENGTH) {
+    return undefined;
+  }
+  if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
+    return normalized;
+  }
+  if (
+    !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
+    !hasBalancedParentheses(normalized) ||
+    !hasAllowedWidthIdentifiers(normalized)
+  ) {
+    return undefined;
+  }
+  return /^(?:calc|clamp|fit-content|max|min)\(.+\)$/i.test(normalized) ? normalized : undefined;
 }
 
 const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
 
-export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
-  return CHAT_SEND_SHORTCUTS.includes(value as ChatSendShortcut)
-    ? (value as ChatSendShortcut)
-    : "enter";
+function normalizeChoice<T extends string>(
+  values: readonly T[],
+  fallback: T,
+): (value: unknown) => T {
+  return (value) => (values.includes(value as T) ? (value as T) : fallback);
 }
+
+export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
+
+const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
+export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
+
+export const normalizeChatFollowUpMode = normalizeChoice(CHAT_FOLLOW_UP_MODES, "steer");
+
+export function normalizeChatFollowUpModeOverride(value: unknown): ChatFollowUpMode | undefined {
+  return CHAT_FOLLOW_UP_MODES.includes(value as ChatFollowUpMode)
+    ? (value as ChatFollowUpMode)
+    : undefined;
+}
+
+const CATALOG_OPEN_TARGETS = ["viewer", "terminal"] as const;
+export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
+
+export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
+
+const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
+export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
+
+export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
 
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -92,19 +171,30 @@ export type UiSettings = {
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
-  chatAutoScroll?: ChatAutoScrollMode;
   chatSendShortcut?: ChatSendShortcut;
+  chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
+  catalogOpenTarget?: CatalogOpenTarget;
   realtimeTalkInputDeviceId?: string;
+  realtimeTalkVideoDeviceId?: string;
+  composerHoldToRecord?: boolean;
+  // Camera intent is device-local, not per-agent or synced through config ui.prefs.
+  talkCameraAutoEnable?: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   chatSplitLayout?: ChatSplitLayout;
+  chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
+  boardSessionViews?: BoardSessionViews; // Last face and active dashboard tab per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
-  sidebarMoreExpanded: boolean; // Whether the sidebar "More" section is expanded
+  sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
+  sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
+  chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
+  showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
+  pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
   lobsterPetVisits?: boolean; // Whether the sidebar lobster pet drops by (default true)
+  lobsterPetSounds?: boolean; // Opt-in poke/pet chirps from the lobster (default false)
 };
 
 type LastActiveSessionHost = {
@@ -118,194 +208,6 @@ export function setLastActiveSessionKey(host: LastActiveSessionHost, next: strin
     return;
   }
   host.applySettings({ ...host.settings, lastActiveSessionKey: trimmed });
-}
-
-type ApplicationStartupLocation = {
-  pathname: string;
-  search: string;
-  hash: string;
-};
-
-type NativeControlAuth = {
-  gatewayUrl?: string | null;
-  token?: string | null;
-  password?: string | null;
-};
-
-type ApplicationStartupSettings = {
-  settings: UiSettings;
-  password: string | null;
-  pendingGatewayUrl: string | null;
-  pendingGatewayToken: string | null;
-  pendingBootstrapToken: string | null;
-  queryTokenUsed: boolean;
-  location: ApplicationStartupLocation;
-  changed: boolean;
-};
-
-declare global {
-  interface Window {
-    __OPENCLAW_NATIVE_CONTROL_AUTH__?: NativeControlAuth;
-  }
-}
-
-export function resolveApplicationStartupSettings(
-  initialSettings: UiSettings,
-  location: ApplicationStartupLocation,
-): ApplicationStartupSettings {
-  let settings = initialSettings;
-  let changed = false;
-  let password: string | null = null;
-  let pendingGatewayUrl: string | null = null;
-  let pendingGatewayToken: string | null = null;
-  let pendingBootstrapToken: string | null = null;
-  let queryTokenUsed = false;
-
-  const updateSettings = (patch: Partial<UiSettings>) => {
-    const entries = Object.entries(patch) as Array<
-      [keyof UiSettings, UiSettings[keyof UiSettings]]
-    >;
-    if (entries.every(([key, value]) => settings[key] === value)) {
-      return;
-    }
-    settings = { ...settings, ...patch };
-    changed = true;
-  };
-
-  const nativeAuth =
-    typeof window === "undefined" ? undefined : window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
-  if (nativeAuth) {
-    try {
-      delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
-    } catch {
-      window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = undefined;
-    }
-
-    const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
-    const token = normalizeOptionalString(nativeAuth.token);
-    const nativePassword = normalizeOptionalString(nativeAuth.password);
-    updateSettings({
-      ...(gatewayUrl ? { gatewayUrl } : {}),
-      ...(token ? { token } : {}),
-    });
-    if (nativePassword) {
-      password = nativePassword;
-    }
-  }
-
-  if (!location.search && !location.hash) {
-    return {
-      settings,
-      password,
-      pendingGatewayUrl,
-      pendingGatewayToken,
-      pendingBootstrapToken,
-      queryTokenUsed,
-      location,
-      changed,
-    };
-  }
-
-  const url = new URL(
-    `${location.pathname}${location.search}${location.hash}`,
-    "http://openclaw.local",
-  );
-  const params = new URLSearchParams(url.search);
-  const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-  const gatewayUrlRaw = params.get("gatewayUrl") ?? hashParams.get("gatewayUrl");
-  const nextGatewayUrl = normalizeOptionalString(gatewayUrlRaw) ?? "";
-  const gatewayUrlChanged = Boolean(nextGatewayUrl && nextGatewayUrl !== settings.gatewayUrl);
-  const queryToken = params.get("token");
-  const hashToken = hashParams.get("token");
-  const hasTokenParam = hashToken != null || queryToken != null;
-  const token = normalizeOptionalString(hashToken ?? queryToken);
-  const hasBootstrapTokenParam = hashParams.has("bootstrapToken");
-  const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
-  const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
-  const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
-  let shouldCleanUrl = false;
-
-  if (params.has("token")) {
-    params.delete("token");
-    shouldCleanUrl = true;
-  }
-
-  if (hasTokenParam) {
-    if (queryToken != null) {
-      queryTokenUsed = true;
-      console.warn(
-        "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
-      );
-    }
-    if (token && gatewayUrlChanged) {
-      pendingGatewayToken = token;
-    } else if (token) {
-      updateSettings({ token });
-    }
-    hashParams.delete("token");
-    shouldCleanUrl = true;
-  }
-
-  if (hasBootstrapTokenParam) {
-    pendingBootstrapToken = bootstrapToken ?? null;
-    hashParams.delete("bootstrapToken");
-    shouldCleanUrl = true;
-  }
-
-  if (shouldResetSessionForToken) {
-    updateSettings({
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-    });
-  }
-
-  if (params.has("password") || hashParams.has("password")) {
-    params.delete("password");
-    hashParams.delete("password");
-    shouldCleanUrl = true;
-  }
-
-  if (session) {
-    updateSettings({
-      sessionKey: session,
-      lastActiveSessionKey: session,
-    });
-  }
-
-  if (gatewayUrlRaw != null) {
-    pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
-    if (!gatewayUrlChanged) {
-      pendingGatewayToken = null;
-    } else if (pendingBootstrapToken) {
-      pendingGatewayToken = null;
-    }
-    params.delete("gatewayUrl");
-    hashParams.delete("gatewayUrl");
-    shouldCleanUrl = true;
-  }
-
-  if (shouldCleanUrl) {
-    url.search = params.toString();
-    const nextHash = hashParams.toString();
-    url.hash = nextHash ? `#${nextHash}` : "";
-  }
-
-  return {
-    settings,
-    password,
-    pendingGatewayUrl,
-    pendingGatewayToken,
-    pendingBootstrapToken,
-    queryTokenUsed,
-    location: shouldCleanUrl
-      ? {
-          pathname: url.pathname,
-          search: url.search,
-          hash: url.hash,
-        }
-      : location,
-    changed,
-  };
 }
 
 function isViteDevPage(): boolean {
@@ -331,13 +233,34 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   return { pageUrl, effectiveUrl };
 }
 
+/**
+ * Standalone documents are owned by the Gateway that served their URL. Do not
+ * let the full app's persisted remote selection retarget a security decision.
+ * Native auth and explicit URL overrides are applied after this default.
+ */
+export function resolvePageGatewaySettings(settings: UiSettings): UiSettings {
+  const { effectiveUrl } = deriveDefaultGatewayUrl();
+  if (
+    normalizeGatewayTokenScope(settings.gatewayUrl) === normalizeGatewayTokenScope(effectiveUrl)
+  ) {
+    return settings;
+  }
+  const session = loadGatewaySessionSelection(effectiveUrl);
+  return {
+    ...settings,
+    gatewayUrl: effectiveUrl,
+    token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, effectiveUrl, settings.token),
+    sessionKey: session.sessionKey,
+    lastActiveSessionKey: session.lastActiveSessionKey,
+  };
+}
+
 function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
 }
 
 type PersistedSettingsSource = {
   gatewayUrl: string;
-  legacy: boolean;
   parsed: PersistedUiSettings;
 };
 
@@ -352,42 +275,17 @@ function parsePersistedSettings(raw: string | null): PersistedUiSettings | null 
   }
 }
 
-function settingsMatchGatewayTarget(
-  parsed: PersistedUiSettings,
-  targetUrl: string,
-  aliases: readonly string[] = [],
-): boolean {
+function settingsMatchGatewayTarget(parsed: PersistedUiSettings, targetUrl: string): boolean {
   const storedUrl = normalizeOptionalString(parsed.gatewayUrl);
   if (!storedUrl) {
     return false;
   }
-  const storedScope = normalizeGatewayTokenScope(storedUrl);
-  return [targetUrl, ...aliases].some(
-    (candidate) => normalizeGatewayTokenScope(candidate) === storedScope,
-  );
-}
-
-function isClaimableLegacyGateway(storedUrl: string | undefined, pageUrl: string): boolean {
-  if (!storedUrl) {
-    return false;
-  }
-  try {
-    const stored = new URL(normalizeGatewayTokenScope(storedUrl));
-    const page = new URL(normalizeGatewayTokenScope(pageUrl));
-    return stored.host !== page.host || page.pathname === "/";
-  } catch {
-    return false;
-  }
+  return normalizeGatewayTokenScope(storedUrl) === normalizeGatewayTokenScope(targetUrl);
 }
 
 function readSettingsForGateway(
   storage: Storage | null,
   targetUrl: string,
-  options: {
-    includeLegacy?: boolean;
-    legacyAliases?: readonly string[];
-    remoteLegacyPageUrl?: string;
-  } = {},
 ): PersistedSettingsSource | null {
   const scoped = parsePersistedSettings(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? null);
   if (
@@ -396,30 +294,8 @@ function readSettingsForGateway(
   ) {
     return {
       gatewayUrl: normalizeOptionalString(scoped.gatewayUrl) ?? targetUrl,
-      legacy: false,
       parsed: scoped,
     };
-  }
-  if (!options.includeLegacy) {
-    return null;
-  }
-  for (const key of [`${SETTINGS_KEY_PREFIX}default`, LEGACY_SETTINGS_KEY]) {
-    const parsed = parsePersistedSettings(storage?.getItem(key) ?? null);
-    if (!parsed) {
-      continue;
-    }
-    const storedUrl = normalizeOptionalString(parsed.gatewayUrl);
-    const matchesTarget = settingsMatchGatewayTarget(parsed, targetUrl, options.legacyAliases);
-    const isRemote = options.remoteLegacyPageUrl
-      ? isClaimableLegacyGateway(storedUrl, options.remoteLegacyPageUrl)
-      : false;
-    if (matchesTarget || isRemote) {
-      return {
-        gatewayUrl: storedUrl ?? targetUrl,
-        legacy: true,
-        parsed,
-      };
-    }
   }
   return null;
 }
@@ -460,7 +336,7 @@ export function loadGatewaySessionSelection(gatewayUrl: string): ScopedSessionSe
   const fallback = { sessionKey: "main", lastActiveSessionKey: "main" };
   try {
     const storage = getSafeLocalStorage();
-    const source = readSettingsForGateway(storage, gatewayUrl, { includeLegacy: true });
+    const source = readSettingsForGateway(storage, gatewayUrl);
     return source ? resolveScopedSessionSelection(gatewayUrl, source.parsed, fallback) : fallback;
   } catch {
     return fallback;
@@ -496,7 +372,7 @@ export function resolveGatewayTokenForUrlEdit(
   return loadSessionToken(nextGatewayUrl);
 }
 
-function persistSessionToken(gatewayUrl: string, token: string) {
+export function persistSessionToken(gatewayUrl: string, token: string) {
   try {
     const storage = getSessionStorage();
     if (!storage) {
@@ -515,7 +391,17 @@ function persistSessionToken(gatewayUrl: string, token: string) {
   }
 }
 
+// Last write that never reached localStorage (private mode, quota, security
+// errors). Without it a setting picked on one page silently reverts when
+// another page re-reads storage in the same tab.
+let unpersistedSettings: UiSettings | null = null;
+
 export function loadSettings(): UiSettings {
+  const cached = unpersistedSettings;
+  if (cached) {
+    // Gateway auth stays session-scoped; re-derive it instead of caching it.
+    return { ...cached, token: loadSessionToken(cached.gatewayUrl) };
+  }
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
   const storage = getSafeLocalStorage();
 
@@ -528,15 +414,18 @@ export function loadSettings(): UiSettings {
     themeMode: "system",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    chatPersistCommentary: false,
-    chatAutoScroll: "near-bottom",
+    chatPersistCommentary: true,
     chatSendShortcut: "enter",
+    catalogOpenTarget: "viewer",
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
-    sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
-    sidebarMoreExpanded: false,
+    sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
+    sidebarLiveActivity: true,
+    showAdvancedSettings: false,
+    pinnedAgentIds: [],
     textScale: 100,
+    composerHoldToRecord: true,
   };
 
   try {
@@ -546,13 +435,7 @@ export function loadSettings(): UiSettings {
     const selected = selectedGatewayUrl
       ? readSettingsForGateway(storage, selectedGatewayUrl)
       : null;
-    // Legacy state has no page owner. Only the current page target or a deliberate
-    // cross-origin remote can claim it; ambiguous same-origin sibling paths cannot.
-    const defaultSource = readSettingsForGateway(storage, defaultUrl, {
-      includeLegacy: true,
-      legacyAliases: [pageDerivedUrl],
-      remoteLegacyPageUrl: pageDerivedUrl,
-    });
+    const defaultSource = readSettingsForGateway(storage, defaultUrl);
     const source = selected ?? defaultSource;
     if (!source) {
       return defaults;
@@ -566,6 +449,25 @@ export function loadSettings(): UiSettings {
       (parsed as { theme?: unknown }).theme,
       (parsed as { themeMode?: unknown }).themeMode,
     );
+    const parsedRecord = parsed as unknown as Record<string, unknown>;
+    const hasSidebarEntries = Object.hasOwn(parsedRecord, "sidebarEntries");
+    // One-time read of the retired route-only shape; all writes use sidebarEntries.
+    const migratedSidebarEntries = hasSidebarEntries
+      ? null
+      : Array.isArray(parsedRecord.sidebarPinnedRoutes)
+        ? normalizeSidebarEntries(
+            parsedRecord.sidebarPinnedRoutes.flatMap((value) =>
+              typeof value === "string" && SIDEBAR_NAV_ROUTES.some((route) => route === value)
+                ? [
+                    serializeSidebarEntry({
+                      type: "route",
+                      route: value as (typeof SIDEBAR_NAV_ROUTES)[number],
+                    }),
+                  ]
+                : [],
+            ),
+          )
+        : null;
     const settings: UiSettings = {
       gatewayUrl,
       // Gateway auth is intentionally in-memory only; scrub any legacy persisted token on load.
@@ -586,9 +488,17 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatPersistCommentary === "boolean"
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
-      chatAutoScroll: normalizeChatAutoScrollMode(parsed.chatAutoScroll),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
+      chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
+      catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
+      realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
+      composerHoldToRecord:
+        typeof parsed.composerHoldToRecord === "boolean"
+          ? parsed.composerHoldToRecord
+          : defaults.composerHoldToRecord,
+      talkCameraAutoEnable:
+        typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
@@ -596,6 +506,8 @@ export function loadSettings(): UiSettings {
           ? parsed.splitRatio
           : defaults.splitRatio,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
+      chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
+      boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -604,18 +516,29 @@ export function loadSettings(): UiSettings {
         parsed.navWidth <= NAV_WIDTH_MAX
           ? parsed.navWidth
           : defaults.navWidth,
-      sidebarPinnedRoutes:
-        normalizeSidebarPinnedRoutes(parsed.sidebarPinnedRoutes) ?? defaults.sidebarPinnedRoutes,
-      sidebarMoreExpanded:
-        typeof parsed.sidebarMoreExpanded === "boolean"
-          ? parsed.sidebarMoreExpanded
-          : defaults.sidebarMoreExpanded,
+      sidebarEntries:
+        normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
+        migratedSidebarEntries ??
+        defaults.sidebarEntries,
+      sidebarLiveActivity:
+        typeof parsed.sidebarLiveActivity === "boolean"
+          ? parsed.sidebarLiveActivity
+          : defaults.sidebarLiveActivity,
+      chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
+      showAdvancedSettings:
+        typeof parsed.showAdvancedSettings === "boolean"
+          ? parsed.showAdvancedSettings
+          : defaults.showAdvancedSettings,
+      pinnedAgentIds: normalizePinnedAgentIds(parsed.pinnedAgentIds),
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
       ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
+      ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
     };
-    if (source.legacy || "token" in parsed) {
+    // Scoped blobs from builds that persisted tokens durably get rewritten once
+    // so the plaintext token leaves localStorage.
+    if ("token" in parsed || migratedSidebarEntries !== null) {
       persistSettings(settings, { selectGateway: true });
     }
     return settings;
@@ -628,9 +551,26 @@ export function saveSettings(next: UiSettings) {
   persistSettings(next);
 }
 
-export function patchSettings(patch: Partial<UiSettings>): UiSettings {
-  const next = { ...loadSettings(), ...patch };
-  persistSettings(next, { selectGateway: patch.gatewayUrl !== undefined });
+// Single change seam over the one write channel every settings mutation uses;
+// the server-prefs sync (app/server-prefs.ts) listens here to write synced
+// prefs through to config ui.prefs without each call site knowing about it.
+type SettingsChangeListener = (previous: UiSettings, next: UiSettings) => void;
+let settingsChangeListener: SettingsChangeListener | null = null;
+
+export function setSettingsChangeListener(listener: SettingsChangeListener | null) {
+  settingsChangeListener = listener;
+}
+
+export function patchSettings(
+  patch: Partial<UiSettings>,
+  options: { selectGateway?: boolean } = {},
+): UiSettings {
+  const previous = loadSettings();
+  const next = { ...previous, ...patch };
+  persistSettings(next, {
+    selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
+  });
+  settingsChangeListener?.(previous, next);
   return next;
 }
 
@@ -652,9 +592,10 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
   const storage = getSafeLocalStorage();
   const scope = normalizeGatewayTokenScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
+  const chatFollowUpMode = normalizeChatFollowUpModeOverride(next.chatFollowUpMode);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
-    const source = readSettingsForGateway(storage, next.gatewayUrl, { includeLegacy: true });
+    const source = readSettingsForGateway(storage, next.gatewayUrl);
     if (source) {
       const parsed = source.parsed;
       if (parsed.sessionsByGateway && typeof parsed.sessionsByGateway === "object") {
@@ -682,28 +623,54 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     themeMode: next.themeMode,
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
-    chatPersistCommentary: next.chatPersistCommentary ?? false,
-    chatAutoScroll: normalizeChatAutoScrollMode(next.chatAutoScroll),
+    chatPersistCommentary: next.chatPersistCommentary ?? true,
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
+      : {}),
+    ...(chatFollowUpMode ? { chatFollowUpMode } : {}),
+    ...(normalizeCatalogOpenTarget(next.catalogOpenTarget) === "terminal"
+      ? { catalogOpenTarget: "terminal" as const }
       : {}),
     ...(normalizeOptionalString(next.realtimeTalkInputDeviceId)
       ? { realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId) }
       : {}),
+    ...(normalizeOptionalString(next.realtimeTalkVideoDeviceId)
+      ? { realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId) }
+      : {}),
+    ...(next.composerHoldToRecord === false ? { composerHoldToRecord: false } : {}),
+    ...(typeof next.talkCameraAutoEnable === "boolean"
+      ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
+      : {}),
     splitRatio: next.splitRatio,
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
+    // Right dock is the default; only the opt-in bottom dock persists.
+    ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
+    ...(next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
+      ? { boardSessionViews: normalizeBoardSessionViews(next.boardSessionViews) }
+      : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
-    sidebarPinnedRoutes: next.sidebarPinnedRoutes,
-    sidebarMoreExpanded: next.sidebarMoreExpanded,
+    sidebarEntries: next.sidebarEntries,
+    ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
+    ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)
+      ? { chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth) }
+      : {}),
+    ...(next.showAdvancedSettings === true ? { showAdvancedSettings: true } : {}),
+    // Empty pin list is the default; only real pins persist.
+    ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
+      ? { pinnedAgentIds: next.pinnedAgentIds }
+      : {}),
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
-    // Visits default on; only an explicit opt-out persists.
+    // Visits default on; only an explicit opt-out persists. Sounds default
+    // off; only an explicit opt-in persists.
     ...(next.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
+    ...(next.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
   };
   const serialized = JSON.stringify(persisted);
+  unpersistedSettings = next;
   try {
     const { pageUrl } = deriveDefaultGatewayUrl();
     const selectionKey = currentGatewaySelectionKeyForPage(pageUrl);
@@ -712,8 +679,12 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
       storage?.setItem(selectionKey, next.gatewayUrl);
     }
     storage?.removeItem(LEGACY_SETTINGS_KEY);
+    if (storage) {
+      unpersistedSettings = null;
+    }
   } catch {
     // best-effort — quota exceeded or security restrictions should not
-    // prevent in-memory settings and visual updates from being applied
+    // prevent in-memory settings and visual updates from being applied;
+    // unpersistedSettings keeps this tab consistent until storage recovers
   }
 }

@@ -9,7 +9,7 @@ import {
   COHERE_MODEL_CATALOG,
 } from "./models.js";
 
-export const COHERE_DEFAULT_MODEL_ID = COHERE_COMMAND_A_PLUS_MODEL_ID;
+const COHERE_DEFAULT_MODEL_ID = COHERE_COMMAND_A_PLUS_MODEL_ID;
 export const COHERE_DEFAULT_MODEL_REF = `cohere/${COHERE_DEFAULT_MODEL_ID}`;
 
 const coherePresetAppliers = createModelCatalogPresetAppliers({

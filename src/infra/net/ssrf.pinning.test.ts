@@ -263,4 +263,35 @@ describe("ssrf pinning", () => {
     expect(pinned.addresses).toEqual(["127.0.0.1"]);
     expect(lookup).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["IPv4 unspecified", "0.0.0.0", 4],
+    ["IPv4 unspecified range", "0.42.42.42", 4],
+    ["IPv6 unspecified", "::", 6],
+    ["IPv4-mapped IPv6 unspecified", "::ffff:0.0.0.0", 6],
+    ["NAT64-embedded IPv4 unspecified", "64:ff9b::0.0.0.0", 6],
+  ] as const)(
+    "rejects a trusted private hostname rebound to %s",
+    async (_name, address, family) => {
+      const lookup = vi.fn(async () => [{ address, family }]) as unknown as LookupFn;
+
+      await expect(
+        resolvePinnedHostnameWithPolicy("model.lan", {
+          lookupFn: lookup,
+          policy: { allowedHostnames: ["model.lan"] },
+        }),
+      ).rejects.toThrow(SsrFBlockedError);
+    },
+  );
+
+  it("does not allow explicit localhost trust to resolve through an unspecified address", async () => {
+    const lookup = vi.fn(async () => [{ address: "0.0.0.0", family: 4 }]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("localhost", {
+        lookupFn: lookup,
+        policy: { allowedHostnames: ["localhost"] },
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
 });

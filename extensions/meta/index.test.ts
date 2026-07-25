@@ -35,15 +35,22 @@ describe("meta provider", () => {
 
   it("builds the muse-spark-1.1 catalog entry over openai-responses", () => {
     const providerConfig = buildMetaProvider();
-    expect(providerConfig.baseUrl).toBe("https://api.ai.meta.com/v1");
+    expect(providerConfig.baseUrl).toBe("https://api.meta.ai/v1");
     expect(providerConfig.api).toBe("openai-responses");
     const model = providerConfig.models.find((m) => m.id === "muse-spark-1.1");
     if (!model) {
       throw new Error("Expected muse-spark-1.1 model");
     }
     expect(model.contextWindow).toBe(1048576);
+    expect(model.maxTokens).toBe(131072);
     expect(model.reasoning).toBe(true);
-    expect(model.input).toContain("image");
+    expect(model.input).toEqual(["text", "image"]);
+    expect(model.cost).toEqual({
+      input: 1.25,
+      output: 4.25,
+      cacheRead: 0.15,
+      cacheWrite: 0,
+    });
   });
 
   it("advertises a high default thinking profile for muse-spark-1.1", () => {

@@ -11,7 +11,10 @@ export type { StoredCodexAppServerBinding } from "./session-binding.js";
 
 /** Defers schema compilation and auth loading until the first binding operation. */
 export function createLazyCodexAppServerBindingStore(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup" | "update">,
+  state: Pick<
+    PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
+    "entries" | "lookup" | "update"
+  >,
 ): CodexAppServerBindingStore {
   let resolved: Promise<CodexAppServerBindingStore> | undefined;
   const store = () =>
@@ -20,12 +23,15 @@ export function createLazyCodexAppServerBindingStore(
     ));
   return {
     read: async (identity) => (await store()).read(identity),
+    hasOtherThreadOwner: async (threadId, currentIdentity) =>
+      (await store()).hasOtherThreadOwner(threadId, currentIdentity),
     mutate: async (identity, mutation) => (await store()).mutate(identity, mutation),
     prepareSessionGenerationReclaim: async (identity) =>
       (await store()).prepareSessionGenerationReclaim(identity),
     adoptSessionGeneration: async (identity, previousSessionId) =>
       (await store()).adoptSessionGeneration(identity, previousSessionId),
     retireSessionGeneration: async (identity) => (await store()).retireSessionGeneration(identity),
+    withThreadArchiveFence: async (run) => (await store()).withThreadArchiveFence(run),
     withLease: async (identity, run) => (await store()).withLease(identity, run),
   };
 }

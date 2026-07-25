@@ -71,14 +71,14 @@ export const en = {
       bindAuto: "Auto (Loopback -> LAN)",
       bindAutoHint: "Try loopback first",
       bindCustom: "Custom IP",
-      bindCustomHint: "Bind to one local address",
+      bindCustomHint: "Specific IPv4s also bind 127.0.0.1",
       bindCustomIp: "Custom IP address",
       bindLan: "LAN (0.0.0.0)",
       bindLanHint: "Reachable on your local network",
       bindLoopback: "Loopback (127.0.0.1)",
       bindLoopbackHint: "This machine only",
       bindTailnet: "Tailnet (Tailscale IP)",
-      bindTailnetHint: "Reachable over Tailscale",
+      bindTailnetHint: "Reachable over Tailscale and local loopback",
       existingPasswordConfirm: "Use existing gateway password ({password})?",
       existingTokenConfirm: "Use existing gateway token ({token})?",
       passwordPrompt: "Gateway password",
@@ -134,6 +134,44 @@ export const en = {
       sourceAgentHome: "Source agent home",
       sourcePathHint: "Enter a source path next",
       targetWorkspace: "Target workspace directory",
+    },
+    memoryImport: {
+      applyFailed:
+        "{label} memory import failed: {reason}\nRetry from the dashboard's Memory import page (Settings → Import Memory).",
+      confirm: "Import these memories into your OpenClaw workspace?",
+      conflictSuffix: ", {count} already imported",
+      errorTitle: "Memory import failed",
+      failureLine: "{label} failed: {reason}. Retry from the Memory import page.",
+      imported: "Imported {label} memories",
+      importFailed: "Could not import {label} memories",
+      importing: "Importing {label} memories…",
+      offerLine: "{label} — {source} ({count} memories{conflictSuffix})",
+      partialFailure: "{count} memory items failed",
+      selectSources: "Choose memory sources to import",
+      skipHint: "Import later from the dashboard's Memory import page (Settings → Import Memory).",
+      summaryLine: "{label}: {migrated} migrated, {skipped} skipped → {target}",
+      summaryTitle: "Memory import summary",
+      title: "Memories found",
+    },
+    appRecommendations: {
+      catalogEntryMissing: "Official plugin catalog entry is unavailable.",
+      detected: "Detected apps: {apps}",
+      disclosure: "App names were matched using your configured model and ClawHub search.",
+      installFailed: "Could not install {name}: {reason}",
+      noneFound: "No app-based plugin or skill recommendations found.",
+      option: "{name} — {reason} (detected: {app})",
+      optionThirdParty:
+        "{name} — {reason} (detected: {app}) — third-party ClawHub skill; installs its publisher's code",
+      scanDisclosure:
+        "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+      scanning: "Scanning installed apps…",
+      scanningCandidate: "Found 1 app — searching plugins and skills for {sample}…",
+      scanningCandidates: "Found {count} apps — searching plugins and skills for {sample}…",
+      scanningMatch: "Asking your model to pick the best matches…",
+      select: "Install recommended plugins and skills",
+      skillTrust: "Trust and install the ClawHub skill {name}?",
+      skipped: "App recommendations skipped: {reason}",
+      title: "App recommendations",
     },
     plugins: {
       configureBackHint: "Return to section menu",
@@ -234,19 +272,54 @@ export const en = {
       websocketUrl: "Gateway WebSocket URL",
     },
     guided: {
+      accessFullHint: "Recommended. I look for AI apps and keys on this machine and test them.",
+      accessFullLabel: "Full access — find everything automatically",
+      accessGuardedHint: "I ask once before looking around, or you configure manually.",
+      accessGuardedLabel: "Ask first — check with me before looking around",
+      accessQuestion: "How should I set things up?",
       aiAccessTitle: "AI access",
       apiKeyPrompt: "API key or token for {label}",
-      appliedTitle: "Setup applied",
+      appliedTitle: "Inference ready",
+      alreadySetUp: "Everything's already set up here — your AI just passed a fresh check.",
+      applyFailedFallback:
+        "Something went wrong while applying setup: {detail}\nLet's finish together in chat instead.",
+      browserHandoffContinuing: "Dashboard connected — continuing in your browser.",
+      browserHandoffCopy:
+        "Open this URL in your browser:\n\n{url}\n\nWaiting for the dashboard to connect…",
+      browserHandoffOpening: "Opening the Control UI dashboard and waiting for it to connect…",
+      browserHandoffReady: "Your browser is ready — I'll be in Settings.",
+      browserHandoffTitle: "Continue in your browser",
+      codingAgentQuip:
+        "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
+      custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
+      failedOptionLine: "{label}: {reason}",
+      failedOptionsIntro: "These didn't work just now:",
+      findMeLater:
+        "You can always find me later — run `openclaw` in a terminal, or open Settings in the dashboard.",
+      hatchingNow: "Hatching your agent now…",
+      keepingCurrent: "Keeping the working AI you already have.",
+      lookAroundManual: "No — I'll configure it manually",
+      lookAroundQuestion: "May I look around to find your AI access?",
+      lookAroundYes: "Yes, take a look",
+      routeConfirm: "Use {label}?",
+      routeOther: "See other options",
+      routeUse: "Continue with {label} — recommended",
+      settingUp: "Setting up your workspace, gateway, and sessions…",
+      setupDone: "Everything's in place.",
+      silentFailures:
+        '{count} detected option(s) didn\'t respond — details under "See other options".',
       complete: "OpenClaw is ready.",
+      completeWithoutAi: "OpenClaw setup is saved. Connect AI before opening chat.",
       detected: "AI detection complete.",
       detectedCandidate: "{label} — {detail}{recommended}",
+      detectedGroupLabel: "Detected on this machine",
+      detectedGroupPrompt: "Use which detected AI?",
       detectedTitle: "AI found",
       detecting: "Looking for AI you already use…",
       enterApiKey: "Enter API key — {label}",
       existingModelKept:
         "Your configured default model was kept unchanged. Choose how to continue below — retry it, connect another provider, or exit. The check runs outside your workspace, so a workspace-plugin model can fail here while still working in the agent.",
-      escapeHatches:
-        "For the full step-by-step wizard, run `openclaw onboard --classic`. You can open plain-language setup help anytime with `openclaw crestodian`.",
+      escapeHatches: "For the full step-by-step wizard, run `openclaw onboard --classic`.",
       failureAuth: "Authentication failed. Sign in again or check the key.",
       failureBilling: "Billing is not active for this model or account.",
       failureFormat: "The model did not return a usable reply.",
@@ -255,32 +328,38 @@ export const en = {
       failureUnavailable: "This AI route is not available right now.",
       failureUnknown: "The completion failed for an unknown reason.",
       foundNothing: "No existing AI access was detected on this machine.",
+      recommendedInstall: "{label} — {hint}\n  {website}",
+      recommendedInstallsTitle: "Recommended installs",
       intro: "Connect your AI",
-      invalidConfigCrestodian:
-        "OpenClaw config is invalid. Opening Crestodian to inspect and repair it before onboarding writes anything.",
+      invalidConfigDetails: "OpenClaw config {path} is invalid:\n{issues}",
+      invalidConfigRepair:
+        "Nothing was changed. Repair with {fixCommand}, inspect with {inspectCommand}, then retry onboarding.",
+      invalidConfigUnknown: "- The config could not be parsed.",
       manualChoice: "How would you like to connect AI?",
       nextSteps:
-        "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw crestodian` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
+        "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw setup` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
+      nextStepsWithoutAi:
+        "Workspace: {workspace}\nAdd AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
       nextStepsTitle: "Next steps",
+      noInferenceOptions:
+        "No inference option is available yet. Sign in to Claude Code or Codex, or configure an API-key provider, then run onboarding again.",
       openChatNow: "Open the chat now?",
-      openCrestodian: "Open Crestodian chat (help in plain language)",
       recommendedSuffix: " — recommended",
       repliedIn: "AI check: replied in {seconds}s",
       retryCandidate: "Retry {label} ({detail})",
-      skipAi: "Skip AI setup for now",
-      skipAiLater:
-        "To add AI later, set OPENAI_API_KEY or ANTHROPIC_API_KEY, or install and log into codex, claude, or gemini. Then re-run `openclaw onboard`.",
       testFailed: "AI check failed.",
       testFailure: "✗ {label}: {reason}\n{detail}",
       testPassed: "AI check passed.",
+      unavailableTitle: "Detected but not auto-tested",
+      unavailableCandidate: "{label} — {detail}. {reason}",
       testingCandidate: "Testing {label} ({modelRef}) — real completion, not a ping…",
       testingManualProvider: "Testing {label} — real completion, not a ping…",
       tryCandidate: "Try {label} ({detail})",
       ttyRequired:
         "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
-      useClassic: "Use the classic step-by-step wizard",
       welcomeTitle: "Setup choices",
-      workspace: "Workspace directory",
+      workspaceConflictClassic:
+        "This verification run kept the configured workspace. Run `{command}` to review and explicitly approve moving the existing agent fleet.",
     },
     setup: {
       authChoiceFailedRetry: "Pick another provider or auth method, or choose Skip for now.",
@@ -343,11 +422,17 @@ export const en = {
       testAiSuccess: "AI access works. Replied in {seconds}s.",
       testAiTitle: "AI access test",
       whatSetup: "What do you want to set up?",
+      workspaceConflictConfirm: "Move the existing agent fleet to the requested workspace?",
+      workspaceConflictNotice:
+        "Existing agents currently use {current}. The requested workspace is {requested}. Changing this fleet-wide default can disconnect agents from their memory and bootstrap files.",
+      workspaceConflictTitle: "Existing agent workspace",
       workspaceDirectory: "Workspace directory",
     },
     security: {
       askForHelp:
         "Ask someone experienced to help before enabling tools or exposing it to the internet.",
+      attribution:
+        "OpenClaw is an open-source assistant that learns and grows with you, by the OpenClaw Foundation (a non-profit).",
       baselineDmSessions:
         "Shared inboxes: isolate DM sessions (session.dmScope: per-channel-peer) and keep tool access minimal.",
       baselinePairing: "Pairing/allowlists + mention gating.",
@@ -357,7 +442,6 @@ export const en = {
         "Multi-user/shared inbox: split trust boundaries (separate gateway/credentials, ideally separate OS users/hosts).",
       baselineStrongModel:
         "Use the strongest available model for any bot with tools or untrusted inboxes.",
-      beta: "OpenClaw is a hobby project and still in beta. Expect sharp edges.",
       confirm:
         "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
       hardeningRequired:
@@ -638,6 +722,27 @@ export const en = {
       helpBotMember: "Tip: the bot must be a member of any channel you want it to monitor.",
       helpCreateBot: "2) Create a bot + copy its token",
       helpOpenConsole: "1) Mattermost System Console -> Integrations -> Bot Accounts",
+    },
+    clickclack: {
+      baseUrlPrompt: "ClickClack server URL",
+      botToken: "ClickClack bot token",
+      botTokenInput: "Enter ClickClack bot token",
+      botTokenKeep: "ClickClack bot token already configured. Keep it?",
+      botTokenTitle: "ClickClack bot token",
+      connectionFailed:
+        "Connection check failed: {error}. Setup was saved; fix the connection and rerun setup.",
+      connectionTitle: "ClickClack connection",
+      connected: "Connected as @{handle} — workspace {workspace} resolved.",
+      envPrompt: "CLICKCLACK_BOT_TOKEN detected. Use env var?",
+      helpCreateToken:
+        "In ClickClack: Workspace settings → Integrations → OpenClaw → create bot → copy token",
+      invalidToken:
+        "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
+      validationWarningTitle: "ClickClack connection check",
+      workspaceHelp: "Use a wsp_… id, workspace slug, or display name.",
+      workspaceNotFound:
+        'Workspace "{workspace}" was not found. Check the id, slug, or name, list available workspaces, and rerun setup.',
+      workspacePrompt: "Workspace (id, slug, or name)",
     },
     nextcloudTalk: {
       allowFromPrompt: "Nextcloud Talk allowFrom (user id)",
@@ -1000,7 +1105,7 @@ export const en = {
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint:
-        "Required for WhatsApp + Telegram. Bun can corrupt memory on reconnect.",
+        "Required because OpenClaw state uses node:sqlite; Bun cannot run the Gateway.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',

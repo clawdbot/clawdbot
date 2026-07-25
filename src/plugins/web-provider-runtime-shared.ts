@@ -13,7 +13,7 @@ import {
 } from "./runtime/load-context.js";
 
 /** Shared options for resolving plugin-backed web providers. */
-export type ResolvePluginWebProvidersParams = {
+type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];

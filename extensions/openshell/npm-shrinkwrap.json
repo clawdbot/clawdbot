@@ -1,14 +1,42 @@
 {
   "name": "@openclaw/openshell-sandbox",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/openshell-sandbox",
-      "version": "2026.6.11",
+      "version": "2026.7.2",
       "dependencies": {
+        "p-limit": "7.3.0",
         "zod": "4.4.3"
+      }
+    },
+    "node_modules/p-limit": {
+      "version": "7.3.0",
+      "resolved": "https://registry.npmjs.org/p-limit/-/p-limit-7.3.0.tgz",
+      "integrity": "sha512-7cIXg/Z0M5WZRblrsOla88S4wAK+zOQQWeBYfV3qJuJXMr+LnbYjaadrFaS0JILfEDPVqHyKnZ1Z/1d6J9VVUw==",
+      "license": "MIT",
+      "dependencies": {
+        "yocto-queue": "^1.2.1"
+      },
+      "engines": {
+        "node": ">=20"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
+    "node_modules/yocto-queue": {
+      "version": "1.2.2",
+      "resolved": "https://registry.npmjs.org/yocto-queue/-/yocto-queue-1.2.2.tgz",
+      "integrity": "sha512-4LCcse/U2MHZ63HAJVE+v71o7yOdIe4cZ70Wpf8D/IyjDKYQLV5GD46B+hSTjJsvV5PztjvHoU580EftxjDZFQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=12.20"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
       }
     },
     "node_modules/zod": {

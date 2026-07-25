@@ -16,7 +16,7 @@ Adds media understanding provider support. Adds web search provider support.
 
 ## Surface
 
-contracts: mediaUnderstandingProviders, webSearchProviders
+contracts: `mediaUnderstandingProviders, webSearchProviders`
 
 ## Related docs
 

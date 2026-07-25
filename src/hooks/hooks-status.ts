@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
-import { hasBinary, isConfigPathTruthy } from "./config.js";
+import { hasBinary, isHookConfigPathTruthy, isHookEnvSatisfied } from "./config.js";
 import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
 import {
   resolveHookConfig,
@@ -15,9 +15,9 @@ import {
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
-export type HookStatusConfigCheck = RequirementConfigCheck;
+type HookStatusConfigCheck = RequirementConfigCheck;
 
-export type HookInstallOption = {
+type HookInstallOption = {
   id: string;
   kind: HookInstallSpec["kind"];
   label: string;
@@ -100,9 +100,8 @@ function buildHookStatus(
   const always = entry.metadata?.always === true;
   const events = entry.metadata?.events ?? [];
   const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));
-  const isEnvSatisfied = (envName: string) =>
-    Boolean(process.env[envName] || hookConfig?.env?.[envName]);
-  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
+  const isEnvSatisfied = (envName: string) => isHookEnvSatisfied(envName, hookConfig);
+  const isConfigSatisfied = (pathStr: string) => isHookConfigPathTruthy(config, pathStr);
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({

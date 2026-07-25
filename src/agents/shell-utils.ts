@@ -6,19 +6,28 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { stripAnsiForSanitization } from "../../packages/terminal-core/src/ansi.js";
+import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
+import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
 import {
   killProcessTree as killProcessTreeGracefully,
   type KillProcessTreeOptions,
 } from "../process/kill-tree.js";
 import { getBinDir } from "./config.js";
 
-export interface ShellConfig {
+type ShellConfig = {
   shell: string;
   args: string[];
+} & ({ commandTransport: "argv" } | { commandTransport: "stdin" });
+
+type ShellCommandInvocation =
+  | { argv: [string, ...string[]]; input?: undefined; stdin: "ignore" }
+  | { argv: [string, ...string[]]; input: string; stdin: "pipe" };
+
+function createArgvShellConfig(shell: string, args: string[]): ShellConfig {
+  return { shell, args, commandTransport: "argv" };
 }
 
-export function resolvePowerShellPath(): string {
+function resolvePowerShellPath(): string {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
   const programFiles = process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
   const pwsh7 = path.join(programFiles, "PowerShell", "7", "pwsh.exe");
@@ -68,7 +77,7 @@ function isNonInteractiveShell(shellPath: string): boolean {
   return NON_INTERACTIVE_SHELLS.has(path.basename(shellPath));
 }
 
-export function getPosixShellArgs(shellPath: string): string[] {
+function getPosixShellArgs(shellPath: string): string[] {
   switch (path.basename(shellPath)) {
     case "bash":
       return ["--noprofile", "--norc", "-c"];
@@ -81,7 +90,7 @@ export function getPosixShellArgs(shellPath: string): string[] {
   }
 }
 
-export function resolveWindowsBashPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+function resolveWindowsBashPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const candidates = [env.ProgramFiles, env["ProgramFiles(x86)"]]
     .filter((dir): dir is string => Boolean(dir?.trim()))
     .map((dir) => path.join(dir, "Git", "bin", "bash.exe"));
@@ -93,12 +102,96 @@ export function resolveWindowsBashPath(env: NodeJS.ProcessEnv = process.env): st
   return resolveShellFromPath("bash.exe", env) ?? resolveShellFromPath("bash", env);
 }
 
+const WINDOWS_GIT_BASH_CACHE_LIMIT = 16;
+const windowsGitBashUsrBinCache = new Map<string, string | undefined>();
+let defaultWindowsGitBashUsrBinResolved = false;
+let defaultWindowsGitBashUsrBin: string | undefined;
+
+function resolveWindowsGitBashUsrBin(shellPath: string): string | undefined {
+  const cacheKey = path.resolve(shellPath).toLowerCase();
+  if (windowsGitBashUsrBinCache.has(cacheKey)) {
+    return windowsGitBashUsrBinCache.get(cacheKey);
+  }
+
+  const normalized = path.normalize(shellPath);
+  const shellName = path.basename(normalized).toLowerCase();
+  const binDir = path.dirname(normalized);
+  let gitRoot: string | undefined;
+  if (
+    (shellName === "bash.exe" || shellName === "bash") &&
+    path.basename(binDir).toLowerCase() === "bin"
+  ) {
+    const parent = path.dirname(binDir);
+    gitRoot = path.basename(parent).toLowerCase() === "usr" ? path.dirname(parent) : parent;
+  }
+
+  const usrBin = gitRoot ? path.join(gitRoot, "usr", "bin") : undefined;
+  const resolved =
+    gitRoot &&
+    fs.existsSync(path.join(gitRoot, "cmd", "git.exe")) &&
+    usrBin &&
+    fs.existsSync(usrBin)
+      ? usrBin
+      : undefined;
+  if (windowsGitBashUsrBinCache.size >= WINDOWS_GIT_BASH_CACHE_LIMIT) {
+    const oldestKey = windowsGitBashUsrBinCache.keys().next().value;
+    if (oldestKey) {
+      windowsGitBashUsrBinCache.delete(oldestKey);
+    }
+  }
+  windowsGitBashUsrBinCache.set(cacheKey, resolved);
+  return resolved;
+}
+
+function getWindowsGitBashUsrBin(shellPath?: string): string | undefined {
+  if (process.platform !== "win32") {
+    return undefined;
+  }
+  if (shellPath) {
+    return resolveWindowsGitBashUsrBin(shellPath);
+  }
+  if (!defaultWindowsGitBashUsrBinResolved) {
+    defaultWindowsGitBashUsrBinResolved = true;
+    const resolvedShell = resolveWindowsBashPath();
+    defaultWindowsGitBashUsrBin = resolvedShell
+      ? resolveWindowsGitBashUsrBin(resolvedShell)
+      : undefined;
+  }
+  return defaultWindowsGitBashUsrBin;
+}
+
+function isLegacyWslBashPath(shellPath: string): boolean {
+  const normalized = shellPath.replace(/\//g, "\\").toLowerCase();
+  return /(?:^|\\)windows\\(?:system32|sysnative)\\bash\.exe$/.test(normalized);
+}
+
+function resolveBashCommandConfig(shell: string): ShellConfig {
+  if (isLegacyWslBashPath(shell)) {
+    return { shell, args: ["-s"], commandTransport: "stdin" };
+  }
+  return createArgvShellConfig(
+    shell,
+    process.platform === "win32" ? ["-c"] : getPosixShellArgs(shell),
+  );
+}
+
+export function buildShellCommandInvocation(
+  command: string,
+  config: ShellConfig,
+): ShellCommandInvocation {
+  if (config.commandTransport === "stdin") {
+    // The legacy WSL launcher mangles command argv, so its -s mode must read the command from stdin.
+    return { argv: [config.shell, ...config.args], input: command, stdin: "pipe" };
+  }
+  return { argv: [config.shell, ...config.args, command], stdin: "ignore" };
+}
+
 export function getShellConfig(customShellPath?: string): ShellConfig {
   if (customShellPath) {
     if (!fs.existsSync(customShellPath)) {
       throw new Error(`Custom shell path not found: ${customShellPath}`);
     }
-    return { shell: customShellPath, args: getPosixShellArgs(customShellPath) };
+    return createArgvShellConfig(customShellPath, getPosixShellArgs(customShellPath));
   }
 
   if (process.platform === "win32") {
@@ -107,10 +200,11 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
     // directly to the console via WriteConsole API, bypassing stdout pipes.
     // When Node.js spawns cmd.exe with piped stdio, these utilities produce no output.
     // PowerShell properly captures and redirects their output to stdout.
-    return {
-      shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
-    };
+    return createArgvShellConfig(resolvePowerShellPath(), [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+    ]);
   }
 
   const rawEnvShell = process.env.SHELL?.trim();
@@ -120,20 +214,20 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
     if (bash) {
-      return { shell: bash, args: getPosixShellArgs(bash) };
+      return createArgvShellConfig(bash, getPosixShellArgs(bash));
     }
     const sh = resolveShellFromPath("sh");
     if (sh) {
-      return { shell: sh, args: getPosixShellArgs(sh) };
+      return createArgvShellConfig(sh, getPosixShellArgs(sh));
     }
   }
   if (envShell) {
-    return { shell: envShell, args: getPosixShellArgs(envShell) };
+    return createArgvShellConfig(envShell, getPosixShellArgs(envShell));
   }
   // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
   // re-invoke the placeholder and get a spurious exitCode=1.
   const shell = resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
-  return { shell, args: getPosixShellArgs(shell) };
+  return createArgvShellConfig(shell, getPosixShellArgs(shell));
 }
 
 export function getBashShellConfig(customShellPath?: string): ShellConfig {
@@ -141,19 +235,19 @@ export function getBashShellConfig(customShellPath?: string): ShellConfig {
     if (!fs.existsSync(customShellPath)) {
       throw new Error(`Custom shell path not found: ${customShellPath}`);
     }
-    return { shell: customShellPath, args: getPosixShellArgs(customShellPath) };
+    return resolveBashCommandConfig(customShellPath);
   }
 
   if (process.platform === "win32") {
     const bash = resolveWindowsBashPath();
     if (bash) {
-      return { shell: bash, args: ["-c"] };
+      return resolveBashCommandConfig(bash);
     }
     throw new Error("No bash shell found. Install Git for Windows or add bash.exe to PATH.");
   }
 
   if (fs.existsSync("/bin/bash")) {
-    return { shell: "/bin/bash", args: getPosixShellArgs("/bin/bash") };
+    return resolveBashCommandConfig("/bin/bash");
   }
 
   const shell =
@@ -161,10 +255,10 @@ export function getBashShellConfig(customShellPath?: string): ShellConfig {
     resolveShellFromWhich("bash") ??
     resolveShellFromPath("sh") ??
     "sh";
-  return { shell, args: getPosixShellArgs(shell) };
+  return resolveBashCommandConfig(shell);
 }
 
-export function resolveShellFromPath(
+function resolveShellFromPath(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
@@ -185,7 +279,7 @@ export function resolveShellFromPath(
   return undefined;
 }
 
-export function resolveShellFromWhich(name: string): string | undefined {
+function resolveShellFromWhich(name: string): string | undefined {
   if (process.platform === "win32") {
     return undefined;
   }
@@ -262,8 +356,27 @@ export function detectRuntimeShell(): string | undefined {
   return undefined;
 }
 
-export function sanitizeBinaryOutput(text: string): string {
-  const scrubbed = stripAnsiForSanitization(text).replace(/[\p{Format}\p{Surrogate}]/gu, "");
+export function sanitizeBinaryOutput(
+  text: string,
+  options?: { ansiMode?: "standard" | "compat" },
+): string {
+  // Output callbacks are stream chunks, not true EOF. Preserve a pending CSI
+  // visibly so a split final byte cannot leak from the following chunk.
+  return sanitizeStrippedBinaryOutput(
+    stripAnsiForStreamChunk(text, {
+      compatibilityGrammar: options?.ansiMode === "compat",
+    }),
+  );
+}
+
+/** Keep one ANSI parser per process stream so control sequences can span callbacks. */
+export function createStreamingBinaryOutputSanitizer(): (text: string) => string {
+  const ansiStripper = new AnsiSequenceStripper();
+  return (text) => sanitizeStrippedBinaryOutput(ansiStripper.write(text));
+}
+
+function sanitizeStrippedBinaryOutput(text: string): string {
+  const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
   if (!scrubbed) {
     return scrubbed;
   }
@@ -286,19 +399,46 @@ export function sanitizeBinaryOutput(text: string): string {
   return chunks.join("");
 }
 
-export function getShellEnv(): NodeJS.ProcessEnv {
+function getShellEnv(sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const binDir = getBinDir();
-  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
-  const currentPath = process.env[pathKey] ?? "";
+  const pathKeys = Object.keys(sourceEnv).filter((key) => key.toLowerCase() === "path");
+  // Node sorts Windows environment keys and passes only the first case-insensitive match.
+  // Collapse duplicates before spawning so callers and child processes see the same PATH.
+  const sourcePathKey = process.platform === "win32" ? pathKeys.toSorted()[0] : pathKeys[0];
+  const pathKey = process.platform === "win32" ? "PATH" : (sourcePathKey ?? "PATH");
+  const currentPath = sourcePathKey ? (sourceEnv[sourcePathKey] ?? "") : "";
   const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
   const updatedPath = pathEntries.includes(binDir)
     ? currentPath
     : [binDir, currentPath].filter(Boolean).join(path.delimiter);
+  const env = { ...sourceEnv };
+  if (process.platform === "win32") {
+    for (const key of pathKeys) {
+      delete env[key];
+    }
+  }
+  env[pathKey] = updatedPath;
+  return env;
+}
 
-  return {
-    ...process.env,
-    [pathKey]: updatedPath,
-  };
+export function getBashShellEnv(
+  shellPath?: string,
+  sourceEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = getShellEnv(sourceEnv);
+  const usrBin = getWindowsGitBashUsrBin(shellPath);
+  if (!usrBin) {
+    return env;
+  }
+
+  const currentPath = env.PATH ?? "";
+  const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
+  const normalizedUsrBin = usrBin.toLowerCase();
+  env.PATH = [
+    usrBin,
+    ...pathEntries.filter((entry) => entry.toLowerCase() !== normalizedUsrBin),
+  ].join(path.delimiter);
+  return env;
 }
 
 export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): void {

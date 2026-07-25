@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Reasoning tag helpers find and remove model reasoning tag blocks from text.
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { findFinalTagMatches } from "./final-tags.js";
@@ -89,7 +90,7 @@ export function stripReasoningTagsFromText(
     }
 
     for (let i = finalMatches.length - 1; i >= 0; i--) {
-      const m = finalMatches[i];
+      const m = expectDefined(finalMatches[i], "final matches capture group i");
       if (!m.inCode) {
         cleaned = cleaned.slice(0, m.start) + cleaned.slice(m.start + m.length);
       }

@@ -36,7 +36,7 @@ The model:
     | `OPENCLAW_IMAGE` / `OPENCLAW_PODMAN_IMAGE` | Use an existing/pulled image instead of building `openclaw:local` |
     | `OPENCLAW_IMAGE_APT_PACKAGES` | Install extra apt packages during image build (also accepts legacy `OPENCLAW_DOCKER_APT_PACKAGES`) |
     | `OPENCLAW_IMAGE_PIP_PACKAGES` | Install extra Python packages during image build; pin versions and use only package indexes you trust |
-    | `OPENCLAW_EXTENSIONS` | Pre-install plugin dependencies at build time |
+    | `OPENCLAW_EXTENSIONS` | Compile/package supported selected plugins and install their runtime dependencies |
     | `OPENCLAW_INSTALL_BROWSER` | Pre-install Chromium and Xvfb for browser automation (set to `1`) |
 
     For Quadlet-managed setup instead (Linux + systemd user services only):

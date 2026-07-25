@@ -6,10 +6,18 @@ import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
 import "./channels-page.ts";
 
+const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+
 type ChannelsPageTestElement = HTMLElement & {
   context: ApplicationContext;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
+};
+
+type PairingTestPage = ChannelsPageTestElement & {
+  pairingAccountFilter: string | null;
+  pairingChannelFilter: string | null;
+  pairingPrompt: object | null;
 };
 
 type NostrTestPage = ChannelsPageTestElement & {
@@ -17,6 +25,7 @@ type NostrTestPage = ChannelsPageTestElement & {
     values: NostrProfile;
     saving: boolean;
     importing: boolean;
+    error: string | null;
   } | null;
   nostrProfileAccountId: string | null;
   editNostrProfile: (accountId: string, profile: NostrProfile | null) => void;
@@ -39,12 +48,38 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
+function stubHangingFetch() {
+  const fetchMock = vi.fn<typeof fetch>(
+    async (_input, init) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("Expected Nostr profile request to carry an AbortSignal");
+        }
+        signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
 function createGateway(): TestGateway {
-  const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+  const client = {
+    request: vi.fn(async (method: string) =>
+      method === "channels.pairing.list"
+        ? {
+            accounts: [],
+            requests: [],
+            commandOwnerConfigured: true,
+            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+          }
+        : {},
+    ),
+  } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -96,6 +131,7 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("ChannelsPage lifecycle", () => {
@@ -119,6 +155,44 @@ describe("ChannelsPage lifecycle", () => {
     second.runtimeConfig.dispose();
     first.channels.dispose();
     second.channels.dispose();
+  });
+
+  it("refreshes pairing data when the authorized scope set changes", async () => {
+    const gateway = createGateway();
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.pairing"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    source.channels.state.pairingSnapshot = {
+      accounts: [],
+      requests: [],
+      commandOwnerConfigured: true,
+      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+    };
+    const refreshPairing = vi.spyOn(source.channels, "refreshPairing").mockResolvedValue();
+    const page = document.createElement("openclaw-channels-page") as PairingTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    refreshPairing.mockClear();
+    page.pairingPrompt = {};
+    page.pairingChannelFilter = "whatsapp";
+    page.pairingAccountFilter = "personal";
+
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.pairing", "operator.read"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await vi.waitFor(() => expect(refreshPairing).toHaveBeenCalled());
+    expect(page.pairingPrompt).toBeNull();
+    expect(page.pairingChannelFilter).toBeNull();
+    expect(page.pairingAccountFilter).toBeNull();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
   });
 
   it("drops a profile save when the channel source is replaced", async () => {
@@ -175,7 +249,7 @@ describe("ChannelsPage lifecycle", () => {
 
     const load = page.importNostrProfile();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    gateway.emit({ connected: false });
+    gateway.emit({ phase: "stopped" });
     expect(page.nostrProfileFormState).toBeNull();
 
     response.resolve(
@@ -219,6 +293,54 @@ describe("ChannelsPage lifecycle", () => {
     expect(page.nostrProfileAccountId).toBe("new-account");
     expect(page.nostrProfileFormState?.values.name).toBe("fresh");
     expect(refresh).not.toHaveBeenCalled();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it("clears profile saving when the gateway response times out", async () => {
+    vi.useFakeTimers();
+    const gateway = createGateway();
+    const source = createContext(gateway);
+    const fetchMock = stubHangingFetch();
+    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    page.editNostrProfile("default", { name: "Alice" });
+
+    const save = page.saveNostrProfile();
+    await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS);
+    await save;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(page.nostrProfileFormState?.saving).toBe(false);
+    expect(page.nostrProfileFormState?.error).toBe(
+      "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
+    );
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it("clears profile importing when the gateway response times out", async () => {
+    vi.useFakeTimers();
+    const gateway = createGateway();
+    const source = createContext(gateway);
+    const fetchMock = stubHangingFetch();
+    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    page.editNostrProfile("default", { name: "Alice" });
+
+    const load = page.importNostrProfile();
+    await vi.advanceTimersByTimeAsync(NOSTR_PROFILE_REQUEST_TIMEOUT_MS);
+    await load;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(page.nostrProfileFormState?.importing).toBe(false);
+    expect(page.nostrProfileFormState?.error).toBe(
+      "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
+    );
     source.runtimeConfig.dispose();
     source.channels.dispose();
   });

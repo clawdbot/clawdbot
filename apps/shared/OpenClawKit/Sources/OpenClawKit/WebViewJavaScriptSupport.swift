@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 #if canImport(WebKit)
 import WebKit
@@ -36,13 +37,21 @@ public enum WebViewJavaScriptSupport {
                     cont.resume(throwing: error)
                     return
                 }
-                if let result {
-                    cont.resume(returning: String(describing: result))
-                } else {
-                    cont.resume(returning: "")
-                }
+                cont.resume(returning: self.evaluationResultString(result))
             }
         }
+    }
+
+    static func evaluationResultString(_ result: Any?) -> String {
+        guard let result else { return "" }
+        // WebKit bridges JavaScript booleans and numbers through NSNumber.
+        // Preserve the Boolean contract before generic numeric description.
+        if let number = result as? NSNumber,
+           CFGetTypeID(number) == CFBooleanGetTypeID()
+        {
+            return number.boolValue ? "true" : "false"
+        }
+        return String(describing: result)
     }
 
     public static func jsValue(_ value: String?) -> String {

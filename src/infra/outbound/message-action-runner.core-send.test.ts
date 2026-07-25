@@ -37,7 +37,7 @@ const slackConfig = {
   },
 } as OpenClawConfig;
 
-function registerSlackTextPlugin() {
+function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
   const sendText = vi.fn().mockResolvedValue({
     channel: "slack",
     messageId: "m1",
@@ -57,7 +57,7 @@ function registerSlackTextPlugin() {
             },
           }),
           config: {
-            listAccountIds: () => ["default"],
+            listAccountIds: () => accountIds,
             resolveAccount: () => ({ enabled: true }),
             isConfigured: () => true,
           },
@@ -343,13 +343,72 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
   });
 
-  it("prepends messages.responsePrefix to message-tool sends", async () => {
+  it("carries a prepared conversation-turn id to the channel send", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "correlated hello",
+      },
+      preparedMessageId: "platform-message-1",
+      dryRun: false,
+    });
+
+    expect(firstMockArg(sendText, "send text").preparedMessageId).toBe("platform-message-1");
+  });
+
+  it("uses an active gateway-mode adapter directly when the Gateway owns the turn", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "reef-message-1",
+      chatId: "molty",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "gateway",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: { channels: { testchat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:C123",
+        message: "correlated hello",
+      },
+      preparedMessageId: "reef-message-1",
+      gatewayOwnedDelivery: true,
+      dryRun: false,
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      kind: "send",
+      sendResult: { via: "direct", result: { messageId: "reef-message-1" } },
+    });
+  });
+
+  it("prepends the channel responsePrefix to message-tool sends", async () => {
     const sendText = registerSlackTextPlugin();
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[Nexus]" },
+        channels: { slack: { enabled: true, responsePrefix: "[Nexus]" } },
       } as OpenClawConfig,
       action: "send",
       params: {
@@ -369,8 +428,7 @@ describe("runMessageAction core send routing", () => {
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[Nexus]" },
+        channels: { slack: { enabled: true, responsePrefix: "[Nexus]" } },
       } as OpenClawConfig,
       action: "send",
       params: {
@@ -421,8 +479,7 @@ describe("runMessageAction core send routing", () => {
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[Nexus]" },
+        channels: { slack: { enabled: true, responsePrefix: "[Nexus]" } },
       } as OpenClawConfig,
       action: "send",
       params: {
@@ -442,8 +499,7 @@ describe("runMessageAction core send routing", () => {
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[{identity.name}]" },
+        channels: { slack: { enabled: true, responsePrefix: "[{identity.name}]" } },
         agents: { list: [{ id: "main", identity: { name: "Nexus" } }] },
       } as OpenClawConfig,
       action: "send",
@@ -465,8 +521,7 @@ describe("runMessageAction core send routing", () => {
 
     await runMessageAction({
       cfg: {
-        channels: { slack: { enabled: true } },
-        messages: { responsePrefix: "[{provider}/{model}]" },
+        channels: { slack: { enabled: true, responsePrefix: "[{provider}/{model}]" } },
       } as OpenClawConfig,
       action: "send",
       params: {
@@ -508,6 +563,142 @@ describe("runMessageAction core send routing", () => {
     }
     expect(sendText).toHaveBeenCalledOnce();
     expect(result.to).toBe("channel:C123");
+  });
+
+  it("marks explicit sends to the trusted current source conversation", async () => {
+    registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "visible source reply",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      messageActionAuthorization: {
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C123",
+          currentSourceTurnId: "source-turn-1",
+        },
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      defaultAccountId: "default",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
+  it("does not trust ambient routing when the authorized source differs", async () => {
+    registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "not the authorized source",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      messageActionAuthorization: {
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C999",
+          currentSourceTurnId: "source-turn-1",
+        },
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      defaultAccountId: "default",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+
+  it("does not mark same-target sends through another account", async () => {
+    registerSlackTextPlugin(["default", "other"]);
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        accountId: "other",
+        target: "channel:C123",
+        message: "cross-account reply",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      messageActionAuthorization: {
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C123",
+          currentSourceTurnId: "source-turn-1",
+        },
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      defaultAccountId: "default",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+
+  it("does not mark same-target sends to another thread", async () => {
+    registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        threadId: "other-thread",
+        message: "thread-only reply",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+        currentThreadTs: "source-thread",
+      },
+      messageActionAuthorization: {
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C123",
+          currentThreadTs: "source-thread",
+          currentSourceTurnId: "source-turn-1",
+        },
+      },
+      sessionKey: "agent:main:slack:channel:C123:thread:source-thread",
+      defaultAccountId: "default",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
   });
 
   it("preserves required delivery when message-tool-only sends target another conversation", async () => {
@@ -625,10 +816,8 @@ describe("runMessageAction core send routing", () => {
             enabled: true,
           },
         },
-        messages: {
-          tts: {
-            auto: "tagged",
-          },
+        tts: {
+          auto: "tagged",
         },
       } as OpenClawConfig,
       action: "send",
@@ -685,10 +874,8 @@ describe("runMessageAction core send routing", () => {
             enabled: true,
           },
         },
-        messages: {
-          tts: {
-            auto: "inbound",
-          },
+        tts: {
+          auto: "inbound",
         },
       } as OpenClawConfig,
       action: "send",

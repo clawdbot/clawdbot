@@ -473,8 +473,8 @@ function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
     }
     const key = decodeJsonPointerSegment(segment);
     if (Array.isArray(current)) {
-      const index = Number(key);
-      if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+      const index = /^(?:0|[1-9]\d*)$/.test(key) ? Number(key) : -1;
+      if (index < 0 || index >= current.length) {
         return undefined;
       }
       current = current[index];
@@ -969,3 +969,4 @@ export function normalizeToolParameterSchema(
     normalizeToolParameterSchemaUncached(schema, options),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

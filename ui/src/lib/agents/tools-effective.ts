@@ -12,7 +12,7 @@ import {
 import type { SessionCapability } from "../sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../sessions/session-key.ts";
 
-export type ToolsEffectiveState = {
+type ToolsEffectiveState = {
   chatModelCatalog?: ModelCatalogEntry[];
   client: {
     request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;

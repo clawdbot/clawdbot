@@ -11,6 +11,8 @@ session** without adding it to conversation history. It is modeled after
 Claude Code's `/btw`, adapted to OpenClaw's Gateway and multi-channel
 architecture.
 
+In the Control UI, both commands route to the session rail companion instead of the detached BTW runner. The companion keeps a bounded multi-turn thread in Gateway memory and can use read-only session-history/search and workspace-read tools. TUI and external-channel behavior is unchanged.
+
 ```text
 /btw what changed?
 /side what does this error mean?
@@ -45,22 +47,38 @@ use a direct one-shot provider call instead.
 ## What it does not do
 
 `/btw` does not create a durable session, continue the unfinished main task,
-persist question/answer data to transcript history, or survive a reload.
+or persist question/answer data to transcript history. Detached BTW results do
+not survive a reload. The Control UI companion can rehydrate its in-memory
+thread after a reload, but the thread is cleared by a session reset, Gateway
+restart, idle expiry, or the rail's clear button.
 
 ## Delivery model
 
-Normal assistant chat uses the Gateway `chat` event. BTW uses a separate
-`chat.side_result` event so clients cannot mistake it for regular
-conversation history. Because it is not replayed from `chat.history`, it
-disappears after reload.
+Normal assistant chat uses the Gateway `chat` event. Detached BTW uses a
+separate `chat.side_result` event so clients cannot mistake it for regular
+conversation history. The Control UI does not consume that event; it calls the
+session companion RPCs and renders their bounded exchange state in the rail.
 
 ## Surface behavior
 
-| Surface           | Behavior                                                                                                                                                |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                               |
-| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                             |
-| Control UI / web  | Gateway emits `chat.side_result` correctly and it is excluded from `chat.history`, but Control UI has no consumer yet to render it live in the browser. |
+| Surface           | Behavior                                                                                                                                                                                                        |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                       |
+| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                     |
+| Control UI / web  | Routes `/btw` and `/side` to the expanded session rail companion. The read-only thread is keyed by session, rehydrates from Gateway memory, and can be cleared with the trash button. `Esc` collapses the rail. |
+
+## Selection popup (Control UI)
+
+Highlighting text inside a chat message in the Control UI opens a small
+selection popup with two actions:
+
+- **More details** immediately asks the session rail companion to explain the
+  highlighted text in the context of the current session.
+- **Ask in side chat** opens the rail and pre-fills its composer with a quoted
+  draft so you can type your own question about the selection.
+
+Both actions follow normal `/btw` semantics: the question and answer stay out
+of session history and the main run is left untouched.
 
 ## When to use it
 

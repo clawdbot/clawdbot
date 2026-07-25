@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyMemoryWikiMutation } from "./apply.js";
@@ -121,7 +122,11 @@ async function createChatGptImportFixture(prefix: string) {
   return {
     config,
     exportDir,
-    pagePath: path.join(rootDir, "sources", sourceFiles[0]),
+    pagePath: path.join(
+      rootDir,
+      "sources",
+      expectDefined(sourceFiles[0], "imported Memory Wiki source file"),
+    ),
   };
 }
 

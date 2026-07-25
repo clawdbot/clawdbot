@@ -2,9 +2,9 @@ import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 // Telegram tests cover telegram outbound plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { splitTelegramHtmlChunks } from "./format.js";
+import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
 import { telegramOutbound } from "./outbound-adapter.js";
-import { clearTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 
 function markdownTable(columns: number): string {
   return [
@@ -30,7 +30,7 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.presentationCapabilities?.limits?.text?.markdownDialect).toBe(
       "markdown",
     );
-    expect(telegramOutbound.pollMaxOptions).toBe(10);
+    expect(telegramOutbound.pollMaxOptions).toBe(12);
   });
 
   it("strips assistant-visible tool traces before outbound delivery", () => {
@@ -45,6 +45,15 @@ describe("telegramPlugin outbound", () => {
     const text = "The pipeline has 3 deals.";
 
     expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe(text);
+  });
+
+  it("uses Telegram markdown markers for sanitized HTML formatting", () => {
+    clearTelegramRuntime();
+    const text = `<strong title="b>">bold</strong> <del data-note='s>'>strike</del>`;
+    const sanitized = telegramOutbound.sanitizeText?.({ text, payload: { text } });
+
+    expect(sanitized).toBe("**bold** ~~strike~~");
+    expect(markdownToTelegramHtml(sanitized ?? "")).toBe("<b>bold</b> <s>strike</s>");
   });
 
   it("preserves explicit HTML parse mode before chunking", () => {

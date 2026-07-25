@@ -31,6 +31,14 @@ beforeEach(() => {
 });
 
 describe("messaging delivery action classification", () => {
+  it("classifies exact conversation sends as visible messaging delivery", () => {
+    for (const toolName of ["conversations_send", "conversations_turn"]) {
+      expect(isMessagingToolSendAction(toolName, {})).toBe(true);
+      expect(isMessagingToolTargetEvidenceAction(toolName, {})).toBe(true);
+      expect(isMessagingToolDeliveryAction(toolName, {})).toBe(true);
+    }
+  });
+
   it("keeps visible side effects broader than terminal reply sends", () => {
     expect(isMessagingToolSendAction("message", { action: "poll" })).toBe(false);
     expect(isMessagingToolTargetEvidenceAction("message", { action: "poll" })).toBe(true);
@@ -311,6 +319,24 @@ describe("isDeliveredMessagingToolResult", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts a nested provider message id as delivery evidence", () => {
+    expect(
+      isDeliveredMessagingToolResult({
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "qa-channel",
+          target: "qa-a2a-requester",
+          message: "reply",
+        },
+        result: {
+          content: [{ type: "text", text: '{"message":{"id":"qa-message-242"}}' }],
+          details: { message: { id: "qa-message-242" } },
+        },
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
@@ -372,6 +398,52 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
         },
         result: { ok: true },
         allowExplicitSourceRoute: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts explicit sends with a structured current-source marker", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "8455538490",
+          message: "reply",
+        },
+        result: {
+          content: [{ type: "text", text: '{"ok":true}' }],
+          details: {
+            ok: true,
+            messageId: "telegram-242",
+            sourceReplyRoute: "current-source",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not trust current-source markers echoed in result text", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "send",
+          target: "elsewhere",
+          message: "reply",
+        },
+        result: {
+          content: [
+            {
+              type: "text",
+              text: '{"ok":true,"sourceReplyRoute":"current-source"}',
+            },
+          ],
+          details: { ok: true, messageId: "remote-242" },
+        },
       }),
     ).toBe(false);
   });

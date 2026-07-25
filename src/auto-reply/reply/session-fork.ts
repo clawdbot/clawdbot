@@ -2,22 +2,29 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
-  type ParentForkedSessionTranscript,
+  resolveSessionParentForkDecision,
   type SessionParentForkDecision,
+  type ParentForkedSessionTranscript,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  isModelSelectionLocked,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
 
-/**
- * Default max parent token count beyond which thread/session parent forking is skipped.
- * This prevents new thread sessions from inheriting near-full parent context.
- * See #26905.
- */
-const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
-const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-fork.runtime.js"));
+export const MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE =
+  "Model-selection-locked sessions cannot create child sessions from parent context.";
 
-export type ParentForkDecision = SessionParentForkDecision;
+function assertParentSessionForkAllowed(parentEntry: SessionEntry): void {
+  // A locked harness owns both the model and transcript lineage. Copying that
+  // context into an ordinary child would let the child continue it elsewhere.
+  if (isModelSelectionLocked(parentEntry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+  }
+}
+
+type ParentForkDecision = SessionParentForkDecision;
 
 type ParentForkDecisionParams = {
   parentEntry: SessionEntry;
@@ -33,13 +40,14 @@ type ForkSessionFromParentParams = {
   config?: OpenClawConfig;
   sessionKey: string;
   storePath?: string;
-  /** Cross-agent forks land the child transcript beside the child's store. */
+
+  /** Cross-agent forks land the child transcript in the target agent's store. */
   targetStorePath?: string;
 };
 
-export type ForkedParentSessionEntry = ParentForkedSessionTranscript;
+type ForkedParentSessionEntry = ParentForkedSessionTranscript;
 
-export type ForkSessionEntryFromParentResult =
+type ForkSessionEntryFromParentResult =
   | {
       status: "forked";
       fork: ForkedParentSessionEntry;
@@ -58,7 +66,7 @@ export type ForkSessionEntryFromParentResult =
   | { status: "missing-parent" }
   | { status: "failed" };
 
-export type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "parentEntry"> & {
+type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "parentEntry"> & {
   parentSessionKey: string;
   parentStoreKeys?: readonly string[];
   sessionKey: string;
@@ -80,20 +88,6 @@ export type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams,
   }) => Partial<SessionEntry> | null;
 };
 
-function loadSessionForkRuntime(): Promise<typeof import("./session-fork.runtime.js")> {
-  return sessionForkRuntimeLoader.load();
-}
-
-function formatParentForkTooLargeMessage(params: {
-  parentTokens: number;
-  maxTokens: number;
-}): string {
-  return (
-    `Parent context is too large to fork (${params.parentTokens}/${params.maxTokens} tokens); ` +
-    "starting with isolated context instead."
-  );
-}
-
 function resolveParentForkStorePath(params: {
   agentId?: string;
   config?: OpenClawConfig;
@@ -107,30 +101,18 @@ function resolveParentForkStorePath(params: {
 export async function resolveParentForkDecision(
   params: ParentForkDecisionParams,
 ): Promise<ParentForkDecision> {
-  const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
-  const parentTokens = await resolveParentForkTokenCount({
+  assertParentSessionForkAllowed(params.parentEntry);
+  return await resolveSessionParentForkDecision({
     parentEntry: params.parentEntry,
     storePath: resolveParentForkStorePath(params),
   });
-  if (typeof parentTokens === "number" && parentTokens > maxTokens) {
-    return {
-      status: "skip",
-      reason: "parent-too-large",
-      maxTokens,
-      parentTokens,
-      message: formatParentForkTooLargeMessage({ parentTokens, maxTokens }),
-    };
-  }
-  return {
-    status: "fork",
-    maxTokens,
-    ...(typeof parentTokens === "number" ? { parentTokens } : {}),
-  };
 }
 
 export async function forkSessionFromParent(
   params: ForkSessionFromParentParams,
 ): Promise<{ sessionId: string; sessionFile: string } | null> {
+  // Keep direct callers fail-closed even if they skipped the normal decision step.
+  assertParentSessionForkAllowed(params.parentEntry);
   const storePath = resolveParentForkStorePath(params);
   const fork = await forkSessionFromParentTranscript({
     agentId: params.agentId,
@@ -178,13 +160,6 @@ export async function forkSessionEntryFromParent(
       storeKeys: params.parentStoreKeys,
     }),
     patch: params.patch,
-    resolveDecision: (parentEntry) =>
-      resolveParentForkDecision({
-        parentEntry,
-        agentId: params.agentId,
-        config: params.config,
-        storePath,
-      }),
     sessionTarget: normalizeForkTarget({
       canonicalKey: params.sessionKey,
       storeKeys: params.sessionStoreKeys,
@@ -193,12 +168,4 @@ export async function forkSessionEntryFromParent(
     skipPatch: params.skipPatch,
     storePath,
   });
-}
-
-async function resolveParentForkTokenCount(params: {
-  parentEntry: SessionEntry;
-  storePath: string;
-}): Promise<number | undefined> {
-  const runtime = await loadSessionForkRuntime();
-  return runtime.resolveParentForkTokenCountRuntime(params);
 }

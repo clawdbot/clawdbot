@@ -1,15 +1,19 @@
-// Shared read-only workspace filesystem access for gateway file browsers.
+// Shared workspace filesystem access for gateway file browsers and editors.
 // All entry points route through fs-safe roots (realpathed root, symlink and
-// hardlink rejection) so no caller can read or list outside a workspace root.
+// hardlink rejection) so no caller can access files outside a workspace root.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 
-export type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
-export type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
+type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
+type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
 export type WorkspaceDirEntry = WorkspacePathStat & { name: string };
+type WorkspaceFileReadResult = ReadResult & { canonicalPath: string };
 
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
+
+let workspaceFileUpdateQueue: Promise<void> = Promise.resolve();
 
 async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   try {
@@ -58,22 +62,106 @@ export async function readWorkspaceFile(
   rootDir: string,
   browserPath: string,
   opts?: { maxBytes?: number },
-): Promise<ReadResult | undefined | "too-large"> {
+): Promise<WorkspaceFileReadResult | undefined | "too-large"> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
     return undefined;
   }
   try {
-    return await workspaceRoot.read(browserPath, {
+    const read = await workspaceRoot.read(browserPath, {
       hardlinks: "reject",
       maxBytes: opts?.maxBytes ?? WORKSPACE_PREVIEW_MAX_BYTES,
       nonBlockingRead: true,
       symlinks: "reject",
     });
+    return {
+      ...read,
+      canonicalPath: path.relative(workspaceRoot.rootReal, read.realPath).split(path.sep).join("/"),
+    };
   } catch (err) {
     if (err instanceof FsSafeError && err.code === "too-large") {
       return "too-large";
     }
+    return undefined;
+  }
+}
+
+export type WorkspaceFileUpdateResult =
+  | { status: "updated"; canonicalPath: string; hash: string; stat: WorkspacePathStat }
+  | { status: "conflict"; currentHash: string }
+  | { status: "unsafe" };
+
+function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
+  const result = workspaceFileUpdateQueue.then(update, update);
+  workspaceFileUpdateQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+export async function updateWorkspaceFile(
+  rootDir: string,
+  browserPath: string,
+  content: string,
+  expectedHash: string,
+): Promise<WorkspaceFileUpdateResult> {
+  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  if (!workspaceRoot) {
+    return { status: "unsafe" };
+  }
+  // Serialize every low-frequency editor save. The same physical file can be
+  // exposed through path aliases or nested workspace roots, so narrower queue
+  // keys can let two routes accept one stale hash and overwrite each other.
+  return await enqueueWorkspaceFileUpdate<WorkspaceFileUpdateResult>(async () => {
+    let current: ReadResult;
+    try {
+      current = await workspaceRoot.read(browserPath, {
+        hardlinks: "reject",
+        maxBytes: WORKSPACE_PREVIEW_MAX_BYTES,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      });
+    } catch {
+      return { status: "unsafe" };
+    }
+    if (decodeUtf8Strict(current.buffer) === undefined) {
+      return { status: "unsafe" };
+    }
+    const currentHash = createHash("sha256").update(current.buffer).digest("hex");
+    if (currentHash !== expectedHash) {
+      return { status: "conflict", currentHash };
+    }
+    await workspaceRoot.write(browserPath, content, {
+      encoding: "utf8",
+      renameIdentity: "strict",
+    });
+    const stat = await workspaceRoot.stat(browserPath);
+    if (workspaceStatKind(stat) !== "file") {
+      return { status: "unsafe" };
+    }
+    return {
+      status: "updated",
+      canonicalPath: path
+        .relative(workspaceRoot.rootReal, current.realPath)
+        .split(path.sep)
+        .join("/"),
+      hash: createHash("sha256").update(content, "utf8").digest("hex"),
+      stat,
+    };
+  });
+}
+
+export function decodeUtf8Strict(buffer: Buffer): string | undefined {
+  // NUL bytes are valid UTF-8 but mark binary payloads we refuse to inline.
+  if (buffer.includes(0)) {
+    return undefined;
+  }
+  try {
+    // ignoreBOM keeps a leading BOM in the decoded string so editor saves
+    // round-trip the original bytes instead of silently dropping it.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
+  } catch {
     return undefined;
   }
 }

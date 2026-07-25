@@ -20,6 +20,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
 import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -62,6 +63,13 @@ function runtimePlanToolContext(params: {
 function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source === target) {
     return;
+  }
+  const catalogMode = (source as AnyAgentTool).catalogMode;
+  if (catalogMode) {
+    (target as AnyAgentTool).catalogMode = catalogMode;
+  }
+  if (source.outputSchema !== undefined) {
+    target.outputSchema = source.outputSchema;
   }
   copyPluginToolMeta(source as never, target as never);
   copyChannelAgentToolMeta(source as never, target as never);

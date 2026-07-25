@@ -17,7 +17,7 @@ const KNOWN_INTERNAL_HOOK_EVENT_FAMILIES = [
  * barrel, so anything outside this set is flagged as a likely typo
  * (advisory), not rejected.
  */
-export const KNOWN_INTERNAL_HOOK_EVENT_KEYS = [
+const KNOWN_INTERNAL_HOOK_EVENT_KEYS = [
   "agent:bootstrap",
   "command:new",
   "command:reset",

@@ -4,6 +4,12 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  hasWebProviderEntryCredential,
+  providerRequiresCredential,
+  readWebProviderEnvValue,
+  resolveWebProviderConfig,
+} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
@@ -22,12 +28,7 @@ import {
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import {
-  hasWebProviderEntryCredential,
-  providerRequiresCredential,
-  readWebProviderEnvValue,
-  resolveWebProviderConfig,
-} from "../../packages/web-content-core/src/provider-runtime-shared.js";
+import { executeWebSearchCandidates } from "./runtime-execution.js";
 import type {
   ResolveWebSearchDefinitionParams,
   RunWebSearchParams,
@@ -76,7 +77,6 @@ function hasEntryCredential(
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
@@ -111,7 +111,6 @@ function hasImplicitProviderSelectionSignal(
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
@@ -405,6 +404,16 @@ function resolveWebSearchCandidates(
   return orderedProviders;
 }
 
+/** Reports whether web_search can use the prepared selection or resolve an agent-scoped provider. */
+export function hasUsableWebSearchProvider(options?: ResolveWebSearchDefinitionParams): boolean {
+  // Prepared metadata owns config/secret selection. Candidate resolution remains necessary for
+  // credentials scoped to the active agent, such as provider auth profiles.
+  if (normalizeOptionalLowercaseString(options?.runtimeWebSearch?.selectedProvider)) {
+    return true;
+  }
+  return resolveWebSearchCandidates(options).length > 0;
+}
+
 function hasExplicitWebSearchSelection(params: {
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
@@ -437,14 +446,6 @@ function hasExplicitWebSearchSelection(params: {
   return false;
 }
 
-function isStructuredAvailabilityError(result: unknown): result is { error: string } {
-  if (!result || typeof result !== "object" || !("error" in result)) {
-    return false;
-  }
-  const error = (result as { error?: unknown }).error;
-  return typeof error === "string" && /^missing_[a-z0-9_]*api_key$/i.test(error);
-}
-
 /** Executes web_search with fallback when selection was not explicit. */
 export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const config = resolveWebSearchRuntimeConfig({
@@ -468,45 +469,14 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
     providerId: params.providerId,
     providers: candidates,
   });
-  let lastError: unknown;
-  let sawUnavailableProvider = false;
-
-  for (const candidate of candidates) {
-    try {
-      const definition = candidate.createTool({
-        config,
-        agentDir: params.agentDir,
-        searchConfig: search as Record<string, unknown> | undefined,
-        runtimeMetadata: runtimeWebSearch,
-      });
-      if (!definition) {
-        if (!allowFallback) {
-          throw new Error(`web_search provider "${candidate.id}" is not available.`);
-        }
-        sawUnavailableProvider = true;
-        continue;
-      }
-      const executed = await definition.execute(params.args, { signal: params.signal });
-      if (allowFallback && isStructuredAvailabilityError(executed)) {
-        // Some providers report missing credentials as structured tool output.
-        // Treat that like unavailable only during auto-detected fallback.
-        lastError = new Error(`web_search provider "${candidate.id}" returned ${executed.error}`);
-        continue;
-      }
-      return {
-        provider: candidate.id,
-        result: executed,
-      };
-    } catch (error) {
-      lastError = error;
-      if (!allowFallback) {
-        throw error;
-      }
-    }
-  }
-
-  if (sawUnavailableProvider && lastError === undefined) {
-    throw new Error("web_search is enabled but no provider is currently available.");
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  return await executeWebSearchCandidates({
+    candidates,
+    config,
+    searchConfig: search as Record<string, unknown> | undefined,
+    runtimeMetadata: runtimeWebSearch,
+    agentDir: params.agentDir,
+    args: params.args,
+    signal: params.signal,
+    allowFallback,
+  });
 }

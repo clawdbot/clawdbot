@@ -53,12 +53,24 @@
   },
   "redirects": [
     {
+      "source": "/cli/crestodian",
+      "destination": "/cli/openclaw"
+    },
+    {
       "source": "/channels/bluebubbles",
       "destination": "/channels/imessage-from-bluebubbles"
     },
     {
       "source": "/install/migrating-matrix",
       "destination": "/channels/matrix-migration"
+    },
+    {
+      "source": "/concepts/qa-matrix",
+      "destination": "/concepts/qa-e2e-automation#matrix-smoke-lanes"
+    },
+    {
+      "source": "/plugins/reference/qa-matrix",
+      "destination": "/plugins/reference/qa-lab"
     },
     {
       "source": "/concepts/openclaw-sdk",
@@ -133,6 +145,14 @@
       "destination": "/plugins/building-plugins#registering-agent-tools"
     },
     {
+      "source": "/plugins/reference/codex-supervisor",
+      "destination": "/plugins/codex-supervision"
+    },
+    {
+      "source": "/specs/claw-supervisor",
+      "destination": "/specs/codex-supervision"
+    },
+    {
       "source": "/gateway/admin-http-rpc",
       "destination": "/plugins/admin-http-rpc"
     },
@@ -143,6 +163,10 @@
     {
       "source": "/tools/capability-cookbook",
       "destination": "/plugins/adding-capabilities"
+    },
+    {
+      "source": "/reference/code-mode",
+      "destination": "/tools/code-mode"
     },
     {
       "source": "/brave-search",
@@ -1127,6 +1151,7 @@
                 "group": "Mainstream messaging",
                 "pages": [
                   "channels/discord",
+                  "channels/discord-activities",
                   "channels/slack",
                   "channels/telegram",
                   "channels/whatsapp",
@@ -1148,6 +1173,7 @@
                   "channels/mattermost",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/reef",
                   "channels/raft",
                   "channels/tlon",
                   "channels/synology-chat",
@@ -1204,16 +1230,19 @@
                   "start/bootstrapping",
                   "concepts/experimental-features",
                   "concepts/qa-e2e-automation",
-                  "concepts/personal-agent-benchmark-pack",
-                  "concepts/qa-matrix"
+                  "concepts/personal-agent-benchmark-pack"
                 ]
               },
               {
                 "group": "Sessions and memory",
                 "pages": [
+                  "concepts/main-session",
+                  "concepts/multi-user",
                   "concepts/session",
+                  "concepts/session-search",
                   "concepts/channel-docking",
                   "concepts/session-pruning",
+                  "concepts/session-state",
                   "concepts/session-tool",
                   {
                     "group": "Memory",
@@ -1273,18 +1302,23 @@
                 ]
               },
               {
-                "group": "Bundled plugin guides",
+                "group": "Plugin guides",
                 "pages": [
                   "plugins/codex-harness",
+                  "plugins/codex-supervision",
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/logbook",
+                  "plugins/meeting-plugins",
                   "plugins/google-meet",
+                  "plugins/teams-meetings",
+                  "plugins/zoom-meetings",
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/vault",
+                  "plugins/onepassword",
                   "plugins/memory-wiki",
                   "plugins/llama-cpp",
                   "plugins/memory-lancedb",
@@ -1310,6 +1344,7 @@
                 "pages": [
                   "tools/skills",
                   "tools/skill-workshop",
+                  "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
@@ -1331,9 +1366,12 @@
                 "group": "Tools",
                 "pages": [
                   "tools/apply-patch",
+                  "tools/ask-user",
                   "tools/btw",
                   "tools/code-execution",
+                  "tools/code-mode",
                   "tools/diffs",
+                  "tools/screen",
                   "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
@@ -1395,6 +1433,7 @@
                   "tools/goal",
                   "tools/steer",
                   "tools/subagents",
+                  "tools/swarm",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
@@ -1506,7 +1545,6 @@
                   "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",
-                  "providers/qwen-oauth",
                   "providers/runway",
                   "providers/senseaudio",
                   "providers/sglang",
@@ -1538,6 +1576,7 @@
                   "platforms/windows",
                   "platforms/android",
                   "platforms/ios",
+                  "platforms/ios-healthkit",
                   "platforms/easyrunner"
                 ]
               },
@@ -1604,6 +1643,7 @@
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
+                      "gateway/1password",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth"
                     ]
@@ -1614,6 +1654,7 @@
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
+                      "gateway/audit",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
@@ -1627,7 +1668,9 @@
                     "pages": [
                       "gateway/gateway-lock",
                       "gateway/background-process",
-                      "gateway/multiple-gateways"
+                      "gateway/restart-recovery",
+                      "gateway/multiple-gateways",
+                      "gateway/multi-tenant-hosting"
                     ]
                   },
                   {
@@ -1638,6 +1681,7 @@
                       "gateway/security/secure-file-operations",
                       "gateway/security/shrinkwrap",
                       "gateway/security/audit-checks",
+                      "gateway/security/rate-limiting",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
@@ -1648,6 +1692,8 @@
                     "group": "Protocols and APIs",
                     "pages": [
                       "gateway/protocol",
+                      "gateway/clients",
+                      "gateway/embedding",
                       "gateway/bridge-protocol",
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
@@ -1689,6 +1735,7 @@
                 "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
+                  "nodes/presence",
                   "nodes/troubleshooting",
                   {
                     "group": "Media capabilities",
@@ -1717,6 +1764,8 @@
                   "web/index",
                   "web/control-ui",
                   "web/dashboard",
+                  "web/dashboards",
+                  "web/dashboard-architecture",
                   "web/webchat",
                   "web/tui",
                   "web/lobster"
@@ -1735,9 +1784,10 @@
                     "group": "Gateway and service",
                     "pages": [
                       "cli/backup",
-                      "cli/crestodian",
+                      "cli/openclaw",
                       "cli/daemon",
                       "cli/doctor",
+                      "cli/fleet",
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
@@ -1757,6 +1807,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/claws",
                       "cli/audit",
                       "cli/hooks",
                       "cli/infer",
@@ -1790,7 +1841,8 @@
                       "cli/flows",
                       "cli/node",
                       "cli/nodes",
-                      "cli/sandbox"
+                      "cli/sandbox",
+                      "cli/worker"
                     ]
                   },
                   {
@@ -1839,7 +1891,6 @@
                 "pages": [
                   "reference/rpc",
                   "gateway/external-apps",
-                  "reference/code-mode",
                   "reference/device-models"
                 ]
               },
@@ -1910,6 +1961,7 @@
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
+                  "reference/database-schemas",
                   "reference/memory-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",
@@ -1933,12 +1985,19 @@
                 ]
               },
               {
+                "group": "Contributing",
+                "pages": [
+                  "reference/pull-request-review-flow"
+                ]
+              },
+              {
                 "group": "Release and CI",
                 "pages": [
                   {
                     "group": "Release notes",
                     "pages": [
                       "releases/index",
+                      "releases/2026.7.1",
                       "releases/2026.6.11"
                     ]
                   },

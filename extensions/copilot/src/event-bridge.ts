@@ -59,6 +59,7 @@ interface EventBridgeOptions {
     success: boolean;
   }) => void | Promise<void>;
   onCompactionStart?: () => void | Promise<void>;
+  onContextCompacted?: () => void;
   getSdkSessionId: () => string | undefined;
   isAborted: () => boolean;
 }
@@ -241,7 +242,10 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "exit_plan_mode.requested", (event) => {
-    const steps = splitPlanText(event.data.planContent);
+    const steps = splitPlanText(event.data.planContent).map((step) => ({
+      step,
+      status: "pending" as const,
+    }));
     enqueueAgentEvent({
       stream: "plan",
       data: {
@@ -306,6 +310,15 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "session.compaction_complete", (event) => {
+    if (event.data.success) {
+      try {
+        // The SDK shares one tool-handler map and omits agent identity from
+        // tool invocations, so any compacted context invalidates the frame.
+        options.onContextCompacted?.();
+      } catch {
+        // Context invalidation must not break generic compaction tracking.
+      }
+    }
     if (!isRootCompactionEvent(event)) {
       return;
     }

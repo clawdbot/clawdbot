@@ -1,15 +1,20 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { createAgentEventAuditRecorder } from "../audit/agent-event-audit.js";
-import { isAuditLedgerEnabled } from "../audit/audit-config.js";
+import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-config.js";
+import { createAuditEventRecorder } from "../audit/audit-recorder.js";
+import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { clearAgentRunContext, onAgentAuditEvent, onAgentEvent } from "../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  onAgentAuditEvent,
+  onAgentRuntimeEvent,
+} from "../infra/agent-events.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
 import {
   type ChatAbortControllerEntry,
@@ -24,6 +29,8 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { createSessionCompanion } from "./session-companion.js";
+import { createSessionObserver } from "./session-observer.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -59,19 +66,35 @@ export function startGatewayEventSubscriptions(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
 }) {
-  // audit.enabled=false stops ledger writes entirely; reads over existing
-  // records keep working. Resolved once at gateway startup like the other
-  // runtime subscriptions.
-  const auditRecorder = isAuditLedgerEnabled(getRuntimeConfig())
-    ? createAgentEventAuditRecorder()
-    : undefined;
-  const unsubscribePrivateAuditEvents = auditRecorder
+  // The worker always runs retention maintenance. audit.enabled only controls
+  // producer subscriptions, so disabling collection cannot strand expired rows.
+  const runtimeConfig = getRuntimeConfig();
+  const auditEnabled = isAuditLedgerEnabled(runtimeConfig);
+  const auditMessageMode = resolveAuditMessageMode(runtimeConfig);
+  const auditRecorder = createAuditEventRecorder({
+    messageMode: auditEnabled ? auditMessageMode : "off",
+  });
+  const sessionObserver = createSessionObserver({
+    getConfig: getRuntimeConfig,
+    subscribers: params.sessionMessageSubscribers,
+    sessionEventSubscribers: params.sessionEventSubscribers,
+    broadcastToConnIds: params.broadcastToConnIds,
+  });
+  const sessionCompanion = createSessionCompanion({
+    getConfig: getRuntimeConfig,
+    sessionObserver,
+  });
+  const unsubscribePrivateAuditEvents = auditEnabled
     ? onAgentAuditEvent(auditRecorder.record)
     : undefined;
-  const unsubscribeToolAuditEvents = auditRecorder
+  const unsubscribeToolAuditEvents = auditEnabled
     ? onTrustedToolExecutionEvent(auditRecorder.recordTool)
     : undefined;
-  const getAgentEventHandler = createLazyPromise(
+  const unsubscribeMessageAuditEvents =
+    auditEnabled && auditMessageMode !== "off"
+      ? onTrustedMessageAuditEvent(auditRecorder.recordMessage)
+      : undefined;
+  const agentEventHandlerLoader = createLazyPromiseLoader(
     () => {
       // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
       return Promise.all([import("./server-chat.js"), import("./server-session-key.js")]).then(
@@ -199,6 +222,7 @@ export function startGatewayEventSubscriptions(params: {
     },
     { cacheRejections: true },
   );
+  const getAgentEventHandler = agentEventHandlerLoader.load;
 
   const getSessionEventsModule = createLazyPromise(() => import("./server-session-events.js"), {
     cacheRejections: true,
@@ -235,14 +259,19 @@ export function startGatewayEventSubscriptions(params: {
     return lifecycleEventHandlerPromise;
   };
 
-  const unsubscribeAgentEvents = onAgentEvent((evt) => {
-    auditRecorder?.record(evt);
+  const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
+    sessionObserver.handleEvent(evt);
+    if (auditEnabled) {
+      auditRecorder.record(evt);
+    }
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
         ? evt.data.phase
         : undefined;
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
-      const chatLink = params.chatRunState.registry.peek(evt.runId);
+      const chatLink = evt.contextClaimId
+        ? undefined
+        : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
       const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
       for (const candidateRunId of candidateRunIds) {
@@ -262,7 +291,9 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     } else if (lifecyclePhase === "start") {
-      const chatLink = params.chatRunState.registry.peek(evt.runId);
+      const chatLink = evt.contextClaimId
+        ? undefined
+        : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
       const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
       const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
@@ -289,9 +320,16 @@ export function startGatewayEventSubscriptions(params: {
   });
   const agentUnsub = async () => {
     unsubscribeAgentEvents();
+    sessionCompanion.dispose();
+    sessionObserver.dispose();
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
-    await auditRecorder?.stop();
+    unsubscribeMessageAuditEvents?.();
+    await agentEventHandlerLoader
+      .peek()
+      ?.then((handler) => handler.dispose())
+      .catch(() => undefined);
+    await auditRecorder.stop();
   };
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
@@ -361,6 +399,8 @@ export function startGatewayEventSubscriptions(params: {
   };
 
   return {
+    sessionCompanion,
+    sessionObserver,
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,

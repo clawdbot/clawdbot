@@ -75,4 +75,28 @@ describe("Codex app-server client runtime", () => {
       }),
     );
   });
+
+  it("rejects ChatGPT refresh on a prepared API-key client", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, {
+      agentDir: "/tmp/agent",
+      authMode: "prepared-api-key",
+    });
+
+    harness.send({
+      id: "refresh-api-key",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "expired" },
+    });
+
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(0));
+    expect(mocks.refreshAuth).not.toHaveBeenCalled();
+    expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toMatchObject({
+      id: "refresh-api-key",
+      error: {
+        message: "ChatGPT token refresh is unavailable for prepared Codex API-key auth.",
+      },
+    });
+  });
 });

@@ -5,7 +5,14 @@
     "onStartup": false
   },
   "contracts": {
-    "webSearchProviders": ["qa-lab-search"]
+    "webSearchProviders": ["qa-lab-search"],
+    "workerProviders": ["static-ssh"],
+    "tools": ["qa_restart_wait", "qa_restart_unsafe_probe"]
+  },
+  "toolMetadata": {
+    "qa_restart_wait": {
+      "replaySafe": true
+    }
   },
   "configSchema": {
     "type": "object",

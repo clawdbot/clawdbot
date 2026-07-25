@@ -1,3 +1,4 @@
+import { CHARS_PER_TOKEN_ESTIMATE } from "../../utils/cjk-chars.js";
 /**
  * Estimates message and tool-result character costs for context guards.
  */
@@ -10,7 +11,6 @@ import {
   bashExecutionToText,
 } from "../runtime/index.js";
 
-export const CHARS_PER_TOKEN_ESTIMATE = 4;
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
@@ -194,13 +194,6 @@ export function estimateMessageCharsCached(
   const estimated = estimateMessageChars(msg);
   cache.set(msg, estimated);
   return estimated;
-}
-
-export function estimateContextChars(
-  messages: AgentMessage[],
-  cache: MessageCharEstimateCache,
-): number {
-  return messages.reduce((sum, msg) => sum + estimateMessageCharsCached(msg, cache), 0);
 }
 
 export function invalidateMessageCharsCacheEntry(

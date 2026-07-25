@@ -107,6 +107,16 @@ final class PairingApprovalCenter {
         }
     }
 
+    /// Resolve a batch of cards with one decision. Takes the caller's
+    /// rendered snapshot instead of reading the live queue: a request that
+    /// arrives between render and click must never be resolved unseen.
+    /// `decide`'s in-flight guard keeps repeated clicks idempotent.
+    func decideAll(_ cards: [Card], _ decision: Decision) {
+        for card in cards {
+            self.decide(card, decision)
+        }
+    }
+
     /// "Not Now": hide the panel without resolving anything. Requests stay
     /// pending on the gateway (TTL applies) and in the menu-bar count.
     func snooze() {
@@ -161,6 +171,12 @@ final class PairingApprovalCenter {
     }
 
     #if DEBUG
+    /// Test seam: seed the live queue without presenting the panel (tests
+    /// run without an NSApplication, so `updatePanel` must not fire).
+    func _testSetCards(_ cards: [Card]) {
+        self.cards = cards
+    }
+
     /// Demo/screenshot hook: decisions on injected cards resolve locally
     /// instead of routing to a prompter.
     private var demoRequestIds: Set<String> = []
@@ -175,20 +191,10 @@ final class PairingApprovalCenter {
     #endif
 }
 
-/// Borderless floating panel hosting the SwiftUI approval UI. Replaces the
-/// old invisible-host-window + NSAlert sheet machinery.
+/// Floating panel with native window chrome hosting the SwiftUI approval UI,
+/// so the prompt reads like a standard system dialog.
 @MainActor
 final class PairingApprovalPanelController {
-    private final class KeyablePanel: NSPanel {
-        override var canBecomeKey: Bool {
-            true
-        }
-
-        override var canBecomeMain: Bool {
-            true
-        }
-    }
-
     private let center: PairingApprovalCenter
     private var panel: NSPanel?
     private var hostingView: NSHostingView<PairingApprovalPanelView>?
@@ -252,22 +258,24 @@ final class PairingApprovalPanelController {
         if let panel = self.panel {
             return panel
         }
-        let panel = KeyablePanel(
+        // Titled so the system draws normal dialog chrome (opaque background,
+        // rounded corners, shadow, key-window focus); the title bar itself is
+        // invisible and buttonless so it reads as an alert, not a document.
+        let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 200),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        // The SwiftUI view draws its own rounded shadow; the window shadow
-        // would trace the square window frame and look like a border.
-        panel.hasShadow = false
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        for buttonType in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            panel.standardWindowButton(buttonType)?.isHidden = true
+        }
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
-        panel.becomesKeyOnlyIfNeeded = false
 
         let host = NSHostingView(rootView: PairingApprovalPanelView(center: self.center))
         panel.contentView = host

@@ -2,6 +2,7 @@
 // full local suite.
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import pMap from "p-map";
 import { formatMs } from "./lib/check-timing-summary.mjs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
 import {
@@ -38,6 +39,7 @@ import {
   resolveChangedTargetArgs,
   shouldAcquireLocalHeavyCheckLock,
   shouldRetryVitestNoOutputTimeout,
+  withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 import { forceKillVitestProcessGroup } from "./vitest-process-group.mjs";
@@ -121,7 +123,9 @@ function runPnpmSpecCommand(spec, pnpmArgs, label) {
 
 async function runVitestSpec(spec) {
   if (spec.includeFilePath && spec.includePatterns) {
-    writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
+    writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns, {
+      expandGlobs: !spec.watchMode,
+    });
   }
   try {
     if (spec.preflightPnpmArgs) {
@@ -161,7 +165,7 @@ async function runLoggedVitestSpec(spec) {
   let result = await runVitestSpec(spec);
   if (result.noOutputTimedOut && !spec.watchMode && shouldRetryVitestNoOutputTimeout(spec.env)) {
     console.error(`[test] retrying ${spec.config} after no-output timeout`);
-    result = await runVitestSpec(spec);
+    result = await runVitestSpec(withRetryNoOutputTimeout(spec));
   }
   const durationMs = performance.now() - startedAt;
   if (result.noOutputTimedOut && result.signal) {
@@ -207,21 +211,21 @@ function printNoChangedTestTargets(args, cwd, baseEnv) {
 }
 
 async function runVitestSpecsParallel(specs, concurrency) {
-  let nextIndex = 0;
   let exitCode = 0;
+  let stopScheduling = false;
   const failures = [];
   const timings = [];
 
-  const runWorker = async () => {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const spec = specs[index];
-      if (!spec) {
+  await pMap(
+    specs,
+    async (spec, index) => {
+      if (stopScheduling) {
         return;
       }
       const result = await runLoggedVitestSpec(spec);
       if (!result) {
+        // A forwarded termination signal must not admit replacement shards during shutdown.
+        stopScheduling = true;
         return;
       }
       if (result.code !== 0) {
@@ -238,10 +242,9 @@ async function runVitestSpecsParallel(specs, concurrency) {
       if (result.timing) {
         timings.push(result.timing);
       }
-    }
-  };
-
-  await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+    },
+    { concurrency, stopOnError: true },
+  );
   return { exitCode, failures, timings };
 }
 
@@ -257,7 +260,7 @@ async function main() {
   const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
   if (unmatchedExplicitTargets.length > 0) {
     for (const unmatched of unmatchedExplicitTargets) {
-      const suffix = unmatched.includePattern ? ` (${unmatched.includePattern})` : "";
+      const suffix = unmatched.includePattern ? ` (tried: ${unmatched.includePattern})` : "";
       console.error(
         `[test] explicit test target matched no test files: ${unmatched.target}${suffix}`,
       );

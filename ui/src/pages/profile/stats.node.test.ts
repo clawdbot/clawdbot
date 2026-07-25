@@ -48,11 +48,11 @@ describe("formatTokenScale", () => {
 
 describe("formatLongDuration", () => {
   it("scales from seconds to hours", () => {
-    expect(formatLongDuration(500)).toBe("0s");
+    expect(formatLongDuration(500)).toBe("500ms");
     expect(formatLongDuration(45_000)).toBe("45s");
     expect(formatLongDuration(12 * 60 * 1000)).toBe("12m");
     expect(formatLongDuration(3 * 60 * 60 * 1000)).toBe("3h");
-    expect(formatLongDuration(59 * 60 * 60 * 1000 + 4 * 60 * 1000)).toBe("59h 4m");
+    expect(formatLongDuration(59 * 60 * 60 * 1000 + 4 * 60 * 1000)).toBe("2d 11h");
   });
 });
 
@@ -94,11 +94,11 @@ describe("buildHeatmap", () => {
     expect(heatmap.weeks.length).toBeLessThanOrEqual(53);
     expect(heatmap.monthLabels.length).toBe(heatmap.weeks.length);
 
-    const lastWeek = heatmap.weeks[heatmap.weeks.length - 1];
+    const lastWeek = heatmap.weeks.at(-1);
     // 2026-07-09 is a Thursday: index 4 in a Sunday-first week; later slots pad null.
-    expect(lastWeek.days[4]?.date).toBe("2026-07-09");
-    expect(lastWeek.days[5]).toBeNull();
-    expect(lastWeek.days[6]).toBeNull();
+    expect(lastWeek?.days[4]?.date).toBe("2026-07-09");
+    expect(lastWeek?.days[5]).toBeNull();
+    expect(lastWeek?.days[6]).toBeNull();
 
     const allDays = heatmap.weeks.flatMap((week) => week.days).filter(Boolean);
     expect(allDays.length).toBe(52 * 7);

@@ -9,7 +9,7 @@ import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
 /** Registry target id accepted by a secrets apply plan. */
-export type SecretsPlanTargetType = string;
+type SecretsPlanTargetType = string;
 
 /** One planned SecretRef mutation against config or auth-profile storage. */
 export type SecretsPlanTarget = {

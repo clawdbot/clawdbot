@@ -26,16 +26,6 @@ import {
   type CustomApiCompatibility,
   type CustomApiResult,
 } from "./onboard-custom-config.js";
-export {
-  applyCustomApiConfig,
-  buildAnthropicVerificationProbeRequest,
-  buildOpenAiVerificationProbeRequest,
-  CustomApiError,
-  inferCustomModelSupportsImageInput,
-  parseNonInteractiveCustomApiFlags,
-  resolveCustomModelImageInputInference,
-  resolveCustomProviderId,
-} from "./onboard-custom-config.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
 const VERIFY_TIMEOUT_MS = 30_000;

@@ -46,7 +46,7 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
 } as const satisfies Record<CronAgentExecutionPhase, CronAgentPhaseWatchdogStage>;
 
 /** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
-export type CronAgentWatchdog = {
+type CronAgentWatchdog = {
   start: () => void;
   noteLaneWait: () => void;
   noteLaneAdmitted: () => void;
@@ -129,7 +129,7 @@ export function createCronAgentWatchdog(params: {
       startPreExecutionTimeout();
       return;
     }
-    if (stage === "execution" || info.firstModelCallStarted) {
+    if (stage === "execution") {
       state = "executing";
       clearPreExecutionTimeout();
     }

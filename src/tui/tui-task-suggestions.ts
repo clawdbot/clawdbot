@@ -69,7 +69,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Parses the task suggestion shape carried by Gateway list and event payloads. */
-export function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
+function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
   if (!isRecord(value)) {
     return null;
   }

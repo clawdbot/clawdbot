@@ -2,6 +2,8 @@
 import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import {
   createLocalEmbeddingWorkerFailureError,
@@ -13,7 +15,10 @@ import type {
   EmbeddingProviderCallOptions,
   EmbeddingProviderOptions,
 } from "./embeddings.types.js";
-import { normalizeOptionalString } from "./string-utils.js";
+import {
+  attachLocalEmbeddingRuntimeFacts,
+  type LocalEmbeddingRuntimeFacts,
+} from "./local-embedding-runtime-facts.js";
 
 // Parent-side local embedding worker client for isolating node-llama-cpp state.
 
@@ -45,10 +50,12 @@ type LocalEmbeddingWorkerResponse =
       id: number;
       ok: true;
       value?: number[] | number[][];
+      runtimeFacts?: LocalEmbeddingRuntimeFacts;
     }
   | {
       id: number;
       ok: false;
+      runtimeFacts?: LocalEmbeddingRuntimeFacts;
       error:
         | string
         | {
@@ -174,6 +181,7 @@ class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
+  private lastRuntimeFacts: LocalEmbeddingRuntimeFacts | undefined;
 
   constructor(private readonly scriptPath: string) {}
 
@@ -200,6 +208,10 @@ class LocalEmbeddingWorkerClient {
   ): Promise<number[][]> {
     const result = await this.send({ type: "embedBatch", options, texts }, callOptions);
     return Array.isArray(result) ? (result as number[][]) : [];
+  }
+
+  getRuntimeFacts(): LocalEmbeddingRuntimeFacts | undefined {
+    return this.lastRuntimeFacts;
   }
 
   /** Ask the child to close gracefully, then force shutdown after a short grace period. */
@@ -278,7 +290,7 @@ class LocalEmbeddingWorkerClient {
           this.pending.delete(id);
           this.shutdownChild();
           reject(
-            toLintErrorObject(
+            toErrorObject(
               options.signal?.reason ?? new Error("Local embedding request aborted"),
               "Non-Error rejection",
             ),
@@ -310,6 +322,9 @@ class LocalEmbeddingWorkerClient {
     const response = message as Partial<LocalEmbeddingWorkerResponse>;
     if (typeof response.id !== "number") {
       return;
+    }
+    if (response.runtimeFacts) {
+      this.lastRuntimeFacts = response.runtimeFacts;
     }
     const pending = this.pending.get(response.id);
     if (!pending) {
@@ -383,7 +398,7 @@ export async function createLocalEmbeddingWorkerProvider(
     }
   };
 
-  return {
+  const provider: EmbeddingProvider = {
     id: "local",
     model: modelPath,
     embedQuery: async (text, callOptions) => {
@@ -402,19 +417,6 @@ export async function createLocalEmbeddingWorkerProvider(
       await client.close();
     },
   };
-}
-
-/** Convert abort reasons or arbitrary thrown values into lint-safe Error objects. */
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
+  attachLocalEmbeddingRuntimeFacts(provider, () => client.getRuntimeFacts());
+  return provider;
 }

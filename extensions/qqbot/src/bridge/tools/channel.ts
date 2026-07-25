@@ -52,7 +52,11 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
       async execute(_toolCallId, params) {
         const { getAccessToken } = await import("../../engine/messaging/sender.js");
         const accessToken = await getAccessToken(account.appId, account.clientSecret);
-        return executeChannelApi(params as ChannelApiParams, { accessToken });
+        return executeChannelApi(params as ChannelApiParams, {
+          accessToken,
+          cfg,
+          accountId: firstAccountId,
+        });
       },
     },
     { name: "qqbot_channel_api" },

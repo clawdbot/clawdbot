@@ -3,7 +3,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
+  reconcileWaitingApprovalsFromSnapshot,
+  resetToolStream,
   type FallbackStatus,
+  type PlanStatus,
   type ToolStreamEntry,
 } from "./tool-stream.ts";
 
@@ -18,6 +21,8 @@ type MutableHost = ToolStreamHost & {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
+  planStatus?: PlanStatus | null;
+  requestUpdate?: () => void;
 };
 const TOOL_STREAM_TEST_NOW = new Date("2026-05-09T00:00:00.000Z").getTime();
 
@@ -28,6 +33,7 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     chatRunId: null,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatRunStartup: null,
     chatStreamSegments: [],
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [],
@@ -47,6 +53,7 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     compactionClearTimer: null,
     fallbackStatus: null,
     fallbackClearTimer: null,
+    planStatus: null,
     ...overrides,
   };
 }
@@ -100,6 +107,274 @@ function useToolStreamFakeTimers(): void {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(TOOL_STREAM_TEST_NOW);
 }
+
+describe("app-tool-stream plan snapshots", () => {
+  it("stores a normalized snapshot and drops malformed entries", () => {
+    const requestUpdate = vi.fn();
+    const host = createHost({ requestUpdate });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "plan", {
+        phase: "update",
+        explanation: "  Shipping the focused change  ",
+        steps: [
+          { step: "Inspect the route", status: "completed" },
+          "  Wire the checklist  ",
+          { step: "Run focused tests", status: "in_progress" },
+          { step: "", status: "pending" },
+          { step: "Missing status" },
+          { step: "Unknown status", status: "blocked" },
+          null,
+          42,
+        ],
+      }),
+    );
+
+    expect(host.planStatus).toEqual({
+      runId: "run-1",
+      explanation: "Shipping the focused change",
+      steps: [
+        { step: "Inspect the route", status: "completed" },
+        { step: "Wire the checklist", status: "pending" },
+        { step: "Run focused tests", status: "in_progress" },
+      ],
+    });
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("replaces the full snapshot and clears on an empty snapshot", () => {
+    const host = createHost();
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "plan", {
+        phase: "update",
+        steps: [
+          { step: "First", status: "completed" },
+          { step: "Second", status: "in_progress" },
+        ],
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "plan", {
+        phase: "update",
+        steps: [{ step: "Replacement", status: "pending" }],
+      }),
+    );
+
+    expect(host.planStatus).toEqual({
+      runId: "run-1",
+      steps: [{ step: "Replacement", status: "pending" }],
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "plan", {
+        phase: "update",
+        explanation: "No actionable steps",
+        steps: [],
+      }),
+    );
+
+    expect(host.planStatus).toBeNull();
+  });
+
+  it("demotes duplicate in-progress steps to pending", () => {
+    const host = createHost();
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "plan", {
+        phase: "update",
+        steps: [
+          { step: "First active", status: "in_progress" },
+          { step: "Second active", status: "in_progress" },
+        ],
+      }),
+    );
+
+    expect(host.planStatus).toEqual({
+      runId: "run-1",
+      steps: [
+        { step: "First active", status: "in_progress" },
+        { step: "Second active", status: "pending" },
+      ],
+    });
+  });
+
+  it("ignores plan snapshots from another run while a run is active", () => {
+    const host = createHost({
+      chatRunId: "run-1",
+      planStatus: {
+        steps: [{ step: "Active step", status: "in_progress" }],
+      },
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-2", 1, "plan", {
+        phase: "update",
+        steps: [{ step: "Spawned run step", status: "in_progress" }],
+      }),
+    );
+
+    expect(host.planStatus).toEqual({
+      steps: [{ step: "Active step", status: "in_progress" }],
+    });
+  });
+
+  it("filters plan snapshots for another session", () => {
+    const host = createHost();
+
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "run-1",
+        1,
+        "plan",
+        {
+          phase: "update",
+          steps: [{ step: "Wrong session", status: "in_progress" }],
+        },
+        "agent:other:main",
+      ),
+    );
+
+    expect(host.planStatus).toBeNull();
+  });
+
+  it("clears plan state with the rest of a new run's transient stream", () => {
+    const host = createHost({
+      planStatus: {
+        steps: [{ step: "Stale step", status: "in_progress" }],
+      },
+    });
+
+    resetToolStream(host);
+
+    expect(host.planStatus).toBeNull();
+  });
+});
+
+describe("app-tool-stream approval lifecycle", () => {
+  const approval = (runId: string | undefined, sessionKey = "main") => ({
+    id: "approval-1",
+    kind: "exec" as const,
+    request: { command: "echo test", sessionKey, runId },
+    createdAtMs: 1,
+    expiresAtMs: 2,
+  });
+
+  const learnRun = (host: MutableHost, runId: string) => {
+    handleAgentEvent(host, agentEvent(runId, 1, "lifecycle", { phase: "start" }));
+  };
+
+  it("hydrates a parked run only when the approval matches a learned engine run id", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(true);
+    expect(host.waitingApprovalStatuses?.get("approval-1")).toEqual({
+      approvalId: "approval-1",
+      toolCallId: null,
+      runId: "run-1",
+    });
+  });
+
+  it("does not hydrate absent or mismatched run ids even while a run is active", () => {
+    const host = createHost({
+      chatRunId: "client-active-run",
+      waitingApprovalStatuses: new Map(),
+    });
+    learnRun(host, "foreground-engine-run");
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval(undefined)])).toBe(false);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("other-engine-run")])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+  });
+
+  it("does not label foreground work for an unrelated heartbeat approval", () => {
+    const host = createHost({
+      chatRunId: "foreground-client-run",
+      waitingApprovalStatuses: new Map(),
+    });
+    learnRun(host, "foreground-engine-run");
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("heartbeat-run")])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+  });
+
+  it("clears only parked runs whose approvals leave the queue snapshot", () => {
+    const host = createHost({
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "run-1" }],
+        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: "run-2" }],
+      ]),
+    });
+
+    expect(
+      reconcileWaitingApprovalsFromSnapshot(host, [{ ...approval("run-2"), id: "approval-2" }]),
+    ).toBe(true);
+    expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
+  });
+
+  it("clears hydrated state when the lifecycle resolution arrives", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+    reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "lifecycle", {
+        phase: "approval-resolved",
+        approvalId: "approval-1",
+      }),
+    );
+
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+
+    resetToolStream(host);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+
+    reconcileWaitingApprovalsFromSnapshot(host, []);
+    learnRun(host, "run-1");
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(true);
+  });
+
+  it("replaces hydrated state with the authoritative lifecycle payload", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+    reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "lifecycle", {
+        phase: "waiting-approval",
+        approvalId: "approval-1",
+        toolCallId: "tool-1",
+      }),
+    );
+
+    expect(host.waitingApprovalStatuses?.get("approval-1")).toEqual({
+      approvalId: "approval-1",
+      toolCallId: "tool-1",
+      runId: "run-1",
+    });
+  });
+
+  it("does not synthesize waiting state after a reset without a new run event", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+    reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
+
+    resetToolStream(host);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+  });
+});
 
 describe("app-tool-stream fallback lifecycle handling", () => {
   beforeEach(() => {
@@ -813,5 +1088,38 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionClearTimer).toBeNull();
 
     vi.useRealTimers();
+  });
+});
+
+describe("app-tool-stream result blocks", () => {
+  it("emits a result block for completed tools with empty output", () => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: TOOL_STREAM_TEST_NOW,
+      sessionKey: "main",
+      data: { phase: "start", name: "bash", toolCallId: "call-1", args: { command: "true" } },
+    });
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool",
+      ts: TOOL_STREAM_TEST_NOW + 1,
+      sessionKey: "main",
+      data: { phase: "result", name: "bash", toolCallId: "call-1", result: "" },
+    });
+
+    const entry = host.toolStreamById.get("call-1") as ToolStreamEntry;
+    expect(entry.resultReceived).toBe(true);
+    expect(entry.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
+    expect(entry.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
+    const content = entry.message.content as Array<Record<string, unknown>>;
+    // The empty-output result block marks the call as finished so the UI does
+    // not keep it in a running state for the rest of the run.
+    expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
   });
 });

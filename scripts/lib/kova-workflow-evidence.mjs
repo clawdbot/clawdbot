@@ -3,7 +3,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const AUTH_MODES = new Set(["live", "mock"]);
-const CLI_KEYS = new Set(["auth", "include", "plan", "profile", "repeat", "report", "target"]);
+const CLI_KEYS = new Set([
+  "auth",
+  "include",
+  "model",
+  "plan",
+  "profile",
+  "repeat",
+  "report",
+  "target",
+]);
 
 function check(condition, reason) {
   if (!condition) {
@@ -55,7 +64,7 @@ function repeatIndexesFor(selectedPairs) {
   return new Map([...selectedPairs].map((key) => [key, new Set()]));
 }
 
-function validateLiveRecord(record, key) {
+function validateLiveRecord(record, key, expectedModel) {
   const auth = object(record.auth, `record ${displayPair(key)} auth`);
   const provider = object(record.providerEvidence, `record ${displayPair(key)} provider evidence`);
   check(
@@ -75,7 +84,28 @@ function validateLiveRecord(record, key) {
     provider.available === true,
     `live record ${displayPair(key)} provider evidence was unavailable`,
   );
-  positiveInteger(provider.requestCount, `live record ${displayPair(key)} provider request count`);
+  const requestCount = positiveInteger(
+    provider.requestCount,
+    `live record ${displayPair(key)} provider request count`,
+  );
+  const models = array(provider.models, `live record ${displayPair(key)} provider models`);
+  check(
+    models.length === 1,
+    `live record ${displayPair(key)} provider model evidence was not exact`,
+  );
+  const model = object(models[0], `live record ${displayPair(key)} provider model`);
+  check(
+    text(model.value, `live record ${displayPair(key)} provider model value`) === expectedModel,
+    `live record ${displayPair(key)} provider model did not match ${expectedModel}`,
+  );
+  const modelCount = positiveInteger(
+    model.count,
+    `live record ${displayPair(key)} provider model count`,
+  );
+  check(
+    modelCount === requestCount,
+    `live record ${displayPair(key)} provider model count did not match request count`,
+  );
 }
 
 export function validateKovaWorkflowEvidence({
@@ -86,6 +116,7 @@ export function validateKovaWorkflowEvidence({
   repeat,
   includeFilters,
   authMode,
+  expectedModel,
 }) {
   const expectedProfile = text(profile, "expected profile");
   const expectedTarget = text(target, "expected target");
@@ -94,6 +125,7 @@ export function validateKovaWorkflowEvidence({
     text(value, `expected include filter ${index}`),
   );
   const expectedAuth = text(authMode, "expected auth mode");
+  const expectedProviderModel = text(expectedModel, "expected model");
   check(AUTH_MODES.has(expectedAuth), `unsupported expected auth mode ${expectedAuth}`);
   check(expectedFilters.length > 0, "expected include filters were empty");
 
@@ -180,7 +212,7 @@ export function validateKovaWorkflowEvidence({
     const recordAuth = object(record.auth, `record ${displayPair(key)} auth`);
     check(recordAuth.mode === expectedAuth, `record ${displayPair(key)} auth mode did not match`);
     if (expectedAuth === "live") {
-      validateLiveRecord(record, key);
+      validateLiveRecord(record, key, expectedProviderModel);
     }
   }
 
@@ -217,7 +249,7 @@ function parseCliArgs(argv) {
     check(!Object.hasOwn(flags, key), `duplicate --${key}`);
     flags[key] = value;
   }
-  for (const key of ["plan", "report", "profile", "target", "repeat", "include", "auth"]) {
+  for (const key of ["plan", "report", "profile", "target", "repeat", "include", "auth", "model"]) {
     text(flags[key], `--${key}`);
   }
   return flags;
@@ -248,6 +280,7 @@ function runCli() {
       .map((value) => value.trim())
       .filter(Boolean),
     authMode: flags.auth,
+    expectedModel: flags.model,
   });
   console.log(
     `Kova plan/report evidence validated: ${result.pairCount} scenario/state pairs x ${result.repeat} repeats (${result.authMode})`,

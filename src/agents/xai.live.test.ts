@@ -3,16 +3,13 @@
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import {
-  isBillingErrorMessage,
-  isOverloadedErrorMessage,
-} from "./embedded-agent-helpers/failover-matches.js";
-import { applyExtraParamsToAgent } from "./embedded-agent-runner.js";
+import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-transport-stream.js";
 import { createWebSearchTool } from "./tools/web-search.js";
 
@@ -86,12 +83,17 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
     await run();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (isBillingErrorMessage(message)) {
-      console.warn(`[xai:live] skip ${label}: billing drift: ${message}`);
+    const drift = shouldSkipLiveProviderDrift({
+      error,
+      allowBilling: true,
+      allowProviderUnavailable: true,
+    });
+    if (drift) {
+      console.warn(`[xai:live] skip ${label}: ${drift.label}: ${message}`);
       return;
     }
-    if (isOverloadedErrorMessage(message)) {
-      console.warn(`[xai:live] skip ${label}: temporary provider capacity: ${message}`);
+    if (/\b403\b/.test(message) && /model .+ is not available in your region/i.test(message)) {
+      console.warn(`[xai:live] skip ${label}: regional model availability: ${message}`);
       return;
     }
     if (message.includes("web_search is disabled or no provider is available")) {
@@ -103,12 +105,18 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
 }
 
 async function collectDoneMessage(
-  stream: AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
+  stream: AsyncIterable<{
+    type: string;
+    message?: AssistantLikeMessage;
+    error?: { errorMessage?: string };
+  }>,
 ): Promise<AssistantLikeMessage> {
   let doneMessage: AssistantLikeMessage | undefined;
   for await (const event of stream) {
     if (event.type === "done") {
       doneMessage = event.message;
+    } else if (event.type === "error") {
+      throw new Error(event.error?.errorMessage ?? "xAI stream failed without error details");
     }
   }
   return requireLiveValue(doneMessage, "done message");
@@ -132,7 +140,10 @@ describeLive("xai live", () => {
             },
           );
 
-          expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
+          expect(
+            extractNonEmptyAssistantText(res.content).length,
+            res.errorMessage,
+          ).toBeGreaterThan(0);
         });
       },
       XAI_COMPLETE_LIVE_TIMEOUT_MS,
@@ -177,7 +188,11 @@ describeLive("xai live", () => {
         );
 
         const doneMessage = await collectDoneMessage(
-          stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
+          stream as AsyncIterable<{
+            type: string;
+            message?: AssistantLikeMessage;
+            error?: { errorMessage?: string };
+          }>,
         );
         const content = requireLiveValue(doneMessage.content, "done message content");
         expect(Array.isArray(content)).toBe(true);
@@ -209,12 +224,20 @@ describeLive("xai live", () => {
     await runXaiLiveCase("web-search", async () => {
       const tool = createWebSearchTool({
         config: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: { model: "grok-4.3" },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               search: {
                 provider: "grok",
                 timeoutSeconds: XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS,
-                grok: { model: "grok-4.3" },
               },
             },
           },
@@ -228,11 +251,10 @@ describeLive("xai live", () => {
       });
 
       const details = (result.details ?? {}) as {
+        kind?: "answer" | "error";
         provider?: string;
-        model?: string;
         content?: string;
-        citations?: string[];
-        inlineCitations?: Array<unknown>;
+        citations?: Array<{ url: string; title?: string }>;
         error?: string;
         message?: string;
       };
@@ -241,20 +263,21 @@ describeLive("xai live", () => {
         details.error && details.message
           ? `${details.error} ${details.message}`
           : details.error || details.message || "";
-      if (isBillingErrorMessage(errorMessage)) {
-        console.warn(`[xai:live] skip web-search: billing drift: ${errorMessage}`);
+      const drift = shouldSkipLiveProviderDrift({
+        error: errorMessage,
+        allowBilling: true,
+        allowProviderUnavailable: true,
+      });
+      if (drift) {
+        console.warn(`[xai:live] skip web-search: ${drift.label}: ${errorMessage}`);
         return;
       }
 
       expect(details.error, details.message).toBeUndefined();
+      expect(details.kind).toBe("answer");
       expect(details.provider).toBe("grok");
-      expect(details.model).toBe("grok-4.3");
       expect(details.content?.trim().length ?? 0).toBeGreaterThan(0);
-
-      const citationCount =
-        (Array.isArray(details.citations) ? details.citations.length : 0) +
-        (Array.isArray(details.inlineCitations) ? details.inlineCitations.length : 0);
-      expect(citationCount).toBeGreaterThan(0);
+      expect(details.citations?.length ?? 0).toBeGreaterThan(0);
     });
   }, 90_000);
 });

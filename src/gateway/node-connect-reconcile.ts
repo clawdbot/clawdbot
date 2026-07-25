@@ -98,6 +98,7 @@ function buildNodePairingRequestInput(params: {
   commands: string[];
   permissions?: Record<string, boolean>;
   remoteIp?: string;
+  silent?: boolean;
 }): NodePairingRequestInput {
   return {
     nodeId: params.nodeId,
@@ -110,6 +111,7 @@ function buildNodePairingRequestInput(params: {
     commands: params.commands,
     permissions: params.permissions,
     remoteIp: params.remoteIp,
+    ...(params.silent ? { silent: true } : {}),
   };
 }
 
@@ -119,6 +121,12 @@ export async function reconcileNodePairingOnConnect(params: {
   connectParams: ConnectParams;
   pairedNode: NodePairingPairedNode | null;
   reportedClientIp?: string;
+  /**
+   * Marks the first-surface capability request silent when device pairing was
+   * approved non-interactively; approval UIs may then auto-approve it (macOS
+   * SSH trust probe) instead of prompting. Upgrade requests stay interactive.
+   */
+  initialSurfaceSilent?: boolean;
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult | null>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
@@ -147,6 +155,7 @@ export async function reconcileNodePairingOnConnect(params: {
         commands: declared,
         permissions: declaredPermissions,
         remoteIp: params.reportedClientIp,
+        silent: params.initialSurfaceSilent,
       }),
     );
     if (!pendingPairing) {
@@ -166,7 +175,7 @@ export async function reconcileNodePairingOnConnect(params: {
 
   // Approved commands reconcile against the pairing allowlist: an approved
   // dangerous surface awaiting arming (e.g. computer.act without an
-  // allowCommands entry) must not read as a pairing upgrade on every
+  // commands.allow entry) must not read as a pairing upgrade on every
   // reconnect. Invoke-time policy still gates every call on the runtime
   // allowlist, so keeping it effective here grants nothing by itself.
   const approvedCommands = resolveApprovedReconnectCommands({

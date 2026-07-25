@@ -1,18 +1,11 @@
 // Covers web-search provider config parsing and provider defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as webSearchTesting } from "../agents/tools/web-search.js";
+import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
-}));
-
-vi.mock("../plugin-sdk/telegram-command-config.js", () => ({
-  TELEGRAM_COMMAND_NAME_PATTERN: /^[a-z0-9_]+$/,
-  normalizeTelegramCommandName: (value: string) => value.trim().toLowerCase(),
-  normalizeTelegramCommandDescription: (value: string) => value.trim(),
-  resolveTelegramCustomCommands: () => ({ commands: [], issues: [] }),
 }));
 
 const mockWebSearchProviders = vi.hoisted(() => {
@@ -241,7 +234,9 @@ vi.mock("../plugins/manifest-registry.js", () => {
   };
 });
 
-const { resolveSearchProvider } = webSearchTesting;
+const resolveSearchProvider = (
+  search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"],
+) => resolveWebSearchProviderId({ search });
 
 type ValidationMessage = {
   path?: string;

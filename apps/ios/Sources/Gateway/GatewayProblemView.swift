@@ -2,6 +2,50 @@ import OpenClawKit
 import SwiftUI
 import UIKit
 
+extension GatewayConnectionProblem.PresentationText {
+    var localizedString: String {
+        switch self {
+        case let .localized(key):
+            String(localized: String.LocalizationValue(key))
+        case let .localizedFormat(format, arguments):
+            String(
+                format: String(localized: String.LocalizationValue(format)),
+                locale: .current,
+                arguments: arguments.map { $0 as CVarArg })
+        case let .verbatim(value):
+            value
+        }
+    }
+}
+
+extension GatewayConnectionProblem {
+    var localizedTitle: String {
+        self.titlePresentation.localizedString
+    }
+
+    var localizedMessage: String {
+        self.messagePresentation.localizedString
+    }
+
+    var localizedActionLabel: String? {
+        self.actionLabelPresentation?.localizedString
+    }
+
+    var localizedStatusText: String {
+        switch self.kind {
+        case .pairingRequired, .pairingRoleUpgradeRequired, .pairingScopeUpgradeRequired,
+             .pairingMetadataUpgradeRequired, .protocolMismatch:
+            guard let requestId else { return self.localizedTitle }
+            return String(
+                format: String(localized: "%@ (request ID: %@)"),
+                self.localizedTitle,
+                requestId)
+        default:
+            return self.localizedTitle
+        }
+    }
+}
+
 struct GatewayProblemBanner: View {
     let problem: GatewayConnectionProblem
     var primaryActionTitle: String?
@@ -11,12 +55,12 @@ struct GatewayProblemBanner: View {
     var body: some View {
         OpenClawNoticeBanner(
             icon: self.iconName,
-            title: self.problem.title,
-            message: self.problem.message,
-            ownerLabel: self.ownerLabel,
+            title: .verbatim(self.problem.localizedTitle),
+            message: .verbatim(self.problem.localizedMessage),
+            ownerLabel: .localized(self.ownerLabel),
             tint: self.tint,
             detail: self.problem.requestId.map(OpenClawNoticeDetail.requestID),
-            primaryActionTitle: self.primaryActionTitle,
+            primaryActionTitle: self.primaryActionTitle.map(OpenClawTextValue.verbatim),
             onPrimaryAction: self.onPrimaryAction,
             secondaryActionTitle: "Details",
             onSecondaryAction: self.onShowDetails)
@@ -88,12 +132,12 @@ struct GatewayProblemDetailsSheet: View {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(self.problem.title)
+                        Text(verbatim: self.problem.localizedTitle)
                             .font(OpenClawType.title3)
-                        Text(self.problem.message)
+                        Text(verbatim: self.problem.localizedMessage)
                             .font(OpenClawType.body)
                             .foregroundStyle(.secondary)
-                        Text(self.ownerSummary)
+                        Text(LocalizedStringKey(self.ownerSummary))
                             .font(OpenClawType.footnoteSemiBold)
                             .foregroundStyle(.secondary)
                     }
@@ -170,7 +214,7 @@ struct GatewayProblemDetailsSheet: View {
 
                 if let copyFeedback {
                     Section {
-                        Text(copyFeedback)
+                        Text(verbatim: copyFeedback)
                             .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -189,7 +233,7 @@ struct GatewayProblemDetailsSheet: View {
                             self.dismiss()
                             onPrimaryAction()
                         } label: {
-                            Text(primaryActionTitle)
+                            Text(verbatim: primaryActionTitle)
                                 .font(OpenClawType.subheadSemiBold)
                         }
                         .font(OpenClawType.subheadSemiBold)

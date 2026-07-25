@@ -4,6 +4,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -117,7 +118,11 @@ rl.on("line", (line) => process.stdout.write(line + "\n"));
       .split(/\r?\n/)
       .map((line) => JSON.parse(line) as { method: string; params: Record<string, unknown> });
 
-    expect(lines[0].params.mcpServers).toEqual([
+    const initialize = expectDefined(lines[0], "MCP initialize message");
+    const initialized = expectDefined(lines[1], "MCP initialized message");
+    const prompt = expectDefined(lines[2], "MCP prompt message");
+
+    expect(initialize.params.mcpServers).toEqual([
       {
         name: "canva",
         command: "npx",
@@ -125,9 +130,9 @@ rl.on("line", (line) => process.stdout.write(line + "\n"));
         env: [{ name: "CANVA_TOKEN", value: "secret" }],
       },
     ]);
-    expect(lines[1].params.mcpServers).toEqual(lines[0].params.mcpServers);
-    expect(lines[2].method).toBe("session/prompt");
-    expect(lines[2].params.mcpServers).toBeUndefined();
+    expect(initialized.params.mcpServers).toEqual(initialize.params.mcpServers);
+    expect(prompt.method).toBe("session/prompt");
+    expect(prompt.params.mcpServers).toBeUndefined();
   });
 
   it("reports target stdin pipe failures without an unhandled stream error", async () => {

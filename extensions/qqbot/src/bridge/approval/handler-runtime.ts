@@ -132,6 +132,7 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
           : buildPluginApprovalText(view, nowMs);
       const keyboard = buildApprovalKeyboard(
         view.approvalId,
+        view.approvalKind,
         view.actions.map((action) => action.decision),
       );
       getBridgeLogger().debug?.(

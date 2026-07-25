@@ -1,6 +1,6 @@
 // Channels config-only status tests cover fallback output when gateway status is unavailable.
 import { describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { makeDirectPlugin } from "../test-utils/channel-plugin-test-fixtures.js";
 import { formatConfigChannelsStatusLines } from "./channels/status-config-format.js";
 

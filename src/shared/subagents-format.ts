@@ -3,7 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 
 /** Formats token counts using compact k/m suffixes for subagent summaries. */
-export function formatTokenShort(value?: number) {
+function formatTokenShort(value?: number) {
   if (!value || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
@@ -60,7 +60,7 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
 }
 
 /** Resolves finite input/output token usage and the derived total. */
-export function resolveIoTokens(entry?: TokenUsageLike) {
+function resolveIoTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }

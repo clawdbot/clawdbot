@@ -5,13 +5,9 @@ import { isStringOption } from "../utils/string-readers.js";
 
 // Input provenance marks whether a user-role message actually came from an
 // external user, another session, or an internal system/tool handoff.
-export const INPUT_PROVENANCE_KIND_VALUES = [
-  "external_user",
-  "inter_session",
-  "internal_system",
-] as const;
+const INPUT_PROVENANCE_KIND_VALUES = ["external_user", "inter_session", "internal_system"] as const;
 
-export type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
+type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
 
 export type InputProvenance = {
   kind: InputProvenanceKind;
@@ -20,6 +16,8 @@ export type InputProvenance = {
   sourceChannel?: string;
   sourceTool?: string;
 };
+
+export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
 
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
@@ -78,6 +76,15 @@ export function isInterSessionInputProvenance(value: unknown): boolean {
   return normalizeInputProvenance(value)?.kind === "inter_session";
 }
 
+export function isMainSessionRestartRecoveryInputProvenance(value: unknown): boolean {
+  const provenance = normalizeInputProvenance(value);
+  return (
+    provenance?.kind === "internal_system" &&
+    normalizeOptionalString(provenance.sourceTool)?.toLowerCase() ===
+      MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL
+  );
+}
+
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOL_SET: ReadonlySet<string> = new Set(
   AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
 );
@@ -85,6 +92,15 @@ const AGENT_MEDIATED_COMPLETION_SOURCE_TOOL_SET: ReadonlySet<string> = new Set(
 export function isAgentMediatedCompletionSourceTool(value: unknown): boolean {
   const sourceTool = normalizeOptionalString(value)?.toLowerCase();
   return sourceTool ? AGENT_MEDIATED_COMPLETION_SOURCE_TOOL_SET.has(sourceTool) : false;
+}
+
+export function isCompletionReportInputProvenance(value: unknown): boolean {
+  const provenance = normalizeInputProvenance(value);
+  if (provenance?.kind !== "inter_session") {
+    return false;
+  }
+  const sourceTool = normalizeOptionalString(provenance.sourceTool)?.toLowerCase();
+  return sourceTool === "subagent_announce" || isAgentMediatedCompletionSourceTool(sourceTool);
 }
 
 const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = new Set([

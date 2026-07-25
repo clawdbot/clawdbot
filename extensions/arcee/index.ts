@@ -4,11 +4,12 @@
  */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   readConfiguredProviderCatalogEntries,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyArceeConfig,
   applyArceeOpenRouterConfig,
@@ -74,9 +75,16 @@ function buildArceeAuthMethods() {
 }
 
 async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
-  const directKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-  if (directKey) {
-    return { provider: { ...buildArceeProvider(), apiKey: directKey } };
+  const directAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
+  if (directAuth.apiKey) {
+    return {
+      provider: await buildOpenAICompatibleLiveModelProviderConfig({
+        providerId: PROVIDER_ID,
+        providerConfig: buildArceeProvider(),
+        apiKey: directAuth.apiKey,
+        discoveryApiKey: directAuth.discoveryApiKey,
+      }),
+    };
   }
 
   const openRouterKey = ctx.resolveProviderApiKey("openrouter").apiKey;
@@ -120,6 +128,9 @@ export default definePluginEntry({
       catalog: {
         run: resolveArceeCatalog,
       },
+      staticCatalog: {
+        run: async () => ({ provider: buildArceeProvider() }),
+      },
       augmentModelCatalog: ({ config }) =>
         readConfiguredProviderCatalogEntries({
           config,
@@ -141,7 +152,7 @@ export default definePluginEntry({
             }
           : undefined;
       },
-      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     });
   },
 });
