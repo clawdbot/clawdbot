@@ -38,6 +38,7 @@ const PICKED = "/home/peter/openclaw/packages";
 const SOURCE_REPO = "/tmp/source-repo";
 const TARGET_REPO = "/tmp/target-repo";
 const REFRESHED_RESEARCH_WORKSPACE = "/home/peter/research-next";
+const MOVED_WORKSPACE = "/home/peter/openclaw-next";
 const NODE_HOME = "/Users/peter";
 const NODE_PICKED = "/Users/peter/Projects";
 const NODE_UNC = "\\\\server\\share\\repo";
@@ -843,6 +844,103 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
       expect(branchRequests.at(-1)?.params).toMatchObject({ repoRoot: PICKED });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("repairs a remembered default folder when the agent workspace moves", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      models: [
+        { id: "gpt-5.5", name: "GPT 5.5", provider: "openai", reasoning: true },
+        {
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          provider: "anthropic",
+          reasoning: true,
+        },
+      ],
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "fs.listDir": {
+          path: WORKSPACE,
+          parent: "/home/peter",
+          home: "/home/peter",
+          entries: [],
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await placeTrigger.click();
+      await page.getByRole("button", { name: "Browse folders" }).click();
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await navigateInApp(page, "chat");
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+
+      await gateway.setMethodResponse("agents.list", {
+        agents: [
+          {
+            id: "main",
+            identity: { name: "Main" },
+            name: "Main",
+            workspace: MOVED_WORKSPACE,
+            workspaceGit: true,
+          },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      });
+      await page.reload();
+      await navigateInApp(page, "new-session");
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw-next");
+
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.click();
+      await page.locator('[data-chat-model-provider="anthropic"]').click();
+      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      const storedPreference = await page.evaluate(() => {
+        const key = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).find((candidate) => candidate?.startsWith("openclaw.new-session.preferences.v1:"));
+        if (!key) {
+          return null;
+        }
+        const value = JSON.parse(localStorage.getItem(key) ?? "null") as {
+          agents?: Record<string, unknown>;
+        } | null;
+        return value?.agents?.main ?? null;
+      });
+      expect(storedPreference).toMatchObject({
+        workspace: MOVED_WORKSPACE,
+        folder: MOVED_WORKSPACE,
+        model: "anthropic/claude-sonnet-4-6",
+      });
     } finally {
       await context.close();
     }

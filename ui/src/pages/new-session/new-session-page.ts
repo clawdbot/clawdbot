@@ -548,19 +548,27 @@ class NewSessionPage extends OpenClawLightDomElement {
     // A node cwd belongs to node discovery, and a locked cloud-recovery draft
     // shows its staged repo; neither may be replaced by a workspace refresh.
     if (!this.execNode && !keepSelectedFolder && !this.pendingCloud.sessionKey) {
+      const workspace = this.workspacePath();
+      const storedWorkspaceMoved =
+        Boolean(preference?.folder) &&
+        preference?.folder === preference.workspace &&
+        preference.workspace !== workspace;
       // An old agent workspace path is not a custom folder. If the configured
       // workspace moved, use the current value instead of reviving the stale path.
       this.folder =
         preference?.folder &&
-        (preference.folder === this.workspacePath() || this.isAdmin()) &&
+        (preference.folder === workspace || this.isAdmin()) &&
         (!preference.workspace ||
           preference.folder !== preference.workspace ||
-          preference.workspace === this.workspacePath())
+          preference.workspace === workspace)
           ? preference.folder
-          : this.workspacePath();
+          : workspace;
       this.folderSelectedByUser = false;
       this.preferredWorktreeRestore = preference?.worktree === true;
       this.worktreeSelectedByUser = false;
+      if (storedWorkspaceMoved) {
+        this.persistPreference({ folder: workspace });
+      }
     }
     void this.loadNodes();
     this.modelControl.load(this.context, this.agentId, !catalog.isTarget(this.data), {
