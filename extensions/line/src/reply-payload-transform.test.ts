@@ -461,15 +461,25 @@ describe("parseLineDirectives", () => {
       });
       const flexMessage = requireFlexMessage(getLineData(result).flexMessage, "long device name");
       const footer = flexMessage.contents?.footer as {
-        contents?: Array<{ contents?: Array<{ action?: { data?: string } }> }>;
+        contents?: Array<{
+          contents?: Array<{ action?: { data?: string; label?: string } }>;
+        }>;
       };
-      const datas = (footer?.contents ?? [])
+      const actions = (footer?.contents ?? [])
         .flatMap((row) => row.contents ?? [])
-        .flatMap((button) => (button.action?.data ? [button.action.data] : []));
+        .flatMap((button) => (button.action?.data ? [button.action] : []));
 
-      expect(datas.length).toBeGreaterThan(0);
-      for (const data of datas) {
-        expect(data.length).toBeLessThanOrEqual(300);
+      expect(flexMessage.altText).toContain("Very Long Device Name");
+      expect(actions.length).toBeGreaterThan(0);
+      for (const action of actions) {
+        if (!action.data) {
+          throw new Error("expected device callback data");
+        }
+        const params = new URLSearchParams(action.data);
+        expect(action.label).toBe("Play/Pause");
+        expect(action.data.length).toBeLessThanOrEqual(300);
+        expect(params.get("line.action")).toBe("toggle");
+        expect(params.get("line.device")).toBeTruthy();
       }
     });
   });

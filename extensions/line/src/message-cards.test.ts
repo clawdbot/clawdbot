@@ -481,13 +481,18 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
   });
 
-  it("uriAction truncates uri on surrogate boundaries", () => {
+  it("uriAction truncates without splitting surrogates or percent-encoded code points", () => {
     // 999 code units + 😀 = 1001; the 1000-unit slice cuts the emoji.
     const uri = `https://e.example/?q=${"u".repeat(978)}😀`;
     const action = uriAction("Open", uri) as { uri: string };
+    // The raw 1000-unit boundary ends in "%A", halfway through an encoded euro sign.
+    const encodedUri = `https://example.com/?q=${"a".repeat(969)}%E2%82%AC`;
+    const encodedAction = uriAction("Open", encodedUri) as { uri: string };
 
     expect(action.uri).toBe(`https://e.example/?q=${"u".repeat(978)}`);
     expect(loneHighSurrogate.test(action.uri)).toBe(false);
+    expect(encodedAction.uri).toBe(`https://example.com/?q=${"a".repeat(969)}`);
+    expect(() => decodeURI(encodedAction.uri)).not.toThrow();
   });
 
   it("buttons template payload uri actions truncate past the 1000-unit cap", () => {

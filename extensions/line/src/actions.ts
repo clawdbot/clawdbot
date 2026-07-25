@@ -11,8 +11,33 @@ export function truncateLineActionLabel(label: string, limit = LINE_ACTION_LABEL
   return truncateUtf16Safe(label, limit);
 }
 
-export function truncateLineActionData(data: string): string {
+function truncateLineActionData(data: string): string {
   return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
+}
+
+function truncateLineActionUri(uri: string): string {
+  let candidate = truncateUtf16Safe(uri, LINE_ACTION_URI_LIMIT);
+  if (candidate === uri) {
+    return candidate;
+  }
+
+  try {
+    decodeURI(uri);
+  } catch {
+    return candidate;
+  }
+
+  // LINE requires UTF-8 percent-encoded URIs. Retreat from the size boundary
+  // until truncation no longer leaves a partial encoded code point.
+  while (candidate) {
+    try {
+      decodeURI(candidate);
+      return candidate;
+    } catch {
+      candidate = truncateUtf16Safe(candidate, candidate.length - 1);
+    }
+  }
+  return candidate;
 }
 
 /**
@@ -33,7 +58,7 @@ export function uriAction(label: string, uri: string): Action {
   return {
     type: "uri",
     label: truncateLineActionLabel(label),
-    uri: truncateUtf16Safe(uri, LINE_ACTION_URI_LIMIT),
+    uri: truncateLineActionUri(uri),
   };
 }
 
