@@ -302,4 +302,4 @@ The companion can then search across all experience types while understanding th
 - [Memory CLI](/cli/memory)
 - [Memory configuration reference](/reference/memory-config)
 - [Memory search](/concepts/memory-search)
-- [Nephesh integration](/nephesh)
+- [Nephesh integration](/concepts/nephesh-integration)
