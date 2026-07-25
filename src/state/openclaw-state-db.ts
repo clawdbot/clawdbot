@@ -74,6 +74,7 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import { createPreMigrationStateBackup } from "./openclaw-state-pre-migration-backup.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export {
@@ -236,6 +237,17 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);
+    // Snapshot the database before a forward schema migration bumps its version
+    // in place, so an older build (or a botched upgrade) still has a recovery
+    // copy. Must run before the transaction below, because VACUUM INTO cannot
+    // execute inside one. Best effort (see helper).
+    const preMigrationBackup = createPreMigrationStateBackup(
+      db,
+      pathname,
+      readSqliteUserVersion(db),
+      OPENCLAW_STATE_SCHEMA_VERSION,
+      Date.now(),
+    );
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runSqliteImmediateTransactionSync(
       db,
@@ -319,13 +331,28 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     );
     const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });
     clearOpenClawStateDatabaseOpenFailure(pathname);
+    const preMigrationChanges =
+      preMigrationBackup.status === "created"
+        ? [
+            `Backed up shared state database before schema migration → ${preMigrationBackup.backupPath}`,
+          ]
+        : [];
+    const preMigrationWarnings =
+      preMigrationBackup.status === "failed"
+        ? [
+            `Could not back up shared state database before migration at ${pathname}: ${preMigrationBackup.reason}`,
+          ]
+        : [];
     return {
-      changes,
-      warnings: quarantineCleared
-        ? []
-        : [
-            `Persisted quarantine record for ${pathname} could not be cleared; rerun openclaw doctor --fix so the repaired database is not refused again.`,
-          ],
+      changes: [...preMigrationChanges, ...changes],
+      warnings: [
+        ...preMigrationWarnings,
+        ...(quarantineCleared
+          ? []
+          : [
+              `Persisted quarantine record for ${pathname} could not be cleared; rerun openclaw doctor --fix so the repaired database is not refused again.`,
+            ]),
+      ],
     };
   } catch (err) {
     // Reaching this catch inside doctor means repair itself refused or failed,
