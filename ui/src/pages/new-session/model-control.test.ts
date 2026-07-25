@@ -28,6 +28,42 @@ function contextWith(models: ModelCatalogEntry[], runtime = "openclaw") {
 }
 
 describe("new-session model runtime", () => {
+  it("restores a browser preference only after the model and thinking level validate", async () => {
+    const { context } = contextWith([
+      {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+        reasoning: true,
+      },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.load(context, "main", true, {
+      preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
+    });
+
+    await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
+    expect(control.thinkingLevel).toBe("high");
+  });
+
+  it("drops a stored model and its reasoning override when the model is unavailable", async () => {
+    const { context, request } = contextWith([
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+    ]);
+    const notify = vi.fn();
+    const control = new NewSessionModelControl(notify);
+
+    control.load(context, "main", true, {
+      preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
+    });
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
+    expect(control.selected).toBe("");
+    expect(control.thinkingLevel).toBe("");
+  });
+
   it("uses model catalog runtime metadata for an explicit cloud target", async () => {
     const { context, request } = contextWith([
       {

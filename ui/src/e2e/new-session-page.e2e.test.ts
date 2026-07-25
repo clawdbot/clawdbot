@@ -92,6 +92,32 @@ async function replaceGatewayClient(page: Page) {
   });
 }
 
+async function navigateInApp(page: Page, routeId: string, search = "") {
+  await page.evaluate(
+    ({ targetRouteId, targetSearch }) => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime?: {
+          context: {
+            navigate: (routeId: string, options?: { search?: string }) => void;
+          };
+        };
+      };
+      if (!app.runtime) {
+        throw new Error("OpenClaw application runtime is unavailable");
+      }
+      app.runtime.context.navigate(targetRouteId, { search: targetSearch });
+    },
+    { targetRouteId: routeId, targetSearch: search },
+  );
+}
+
+async function choosePackagesFolder(page: Page) {
+  await page.locator("#new-session-place-trigger").click();
+  await page.getByRole("button", { name: "Browse folders" }).click();
+  await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
+  await page.getByRole("button", { name: "Use this folder" }).click();
+}
+
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -721,6 +747,263 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         message: "use this model",
         model: "anthropic/claude-sonnet-4-6",
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("restores the last valid place, worktree, model, and reasoning in a new draft", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      models: [
+        { id: "gpt-5.5", name: "GPT 5.5", provider: "openai", reasoning: true },
+        {
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          provider: "anthropic",
+          reasoning: true,
+        },
+      ],
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                parent: "/home/peter",
+                home: "/home/peter",
+                entries: [{ name: "packages", path: PICKED }],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: {
+                path: PICKED,
+                parent: WORKSPACE,
+                home: "/home/peter",
+                entries: [],
+              },
+            },
+          ],
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await choosePackagesFolder(page);
+      await placeTrigger.click();
+      await page.getByRole("button", { name: "Worktree" }).click();
+      await page.keyboard.press("Escape");
+
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.click();
+      await page.locator('[data-chat-model-provider="anthropic"]').click();
+      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
+      await thinkingSlider.press("End");
+      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+
+      await page.goto(`${server.baseUrl}new`);
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("packages");
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect
+        .poll(() => modelSelect.getAttribute("data-chat-select-value"))
+        .toBe("anthropic/claude-sonnet-4-6");
+      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+      await captureUiProof(page, "new-session-preferences-restored.png");
+
+      const branchRequests = await gateway.getRequests("worktrees.branches");
+      expect(branchRequests.at(-1)?.params).toMatchObject({ repoRoot: PICKED });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("falls back to the current workspace when the remembered folder is gone", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                parent: "/home/peter",
+                home: "/home/peter",
+                entries: [{ name: "packages", path: PICKED }],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:stale-folder-fallback", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await choosePackagesFolder(page);
+
+      await navigateInApp(page, "chat");
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      const validationRequests = (await gateway.getRequests("fs.listDir")).length;
+      await gateway.deferNext("fs.listDir");
+      await navigateInApp(page, "new-session");
+      await expect
+        .poll(async () => (await gateway.getRequests("fs.listDir")).length)
+        .toBeGreaterThan(validationRequests);
+      const message = page.locator(".new-session-page__message");
+      await message.fill("use a safe folder");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .toBe(true);
+
+      await gateway.rejectDeferred("fs.listDir", {
+        code: "INVALID_REQUEST",
+        message: `Error: ENOENT: no such file or directory, scandir '${PICKED}'`,
+      });
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a newer folder choice when remembered-folder validation finishes late", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                parent: "/home/peter",
+                home: "/home/peter",
+                entries: [{ name: "packages", path: PICKED }],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: { path: PICKED, parent: WORKSPACE, home: "/home/peter", entries: [] },
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:newer-folder-wins", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await choosePackagesFolder(page);
+
+      await navigateInApp(page, "chat");
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      const validationRequests = (await gateway.getRequests("fs.listDir")).length;
+      await gateway.deferNext("fs.listDir");
+      await navigateInApp(page, "new-session");
+      await expect
+        .poll(async () => (await gateway.getRequests("fs.listDir")).length)
+        .toBeGreaterThan(validationRequests);
+
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await placeTrigger.click();
+      await page
+        .locator('wa-popover.new-session-page__place-popover [data-value="workspace"]')
+        .click();
+      await gateway.resolveDeferred("fs.listDir", {
+        path: PICKED,
+        parent: WORKSPACE,
+        home: "/home/peter",
+        entries: [],
+      });
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
+
+      await page.locator(".new-session-page__message").fill("keep the newer choice");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).not.toHaveProperty("cwd");
     } finally {
       await context.close();
     }
