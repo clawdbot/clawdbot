@@ -232,7 +232,11 @@ async function writeTuiPtyFixtureScript(dir: string) {
             return { runId };
           }
           const responseDelayMs =
-            opts.message === "slow prompt" || opts.message === "streaming prompt" ? 500 : 20;
+            opts.message === "slow prompt" ||
+            opts.message === "slow reset proof" ||
+            opts.message === "streaming prompt"
+              ? 500
+              : 20;
           if (opts.message === "streaming prompt") {
             setTimeout(() => {
               this.onEvent?.({
@@ -830,6 +834,30 @@ describe.sequential("TUI PTY harness", () => {
       expect(slowPromptCalls).toHaveLength(1);
       expect(slowPromptCalls[0]?.payload).toMatchObject({ message: "slow prompt" });
       await fixture.run.write("\x15", { delay: false });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps an active session intact when /reset is submitted from the terminal",
+    async () => {
+      const priorResetCount = (await readFixtureLog(fixture.logPath)).filter(
+        (entry) => entry.method === "resetSession",
+      ).length;
+
+      await fixture.run.write("slow reset proof\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "slow reset proof"),
+      );
+      await fixture.run.write("/reset\r", { delay: false });
+      await fixture.run.waitForOutput("abort the current run before /reset");
+
+      const resetCalls = (await readFixtureLog(fixture.logPath)).filter(
+        (entry) => entry.method === "resetSession",
+      );
+      expect(resetCalls).toHaveLength(priorResetCount);
+      await fixture.run.waitForOutput("PTY_RESPONSE: slow reset proof");
     },
     TEST_TIMEOUT_MS,
   );
