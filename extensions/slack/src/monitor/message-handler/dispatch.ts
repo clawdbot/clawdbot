@@ -43,7 +43,7 @@ import {
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import {
   buildTtsSupplementMediaPayload,
@@ -2364,7 +2364,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     });
   }
   if (dispatchError) {
-    throw toLintErrorObject(dispatchError, "Slack dispatch failed");
+    throw toErrorObject(dispatchError, "Slack dispatch failed");
   }
   if (!anyReplyDelivered && !draftPreviewCommitted) {
     await draftStream?.clear();
@@ -2377,19 +2377,5 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
     );
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
