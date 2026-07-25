@@ -1119,12 +1119,13 @@ describe("session MCP runtime", () => {
       await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
 
       nowMs += 5_001;
-      expect(runtime.peekCatalog()).toBeNull();
+      expect(runtime.peekCatalog()).toBe(failedCatalog);
       const staleCatalog = await withTestTimeout(
         runtime.getCatalog(),
         300,
         "catalog retry blocked the triggering turn",
       );
+      expect(staleCatalog).toBe(failedCatalog);
       expect(staleCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
       await expect(runtime.callTool("healthyServer", "healthy_tool", {})).resolves.toMatchObject({
         isError: false,

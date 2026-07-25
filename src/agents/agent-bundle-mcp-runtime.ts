@@ -420,8 +420,8 @@ export function createSessionMcpRuntime(params: {
   let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   let catalogInvalidationGeneration = 0;
-  const peekCurrentCatalog = (): McpToolCatalog | null =>
-    catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs ? null : catalog;
+  const catalogRetryIsDue = (): boolean =>
+    catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
   const recordServerToolFailure = (serverName: string, nowMs: number) => {
@@ -514,7 +514,7 @@ export function createSessionMcpRuntime(params: {
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
     failIfDisposed();
-    const cachedCatalog = peekCurrentCatalog();
+    const cachedCatalog = catalogRetryIsDue() ? null : catalog;
     if (cachedCatalog) {
       return cachedCatalog;
     }
@@ -904,7 +904,7 @@ export function createSessionMcpRuntime(params: {
     getCatalog,
     /** Synchronous catalog snapshot only; must not connect transports or issue tools/list. */
     peekCatalog() {
-      return peekCurrentCatalog();
+      return catalog;
     },
     markUsed() {
       lastUsedAt = Date.now();
