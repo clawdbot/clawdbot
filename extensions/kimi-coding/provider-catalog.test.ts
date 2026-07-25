@@ -14,27 +14,22 @@ describe("kimi provider catalog", () => {
       "kimi-for-coding",
       "kimi-for-coding-highspeed",
       "k3",
-      "k3[1m]",
     ]);
     expect(provider.models.find((model) => model.id === "k3")).toMatchObject({
       name: "Kimi K3",
       reasoning: true,
-      contextWindow: 262_144,
-      maxTokens: 32_768,
       thinkingLevelMap: {
         off: null,
-        minimal: null,
-        low: null,
-        medium: null,
-        high: null,
+        minimal: "low",
+        low: "low",
+        medium: "high",
+        high: "high",
         xhigh: "max",
         max: "max",
       },
-    });
-    expect(provider.models.find((model) => model.id === "k3[1m]")).toMatchObject({
-      name: "Kimi K3 (1M)",
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
       contextWindow: 1_048_576,
-      maxTokens: 32_768,
+      maxTokens: 131_072,
     });
     expect(provider.models.find((model) => model.id === "kimi-for-coding-highspeed")).toMatchObject(
       {
@@ -51,6 +46,7 @@ describe("kimi provider catalog", () => {
     expect(normalizeKimiCodingModelId("k2p5")).toBe("kimi-for-coding");
     expect(normalizeKimiCodingModelId("kimi-for-coding")).toBe("kimi-for-coding");
     expect(normalizeKimiCodingModelId("k3")).toBe("k3");
+    expect(normalizeKimiCodingModelId("k3[1m]")).toBe("k3");
     expect(normalizeKimiCodingModelId("kimi-for-coding-highspeed")).toBe(
       "kimi-for-coding-highspeed",
     );

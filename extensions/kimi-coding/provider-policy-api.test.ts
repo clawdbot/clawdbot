@@ -2,13 +2,19 @@ import { describe, expect, it } from "vitest";
 import { isKimiK3ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("Kimi Code provider policy", () => {
-  it.each(["k3", "k3[1m]"])("exposes off and max for %s", (modelId) => {
+  it.each(["k3", "k3[1m]"])("exposes adaptive K3 thinking levels for %s", (modelId) => {
     expect(resolveThinkingProfile({ provider: "kimi", modelId })).toEqual({
       levels: [
-        { id: "off", label: "off" },
-        { id: "max", label: "max" },
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "adaptive" },
+        { id: "xhigh" },
+        { id: "max" },
       ],
-      defaultLevel: "max",
+      defaultLevel: "high",
       preserveWhenCatalogReasoningFalse: true,
     });
   });
