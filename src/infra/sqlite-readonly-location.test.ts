@@ -179,6 +179,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       CREATE TABLE probe (value TEXT);
       INSERT INTO probe VALUES ('ok');
     `);
+    const canonicalDatabasePath = fs.realpathSync.native(databasePath);
     let failNextSourceStat = false;
     vi.spyOn(sqlite, "backup").mockImplementationOnce(async () => {
       failNextSourceStat = true;
@@ -186,7 +187,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     });
     const statSync = fs.statSync.bind(fs);
     vi.spyOn(fs, "statSync").mockImplementation(((pathname, options) => {
-      if (failNextSourceStat && path.resolve(String(pathname)) === path.resolve(databasePath)) {
+      if (failNextSourceStat && path.resolve(String(pathname)) === canonicalDatabasePath) {
         failNextSourceStat = false;
         const error = new Error("missing");
         (error as NodeJS.ErrnoException).code = "ENOENT";
@@ -332,10 +333,11 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const seed = new sqlite.DatabaseSync(databasePath);
     seed.exec("CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('ok');");
     seed.close();
+    const canonicalDatabasePath = fs.realpathSync.native(databasePath);
     const statSync = fs.statSync.bind(fs);
     let injected = false;
     vi.spyOn(fs, "statSync").mockImplementation(((pathname, options) => {
-      if (!injected && path.resolve(String(pathname)) === path.resolve(databasePath)) {
+      if (!injected && path.resolve(String(pathname)) === canonicalDatabasePath) {
         injected = true;
         const error = new Error("missing");
         (error as NodeJS.ErrnoException).code = "ENOENT";
