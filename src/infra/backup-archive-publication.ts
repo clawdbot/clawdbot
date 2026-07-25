@@ -9,8 +9,6 @@ import {
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
 import {
-  isHardlinkFallbackError,
-  publishFileNoClobber,
   requireDirectorySync,
   syncDirectory,
   syncDirectoryIfSupported,
@@ -108,6 +106,17 @@ async function syncPublishedArchiveCommit(
     label: "backup publication directory",
   });
   requireDirectorySync(outcome, "Backup publication directory");
+}
+
+function isUnsupportedHardLinkError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return (
+    code === "EPERM" ||
+    code === "EXDEV" ||
+    code === "ENOTSUP" ||
+    code === "EOPNOTSUPP" ||
+    code === "ENOSYS"
+  );
 }
 
 async function openPreparedArchive(
@@ -271,47 +280,31 @@ export async function publishPreparedBackupArchive(params: {
   const { plan, prepared } = params;
   let preparedHandle: FileHandle | undefined;
   let publishedIdentity: Stats | undefined;
-  let publicationCollision = false;
-  let publicationStarted = false;
+  let hardLinkCreated = false;
   let committed = false;
   try {
     await assertPublicationParentUnchanged(plan);
     preparedHandle = await openPreparedArchive(plan, prepared);
+    await assertTargetAbsent(plan.canonicalOutputPath);
+    // publishFileExclusive removes a newly linked target when its internal
+    // directory sync fails. Backups intentionally retain that complete output
+    // for recovery, so this site cannot adopt it until fs-safe exposes a
+    // preserve-on-sync-failure publication policy.
     try {
-      await assertTargetAbsent(plan.canonicalOutputPath);
-    } catch (error) {
-      publicationCollision = true;
-      throw error;
-    }
-    publicationStarted = true;
-    try {
-      const publication = await publishFileNoClobber(
-        prepared.archivePath,
-        plan.canonicalOutputPath,
-        {
-          strategy: "link-required",
-          durability: "degrade",
-        },
-      );
-      publishedIdentity = publication.identity;
+      await fs.link(prepared.archivePath, plan.canonicalOutputPath);
+      hardLinkCreated = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        publicationCollision = true;
         throw new Error(
           `Refusing to overwrite existing backup archive: ${plan.requestedOutputPath}`,
           { cause: error },
         );
       }
-      if (isHardlinkFallbackError(error)) {
+      if (isUnsupportedHardLinkError(error)) {
         throw new Error(
           `Atomic backup publication requires hard-link support in ${plan.requestedParentPath}.`,
           { cause: error },
         );
-      }
-      if ((error as { code?: unknown }).code === "path-mismatch") {
-        throw new Error(`Backup archive changed during publication: ${plan.requestedOutputPath}`, {
-          cause: error,
-        });
       }
       throw error;
     }
@@ -355,9 +348,20 @@ export async function publishPreparedBackupArchive(params: {
     await assertPublishedArchiveUnchanged(plan, preparedHandle, publishedIdentity);
   } catch (error) {
     if (!committed) {
-      if (publishedIdentity || (publicationStarted && !publicationCollision)) {
+      if (!publishedIdentity && hardLinkCreated) {
+        const currentTargetIdentity = await fs
+          .lstat(plan.canonicalOutputPath)
+          .catch(() => undefined);
+        if (
+          currentTargetIdentity?.isFile() &&
+          sameFileIdentity(currentTargetIdentity, prepared.identity)
+        ) {
+          publishedIdentity = currentTargetIdentity;
+        }
+      }
+      if (publishedIdentity) {
         params.log?.(
-          `Backup archiver preserved any final output after publication failed so a concurrent replacement could not be deleted: ${plan.requestedOutputPath}.`,
+          `Backup archiver preserved the final archive after publication failed so a concurrent replacement could not be deleted: ${plan.requestedOutputPath}.`,
         );
       }
       if (!removePreparedBackupArchive(prepared)) {

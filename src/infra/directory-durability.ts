@@ -4,6 +4,8 @@ import {
   syncDirectory,
   type DirectorySyncOutcome,
   type PublishFileExclusiveFailureDetails,
+  type PublishFileExclusiveFailurePhase,
+  type PublishFileExclusiveResult,
 } from "@openclaw/fs-safe/durability";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { FsSafeError } from "./fs-safe.js";
@@ -61,6 +63,32 @@ export function getPublishFileExclusiveFailureDetails(
   return details as PublishFileExclusiveFailureDetails;
 }
 
+function postPublicationFailure(params: {
+  error: unknown;
+  phase: PublishFileExclusiveFailurePhase;
+  published: PublishFileExclusiveResult;
+}): FsSafeError {
+  const cause = params.error instanceof Error ? params.error : new Error(String(params.error));
+  return new FsSafeError(
+    params.error instanceof FsSafeError ? params.error.code : "helper-failed",
+    `File publication failed after target creation: ${cause.message}`,
+    {
+      cause,
+      details: {
+        phase: params.phase,
+        targetCreated: true,
+        targetIdentity: {
+          dev: params.published.identity.dev,
+          ino: params.published.identity.ino,
+        },
+        // After publication succeeds, pathname cleanup cannot atomically prove
+        // it still owns the target. Callers use this receipt with their pinned guards.
+        cleanup: "preserved",
+      } satisfies PublishFileExclusiveFailureDetails,
+    },
+  );
+}
+
 /** Publish one file without replacement under OpenClaw's durability policy. */
 export async function publishFileNoClobber(
   sourcePath: string,
@@ -80,15 +108,31 @@ export async function publishFileNoClobber(
   });
   const degraded = published.directorySync.status === "unsupported";
   if (options.durability === "fail-closed") {
-    requireDirectorySync(published.directorySync, "File publication directory");
+    try {
+      requireDirectorySync(published.directorySync, "File publication directory");
+    } catch (error) {
+      throw postPublicationFailure({
+        error,
+        phase: "directory-sync",
+        published,
+      });
+    }
   }
 
   if (options.moveSource) {
-    const currentSource = await fs.lstat(sourcePath);
-    if (!currentSource.isFile() || !sameFileIdentity(currentSource, sourceIdentity)) {
-      throw new Error(`File publication source changed before removal: ${sourcePath}`);
+    try {
+      const currentSource = await fs.lstat(sourcePath);
+      if (!currentSource.isFile() || !sameFileIdentity(currentSource, sourceIdentity)) {
+        throw new Error(`File publication source changed before removal: ${sourcePath}`);
+      }
+      await fs.unlink(sourcePath);
+    } catch (error) {
+      throw postPublicationFailure({
+        error,
+        phase: published.method === "hardlink" ? "hardlink-verify" : "copy-verify",
+        published,
+      });
     }
-    await fs.unlink(sourcePath);
   }
 
   return { ...published, durability: degraded ? "degraded" : "durable" };
