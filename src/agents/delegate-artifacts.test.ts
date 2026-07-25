@@ -60,11 +60,15 @@ function policy(overrides: Partial<DelegateArtifactPolicyV1> = {}): DelegateArti
   };
 }
 
-function publish(options: ReturnType<typeof stateOptions>, publicationKey = "tool-call-1") {
+function publish(
+  options: ReturnType<typeof stateOptions>,
+  publicationKey = "tool-call-1",
+  producerRunId = "continuation-delegate-run-1",
+) {
   return publishDelegateArtifactCandidates({
     producerSessionKey: "agent:main:subagent:continuation-child",
     producerSessionId: "child-session-1",
-    producerRunId: "continuation-delegate-run-1",
+    producerRunId,
     publicationKey,
     candidates: [{ bytes: Buffer.from("%PDF-1.7 delegate report"), mimeType: "application/pdf" }],
     runtimeEnabled: true,
@@ -1394,6 +1398,132 @@ describe("managed delegate artifact claims", () => {
         crossSessionEnabled: true,
         now: 1_000 + DELEGATE_ARTIFACT_RETENTION_MS,
         options: expiryOptions,
+      }),
+    ).toEqual({ outcome: "expired" });
+  });
+
+  it("lists a live flow without historical expired or discarded flows poisoning it", () => {
+    const options = stateOptions();
+    createDelegateArtifactPolicy(
+      policy({
+        flowId: "00-expired-flow",
+        producerRunId: "expired-run",
+      }),
+      options,
+    );
+    publish(options, "expired-publication", "expired-run");
+    const expired = finalize(options, {
+      producerRunId: "expired-run",
+      completionId: "expired-completion",
+      finalizationKey: "expired-finalization",
+    });
+    if (expired.status !== "finalized") {
+      throw new Error("expected expired flow finalization");
+    }
+    const expiredProjection = expired.projections.get("agent:main:parent");
+    if (!expiredProjection) {
+      throw new Error("expected expired parent projection");
+    }
+    recordDelegateArtifactDelivery({
+      projection: expiredProjection,
+      phase: "attempt",
+      now: 9_900,
+      options,
+    });
+    recordDelegateArtifactDelivery({
+      projection: expiredProjection,
+      phase: "acknowledged",
+      now: 9_950,
+      options,
+    });
+
+    createDelegateArtifactPolicy(
+      policy({
+        flowId: "zz-live-flow",
+        producerRunId: "live-run",
+        dispatchAcceptedAt: 2_000,
+        scheduledAt: 2_100,
+        notBefore: 32_100,
+      }),
+      options,
+    );
+    publish(options, "live-publication", "live-run");
+    const live = finalize(options, {
+      producerRunId: "live-run",
+      completionId: "live-completion",
+      finalizationKey: "live-finalization",
+    });
+    if (live.status !== "finalized") {
+      throw new Error("expected live flow finalization");
+    }
+    const liveProjection = live.projections.get("agent:main:parent");
+    if (!liveProjection) {
+      throw new Error("expected live parent projection");
+    }
+    recordDelegateArtifactDelivery({
+      projection: liveProjection,
+      phase: "attempt",
+      now: 10_000,
+      options,
+    });
+    recordDelegateArtifactDelivery({
+      projection: liveProjection,
+      phase: "acknowledged",
+      now: 10_050,
+      options,
+    });
+    const expiredAt = 1_000 + DELEGATE_ARTIFACT_RETENTION_MS;
+
+    expect(
+      listDelegateArtifactsForRecipient({
+        recipientSessionKey: "agent:main:parent",
+        recipientSessionId: "parent-session-1",
+        runtimeEnabled: true,
+        crossSessionEnabled: true,
+        now: expiredAt,
+        options,
+      }),
+    ).toEqual({
+      outcome: "available",
+      artifacts: liveProjection.artifacts,
+    });
+
+    const expiredClaimId = expiredProjection.artifacts[0]?.id;
+    if (!expiredClaimId) {
+      throw new Error("expected expired claim");
+    }
+    expect(
+      discardDelegateArtifactForRecipient({
+        claimId: expiredClaimId,
+        recipientSessionKey: "agent:main:parent",
+        recipientSessionId: "parent-session-1",
+        runtimeEnabled: true,
+        crossSessionEnabled: true,
+        now: 10_100,
+        options,
+      }),
+    ).toEqual({ outcome: "available" });
+    expect(
+      listDelegateArtifactsForRecipient({
+        recipientSessionKey: "agent:main:parent",
+        recipientSessionId: "parent-session-1",
+        runtimeEnabled: true,
+        crossSessionEnabled: true,
+        now: 10_200,
+        options,
+      }),
+    ).toEqual({
+      outcome: "available",
+      artifacts: liveProjection.artifacts,
+    });
+    expect(
+      listDelegateArtifactsForRecipient({
+        recipientSessionKey: "agent:main:parent",
+        recipientSessionId: "parent-session-1",
+        runtimeEnabled: true,
+        crossSessionEnabled: true,
+        now: 2_000 + DELEGATE_ARTIFACT_RETENTION_MS,
+        options,
       }),
     ).toEqual({ outcome: "expired" });
   });

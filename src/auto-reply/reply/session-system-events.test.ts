@@ -68,8 +68,12 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
-const { drainFormattedSystemEvents, prepareFormattedSystemEvents } =
-  await import("./session-system-events.js");
+const {
+  acknowledgePersistedManagedSystemEvents,
+  drainFormattedSystemEvents,
+  prepareFormattedSystemEvents,
+  settleManagedSystemEventsAfterTurnAdoption,
+} = await import("./session-system-events.js");
 
 describe("drainFormattedSystemEvents trace context", () => {
   beforeEach(() => {
@@ -393,6 +397,66 @@ describe("drainFormattedSystemEvents trace context", () => {
     });
     expect(mocks.ackSessionDelivery).toHaveBeenCalledWith("delivery-1", undefined);
     expect(mocks.consumeSelectedSystemEventEntries).toHaveBeenCalledWith("main", [event]);
+  });
+
+  it("acknowledges only deliveries evidenced by the persisted recipient turn", async () => {
+    const delivery1 = vi.fn(async () => undefined);
+    const delivery2 = vi.fn(async () => undefined);
+    const deliveries = [
+      { id: "delivery-1", acknowledge: delivery1 },
+      { id: "delivery-2", acknowledge: delivery2 },
+    ];
+
+    await acknowledgePersistedManagedSystemEvents({
+      deliveries,
+      persistedMessage: {
+        role: "user",
+        content: "older idempotent turn",
+      },
+    });
+
+    expect(delivery1).not.toHaveBeenCalled();
+    expect(delivery2).not.toHaveBeenCalled();
+
+    await acknowledgePersistedManagedSystemEvents({
+      deliveries,
+      persistedMessage: {
+        role: "user",
+        content: "adopted managed turn",
+        __openclaw: { sessionDeliveryAckIds: ["delivery-2"] },
+      },
+    });
+
+    expect(delivery1).not.toHaveBeenCalled();
+    expect(delivery2).toHaveBeenCalledOnce();
+  });
+
+  it("finalizes ingress adoption before fallible managed delivery settlement", async () => {
+    const order: string[] = [];
+    const settlementError = new Error("managed settlement failed");
+    const onTurnAdopted = vi.fn(async () => {
+      order.push("ingress-adopted");
+    });
+    const acknowledge = vi.fn(async () => {
+      order.push("managed-settlement");
+      throw settlementError;
+    });
+
+    await expect(
+      settleManagedSystemEventsAfterTurnAdoption({
+        deliveries: [{ id: "delivery-1", acknowledge }],
+        persistedMessage: {
+          role: "user",
+          content: "adopted managed turn",
+          __openclaw: { sessionDeliveryAckIds: ["delivery-1"] },
+        },
+        onTurnAdopted,
+      }),
+    ).rejects.toBe(settlementError);
+
+    expect(order).toEqual(["ingress-adopted", "managed-settlement"]);
+    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(acknowledge).toHaveBeenCalledOnce();
   });
 
   it("settles an already-adopted managed delivery without creating another prompt", async () => {

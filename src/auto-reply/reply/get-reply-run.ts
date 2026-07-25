@@ -132,6 +132,7 @@ import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import {
   prepareFormattedSystemEvents,
+  settleManagedSystemEventsAfterTurnAdoption,
   type PreparedManagedSystemEventDelivery,
 } from "./session-system-events.js";
 import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
@@ -1591,27 +1592,17 @@ export async function runPreparedReply(
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
-  const acknowledgeManagedSystemEvents = async () => {
-    let firstError: unknown;
-    for (const delivery of managedSystemEventDeliveries.values()) {
-      try {
-        await delivery.acknowledge();
-      } catch (error) {
-        firstError ??= error;
-      }
-    }
-    if (firstError !== undefined) {
-      throw firstError;
-    }
-  };
   const originalTurnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
   const effectiveTurnAdoptionLifecycle =
     managedSystemEventDeliveries.size > 0
       ? {
           ...originalTurnAdoptionLifecycle,
           onAdopted: async () => {
-            await acknowledgeManagedSystemEvents();
-            await originalTurnAdoptionLifecycle?.onAdopted();
+            await settleManagedSystemEventsAfterTurnAdoption({
+              deliveries: managedSystemEventDeliveries.values(),
+              persistedMessage: userTurnTranscriptRecorder?.getPersistedMessage?.(),
+              onTurnAdopted: originalTurnAdoptionLifecycle?.onAdopted,
+            });
           },
         }
       : originalTurnAdoptionLifecycle;

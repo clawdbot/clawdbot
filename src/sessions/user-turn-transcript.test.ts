@@ -427,6 +427,44 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("returns the older receipt-free row for an idempotent managed-delivery retry", async () => {
+      const dir = createTempDir("openclaw-user-turn-managed-delivery-retry-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const original = createUserTurnTranscriptRecorder({
+        input: {
+          text: "original active steer",
+          idempotencyKey: "active-steer:user",
+        },
+        target,
+      });
+      await original.persistApproved();
+      const retry = createUserTurnTranscriptRecorder({
+        input: {
+          text: "managed completion retry",
+          idempotencyKey: "active-steer:user",
+          sessionDeliveryAckIds: ["delivery-1"],
+        },
+        target,
+      });
+
+      const persisted = await retry.persistApproved();
+
+      expect(persisted).toMatchObject({
+        appended: false,
+        message: {
+          content: "original active steer",
+          idempotencyKey: "active-steer:user",
+        },
+      });
+      expect(retry.getPersistedMessage?.()).not.toHaveProperty("__openclaw.sessionDeliveryAckIds");
+      await expect(readTranscriptMessages(target)).resolves.toEqual([
+        expect.objectContaining({
+          content: "original active steer",
+          idempotencyKey: "active-steer:user",
+        }),
+      ]);
+    });
+
     it("appends #99495 media that resolves after the admitted turn reached the provider", async () => {
       const dir = createTempDir("openclaw-user-turn-recorder-late-media-");
       const target = createSqliteTranscriptTarget({ dir });

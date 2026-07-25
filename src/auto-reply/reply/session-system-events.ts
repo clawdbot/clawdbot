@@ -131,6 +131,61 @@ export type PreparedFormattedSystemEvents = {
   managedDeliveries: PreparedManagedSystemEventDelivery[];
 };
 
+function readSessionDeliveryAckIds(message: unknown): Set<string> {
+  const ids = new Set<string>();
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return ids;
+  }
+  const metadata = (message as { __openclaw?: unknown }).__openclaw;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return ids;
+  }
+  const deliveryIds = (metadata as { sessionDeliveryAckIds?: unknown }).sessionDeliveryAckIds;
+  if (!Array.isArray(deliveryIds)) {
+    return ids;
+  }
+  for (const id of deliveryIds) {
+    const normalized = normalizeOptionalString(id);
+    if (normalized) {
+      ids.add(normalized);
+    }
+  }
+  return ids;
+}
+
+export async function acknowledgePersistedManagedSystemEvents(params: {
+  deliveries: Iterable<PreparedManagedSystemEventDelivery>;
+  persistedMessage: unknown;
+}): Promise<void> {
+  const adoptedIds = readSessionDeliveryAckIds(params.persistedMessage);
+  let firstError: unknown;
+  for (const delivery of params.deliveries) {
+    if (!adoptedIds.has(delivery.id)) {
+      continue;
+    }
+    try {
+      await delivery.acknowledge();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError !== undefined) {
+    throw firstError;
+  }
+}
+
+export async function settleManagedSystemEventsAfterTurnAdoption(params: {
+  deliveries: Iterable<PreparedManagedSystemEventDelivery>;
+  persistedMessage: unknown;
+  onTurnAdopted?: () => void | Promise<void>;
+}): Promise<void> {
+  // The ingress owner must tombstone its claim first. Managed settlement can
+  // replay from the transcript receipt; an untombstoned ingress claim can
+  // replay the already-injected user turn.
+  await params.onTurnAdopted?.();
+  await acknowledgePersistedManagedSystemEvents(params);
+}
+
 type ManagedDeliverySettlement = {
   event: SystemEvent;
   id: string;
@@ -145,23 +200,8 @@ function readAdoptedSessionDeliveryIds(events: readonly unknown[]): Set<string> 
     if (!event || typeof event !== "object" || Array.isArray(event)) {
       continue;
     }
-    const message = (event as { message?: unknown }).message;
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      continue;
-    }
-    const metadata = (message as { __openclaw?: unknown }).__openclaw;
-    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-      continue;
-    }
-    const deliveryIds = (metadata as { sessionDeliveryAckIds?: unknown }).sessionDeliveryAckIds;
-    if (!Array.isArray(deliveryIds)) {
-      continue;
-    }
-    for (const id of deliveryIds) {
-      const normalized = normalizeOptionalString(id);
-      if (normalized) {
-        ids.add(normalized);
-      }
+    for (const id of readSessionDeliveryAckIds((event as { message?: unknown }).message)) {
+      ids.add(id);
     }
   }
   return ids;

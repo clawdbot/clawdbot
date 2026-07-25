@@ -1406,6 +1406,7 @@ export function listDelegateArtifactsForRecipient(params: {
           .where("outcome", "=", "available")
           .where("delivery_terminal_reason", "is", null)
           .where("delivery_acknowledged_at", "is not", null)
+          .orderBy("flow_id")
           .limit(1),
       );
       if (!authorized) {
@@ -1419,37 +1420,6 @@ export function listDelegateArtifactsForRecipient(params: {
         });
         return { outcome: "unauthorized" };
       }
-      const policy = executeSqliteQueryTakeFirstSync(
-        db,
-        kdb
-          .selectFrom("delegate_artifact_policies")
-          .select("retention_deadline")
-          .where("flow_id", "=", authorized.flow_id),
-      );
-      if (!policy) {
-        auditOperation({
-          db,
-          action: "list",
-          outcome: "corrupt",
-          flowId: authorized.flow_id,
-          recipientSessionKey: params.recipientSessionKey,
-          recipientSessionId: params.recipientSessionId,
-          now,
-        });
-        return { outcome: "corrupt" };
-      }
-      if (policy.retention_deadline <= now) {
-        auditOperation({
-          db,
-          action: "list",
-          outcome: "expired",
-          flowId: authorized.flow_id,
-          recipientSessionKey: params.recipientSessionKey,
-          recipientSessionId: params.recipientSessionId,
-          now,
-        });
-        return { outcome: "expired" };
-      }
       const bindings = executeSqliteQuerySync(
         db,
         kdb
@@ -1461,12 +1431,12 @@ export function listDelegateArtifactsForRecipient(params: {
             params.recipientSessionKey,
           )
           .where("delegate_artifact_bindings.recipient_session_id", "=", params.recipientSessionId)
-          .where("delegate_artifact_bindings.status", "in", ["available", "materialized"])
           .where("delegate_artifact_bindings.delivery_acknowledged_at", "is not", null)
           .orderBy("delegate_artifact_bindings.arrived_at")
           .orderBy("delegate_artifact_bindings.claim_id"),
       ).rows;
       const artifacts: DelegateArtifactSummaryV1[] = [];
+      const unavailableOutcomes = new Set<Exclude<DelegateArtifactOperationOutcome, "available">>();
       for (const binding of bindings) {
         const resolved = resolveClaimForRecipient({
           db,
@@ -1477,19 +1447,31 @@ export function listDelegateArtifactsForRecipient(params: {
           now,
         });
         if (resolved.outcome !== "available") {
+          unavailableOutcomes.add(resolved.outcome);
+          continue;
+        }
+        artifacts.push(toDelegateArtifactSummaryV1(toClaim(resolved.claim)));
+      }
+      if (artifacts.length === 0) {
+        const outcomePriority = [
+          "corrupt",
+          "unauthorized",
+          "revoked",
+          "missing",
+          "expired",
+        ] as const satisfies readonly Exclude<DelegateArtifactOperationOutcome, "available">[];
+        const outcome = outcomePriority.find((candidate) => unavailableOutcomes.has(candidate));
+        if (outcome) {
           auditOperation({
             db,
             action: "list",
-            outcome: resolved.outcome,
-            claimId: binding.claim_id,
-            ...("flowId" in resolved && resolved.flowId ? { flowId: resolved.flowId } : {}),
+            outcome,
             recipientSessionKey: params.recipientSessionKey,
             recipientSessionId: params.recipientSessionId,
             now,
           });
-          return { outcome: resolved.outcome };
+          return { outcome };
         }
-        artifacts.push(toDelegateArtifactSummaryV1(toClaim(resolved.claim)));
       }
       auditOperation({
         db,
