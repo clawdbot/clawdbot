@@ -12,14 +12,6 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.ty
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
-export {
-  publishedModelCatalogOwnerMatchesAgent,
-  resolvePublishedModelCatalogOwner,
-} from "./prepared-model-catalog-owner.js";
-export type {
-  PublishedModelCatalogOwnerCandidate,
-  ResolvedPublishedModelCatalogOwner,
-} from "./prepared-model-catalog.types.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
