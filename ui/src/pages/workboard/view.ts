@@ -1,6 +1,5 @@
 // Control UI view renders workboard screen content.
 
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
@@ -10,7 +9,12 @@ import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
+import {
+  clampText,
+  formatDateMs,
+  formatDateTimeMs,
+  formatDurationCompact,
+} from "../../lib/format.ts";
 import "../../styles/workboard.css";
 import {
   addWorkboardCardComment,
@@ -24,6 +28,7 @@ import {
   getWorkboardState,
   moveWorkboardCard,
   refreshWorkboard,
+  resetDraftState,
   saveWorkboardCardDraft,
   startWorkboardCard,
   stopWorkboardCard,
@@ -193,13 +198,6 @@ function formatAge(value: number | undefined): string {
   return formatDurationCompact(elapsedMs, { spaced: true }) ?? "0ms";
 }
 
-function truncateBadgeText(value: string, maxLength = 64): string {
-  const trimmed = value.trim();
-  return trimmed.length <= maxLength
-    ? trimmed
-    : `${truncateUtf16Safe(trimmed, Math.max(0, maxLength - 1))}…`;
-}
-
 function canMutate(props: WorkboardProps): boolean {
   return props.canWrite !== false && workboardMutationsReady(getWorkboardState(props.host));
 }
@@ -341,14 +339,14 @@ function renderCompactBadges(card: WorkboardCard, task?: WorkboardTaskSummary) {
   if (latestDiagnostic) {
     badges.push(
       html`<span class="workboard-card__badge--warning" title=${latestDiagnostic.detail}>
-        ${icons.alertTriangle}${truncateBadgeText(latestDiagnostic.title)}
+        ${icons.alertTriangle}${clampText(latestDiagnostic.title.trim(), 64)}
       </span>`,
     );
   }
   if (blockedReason) {
     badges.push(
       html`<span class="workboard-card__badge--warning" title=${blockedReason}>
-        ${icons.alertTriangle}${truncateBadgeText(blockedReason)}
+        ${icons.alertTriangle}${clampText(blockedReason.trim(), 64)}
       </span>`,
     );
   }
@@ -771,26 +769,8 @@ function getVisibleDetailCard(state: WorkboardUiState): WorkboardCard | null {
   return card;
 }
 
-function resetDraft(state: WorkboardUiState) {
-  const resolveStaleEdit = state.loaded && state.mutationReadiness === "stale_edit_draft";
-  state.draftOpen = false;
-  state.editingCardId = null;
-  state.draftTitle = "";
-  state.draftNotes = "";
-  state.draftStatus = "todo";
-  state.draftPriority = "normal";
-  state.draftLabels = "";
-  state.draftAgentId = "";
-  state.draftSessionKey = "";
-  state.draftTemplateId = "";
-  state.draftCommentBody = "";
-  if (resolveStaleEdit) {
-    state.mutationReadiness = "ready";
-  }
-}
-
 function openCreateModal(state: WorkboardUiState) {
-  resetDraft(state);
+  resetDraftState(state);
   state.draftOpen = true;
 }
 
@@ -870,7 +850,7 @@ function renderCardModal(props: WorkboardProps) {
     if (draftDismissalBusy) {
       return false;
     }
-    resetDraft(state);
+    resetDraftState(state);
     return true;
   };
   return html`
