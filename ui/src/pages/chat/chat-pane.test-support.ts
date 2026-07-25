@@ -169,7 +169,9 @@ export function createTestChatPane(params: {
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
-    sidebarOpen: false,
+    sidebarFocusPanelId: "",
+    sidebarFocusVersion: 0,
+    sidebarLayout: { columns: [] },
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
@@ -178,6 +180,9 @@ export function createTestChatPane(params: {
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
+  state.updateSidebarLayout = (layout) => {
+    state.sidebarLayout = layout;
+  };
   pane.context = createSessionContext(params.client, params.sessions);
   pane.state = state;
   pane.connectedClient = params.client;

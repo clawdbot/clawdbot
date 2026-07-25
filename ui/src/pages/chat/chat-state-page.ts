@@ -3,7 +3,9 @@ import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
+import { updateSidebarSessionLayout } from "../../lib/board/settings.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
+import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
@@ -22,9 +24,18 @@ import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  fitSidebarLayout,
+  normalizeSidebarLayout,
+  openSlot,
+} from "./sidebar-layout.ts";
 import { resetToolStream } from "./tool-stream.ts";
 
 type ChatPageElement = {
+  getBoundingClientRect?: () => DOMRect;
   querySelector: (selectors: string) => Element | null;
 };
 
@@ -196,11 +207,19 @@ export function createPageState(
     chatFollowLocked: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
-    sidebarOpen: false,
+    sidebarLayout: normalizeSidebarLayout(
+      settings.sidebarSessionLayouts?.[
+        canonicalUiSessionKeyForPersistence(
+          { agentsList: context.agents.state.agentsList, hello: context.gateway.snapshot.hello },
+          settings.sessionKey,
+        )
+      ],
+    ),
     sidebarContent: null,
+    sidebarFocusPanelId: "",
+    sidebarFocusVersion: 0,
     imageLightbox: null,
     imageLightboxRequestVersion: 0,
-    splitRatio: settings.splitRatio,
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
@@ -230,9 +249,7 @@ export function createPageState(
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
       chatSendShortcut: next.chatSendShortcut,
-      splitRatio: next.splitRatio,
     });
-    state.splitRatio = state.settings.splitRatio;
     renderLifecycle.invalidate();
   };
   state.setChatViewMenuOpen = (open, options) => {
@@ -276,14 +293,41 @@ export function createPageState(
     await steerQueuedChatMessage(state, id);
     renderLifecycle.invalidate();
   };
-  state.handleOpenSidebar = (content) => {
-    state.sidebarContent = content;
-    state.sidebarOpen = true;
+  state.updateSidebarLayout = (layout) => {
+    const normalized = normalizeSidebarLayout(layout);
+    state.sidebarLayout = normalized;
+    state.settings = patchSettings({
+      sidebarSessionLayouts: updateSidebarSessionLayout(
+        loadSettings().sidebarSessionLayouts,
+        canonicalUiSessionKeyForPersistence(state, state.sessionKey),
+        normalized,
+      ),
+    });
     renderLifecycle.invalidate();
   };
+  state.handleOpenSidebar = (content) => {
+    let opened = openSlot(state.sidebarLayout, "detail", "right");
+    const detailPanel = opened.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "detail");
+    if (detailPanel) {
+      opened = activatePanel(opened, detailPanel.id);
+      state.sidebarFocusPanelId = detailPanel.id;
+      state.sidebarFocusVersion += 1;
+    }
+    const newColumn = opened.columns.find(
+      (column) => !state.sidebarLayout.columns.some((current) => current.id === column.id),
+    );
+    const availableWidth = page.getBoundingClientRect?.().width ?? 0;
+    const fitted =
+      availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+        ? (fitSidebarLayout(opened, availableWidth, newColumn?.id) ?? opened)
+        : opened;
+    state.sidebarContent = content;
+    state.updateSidebarLayout(fitted);
+  };
   state.handleCloseSidebar = () => {
-    state.sidebarOpen = false;
-    renderLifecycle.invalidate();
+    state.updateSidebarLayout(closeSlot(state.sidebarLayout, "detail"));
   };
   state.beginImageOpen = () => {
     const requestVersion = invalidateImageLightbox(state);
@@ -309,10 +353,6 @@ export function createPageState(
   state.handleCloseImage = () => {
     invalidateImageLightbox(state);
     renderLifecycle.invalidate();
-  };
-  state.handleSplitRatioChange = (ratio) => {
-    const next = Math.max(0.4, Math.min(0.7, ratio));
-    state.applySettings({ ...state.settings, splitRatio: next });
   };
   return state;
 }

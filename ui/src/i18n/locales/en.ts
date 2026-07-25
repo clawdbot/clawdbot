@@ -4213,6 +4213,14 @@ export const en: TranslationMap = {
       noPreviewableMarkdown: "No previewable markdown content.",
       noContent: "No content available",
     },
+    sidebarColumns: {
+      chat: "Chat",
+      discussion: "Discussion",
+      detail: "Details",
+      close: "Close {panel}",
+      drag: "Drag {panel}",
+      resize: "Resize {panel}",
+    },
     thread: {
       search: "Search messages",
       searchPlaceholder: "Search messages...",

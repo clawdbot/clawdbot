@@ -15,7 +15,6 @@ import type {
 
 export type BoardChatDockSize = {
   height: number;
-  width: number;
 };
 
 export type WorkboardCardChipProps = {
@@ -176,17 +175,17 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
   `;
 }
 
-function renderChatDock(props: BoardSessionSurfaceProps, dock: BoardVisibleChatDock) {
-  const style =
-    dock === "bottom" ? `height: ${props.dockSize.height}px` : `width: ${props.dockSize.width}px`;
-  return html`<div class="board-session-surface__chat" style=${style}>${props.chat}</div>`;
+function renderChatDock(props: BoardSessionSurfaceProps) {
+  return html`<div class="board-session-surface__chat" style="height: ${props.dockSize.height}px">
+    ${props.chat}
+  </div>`;
 }
 
 export function renderBoardSessionSurface(props: BoardSessionSurfaceProps) {
-  const layoutDock = props.dock === "hidden" ? props.reopenDock : props.dock;
   return html`
     <div class="board-session-surface board-session-surface--dock-${props.dock}">
-      ${renderBoardView(props)} ${props.divider} ${renderChatDock(props, layoutDock)}
+      ${renderBoardView(props)}
+      ${props.dock === "bottom" ? html`${props.divider}${renderChatDock(props)}` : nothing}
       <button
         type="button"
         class="board-session-surface__reopen board-session-surface__reopen--${props.reopenDock}"

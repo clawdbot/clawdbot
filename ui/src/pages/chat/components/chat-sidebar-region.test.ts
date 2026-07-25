@@ -1,0 +1,194 @@
+/* @vitest-environment jsdom */
+
+import { html } from "lit";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mergePanelIntoColumn, openSlot } from "../sidebar-layout.ts";
+import "./chat-sidebar-region.ts";
+
+type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
+  updateComplete: Promise<unknown>;
+};
+
+const regions: Region[] = [];
+
+async function createRegion(narrow: boolean) {
+  const region = document.createElement("openclaw-chat-sidebar-region") as Region;
+  region.layout = openSlot(openSlot(openSlot({ columns: [] }, "discussion"), "chat"), "detail");
+  region.primary = html`<main data-primary>Primary</main>`;
+  region.panelTemplates = {
+    chat: html`<div data-panel="chat">Chat panel</div>`,
+    detail: html`<div data-panel="detail">Detail panel</div>`,
+    discussion: html`<div data-panel="discussion">Discussion panel</div>`,
+  };
+  region.callbacks = {
+    activatePanel: vi.fn(),
+    closeSlot: vi.fn(),
+    detachPanel: vi.fn(),
+    mergePanel: vi.fn(),
+    resizeColumn: vi.fn(),
+  };
+  region.narrow = narrow;
+  region.availableWidth = narrow ? 620 : 1_600;
+  document.body.append(region);
+  regions.push(region);
+  await region.updateComplete;
+  return region;
+}
+
+afterEach(() => {
+  for (const region of regions.splice(0)) {
+    region.remove();
+  }
+});
+
+describe("chat sidebar region", () => {
+  it("renders independent columns in rank order on wide panes", async () => {
+    const region = await createRegion(false);
+    expect(region.querySelectorAll(".sidebar-column")).toHaveLength(3);
+    expect(
+      Array.from(region.querySelectorAll(".sidebar-column__tab"), (tab) => tab.textContent?.trim()),
+    ).toEqual(["Chat", "Details", "Discussion"]);
+    expect(region.querySelector("[data-primary]")).not.toBeNull();
+  });
+
+  it("collapses every open panel into one tabbed column on narrow panes", async () => {
+    const region = await createRegion(true);
+    expect(region.querySelectorAll(".sidebar-column")).toHaveLength(1);
+    expect(region.querySelectorAll(".sidebar-column__tab")).toHaveLength(3);
+    expect(
+      Array.from(region.querySelectorAll<HTMLButtonElement>(".sidebar-column__tab")).every(
+        (tab) => !tab.draggable,
+      ),
+    ).toBe(true);
+
+    region.querySelectorAll<HTMLButtonElement>(".sidebar-column__tab")[1]?.click();
+    await region.updateComplete;
+
+    expect(region.querySelector('[data-panel="detail"]')).not.toBeNull();
+    expect(region.querySelector('[data-panel="chat"]')).not.toBeNull();
+    expect(region.callbacks?.activatePanel).toHaveBeenCalled();
+  });
+
+  it("activates a panel opened after the narrow region is already visible", async () => {
+    const region = await createRegion(true);
+    region.layout = openSlot({ columns: [] }, "chat");
+    await region.updateComplete;
+
+    region.layout = openSlot(region.layout, "discussion");
+    await region.updateComplete;
+
+    expect(region.querySelector('[data-panel="discussion"]')).not.toBeNull();
+  });
+
+  it("foregrounds an already-mounted panel from a focus request", async () => {
+    const region = await createRegion(true);
+    const discussion = region.layout.columns[2]!.panels[0]!;
+
+    region.focusPanelId = discussion.id;
+    region.focusVersion += 1;
+    await region.updateComplete;
+
+    expect(region.querySelector('[data-panel="discussion"]')?.parentElement?.hidden).toBe(false);
+    expect(region.querySelector('[data-panel="chat"]')?.parentElement?.hidden).toBe(true);
+  });
+
+  it("routes native header drops through the merge callback", async () => {
+    const region = await createRegion(false);
+    const tabs = region.querySelectorAll<HTMLElement>(".sidebar-column__tab");
+    const source = tabs[0];
+    const target = tabs[1];
+    expect(source).toBeDefined();
+    expect(target).toBeDefined();
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: "none",
+      dropEffect: "none",
+      getData: (type: string) => values.get(type) ?? "",
+      setData: (type: string, value: string) => values.set(type, value),
+    };
+    const start = new Event("dragstart", { bubbles: true }) as DragEvent;
+    Object.defineProperty(start, "dataTransfer", { value: dataTransfer });
+    source!.dispatchEvent(start);
+    const drop = new Event("drop", { bubbles: true }) as DragEvent;
+    Object.defineProperties(drop, {
+      clientX: { value: 1 },
+      clientY: { value: 1 },
+      dataTransfer: { value: dataTransfer },
+    });
+    target!.dispatchEvent(drop);
+
+    expect(region.callbacks?.mergePanel).toHaveBeenCalledWith(
+      region.layout.columns[0]?.panels[0]?.id,
+      region.layout.columns[1]?.id,
+      1,
+    );
+  });
+
+  it("routes boundary drops through the detach callback", async () => {
+    const region = await createRegion(false);
+    const source = region.querySelectorAll<HTMLElement>(".sidebar-column__tab")[1]!;
+    const boundary = region.querySelector<HTMLElement>("resizable-divider")!;
+    boundary.getBoundingClientRect = () => ({ left: 0, top: 0, width: 4, height: 100 }) as DOMRect;
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: "none",
+      dropEffect: "none",
+      getData: (type: string) => values.get(type) ?? "",
+      setData: (type: string, value: string) => values.set(type, value),
+    };
+    const start = new Event("dragstart", { bubbles: true }) as DragEvent;
+    Object.defineProperty(start, "dataTransfer", { value: dataTransfer });
+    source.dispatchEvent(start);
+    const drop = new Event("drop", { bubbles: true }) as DragEvent;
+    Object.defineProperties(drop, {
+      clientX: { value: 1 },
+      clientY: { value: 50 },
+      dataTransfer: { value: dataTransfer },
+    });
+    boundary.dispatchEvent(drop);
+
+    expect(region.callbacks?.detachPanel).toHaveBeenCalledWith(
+      region.layout.columns[1]?.panels[0]?.id,
+      "right",
+      0,
+    );
+  });
+
+  it("ignores a drag payload started by another sidebar region", async () => {
+    const sourceRegion = await createRegion(false);
+    const targetRegion = await createRegion(false);
+    const source = sourceRegion.querySelector<HTMLElement>(".sidebar-column__tab")!;
+    const target = targetRegion.querySelector<HTMLElement>(".sidebar-column__tab")!;
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: "none",
+      dropEffect: "none",
+      getData: (type: string) => values.get(type) ?? "",
+      setData: (type: string, value: string) => values.set(type, value),
+    };
+    const start = new Event("dragstart", { bubbles: true }) as DragEvent;
+    Object.defineProperty(start, "dataTransfer", { value: dataTransfer });
+    source.dispatchEvent(start);
+    const drop = new Event("drop", { bubbles: true }) as DragEvent;
+    Object.defineProperties(drop, {
+      clientX: { value: 1 },
+      clientY: { value: 1 },
+      dataTransfer: { value: dataTransfer },
+    });
+    target.dispatchEvent(drop);
+
+    expect(targetRegion.callbacks?.mergePanel).not.toHaveBeenCalled();
+  });
+
+  it("preserves a panel DOM node when it moves between columns", async () => {
+    const region = await createRegion(false);
+    const detail = region.layout.columns[1]!.panels[0]!;
+    const target = region.layout.columns[2]!;
+    const detailNode = region.querySelector('[data-panel="detail"]');
+
+    region.layout = mergePanelIntoColumn(region.layout, detail.id, target.id, 0);
+    await region.updateComplete;
+
+    expect(region.querySelector('[data-panel="detail"]')).toBe(detailNode);
+  });
+});

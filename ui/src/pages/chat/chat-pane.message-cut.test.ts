@@ -68,7 +68,7 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
-    sidebarOpen: false,
+    sidebarLayout: { columns: [] },
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,

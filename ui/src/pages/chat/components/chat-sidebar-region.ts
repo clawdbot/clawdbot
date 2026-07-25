@@ -1,0 +1,378 @@
+import { html, nothing, type TemplateResult } from "lit";
+import { property, state } from "lit/decorators.js";
+import { repeat } from "lit/directives/repeat.js";
+import { styleMap } from "lit/directives/style-map.js";
+import { icons } from "../../../components/icons.ts";
+import { t } from "../../../i18n/index.ts";
+import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import {
+  SIDEBAR_MIN_WIDTH_PX,
+  isSidebarRegionCollapsed,
+  type SidebarColumn,
+  type SidebarLayout,
+  type SidebarPanel,
+  type SidebarSide,
+  type SidebarSlotId,
+} from "../sidebar-layout.ts";
+import { resolveSplitDropZone } from "../split-drop-zone.ts";
+import { renderChatResizableDivider } from "./chat-resizable-divider.ts";
+
+export type SidebarPanelTemplates = Partial<Record<SidebarSlotId, TemplateResult>>;
+
+type SidebarRegionCallbacks = {
+  activatePanel: (panelId: string) => void;
+  closeSlot: (slot: SidebarSlotId) => void;
+  detachPanel: (panelId: string, side: SidebarSide, columnIndex: number) => void;
+  mergePanel: (panelId: string, targetColumnId: string, panelIndex: number) => void;
+  resizeColumn: (columnId: string, width: number) => void;
+};
+
+function panelTitle(slot: SidebarSlotId): string {
+  if (slot === "chat") {
+    return t("chat.sidebarColumns.chat");
+  }
+  if (slot === "discussion") {
+    return t("chat.sidebarColumns.discussion");
+  }
+  return t("chat.sidebarColumns.detail");
+}
+
+function panelsOf(layout: SidebarLayout): SidebarPanel[] {
+  return layout.columns.flatMap((column) => column.panels);
+}
+
+class ChatSidebarRegion extends OpenClawLightDomElement {
+  @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
+  @property({ attribute: false }) primary: TemplateResult | null = null;
+  @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
+  @property({ attribute: false }) panelOpenUrls: Partial<Record<SidebarSlotId, string | null>> = {};
+  @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
+  @property() focusPanelId = "";
+  @property({ type: Number }) focusVersion = 0;
+  @property({ type: Boolean }) narrow = false;
+  @property({ type: Number }) availableWidth = 0;
+
+  @state() private narrowActivePanelId = "";
+  @state() private draggedPanelId = "";
+
+  protected override willUpdate(changed: Map<string, unknown>) {
+    if (changed.has("focusVersion")) {
+      const requested = panelsOf(this.layout).find((panel) => panel.id === this.focusPanelId);
+      if (requested) {
+        this.narrowActivePanelId = requested.id;
+      }
+    }
+    if (!changed.has("layout")) {
+      return;
+    }
+    const currentPanels = panelsOf(this.layout);
+    const previous = changed.get("layout") as SidebarLayout | undefined;
+    const previousIds = new Set(previous ? panelsOf(previous).map((panel) => panel.id) : []);
+    const addedPanel = currentPanels.find((panel) => !previousIds.has(panel.id));
+    if (addedPanel) {
+      this.narrowActivePanelId = addedPanel.id;
+      return;
+    }
+    if (!currentPanels.some((panel) => panel.id === this.narrowActivePanelId)) {
+      this.narrowActivePanelId =
+        this.layout.columns.at(-1)?.activePanelId ?? currentPanels[0]?.id ?? "";
+    }
+  }
+
+  private startDrag(event: DragEvent, panelId: string) {
+    this.draggedPanelId = panelId;
+    event.dataTransfer?.setData("application/x-openclaw-sidebar-panel", panelId);
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+    }
+  }
+
+  private endDrag() {
+    this.draggedPanelId = "";
+  }
+
+  private draggedPanel(): string {
+    return this.draggedPanelId;
+  }
+
+  private allowPanelDrop(event: DragEvent) {
+    if (!this.draggedPanel()) {
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+  }
+
+  private dropOnHeader(event: DragEvent, column: SidebarColumn) {
+    const panelId = this.draggedPanel();
+    if (!panelId) {
+      return;
+    }
+    event.preventDefault();
+    const tab = event
+      .composedPath()
+      .find(
+        (target): target is HTMLElement =>
+          target instanceof HTMLElement && target.classList.contains("sidebar-column__tab"),
+      );
+    const targetPanelId = tab?.dataset.panelId;
+    let panelIndex = column.panels.length;
+    if (targetPanelId && tab) {
+      const targetIndex = column.panels.findIndex((panel) => panel.id === targetPanelId);
+      const rect = tab.getBoundingClientRect();
+      const zone = resolveSplitDropZone(rect, event.clientX, event.clientY);
+      panelIndex = targetIndex + (zone.kind === "edge" && zone.edge === "left" ? 0 : 1);
+    }
+    this.callbacks?.mergePanel(panelId, column.id, panelIndex);
+    this.endDrag();
+  }
+
+  private dropOnBoundary(
+    event: DragEvent,
+    side: SidebarSide,
+    columnIndex: number,
+    element: Element | undefined,
+  ) {
+    const panelId = this.draggedPanel();
+    if (!panelId || !(element instanceof HTMLElement)) {
+      return;
+    }
+    const rect = element.getBoundingClientRect();
+    const zone = resolveSplitDropZone(rect, event.clientX, event.clientY);
+    if (zone.kind !== "edge" || (zone.edge !== "left" && zone.edge !== "right")) {
+      return;
+    }
+    event.preventDefault();
+    this.callbacks?.detachPanel(panelId, side, columnIndex);
+    this.endDrag();
+  }
+
+  private activate(panelId: string, narrow: boolean) {
+    if (narrow) {
+      this.narrowActivePanelId = panelId;
+    }
+    this.callbacks?.activatePanel(panelId);
+  }
+
+  private renderHeader(column: SidebarColumn, activePanelId: string, narrow: boolean) {
+    const active = column.panels.find((panel) => panel.id === activePanelId) ?? column.panels[0];
+    if (!active) {
+      return nothing;
+    }
+    const openUrl = this.panelOpenUrls[active.slot];
+    return html`
+      <div
+        class="sidebar-column__header"
+        @dragover=${(event: DragEvent) => (narrow ? undefined : this.allowPanelDrop(event))}
+        @drop=${(event: DragEvent) => (narrow ? undefined : this.dropOnHeader(event, column))}
+      >
+        <div class="sidebar-column__tabs" role="tablist">
+          ${column.panels.map(
+            (panel) => html`
+              <button
+                class="sidebar-column__tab"
+                type="button"
+                role="tab"
+                data-panel-id=${panel.id}
+                .draggable=${!narrow}
+                aria-selected=${String(panel.id === active.id)}
+                title=${t("chat.sidebarColumns.drag", { panel: panelTitle(panel.slot) })}
+                @click=${() => this.activate(panel.id, narrow)}
+                @dragstart=${(event: DragEvent) =>
+                  narrow ? undefined : this.startDrag(event, panel.id)}
+                @dragend=${() => this.endDrag()}
+              >
+                ${panelTitle(panel.slot)}
+              </button>
+            `,
+          )}
+        </div>
+        <div class="sidebar-column__actions">
+          ${openUrl
+            ? html`<a
+                class="btn btn--ghost btn--icon"
+                href=${openUrl}
+                target="_blank"
+                rel="noopener"
+                aria-label=${t("chat.sessionDiscussion.openExternal")}
+                title=${t("chat.sessionDiscussion.openExternal")}
+                >${icons.externalLink}</a
+              >`
+            : nothing}
+          <button
+            class="btn btn--ghost btn--icon"
+            type="button"
+            aria-label=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}
+            title=${t("chat.sidebarColumns.close", { panel: panelTitle(active.slot) })}
+            @click=${() => this.callbacks?.closeSlot(active.slot)}
+          >
+            ${icons.x}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderColumn(column: SidebarColumn) {
+    const active =
+      column.panels.find((panel) => panel.id === column.activePanelId) ?? column.panels[0];
+    return html`
+      <section
+        class="sidebar-column"
+        data-column-id=${column.id}
+        style=${styleMap({ width: `${column.width}px` })}
+      >
+        ${this.renderHeader(column, active?.id ?? "", false)}
+        <div class="sidebar-column__body"></div>
+      </section>
+    `;
+  }
+
+  private renderWidePanel(panel: SidebarPanel) {
+    const column = this.layout.columns.find((candidate) =>
+      candidate.panels.some((entry) => entry.id === panel.id),
+    );
+    if (!column) {
+      return nothing;
+    }
+    const sideColumns = this.layout.columns.filter((candidate) => candidate.side === column.side);
+    const columnIndex = sideColumns.findIndex((candidate) => candidate.id === column.id);
+    const offsetColumns =
+      column.side === "left"
+        ? sideColumns.slice(0, columnIndex)
+        : sideColumns.slice(columnIndex + 1);
+    const offset = offsetColumns.reduce((sum, candidate) => sum + candidate.width + 4, 0);
+    return html`<div
+      class="sidebar-column__panel sidebar-column__panel--wide"
+      style=${styleMap({ [column.side]: `${offset}px`, width: `${column.width}px` })}
+      ?hidden=${panel.id !== column.activePanelId}
+    >
+      ${this.panelTemplates[panel.slot]}
+    </div>`;
+  }
+
+  private renderDivider(column: SidebarColumn, side: SidebarSide, columnIndex: number) {
+    let divider: Element | undefined;
+    return renderChatResizableDivider({
+      className: "sidebar-column__divider",
+      label: t("chat.sidebarColumns.resize", {
+        panel: panelTitle(column.panels[0]?.slot ?? "detail"),
+      }),
+      orientation: "vertical",
+      splitRatio: 0.5,
+      minRatio: 0.05,
+      maxRatio: 0.95,
+      onElement: (element) => {
+        divider = element;
+        if (!(element instanceof HTMLElement)) {
+          return;
+        }
+        queueMicrotask(() => {
+          const previous = element.previousElementSibling?.getBoundingClientRect();
+          const next = element.nextElementSibling?.getBoundingClientRect();
+          const total = (previous?.width ?? 0) + (next?.width ?? 0);
+          if (total > 0) {
+            (element as HTMLElement & { splitRatio: number }).splitRatio =
+              (previous?.width ?? 0) / total;
+          }
+        });
+      },
+      onDragover: (event) => this.allowPanelDrop(event),
+      onDrop: (event) => this.dropOnBoundary(event, side, columnIndex, divider),
+      onResize: (event) => {
+        const element = event.currentTarget as HTMLElement | null;
+        const previous = element?.previousElementSibling?.getBoundingClientRect();
+        const next = element?.nextElementSibling?.getBoundingClientRect();
+        const total = (previous?.width ?? 0) + (next?.width ?? 0);
+        if (total <= 0) {
+          return;
+        }
+        const requested =
+          side === "left" ? total * event.detail.splitRatio : total * (1 - event.detail.splitRatio);
+        const regionWidth =
+          this.availableWidth > 0 ? this.availableWidth : this.getBoundingClientRect().width;
+        const maxWidth = Math.max(SIDEBAR_MIN_WIDTH_PX, regionWidth * 0.6);
+        this.callbacks?.resizeColumn(column.id, Math.min(requested, maxWidth));
+      },
+    });
+  }
+
+  private renderWide() {
+    const left = this.layout.columns.filter((column) => column.side === "left");
+    const right = this.layout.columns.filter((column) => column.side === "right");
+    return html`
+      <div class="sidebar-region">
+        ${left.map(
+          (column, index) => html`
+            ${this.renderColumn(column)} ${this.renderDivider(column, "left", index + 1)}
+          `,
+        )}
+        <div class="sidebar-region__primary">${this.primary}</div>
+        ${right.map(
+          (column, index) => html`
+            ${this.renderDivider(column, "right", index)} ${this.renderColumn(column)}
+          `,
+        )}
+        ${repeat(
+          panelsOf(this.layout),
+          (panel) => panel.id,
+          (panel) => this.renderWidePanel(panel),
+        )}
+      </div>
+    `;
+  }
+
+  private renderNarrow() {
+    const panels = panelsOf(this.layout);
+    const active =
+      panels.find((panel) => panel.id === this.narrowActivePanelId) ?? panels.at(-1) ?? panels[0];
+    const collapsed: SidebarColumn = {
+      id: "collapsed-sidebar-column",
+      side: "right",
+      panels,
+      activePanelId: active?.id ?? "",
+      width: SIDEBAR_MIN_WIDTH_PX,
+    };
+    return html`
+      <div class="sidebar-region sidebar-region--narrow">
+        <div class="sidebar-region__primary">${this.primary}</div>
+        ${panels.length > 0
+          ? html`<section class="sidebar-column sidebar-column--collapsed">
+              ${this.renderHeader(collapsed, active?.id ?? "", true)}
+              <div class="sidebar-column__body">
+                ${repeat(
+                  panels,
+                  (panel) => panel.id,
+                  (panel) => html`<div
+                    class="sidebar-column__panel"
+                    ?hidden=${panel.id !== active?.id}
+                  >
+                    ${this.panelTemplates[panel.slot]}
+                  </div>`,
+                )}
+              </div>
+            </section>`
+          : nothing}
+      </div>
+    `;
+  }
+
+  override render() {
+    const width = this.availableWidth > 0 ? this.availableWidth : Number.POSITIVE_INFINITY;
+    return this.narrow || isSidebarRegionCollapsed(this.layout, width)
+      ? this.renderNarrow()
+      : this.renderWide();
+  }
+}
+
+if (!customElements.get("openclaw-chat-sidebar-region")) {
+  customElements.define("openclaw-chat-sidebar-region", ChatSidebarRegion);
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-chat-sidebar-region": ChatSidebarRegion;
+  }
+}

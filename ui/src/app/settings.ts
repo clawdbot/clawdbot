@@ -37,7 +37,12 @@ import {
   serializeSidebarEntry,
 } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
-import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
+import {
+  normalizeBoardSessionViews,
+  normalizeSidebarSessionLayouts,
+  type BoardSessionViews,
+  type SidebarSessionLayouts,
+} from "../lib/board/settings.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
@@ -179,10 +184,10 @@ export type UiSettings = {
   composerHoldToRecord?: boolean;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
-  splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Last face and active dashboard tab per session
+  sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
@@ -417,7 +422,6 @@ export function loadSettings(): UiSettings {
     chatPersistCommentary: true,
     chatSendShortcut: "enter",
     catalogOpenTarget: "viewer",
-    splitRatio: 0.6,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
@@ -499,15 +503,10 @@ export function loadSettings(): UiSettings {
           : defaults.composerHoldToRecord,
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
-      splitRatio:
-        typeof parsed.splitRatio === "number" &&
-        parsed.splitRatio >= 0.4 &&
-        parsed.splitRatio <= 0.7
-          ? parsed.splitRatio
-          : defaults.splitRatio,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
+      sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -641,12 +640,14 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(typeof next.talkCameraAutoEnable === "boolean"
       ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
       : {}),
-    splitRatio: next.splitRatio,
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
     // Right dock is the default; only the opt-in bottom dock persists.
     ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
     ...(next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
       ? { boardSessionViews: normalizeBoardSessionViews(next.boardSessionViews) }
+      : {}),
+    ...(next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
+      ? { sidebarSessionLayouts: normalizeSidebarSessionLayouts(next.sidebarSessionLayouts) }
       : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,

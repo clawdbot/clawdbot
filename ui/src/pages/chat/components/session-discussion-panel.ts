@@ -15,6 +15,15 @@ export type SessionDiscussionStateListener = (
   openUrl: string | null,
 ) => void;
 
+export type SessionDiscussionPanelConfig = {
+  sessionKey: string;
+  canOpen: boolean;
+  openUrl: string | null;
+  loadInfo: SessionDiscussionInfoLoader;
+  openDiscussion: SessionDiscussionOpener;
+  onStateChange: SessionDiscussionStateListener;
+};
+
 function resolveDiscussionUrl(value: string | undefined): string | null {
   if (!value?.trim()) {
     return null;
