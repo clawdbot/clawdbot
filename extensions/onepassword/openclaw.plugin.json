@@ -10,7 +10,7 @@
   "commandAliases": [
     {
       "name": "onepassword",
-      "kind": "cli"
+      "cliCommand": "onepassword"
     }
   ],
   "contracts": {
@@ -24,18 +24,25 @@
       "source": "exec",
       "command": "${node}",
       "args": ["./onepassword-secret-ref-resolver.js"],
-      "timeoutMs": 40000,
-      "noOutputTimeoutMs": 40000,
+      "timeoutMs": 90000,
+      "noOutputTimeoutMs": 90000,
       "maxOutputBytes": 8388608,
       "passEnv": [
         "HOME",
         "USERPROFILE",
         "HOMEDRIVE",
         "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
         "OPENCLAW_HOME",
+        "OPENCLAW_PROFILE",
         "OPENCLAW_STATE_DIR",
         "PATH",
-        "CLAW_1PASSWORD_OP"
+        "CLAW_1PASSWORD_OP",
+        "SYSTEMROOT",
+        "WINDIR"
       ]
     }
   },
