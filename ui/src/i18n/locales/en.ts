@@ -1889,6 +1889,15 @@ export const en: TranslationMap = {
       pair: "Pair",
       more: "More sign-in options",
     },
+    prepare: {
+      title: "Set up a local model",
+      intro: "Download or prepare a local model on this Gateway.",
+      button: "Set up / Download model",
+      ollamaLabel: "Ollama",
+      ollamaHint: "Download a tools-capable model from your Ollama server",
+      llamaCppLabel: "Local model (llama.cpp)",
+      llamaCppHint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+    },
     manual: {
       title: "Connect with an API key or token",
       provider: "Provider",
@@ -1919,8 +1928,11 @@ export const en: TranslationMap = {
     },
     wizard: {
       dialogLabel: "Provider sign-in",
+      prepareDialogLabel: "Local model setup",
       title: "Sign in with a provider",
+      prepareTitle: "Set up a local model",
       starting: "Starting provider sign-in…",
+      prepareStarting: "Starting local model setup…",
       checking: "Checking your model setup…",
       working: "Working…",
       continue: "Continue",

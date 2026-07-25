@@ -408,6 +408,7 @@ describe("agent delivery helpers", () => {
 
     const result = await resolveAgentExplicitRecipientSession({
       cfg: {
+        agents: { entries: { ops: { default: true } } },
         session: { dmScope: "main" },
         bindings: [
           {

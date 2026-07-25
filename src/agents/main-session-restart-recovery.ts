@@ -48,6 +48,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import { isAnnounceRunId } from "./announce-idempotency.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import {
@@ -1232,6 +1233,7 @@ type RecoveryCheckpointCompletion =
   | { outcome: "unsafe-transcript"; reason: string };
 
 async function markSessionCompletedAfterRecoveryCheckpoint(params: {
+  agentId: string;
   entry: SessionEntry;
   messages: readonly unknown[];
   reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
@@ -1390,7 +1392,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     };
     const persisted = await persistSessionTranscriptTurn(
       {
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        agentId: params.agentId,
         sessionId: params.entry.sessionId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
@@ -1497,12 +1499,13 @@ async function sendUnresumableSessionNotice(params: {
 }
 
 async function writeUnresumableSessionNotice(params: {
+  agentId: string;
   entry: SessionEntry;
   sessionKey: string;
   storePath: string;
 }): Promise<boolean> {
   const result = await appendAssistantMessageToSessionTranscript({
-    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     expectedSessionId: params.entry.sessionId,
     expectedSessionState: {
@@ -1554,6 +1557,10 @@ async function failUnresumableMainSession(params: {
   if (
     !deliveryContext &&
     !(await writeUnresumableSessionNotice({
+      agentId: resolveAgentIdFromSessionKey(
+        params.sessionKey,
+        params.cfg ? resolveDefaultAgentId(params.cfg) : undefined,
+      ),
       entry: params.entry,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
@@ -1711,6 +1718,10 @@ async function recoverStore(params: {
     a.sessionKey.localeCompare(b.sessionKey),
   )) {
     let entry = loadedEntry;
+    const agentId = resolveAgentIdFromSessionKey(
+      sessionKey,
+      params.cfg ? resolveDefaultAgentId(params.cfg) : undefined,
+    );
     if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
       continue;
     }
@@ -1899,7 +1910,7 @@ async function recoverStore(params: {
     try {
       messages = await readSessionMessagesAsync(
         {
-          agentId: resolveAgentIdFromSessionKey(sessionKey),
+          agentId,
           sessionEntry: entry,
           sessionId: entry.sessionId,
           sessionKey,
@@ -2000,6 +2011,7 @@ async function recoverStore(params: {
     );
     if (resumePolicy.action === "complete") {
       const completion = await markSessionCompletedAfterRecoveryCheckpoint({
+        agentId,
         entry,
         messages,
         reason: resumePolicy.reason,

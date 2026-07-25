@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { OPENCLAW_AGENT_RUNTIME_ID, isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { listAgentEntries } from "./agent-scope-config.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 
 // Harness runtime discovery feeds plugin preloading/setup. Only plugin runtimes
@@ -115,7 +116,7 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
     }
   };
   pushModelMapRuntimeIds(config.agents?.defaults?.models);
-  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  const agents = listAgentEntries(config);
   for (const agent of agents) {
     pushModelMapRuntimeIds(isRecord(agent) ? agent.models : undefined);
   }
@@ -152,10 +153,7 @@ function pushConfiguredAgentModelRuntimeIds(
   pushModelRefs(defaultsModelRefs);
   pushModelMapRefs(config.agents?.defaults?.models);
 
-  if (!Array.isArray(config.agents?.list)) {
-    return;
-  }
-  for (const agent of config.agents.list) {
+  for (const agent of listAgentEntries(config)) {
     if (!isRecord(agent)) {
       continue;
     }

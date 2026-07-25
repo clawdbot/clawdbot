@@ -895,7 +895,6 @@ src/infra/restart.ts
 src/infra/run-node.test.ts
 src/infra/session-cost-usage.test.ts
 src/infra/session-cost-usage.ts
-src/infra/sqlite-snapshot.ts
 src/infra/state-migrations.doctor.ts
 src/infra/state-migrations.runtime-state.ts
 src/infra/state-migrations.session-store.ts

@@ -1,4 +1,5 @@
 import type { Model, OpenAICompletionsCompat } from "../types.js";
+import { isKnownOpenAIJsonSchemaModelId } from "./openai-response-format.js";
 
 type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 
@@ -39,6 +40,7 @@ const DEFAULT_OPENAI_COMPLETIONS_COMPAT = {
   vercelGatewayRouting: {},
   zaiToolStream: false,
   supportsStrictMode: true,
+  supportsJsonSchemaResponseFormat: false,
   cacheControlFormat: undefined,
   sessionAffinityFormat: "openai",
   supportsPromptCacheKey: false,
@@ -297,6 +299,11 @@ export function resolveOpenAICompletionsCompat(
     vercelGatewayRouting: configured?.vercelGatewayRouting ?? detected.vercelGatewayRouting,
     zaiToolStream: configured?.zaiToolStream ?? detected.zaiToolStream,
     supportsStrictMode: configured?.supportsStrictMode ?? detected.supportsStrictMode,
+    supportsJsonSchemaResponseFormat:
+      configured?.supportsJsonSchemaResponseFormat ??
+      (model.provider === "openai" &&
+        model.baseUrl.includes("api.openai.com") &&
+        isKnownOpenAIJsonSchemaModelId(model.id)),
     cacheControlFormat: configured?.cacheControlFormat ?? detected.cacheControlFormat,
     sessionAffinity: resolveSessionAffinity(model, detected.sessionAffinityFormat),
     supportsPromptCacheKey: configured?.supportsPromptCacheKey ?? detected.supportsPromptCacheKey,

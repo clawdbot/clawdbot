@@ -43,7 +43,9 @@ function makeContextParams(
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
     loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+      agentId: "main",
       agentDir: "/tmp/model-catalog-agent",
+      workspaceDir: "/tmp/model-catalog-workspace",
       config,
       entries: [],
       routeVariants: [],

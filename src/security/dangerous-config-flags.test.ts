@@ -1,13 +1,131 @@
 // Covers dangerous config flag detection and reporting.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
+import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
 describe("collectEnabledInsecureOrDangerousFlags", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("keeps plugin contract checks enabled for a malformed roster", () => {
+    const inheritedWorkspaceDir = tempDirs.make("openclaw-dangerous-inherited-workspace-");
+    const explicitWorkspaceDir = tempDirs.make("openclaw-dangerous-explicit-workspace-");
+    const pluginDir = path.join(
+      inheritedWorkspaceDir,
+      ".openclaw",
+      "extensions",
+      "workspace-danger",
+    );
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      "export default { id: 'workspace-danger' };\n",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "workspace-danger",
+        configSchema: { type: "object", additionalProperties: true },
+        configContracts: { dangerousFlags: [{ path: "mode", equals: "danger" }] },
+      }),
+    );
+    const flags = collectEnabledInsecureOrDangerousFlags(
+      asConfig({
+        agents: {
+          defaults: { workspace: inheritedWorkspaceDir },
+          entries: { alpha: { workspace: explicitWorkspaceDir }, beta: {} },
+        },
+        plugins: {
+          entries: {
+            acpx: { config: { permissionMode: "approve-all" } },
+            "workspace-danger": { config: { mode: "danger" } },
+          },
+        },
+      }),
+    );
+
+    expect(flags).toContain("plugins.entries.acpx.config.permissionMode=approve-all");
+    expect(flags).toContain("plugins.entries.workspace-danger.config.mode=danger");
+  });
+
+  it("does not scan an unused defaults workspace when every malformed-roster entry is explicit", () => {
+    const defaultsWorkspaceDir = tempDirs.make("openclaw-dangerous-unused-defaults-");
+    const alphaWorkspaceDir = tempDirs.make("openclaw-dangerous-alpha-");
+    const betaWorkspaceDir = tempDirs.make("openclaw-dangerous-beta-");
+    const pluginDir = path.join(
+      defaultsWorkspaceDir,
+      ".openclaw",
+      "extensions",
+      "workspace-danger",
+    );
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      "export default { id: 'workspace-danger' };\n",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "workspace-danger",
+        configSchema: { type: "object", additionalProperties: true },
+        configContracts: { dangerousFlags: [{ path: "mode", equals: "danger" }] },
+      }),
+    );
+
+    const flags = collectEnabledInsecureOrDangerousFlags(
+      asConfig({
+        agents: {
+          defaults: { workspace: defaultsWorkspaceDir },
+          entries: {
+            alpha: { workspace: alphaWorkspaceDir },
+            beta: { workspace: betaWorkspaceDir },
+          },
+        },
+        plugins: {
+          entries: { "workspace-danger": { config: { mode: "danger" } } },
+        },
+      }),
+    );
+
+    expect(flags).not.toContain("plugins.entries.workspace-danger.config.mode=danger");
+  });
+
+  it("uses the implicit main workspace for a rosterless compatibility config", () => {
+    const workspaceDir = tempDirs.make("openclaw-dangerous-rosterless-");
+    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-danger");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      "export default { id: 'workspace-danger' };\n",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "workspace-danger",
+        configSchema: { type: "object", additionalProperties: true },
+        configContracts: { dangerousFlags: [{ path: "mode", equals: "danger" }] },
+      }),
+    );
+
+    const flags = collectEnabledInsecureOrDangerousFlags(
+      asConfig({
+        agents: { defaults: { workspace: workspaceDir } },
+        plugins: {
+          entries: { "workspace-danger": { config: { mode: "danger" } } },
+        },
+      }),
+    );
+
+    expect(flags).toContain("plugins.entries.workspace-danger.config.mode=danger");
+  });
+
   it("collects manifest-declared dangerous plugin config values", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
@@ -113,7 +231,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
       "tools.fs.workspaceOnly=false",
       "agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets=true",
       "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",
-      'agents.list[id="worker"].sandbox.docker.dangerouslyAllowExternalBindSources=true',
+      "agents.list.0.sandbox.docker.dangerouslyAllowExternalBindSources=true",
     ]);
   });
 
@@ -131,7 +249,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     ).toContain("security.audit.suppressions configured (1)");
   });
 
-  it("uses stable agent ids for per-agent dangerous sandbox flags", () => {
+  it("uses legacy list indices for list-shaped dangerous sandbox flags", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
@@ -152,9 +270,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
           },
         }),
       ),
-    ).toContain(
-      'agents.list[id="worker"].sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true',
-    );
+    ).toContain("agents.list.0.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
 
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
@@ -176,8 +292,26 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
           },
         }),
       ),
-    ).toContain(
-      'agents.list[id="worker"].sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true',
-    );
+    ).toContain("agents.list.1.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
+  });
+
+  it("uses keyed roster paths for entries-shaped dangerous sandbox flags", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
+        asConfig({
+          agents: {
+            entries: {
+              worker: {
+                sandbox: {
+                  docker: {
+                    dangerouslyAllowContainerNamespaceJoin: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ),
+    ).toContain("agents.entries.worker.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
   });
 });

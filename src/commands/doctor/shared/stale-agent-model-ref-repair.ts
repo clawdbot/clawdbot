@@ -2,15 +2,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  listAgentEntries,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 
 type StaleAgentModelRefRepair = {
   config: OpenClawConfig;
@@ -53,7 +55,8 @@ function collectPluginProviderIds(
     };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
   const snapshot = resolvePluginMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
@@ -291,8 +294,8 @@ export function repairStaleAgentModelRefs(
       return available;
     }
     const inheritingAgentIds: string[] = [];
-    for (const agent of Array.isArray(cfg.agents?.list) ? cfg.agents.list : []) {
-      if (!isRecord(agent) || typeof agent.id !== "string") {
+    for (const agent of listAgentEntries(cfg)) {
+      if (typeof agent.id !== "string") {
         continue;
       }
       const explicitPrimary = modelPrimaryRef(agent.model);
@@ -308,7 +311,10 @@ export function repairStaleAgentModelRefs(
       }
     }
     if (inheritingAgentIds.length === 0) {
-      inheritingAgentIds.push(resolveDefaultAgentId(cfg));
+      const defaultAgentId = tryResolveDefaultAgentId(cfg);
+      if (defaultAgentId) {
+        inheritingAgentIds.push(defaultAgentId);
+      }
     }
     let commonPersisted: Set<string> | undefined;
     for (const agentId of inheritingAgentIds) {
@@ -330,11 +336,14 @@ export function repairStaleAgentModelRefs(
     if (replaceMode) {
       return available;
     }
-    const inheritingAgentIds = (Array.isArray(cfg.agents?.list) ? cfg.agents.list : [])
+    const inheritingAgentIds = listAgentEntries(cfg)
       .filter((agent) => isRecord(agent) && typeof agent.id === "string" && !isRecord(agent.models))
       .map((agent) => agent.id as string);
     if (inheritingAgentIds.length === 0) {
-      inheritingAgentIds.push(resolveDefaultAgentId(cfg));
+      const defaultAgentId = tryResolveDefaultAgentId(cfg);
+      if (defaultAgentId) {
+        inheritingAgentIds.push(defaultAgentId);
+      }
     }
     for (const agentId of inheritingAgentIds) {
       const persisted = persistedForAgent(agentId);
@@ -450,19 +459,14 @@ export function repairStaleAgentModelRefs(
     }
   }
 
-  for (const [index, agent] of (Array.isArray(config.agents?.list)
-    ? config.agents.list
-    : []
-  ).entries()) {
-    if (!isRecord(agent) || typeof agent.id !== "string") {
-      continue;
-    }
-    const available = availabilityForAgent(agent.id);
+  for (const entry of listMutableCodexRouteAgentEntries(config)) {
+    const agent = entry.agent;
+    const available = availabilityForAgent(entry.agentId);
     if (!available) {
       continue;
     }
     const isStale = makeStaleChecker(available);
-    const modelPath = `agents.list[${index}].model`;
+    const modelPath = `${entry.path}.model`;
     const inheritedDefaultAvailable = Boolean(
       defaultAvailability &&
       repairedDefaultPrimary &&
@@ -479,7 +483,7 @@ export function repairStaleAgentModelRefs(
           delete agent.model;
           agentPrimaryChanged = true;
           changes.push(
-            `Removed stale ${modelPath} "${staleRef}" so agent "${agent.id}" inherits the default model (provider "${provider}" is unavailable).`,
+            `Removed stale ${modelPath} "${staleRef}" so agent "${entry.agentId}" inherits the default model (provider "${provider}" is unavailable).`,
           );
         } else if (repairedDefaultPrimary && !isStale(repairedDefaultPrimary)) {
           agent.model = repairedDefaultPrimary;
@@ -494,22 +498,22 @@ export function repairStaleAgentModelRefs(
         }
       }
     } else if (isRecord(agent.model)) {
-      const provider =
-        typeof agent.model.primary === "string" ? isStale(agent.model.primary) : undefined;
+      const model = agent.model;
+      const provider = typeof model.primary === "string" ? isStale(model.primary) : undefined;
       let agentReplacement: string | undefined;
-      if (provider && typeof agent.model.primary === "string") {
-        const staleRef = agent.model.primary;
+      if (provider && typeof model.primary === "string") {
+        const staleRef = model.primary;
         if (canInheritDefault) {
-          delete agent.model.primary;
+          delete model.primary;
           agentPrimaryChanged = true;
           agentReplacement = repairedDefaultPrimary;
           changes.push(
-            `Removed stale ${modelPath} primary "${staleRef}" so agent "${agent.id}" inherits the default model (provider "${provider}" is unavailable).`,
+            `Removed stale ${modelPath} primary "${staleRef}" so agent "${entry.agentId}" inherits the default model (provider "${provider}" is unavailable).`,
           );
         } else if (
           (agentReplacement =
-            (Array.isArray(agent.model.fallbacks)
-              ? agent.model.fallbacks.find(
+            (Array.isArray(model.fallbacks)
+              ? model.fallbacks.find(
                   (fallback) => typeof fallback === "string" && !isStale(fallback),
                 )
               : undefined) ??
@@ -517,7 +521,7 @@ export function repairStaleAgentModelRefs(
               ? repairedDefaultPrimary
               : undefined))
         ) {
-          agent.model.primary = agentReplacement;
+          model.primary = agentReplacement;
           agentPrimaryChanged = true;
           changes.push(
             `Replaced stale ${modelPath} primary "${staleRef}" with "${agentReplacement}" (provider "${provider}" is unavailable).`,
@@ -528,30 +532,31 @@ export function repairStaleAgentModelRefs(
           );
         }
       }
-      filterFallbacks({ model: agent.model, path: modelPath, isStale, changes });
+      filterFallbacks({ model, path: modelPath, isStale, changes });
       if (
         agentReplacement &&
-        Array.isArray(agent.model.fallbacks) &&
-        agent.model.fallbacks.includes(agentReplacement)
+        Array.isArray(model.fallbacks) &&
+        model.fallbacks.includes(agentReplacement)
       ) {
-        agent.model.fallbacks = agent.model.fallbacks.filter(
+        const filteredFallbacks = model.fallbacks.filter(
           (fallback) => fallback !== agentReplacement,
         );
+        model.fallbacks = filteredFallbacks;
         changes.push(
           `Removed duplicate ${modelPath} fallback "${agentReplacement}" after selecting it as the primary.`,
         );
-        if (agent.model.fallbacks.length === 0) {
-          delete agent.model.fallbacks;
+        if (filteredFallbacks.length === 0) {
+          delete model.fallbacks;
         }
       }
-      if (!agent.model.primary && !agent.model.fallbacks) {
+      if (!model.primary && !model.fallbacks) {
         delete agent.model;
       }
     }
     const effectiveAgentPrimary = modelPrimaryRef(agent.model) ?? repairedDefaultPrimary;
     repairModelMap({
-      models: agent.models,
-      path: `agents.list[${index}].models`,
+      models: isRecord(agent.models) ? agent.models : undefined,
+      path: `${entry.path}.models`,
       isStale,
       replacementRef:
         effectiveAgentPrimary && !isStale(effectiveAgentPrimary)

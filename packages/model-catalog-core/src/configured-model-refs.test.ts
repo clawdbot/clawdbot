@@ -64,6 +64,33 @@ describe("configured model refs", () => {
     ).toEqual(["openai/gpt-5.5"]);
   });
 
+  it("preserves legacy list indices when collecting agent model refs", () => {
+    expect(
+      collectConfiguredModelRefs({
+        agents: {
+          list: [
+            { id: "10", model: "openai/gpt-5.6" },
+            { id: "2", utilityModel: "anthropic/claude-sonnet-4-6" },
+          ],
+        },
+      }),
+    ).toEqual([
+      { path: "agents.list.0.model", value: "openai/gpt-5.6" },
+      { path: "agents.list.1.utilityModel", value: "anthropic/claude-sonnet-4-6" },
+    ]);
+  });
+
+  it("ignores a shadowed legacy list when keyed entries are authoritative", () => {
+    expect(
+      collectConfiguredModelRefs({
+        agents: {
+          entries: { ops: { model: "openai/gpt-5.6" } },
+          list: [{ id: "stale", model: "anthropic/claude-opus-4-8" }],
+        },
+      }),
+    ).toEqual([{ path: "agents.entries.ops.model", value: "openai/gpt-5.6" }]);
+  });
+
   it("ignores array-shaped malformed records", () => {
     expect(
       collectConfiguredModelRefs({

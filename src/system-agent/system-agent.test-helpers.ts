@@ -1,3 +1,4 @@
+import { expect } from "vitest";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
@@ -11,6 +12,7 @@ import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-alia
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
@@ -22,6 +24,36 @@ type SystemAgentVerifiedInferenceTestFixture = {
   binding: SystemAgentVerifiedInferenceBinding;
   deps: SystemAgentVerifiedInferenceDeps;
 };
+
+export function readLastSystemAgentAuditEntry(): unknown {
+  return listSystemAgentAuditEntriesForTests().at(-1)?.value;
+}
+
+export function requireTestRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+export function expectTestRecordFields(
+  record: Record<string, unknown>,
+  fields: Record<string, unknown>,
+): void {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+export function expectSystemAgentAuditRecord(
+  audit: unknown,
+  fields: Record<string, unknown>,
+  detailFields: Record<string, unknown>,
+): void {
+  const auditRecord = requireTestRecord(audit, "audit record");
+  expectTestRecordFields(auditRecord, fields);
+  expectTestRecordFields(requireTestRecord(auditRecord.details, "audit details"), detailFields);
+}
 
 /** Build exact, revalidatable proof for a test config without reading host credentials. */
 export async function createSystemAgentVerifiedInferenceTestFixture(

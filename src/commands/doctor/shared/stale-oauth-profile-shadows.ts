@@ -3,11 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-  listAgentEntries,
-} from "../../../agents/agent-scope.js";
+import { resolveAgentDir, listAgentEntries } from "../../../agents/agent-scope.js";
 import {
   isLegacyOAuthRef,
   LEGACY_OAUTH_REF_PROVIDER,
@@ -23,6 +19,7 @@ import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/st
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 
 type StaleOAuthProfileShadow = {
@@ -116,7 +113,7 @@ export async function scanStaleOAuthProfileShadows(params: {
 }): Promise<StaleOAuthProfileShadow[]> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
-  const mainAgentDir = resolveDefaultAgentDir({}, env);
+  const mainAgentDir = path.join(resolveStateDir(env), "agents", LEGACY_IMPLICIT_AGENT_ID, "agent");
   const mainAuthPath = path.resolve(resolveAuthStorePath(mainAgentDir));
   const mainStore = loadPersistedAuthProfileStore(mainAgentDir);
   if (!mainStore) {
@@ -297,7 +294,9 @@ export async function repairStaleOAuthProfileShadows(params: {
     byAgentDir.set(hit.agentDir, existing);
   }
   for (const [agentDir, agentHits] of byAgentDir) {
-    const mainStore = loadPersistedAuthProfileStore(resolveDefaultAgentDir({}, env));
+    const mainStore = loadPersistedAuthProfileStore(
+      path.join(resolveStateDir(env), "agents", LEGACY_IMPLICIT_AGENT_ID, "agent"),
+    );
     if (!mainStore) {
       continue;
     }

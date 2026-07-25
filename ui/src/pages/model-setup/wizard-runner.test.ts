@@ -83,6 +83,44 @@ describe("ModelSetupWizardRunner", () => {
     );
   });
 
+  it("uses the prepare start method with the shared wizard transport", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "openclaw.setup.prepare.start") {
+        return Promise.resolve({ sessionId: "prepare-session", done: false, status: "running" });
+      }
+      if (method === "wizard.next") {
+        return Promise.resolve({
+          done: false,
+          status: "running",
+          step: { id: "pull", type: "progress", message: "Pulling 25%" },
+        });
+      }
+      return Promise.resolve({});
+    });
+    const runner = new ModelSetupWizardRunner({
+      getClient: () => ({ request }) as unknown as GatewayBrowserClient,
+      onChange: () => undefined,
+      onDone: () => undefined,
+      requestFailedMessage: () => "failed",
+      cancelledMessage: () => "cancelled",
+      sessionExpiredMessage: () => "expired",
+    });
+
+    await runner.start("llama-cpp", "openclaw.setup.prepare.start");
+
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "openclaw.setup.prepare.start",
+      { sessionId: expect.any(String), authChoice: "llama-cpp" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(runner.state).toMatchObject({
+      phase: "step",
+      authChoice: "llama-cpp",
+      step: { type: "progress" },
+    });
+  });
+
   it("clears an expired session and abort without cancelling or replaying the answer", async () => {
     let nextCount = 0;
     let answerSignal: AbortSignal | undefined;

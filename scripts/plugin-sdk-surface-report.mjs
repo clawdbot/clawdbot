@@ -175,7 +175,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +5: focused media-local-roots helpers and typed hook media contracts.
       // +1: model-independent agent-harness preflight failure contract.
       // +3: channel DM policy factory and its account/patch callback contracts.
-      4720,
+      // +1: typed owner-required error for session store path resolution.
+      4721,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

@@ -58,7 +58,12 @@ describe("detectInferenceBackends", () => {
 
   it("orders the ladder: existing model, logged-in subscriptions, env keys, then fallback CLIs", async () => {
     const candidates = await detectInferenceBackends({
-      config: { agents: { defaults: { model: "zai/glm-5.2" } } },
+      config: {
+        agents: {
+          defaults: { model: "zai/glm-5.2" },
+          entries: { main: { default: true } },
+        },
+      },
       env: { OPENAI_API_KEY: "sk-x", ANTHROPIC_API_KEY: "sk-y" },
       platform: "linux",
       deps: {
@@ -162,7 +167,12 @@ describe("detectInferenceBackends", () => {
 
   it("keeps the existing model first and definitively logged-out CLIs last", async () => {
     const candidates = await detectInferenceBackends({
-      config: { agents: { defaults: { model: "zai/glm-5.2" } } },
+      config: {
+        agents: {
+          defaults: { model: "zai/glm-5.2" },
+          entries: { main: { default: true } },
+        },
+      },
       env: { OPENAI_API_KEY: "sk-x" },
       platform: "linux",
       deps: {
@@ -215,6 +225,7 @@ describe("detectInferenceBackends", () => {
             model: { primary: "opus" },
             models: { "anthropic/claude-opus-4-8": { alias: "opus" } },
           },
+          entries: { main: { default: true } },
         },
       },
       env: {},
