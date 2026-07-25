@@ -107,10 +107,7 @@ export function formatMatrixCliCommand(command: string, accountId?: string): str
   return formatMatrixCliCommandParts(command.split(" "), accountId);
 }
 
-export function formatMatrixCliRecoveryKeyStdinCommand(
-  command: string,
-  accountId?: string,
-): string {
+function formatMatrixCliRecoveryKeyStdinCommand(command: string, accountId?: string): string {
   const normalizedAccountId = normalizeAccountId(accountId);
   const envName =
     normalizedAccountId === "default"
@@ -314,7 +311,7 @@ function isAnsiFinalByte(code: number): boolean {
   return code >= 0x40 && code <= 0x7e;
 }
 
-export type MatrixCliBackupStatus = MatrixRoomKeyBackupStatus;
+type MatrixCliBackupStatus = MatrixRoomKeyBackupStatus;
 
 export type MatrixCliVerificationStatus = MatrixOwnDeviceVerificationStatus & {
   pendingVerifications: number;
@@ -338,7 +335,7 @@ export type MatrixCliSelfVerificationCommandOptions = {
 };
 
 export type MatrixCliVerificationSummary = MatrixVerificationSummary;
-export type MatrixCliVerificationSas = NonNullable<MatrixVerificationSummary["sas"]>;
+type MatrixCliVerificationSas = NonNullable<MatrixVerificationSummary["sas"]>;
 
 export function resolveBackupStatus(status: {
   backupVersion: string | null;
