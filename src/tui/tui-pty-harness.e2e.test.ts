@@ -940,6 +940,7 @@ describe.sequential("TUI PTY harness", () => {
       );
 
       expect(sent.payload).toMatchObject({ sessionKey, message });
+      await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
     },
     TEST_TIMEOUT_MS,
   );
