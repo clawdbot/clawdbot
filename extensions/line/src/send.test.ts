@@ -264,6 +264,7 @@ describe("LINE send helpers", () => {
 
   it("normalizes raw imagemap actions at both outbound API boundaries", async () => {
     const area = { x: 0, y: 0, width: 520, height: 1040 };
+    const videoArea = { x: 520, y: 0, width: 520, height: 1040 };
     const message = {
       type: "imagemap",
       baseUrl: "https://e.example/imagemap",
@@ -276,27 +277,50 @@ describe("LINE send helpers", () => {
           linkUri: `https://e.example/?q=${"x".repeat(1200)}`,
           area,
         },
+        ...Array.from({ length: 49 }, (_, index) => ({
+          type: "message",
+          label: `Item ${index}`,
+          text: `item-${index}`,
+          area,
+        })),
       ],
+      video: {
+        originalContentUrl: "https://e.example/video.mp4",
+        previewImageUrl: "https://e.example/preview.jpg",
+        area: videoArea,
+        externalLink: {
+          linkUri: `https://e.example/video?q=${"x".repeat(1200)}`,
+          label: "Open video",
+        },
+      },
     };
 
     await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
     await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
 
     const pushed = pushMessageMock.mock.calls[0]?.[0] as {
-      messages: Array<{ actions: unknown[] }>;
+      messages: Array<{ actions: unknown[]; video?: { externalLink?: unknown } }>;
     };
     const replied = replyMessageMock.mock.calls[0]?.[0] as {
       messages: Array<{ actions: unknown[] }>;
     };
     expect(pushed.messages[0]?.actions).toEqual(replied.messages[0]?.actions);
-    expect(pushed.messages[0]?.actions).toEqual([
-      {
-        type: "message",
-        label: "Unavailable",
-        text: "Link unavailable: URL exceeds LINE's limit.",
-        area,
-      },
-    ]);
+    expect(pushed.messages[0]?.actions).toHaveLength(50);
+    expect(pushed.messages[0]?.actions[0]).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+      area,
+    });
+    expect(pushed.messages[0]?.actions[1]).toMatchObject({
+      type: "message",
+      text: "item-0",
+    });
+    expect(pushed.messages[0]?.actions[49]).toMatchObject({
+      type: "message",
+      text: "item-48",
+    });
+    expect(pushed.messages[0]?.video?.externalLink).toBeUndefined();
     expect(message.actions[0]?.type).toBe("uri");
   });
 

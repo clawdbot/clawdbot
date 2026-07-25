@@ -5,6 +5,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 export type Action = messagingApi.Action;
 type Message = messagingApi.Message;
 type ImagemapAction = messagingApi.ImagemapAction;
+type ImagemapVideo = messagingApi.ImagemapVideo;
 const LINE_ACTION_LABEL_LIMIT = 20;
 const LINE_ACTION_DATA_LIMIT = 300;
 const LINE_ACTION_URI_LIMIT = 1000;
@@ -12,6 +13,8 @@ const LINE_CLIPBOARD_TEXT_LIMIT = 1000;
 const LINE_RICH_MENU_ALIAS_LIMIT = 32;
 const LINE_IMAGEMAP_ACTION_LABEL_LIMIT = 100;
 const LINE_IMAGEMAP_MESSAGE_TEXT_LIMIT = 400;
+const LINE_IMAGEMAP_EXTERNAL_LINK_LABEL_LIMIT = 30;
+const LINE_IMAGEMAP_ACTION_LIMIT = 50;
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function truncateLineActionText(text: string, limit: number): string {
@@ -29,7 +32,8 @@ function truncateLineActionText(text: string, limit: number): string {
 }
 
 export function truncateLineActionLabel(label: string, limit = LINE_ACTION_LABEL_LIMIT): string {
-  return truncateLineActionText(label, limit);
+  const truncated = truncateLineActionText(label, limit);
+  return truncated || (label ? "…" : "");
 }
 
 function truncateLineActionData(data: string): string {
@@ -201,6 +205,36 @@ function normalizeImagemapAction(action: ImagemapAction): ImagemapAction {
   return { ...action, label };
 }
 
+function normalizeImagemapVideo(video: ImagemapVideo): {
+  video: ImagemapVideo;
+  fallbackAction?: ImagemapAction;
+} {
+  const externalLink = video.externalLink;
+  if (!externalLink) {
+    return { video };
+  }
+
+  const label =
+    externalLink.label === undefined
+      ? undefined
+      : truncateLineActionLabel(externalLink.label, LINE_IMAGEMAP_EXTERNAL_LINK_LABEL_LIMIT);
+  if (
+    externalLink.linkUri !== undefined &&
+    truncateUtf16Safe(externalLink.linkUri, LINE_ACTION_URI_LIMIT) !== externalLink.linkUri
+  ) {
+    const normalizedVideo = { ...video };
+    delete normalizedVideo.externalLink;
+    return {
+      video: normalizedVideo,
+      fallbackAction:
+        video.area === undefined
+          ? undefined
+          : unavailableImagemapAction("Link", "URL exceeds LINE's limit.", video.area),
+    };
+  }
+  return { video: { ...video, externalLink: { ...externalLink, label } } };
+}
+
 export function normalizeLineMessageActions(message: Message): Message {
   let normalized: Message;
   if (message.type === "flex") {
@@ -215,9 +249,17 @@ export function normalizeLineMessageActions(message: Message): Message {
       template: normalizeNestedActions(message.template, labelLimit) as messagingApi.Template,
     };
   } else if (message.type === "imagemap") {
+    const actions = message.actions.map(normalizeImagemapAction);
+    const videoResult = message.video ? normalizeImagemapVideo(message.video) : undefined;
+    if (videoResult?.fallbackAction) {
+      if (actions.length < LINE_IMAGEMAP_ACTION_LIMIT) {
+        actions.push(videoResult.fallbackAction);
+      }
+    }
     normalized = {
       ...message,
-      actions: message.actions.map(normalizeImagemapAction),
+      actions,
+      video: videoResult?.video,
     };
   } else {
     normalized = { ...message };

@@ -690,6 +690,7 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(messageAction("Open", emojiText)).toMatchObject({ text: emojiText });
     const familyEmoji = "👨‍👩‍👧‍👦";
     expect(truncateLineActionLabel(familyEmoji.repeat(3))).toBe(familyEmoji.repeat(2));
+    expect(truncateLineActionLabel(`👩${"‍👩".repeat(10)}`)).toBe("…");
     expect(messageAction("Open", familyEmoji.repeat(43))).toEqual({
       type: "message",
       label: "Unavailable",
