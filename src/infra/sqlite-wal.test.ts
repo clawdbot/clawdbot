@@ -201,57 +201,49 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
-  describe("journal_size_limit ceiling", () => {
-    it("bounds the WAL to the default 64 MiB ceiling", () => {
-      const sqlite = requireNodeSqlite();
-      const dir = tempDirs.make("openclaw-sqlite-wal-size-");
-      const dbPath = path.join(dir, "openclaw.sqlite");
-      const db = new sqlite.DatabaseSync(dbPath);
-      try {
-        configureSqliteWalMaintenance(db, {
-          checkpointIntervalMs: 0,
-          databaseLabel: "wal-size-default",
-          databasePath: dbPath,
-        });
+  it("reclaims an inflated WAL on the first commit after a completed checkpoint", () => {
+    const sqlite = requireNodeSqlite();
+    const dir = tempDirs.make("openclaw-sqlite-wal-size-");
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const walPath = `${dbPath}-wal`;
+    const db = new sqlite.DatabaseSync(dbPath);
+    let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
+    try {
+      maintenance = configureSqliteWalMaintenance(db, {
+        autoCheckpointPages: 0,
+        checkpointIntervalMs: 0,
+        databaseLabel: "wal-size-default",
+        databasePath: dbPath,
+      });
+      db.exec("CREATE TABLE payload (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+      db.prepare("INSERT INTO payload (value) VALUES (?)").run("before-checkpoint");
 
-        expect(db.prepare("PRAGMA journal_mode;").get()).toEqual({ journal_mode: "wal" });
-        expect(db.prepare("PRAGMA journal_size_limit;").get()).toEqual({
-          journal_size_limit: 64 * 1024 * 1024,
-        });
-      } finally {
-        db.close();
-      }
-    });
+      const checkpoint = db.prepare("PRAGMA wal_checkpoint(PASSIVE);").get() as {
+        busy: number;
+        checkpointed: number;
+        log: number;
+      };
+      expect(checkpoint.busy).toBe(0);
+      expect(checkpoint.checkpointed).toBe(checkpoint.log);
 
-    it("honors a custom journalSizeLimitBytes", () => {
-      const sqlite = requireNodeSqlite();
-      const dir = tempDirs.make("openclaw-sqlite-wal-size-custom-");
-      const dbPath = path.join(dir, "openclaw.sqlite");
-      const db = new sqlite.DatabaseSync(dbPath);
-      try {
-        configureSqliteWalMaintenance(db, {
-          checkpointIntervalMs: 0,
-          databaseLabel: "wal-size-custom",
-          databasePath: dbPath,
-          journalSizeLimitBytes: 1024 * 1024,
-        });
+      const sizeLimit = Number(
+        (
+          db.prepare("PRAGMA journal_size_limit;").get() as {
+            journal_size_limit: number | bigint;
+          }
+        ).journal_size_limit,
+      );
+      expect(sizeLimit).toBe(64 * 1024 * 1024);
+      // A sparse extension models a retained high-water WAL without writing a 65 MiB fixture.
+      fs.truncateSync(walPath, sizeLimit + 1024 * 1024);
 
-        expect(db.prepare("PRAGMA journal_size_limit;").get()).toEqual({
-          journal_size_limit: 1024 * 1024,
-        });
-      } finally {
-        db.close();
-      }
-    });
+      db.prepare("INSERT INTO payload (value) VALUES (?)").run("after-checkpoint");
 
-    it("rejects a negative journalSizeLimitBytes", () => {
-      expect(() =>
-        configureSqliteWalMaintenance(createMockDb(), {
-          checkpointIntervalMs: 0,
-          journalSizeLimitBytes: -1,
-        }),
-      ).toThrow("journalSizeLimitBytes must be a non-negative integer");
-    });
+      expect(fs.statSync(walPath).size).toBe(sizeLimit);
+    } finally {
+      maintenance?.close();
+      db.close();
+    }
   });
 
   it("rejects a memory journal for a file-backed database", () => {

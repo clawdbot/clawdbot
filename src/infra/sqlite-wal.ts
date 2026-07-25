@@ -10,16 +10,9 @@ import { isSqliteLockError } from "./sqlite-transaction.js";
 // checkpoints so state databases do not accumulate unbounded WAL files.
 const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
-// Cap the on-disk WAL size. Since periodic checkpoints default to PASSIVE (#82366,
-// to keep WAL maintenance off the event loop), a running process no longer
-// truncates the WAL file — only close() does. wal_autocheckpoint recycles WAL
-// space in place but never shrinks the file, and is itself a PASSIVE checkpoint a
-// reader can block. So a checkpoint transiently blocked by a reader (e.g. a memory
-// reindex) inflates the WAL and it then stays parked at that high-water mark until
-// the gateway restarts. journal_size_limit makes any completing checkpoint —
-// including the PASSIVE periodic/auto ones — truncate the file back to this
-// ceiling, without blocking. Set well above the autocheckpoint steady state
-// (~4MB at 1000 pages) so it is inert until growth is genuinely pathological.
+// SQLite applies this ceiling when a fully checkpointed WAL resets on the next
+// commit. Keep it well above the usual ~4 MiB autocheckpoint window so only
+// pathological high-water marks pay the truncation cost.
 const DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 // 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
 // bounded so maintenance can never behave like a blocking full VACUUM.
@@ -56,7 +49,6 @@ export type SqliteWalMaintenanceOptions = {
   checkpointMode?: SqliteWalCheckpointMode;
   databaseLabel?: string;
   databasePath?: string;
-  journalSizeLimitBytes?: number;
   onCheckpointError?: (error: unknown) => void;
 };
 
@@ -455,10 +447,6 @@ export function configureSqliteWalMaintenance(
     options.checkpointIntervalMs ?? DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
     "checkpointIntervalMs",
   );
-  const journalSizeLimitBytes = normalizeNonNegativeInteger(
-    options.journalSizeLimitBytes ?? DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES,
-    "journalSizeLimitBytes",
-  );
   const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
   const periodicCheckpointMode = options.checkpointMode ?? "PASSIVE";
@@ -483,10 +471,7 @@ export function configureSqliteWalMaintenance(
   }
   enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
-  // Bound the WAL file size (see DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES): a
-  // completing checkpoint truncates the file back to this ceiling. Non-blocking —
-  // journal_size_limit changes only how far truncation goes, never checkpoint timing.
-  db.exec(`PRAGMA journal_size_limit = ${journalSizeLimitBytes};`);
+  db.exec(`PRAGMA journal_size_limit = ${DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES};`);
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {
