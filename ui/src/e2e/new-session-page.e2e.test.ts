@@ -3872,6 +3872,13 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
               workspace: WORKSPACE,
               workspaceGit: true,
             },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: "/home/peter/research",
+              workspaceGit: true,
+            },
           ],
           defaultId: "main",
           mainKey: "main",
@@ -3982,11 +3989,22 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       // Using a node folder retargets the draft to that node.
       await expect.poll(() => placeLabel.textContent()).toBe("Projects · MacBook");
 
+      // A node cwd belongs to the selected agent's draft and must not leak
+      // across an agent change, even though the execution node stays selected.
+      const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      await agentPicker.locator(".agent-select__trigger").click();
+      await agentPicker
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "Research" })
+        .click();
+      await page.getByRole("heading", { name: "Research" }).waitFor();
+      await expect.poll(() => placeLabel.textContent()).toBe("Agent workspace · MacBook");
+
       // Clearing the path applies the node's default directory (empty folder),
       // the state the replaced clearable folder textbox could express.
       await placeTrigger.click();
       await placeSelect.getByRole("button", { name: "Browse folders" }).click();
-      await expect.poll(() => pathInput.inputValue()).toBe(NODE_PICKED);
+      await expect.poll(() => pathInput.inputValue()).toBe(NODE_HOME);
       await pathInput.fill("");
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => placeLabel.textContent()).toBe("Agent workspace · MacBook");
@@ -4018,7 +4036,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Start thread" }).click();
       const createRequest = await gateway.waitForRequest("sessions.create");
       expect(createRequest.params).toMatchObject({
-        agentId: "main",
+        agentId: "research",
         message: "inspect the remote checkout",
         execNode: "old-node",
         cwd: EXEC_ONLY_PICKED,

@@ -1176,6 +1176,11 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.worktree = false;
     this.worktreeName = "";
     this.closeBrowser();
+    if (this.execNode) {
+      // Node cwd choices are agent-scoped draft state; switching agents must
+      // not carry the previous agent's remote path into the next session.
+      this.folder = "";
+    }
     this.adoptAgentDefaults({ preserveSelectedAgent: true });
   }
 
