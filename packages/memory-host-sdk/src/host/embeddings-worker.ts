@@ -520,9 +520,12 @@ class LocalEmbeddingWorkerClient {
 }
 
 const FAILED_CONSTRUCTION_CLIENTS = new Set<LocalEmbeddingWorkerClient>();
+const FAILED_CONSTRUCTION_DRAIN_RETRY_MS = 1_000;
 let workerProviderCreationTail: Promise<void> = Promise.resolve();
+let failedConstructionDrainPromise: Promise<void> | null = null;
+let failedConstructionDrainTimer: NodeJS.Timeout | null = null;
 
-async function drainFailedConstructionClients(): Promise<void> {
+async function drainFailedConstructionClientsNow(): Promise<void> {
   let firstError: unknown;
   let closeFailed = false;
   for (const client of FAILED_CONSTRUCTION_CLIENTS) {
@@ -539,6 +542,37 @@ async function drainFailedConstructionClients(): Promise<void> {
   if (closeFailed) {
     throw firstError;
   }
+}
+
+function scheduleFailedConstructionDrain(): void {
+  if (FAILED_CONSTRUCTION_CLIENTS.size === 0 || failedConstructionDrainTimer) {
+    return;
+  }
+  failedConstructionDrainTimer = setTimeout(() => {
+    failedConstructionDrainTimer = null;
+    void drainFailedConstructionClients().catch(() => {});
+  }, FAILED_CONSTRUCTION_DRAIN_RETRY_MS);
+  failedConstructionDrainTimer.unref?.();
+}
+
+async function drainFailedConstructionClients(): Promise<void> {
+  if (failedConstructionDrainPromise) {
+    return await failedConstructionDrainPromise;
+  }
+  if (failedConstructionDrainTimer) {
+    clearTimeout(failedConstructionDrainTimer);
+    failedConstructionDrainTimer = null;
+  }
+  const drain = drainFailedConstructionClientsNow();
+  failedConstructionDrainPromise = drain;
+  const settle = () => {
+    if (failedConstructionDrainPromise === drain) {
+      failedConstructionDrainPromise = null;
+    }
+    scheduleFailedConstructionDrain();
+  };
+  void drain.then(settle, settle);
+  return await drain;
 }
 
 /** Create the public local embedding provider backed by the child worker client. */
@@ -574,6 +608,7 @@ async function createLocalEmbeddingWorkerProviderOnce(
       await client.close();
     } catch {
       FAILED_CONSTRUCTION_CLIENTS.add(client);
+      scheduleFailedConstructionDrain();
     }
     throw err;
   }

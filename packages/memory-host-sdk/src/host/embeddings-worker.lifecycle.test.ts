@@ -135,3 +135,56 @@ it("drains failed construction clients before forking another worker", async () 
 
   await expect(provider.close?.()).resolves.toBeUndefined();
 });
+
+it("retries failed construction cleanup without another provider creation", async () => {
+  const failedChild = Object.assign(new EventEmitter(), {
+    connected: true,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    disconnect: vi.fn(function (this: { connected: boolean }) {
+      this.connected = false;
+    }),
+    kill: vi.fn(function (this: EventEmitter, _signal?: NodeJS.Signals) {
+      queueMicrotask(() => this.emit("error", new Error("kill failed")));
+      return false;
+    }),
+    send: vi.fn(function (
+      this: EventEmitter,
+      message: { id: number; type: string },
+      callback: (err?: Error | null) => void,
+    ) {
+      callback();
+      queueMicrotask(() =>
+        this.emit(
+          "message",
+          message.type === "initialize"
+            ? { id: message.id, ok: false, error: "initialization failed" }
+            : { id: message.id, ok: true },
+        ),
+      );
+      return true;
+    }),
+  });
+  forkMock.mockReturnValue(failedChild);
+
+  await expect(
+    createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: "/mock/worker.cjs" },
+    ),
+  ).rejects.toThrow("initialization failed");
+  expect(forkMock).toHaveBeenCalledTimes(1);
+
+  failedChild.kill.mockImplementationOnce(function (
+    this: typeof failedChild,
+    signal: NodeJS.Signals = "SIGTERM",
+  ) {
+    this.signalCode = signal;
+    queueMicrotask(() => this.emit("close", null, signal));
+    return true;
+  });
+  await vi.waitFor(() => expect(failedChild.kill).toHaveBeenCalledTimes(3), { timeout: 2_000 });
+
+  expect(forkMock).toHaveBeenCalledTimes(1);
+  expect(failedChild.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"], ["SIGTERM"]]);
+});
