@@ -9,6 +9,23 @@ import { parseClawManifest } from "./schema.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("CLAW.md prompt bodies", () => {
+  it("preserves non-ASCII UTF-8 frontmatter values", async () => {
+    const root = tempDirs.make("openclaw-claw-markdown-unicode-");
+    const manifestPath = join(root, "CLAW.md");
+    await writeFile(
+      manifestPath,
+      "---\nschemaVersion: 1\nagent: { id: cafe, name: Café }\n---\nPortable soul\n",
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(manifestPath);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.agent.name).toBe("Café");
+    }
+  });
+
   it.each([
     ["nested", "SOUL.md/child"],
     ["case-folded nested", "soul.MD/child"],
