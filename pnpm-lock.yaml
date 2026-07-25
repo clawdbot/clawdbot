@@ -2211,6 +2211,9 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/net-policy:
     dependencies:
