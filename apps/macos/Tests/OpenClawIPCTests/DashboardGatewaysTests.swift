@@ -1,0 +1,233 @@
+import AppKit
+import Foundation
+import Testing
+@testable import OpenClaw
+
+struct DashboardGatewayCatalogTests {
+    @Test func `catalog deduplicates active profile and adopts its name`() throws {
+        let primaryURL = try #require(URL(string: "wss://studio.example/control"))
+        let duplicate = MacGatewayCatalogProfile(
+            profile: MacGatewayProfile(id: "studio", name: "My Studio", url: primaryURL),
+            canPromote: true)
+        let other = try MacGatewayCatalogProfile(
+            profile: MacGatewayProfile(
+                id: "backup",
+                name: "Backup",
+                url: #require(URL(string: "wss://backup.example"))),
+            canPromote: false)
+
+        let entries = DashboardGatewayCatalog.entries(
+            mode: .remote,
+            primaryRemoteURL: primaryURL,
+            resolvedRemoteHostLabel: "studio.example:443",
+            profiles: [duplicate, other],
+            primaryHealth: .ok)
+
+        #expect(entries.map(\.id) == ["primary", "profile:backup"])
+        #expect(entries[0].name == "My Studio")
+        #expect(entries[0].kind == "remote")
+        #expect(entries[0].health == .ok)
+        #expect(!entries[0].canPromote)
+        #expect(!entries[1].canPromote)
+        #expect(entries[1].health == .unknown)
+    }
+
+    @Test @MainActor func `catalog maps only connected control state to healthy`() {
+        #expect(DashboardGatewayCatalog.primaryHealth(for: .connected) == .ok)
+        #expect(DashboardGatewayCatalog.primaryHealth(for: .disconnected) == .unknown)
+        #expect(DashboardGatewayCatalog.primaryHealth(for: .connecting) == .unknown)
+        #expect(DashboardGatewayCatalog.primaryHealth(for: .degraded("offline")) == .unknown)
+    }
+
+    @Test func `local catalog does not deduplicate a retained remote profile`() throws {
+        let url = try #require(URL(string: "wss://studio.example"))
+        let entries = DashboardGatewayCatalog.entries(
+            mode: .local,
+            primaryRemoteURL: url,
+            resolvedRemoteHostLabel: "127.0.0.1:18789",
+            profiles: [.init(
+                profile: .init(id: "studio", name: "Studio", url: url),
+                canPromote: true)],
+            primaryHealth: .ok)
+
+        #expect(entries.map(\.id) == ["primary", "profile:studio"])
+        #expect(entries[0].name == "Local Gateway")
+    }
+}
+
+@MainActor
+struct DashboardGatewaysBridgeTests {
+    @Test func `parses gateway bridge requests with role based ids`() {
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "select", "id": "primary"]) == .select(.primary))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "open-window", "id": "profile:studio"]) == .openWindow(.profile("studio")))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "set-primary", "id": "profile:studio"]) == .setPrimary(.profile("studio")))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "open-settings"]) == .openSettings)
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "select", "id": "https://secret.example"]) == nil)
+    }
+
+    @Test func `gateway script contains metadata and no credentials`() {
+        let snapshot = DashboardGatewaySnapshot(
+            gateways: [.init(
+                id: "primary",
+                name: "Local Gateway",
+                kind: "local",
+                isPrimary: true,
+                canPromote: false,
+                health: .ok)],
+            currentId: "primary")
+        let script = DashboardWindowController.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true)
+        #expect(script.contains("__OPENCLAW_NATIVE_GATEWAYS__"))
+        #expect(script.contains("openclaw:native-gateways-changed"))
+        #expect(!script.contains("token"))
+        #expect(!script.contains("password"))
+    }
+}
+
+@Suite(.serialized)
+@MainActor
+struct DashboardManagerGatewayTargetTests {
+    @Test func `primary endpoint subscription does not mutate profile targeted main window`() async throws {
+        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=current"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(
+                gatewayUrl: "ws://127.0.0.1:60001/",
+                token: "current",
+                password: nil),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+        controller.show()
+        defer { controller.closeDashboard() }
+        let manager = DashboardManager._testMake()
+        manager._testSetController(controller)
+        manager._testSetMainTarget(.profile("studio"))
+
+        try await manager.handleEndpointState(.ready(
+            mode: .remote,
+            url: #require(URL(string: "ws://127.0.0.1:60002")),
+            token: "replacement",
+            password: nil,
+            routeRevision: 2))
+
+        #expect(manager._testController() === controller)
+        #expect(controller.currentURL == url)
+
+        try await manager.show()
+        #expect(manager._testController() === controller)
+        #expect(manager._testMainTarget() == .profile("studio"))
+        #expect(!manager.showConfiguredWindowIfPossible())
+    }
+
+    @Test func `profile dashboard autosave name is target specific`() {
+        #expect(DashboardManager._testAutosaveName(for: .profile("studio")) ==
+            "OpenClawDashboardWindow-studio")
+    }
+
+    @Test func `removed current profile requires target reconciliation`() {
+        let primary = DashboardGatewayEntry(
+            id: "primary",
+            name: "Local Gateway",
+            kind: "local",
+            isPrimary: true,
+            canPromote: false,
+            health: .ok)
+
+        #expect(DashboardManager._testTargetIsAvailable(.primary, in: [primary]))
+        #expect(!DashboardManager._testTargetIsAvailable(.profile("removed"), in: [primary]))
+    }
+
+    @Test func `opening primary retargets profile main window without moving it`() async throws {
+        let state = AppStateStore.shared
+        let originalMode = state.connectionMode
+        state.connectionMode = .local
+        defer { state.connectionMode = originalMode }
+        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=current"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(
+                gatewayUrl: "ws://127.0.0.1:60001/",
+                token: "current",
+                password: nil),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+        let frame = NSRect(x: 180, y: 180, width: 960, height: 720)
+        controller.window?.setFrame(frame, display: false)
+        controller.show()
+        let manager = DashboardManager._testMake()
+        manager._testSetController(controller)
+        manager._testSetMainTarget(.profile("studio"))
+        defer { manager._testController()?.closeDashboard() }
+
+        await manager._testOpenWindow(for: .primary)
+
+        let replacement = try #require(manager._testController())
+        #expect(replacement !== controller)
+        #expect(manager._testMainTarget() == .primary)
+        #expect(replacement.window?.frame == frame)
+    }
+}
+
+@MainActor
+struct DashboardPrimaryGatewayAdapterTests {
+    @Test func `token profile promotion updates AppState direct remote fields`() async throws {
+        let state = AppState(preview: true)
+        let url = try #require(URL(string: "wss://studio.example:443/"))
+        let adapter = DashboardPrimaryGatewayAdapter(
+            state: state,
+            endpoint: { _ in
+                GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: "profile-token", password: nil),
+                    routeAuthority: nil)
+            })
+
+        try await adapter.apply(profileID: "studio")
+
+        #expect(state.remoteTransport == .direct)
+        #expect(state.remoteUrl == url.absoluteString)
+        #expect(state.remoteToken == "profile-token")
+        #expect(state.connectionMode == .remote)
+    }
+
+    @Test func `password only profile cannot be promoted`() async throws {
+        let state = AppState(preview: true)
+        let url = try #require(URL(string: "wss://studio.example:443/"))
+        let adapter = DashboardPrimaryGatewayAdapter(
+            state: state,
+            endpoint: { _ in
+                GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: nil, password: "secret"),
+                    routeAuthority: nil)
+            })
+        await #expect(throws: DashboardPrimaryGatewayError.notPromotable) {
+            try await adapter.apply(profileID: "studio")
+        }
+    }
+
+    @Test func `failed promotion restores previous AppState fields`() async throws {
+        let state = AppState(preview: true)
+        state.remoteTransport = .ssh
+        state.remoteUrl = "ws://127.0.0.1:18789"
+        state.remoteToken = "previous-token"
+        state.connectionMode = .local
+        let url = try #require(URL(string: "wss://studio.example:443/"))
+        let adapter = DashboardPrimaryGatewayAdapter(
+            state: state,
+            endpoint: { _ in
+                GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: "profile-token", password: nil),
+                    routeAuthority: nil)
+            },
+            persist: { _ in false })
+
+        await #expect(throws: DashboardPrimaryGatewayError.notPromotable) {
+            try await adapter.apply(profileID: "studio")
+        }
+        #expect(state.remoteTransport == .ssh)
+        #expect(state.remoteUrl == "ws://127.0.0.1:18789")
+        #expect(state.remoteToken == "previous-token")
+        #expect(state.connectionMode == .local)
+    }
+}
