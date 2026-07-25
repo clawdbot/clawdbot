@@ -13387,7 +13387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 384,
+      "line": 358,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${days}d",
       "surface": "android",
@@ -13395,7 +13395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 388,
+      "line": 362,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${hours}h",
       "surface": "android",
@@ -13403,7 +13403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 392,
+      "line": 366,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${minutes}m",
       "surface": "android",
@@ -13411,7 +13411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 396,
+      "line": 370,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${seconds}s",
       "surface": "android",
@@ -13419,7 +13419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 431,
+      "line": 405,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Shelling",
       "surface": "android",
@@ -13427,7 +13427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 432,
+      "line": 406,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Scuttling",
       "surface": "android",
@@ -13435,7 +13435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 433,
+      "line": 407,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Clawing",
       "surface": "android",
@@ -13443,7 +13443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 434,
+      "line": 408,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Pinching",
       "surface": "android",
@@ -13451,7 +13451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 435,
+      "line": 409,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Molting",
       "surface": "android",
@@ -13459,7 +13459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 436,
+      "line": 410,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Bubbling",
       "surface": "android",
@@ -13467,7 +13467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 437,
+      "line": 411,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Tiding",
       "surface": "android",
@@ -13475,7 +13475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 438,
+      "line": 412,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Reefing",
       "surface": "android",
@@ -13483,7 +13483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 439,
+      "line": 413,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Cracking",
       "surface": "android",
@@ -13491,7 +13491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 440,
+      "line": 414,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Sifting",
       "surface": "android",
@@ -13499,7 +13499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 441,
+      "line": 415,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Brining",
       "surface": "android",
@@ -13507,7 +13507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 442,
+      "line": 416,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Nautiling",
       "surface": "android",
@@ -13515,7 +13515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 443,
+      "line": 417,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Krilling",
       "surface": "android",
@@ -13523,7 +13523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 444,
+      "line": 418,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Barnacling",
       "surface": "android",
@@ -13531,7 +13531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 445,
+      "line": 419,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Lobstering",
       "surface": "android",
@@ -13539,7 +13539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 446,
+      "line": 420,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Tidepooling",
       "surface": "android",
@@ -13547,7 +13547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 447,
+      "line": 421,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Pearling",
       "surface": "android",
@@ -13555,7 +13555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 448,
+      "line": 422,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Snapping",
       "surface": "android",
@@ -13563,7 +13563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 449,
+      "line": 423,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Surfacing",
       "surface": "android",
