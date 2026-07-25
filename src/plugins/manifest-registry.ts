@@ -22,6 +22,7 @@ import {
   type PluginDiscoveryResult,
 } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import type { PluginManifestHostIntegrationBundle } from "./host-integration-bundle.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type {
@@ -266,6 +267,7 @@ export type PluginManifestRecord = {
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
   contracts?: PluginManifestContracts;
+  hostIntegrationBundle?: PluginManifestHostIntegrationBundle;
   mediaUnderstandingProviderMetadata?: Record<
     string,
     PluginManifestMediaUnderstandingProviderMetadata
@@ -326,6 +328,48 @@ function rejectCaseFoldedIdCollisions(
     }
   }
   return records.filter((record) => !rejected.has(record));
+}
+
+function rejectHostIntegrationBundleIdCollisions(
+  records: readonly PluginManifestRecord[],
+  diagnostics: PluginDiagnostic[],
+): PluginManifestRecord[] {
+  const recordsByBundleId = new Map<string, PluginManifestRecord[]>();
+  for (const record of records) {
+    const bundleId = record.hostIntegrationBundle?.id;
+    if (!bundleId) {
+      continue;
+    }
+    const matches = recordsByBundleId.get(bundleId) ?? [];
+    matches.push(record);
+    recordsByBundleId.set(bundleId, matches);
+  }
+
+  const rejected = new Set<PluginManifestRecord>();
+  for (const [bundleId, matches] of recordsByBundleId) {
+    if (matches.length < 2) {
+      continue;
+    }
+    const pluginIds = matches.map((record) => record.id).toSorted();
+    const message = `host integration bundle id ${JSON.stringify(bundleId)} is declared by multiple plugins: ${pluginIds.map((id) => JSON.stringify(id)).join(", ")}; refusing all conflicting bundles`;
+    for (const record of matches) {
+      rejected.add(record);
+      diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message,
+      });
+    }
+  }
+  return records.map((record) => {
+    if (!rejected.has(record)) {
+      return record;
+    }
+    const copy = { ...record };
+    delete copy.hostIntegrationBundle;
+    return copy;
+  });
 }
 
 function safeStatMtimeMs(filePath: string): number | null {
@@ -623,6 +667,7 @@ function buildRecord(params: {
       params.manifest.contracts,
       officialCatalogManifest?.contracts,
     ),
+    hostIntegrationBundle: params.manifest.hostIntegrationBundle,
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
@@ -1252,7 +1297,10 @@ export function loadPluginManifestRegistry(
     pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
-  const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
+  const plugins = rejectHostIntegrationBundleIdCollisions(
+    rejectCaseFoldedIdCollisions(records, diagnostics),
+    diagnostics,
+  );
   const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }

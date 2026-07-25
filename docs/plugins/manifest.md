@@ -165,6 +165,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `dashboard`                          | No       | `object`                     | Dashboard widget data bindings and action verbs. Each entry is validated against a Gateway method registered by this plugin with the required read or write scope. See [dashboard reference](#dashboard-reference).                                                                            |
 | `mcpServers`                         | No       | `Record<string, object>`     | Static MCP server definitions contributed while this plugin is enabled. Relative command arguments and working directories resolve from the plugin root. Operator `mcp.servers` entries override or disable definitions with the same name. See [MCP server reference](#mcp-server-reference). |
 | `contracts`                          | No       | `object`                     | Static capability ownership snapshot for external auth hooks, embeddings, speech, realtime transcription, realtime voice, media-understanding, image/video/music generation, web fetch, web search, worker providers, document/web-content extraction, and tool ownership.                     |
+| `hostIntegrationBundle`              | No       | `object`                     | One atomic, inert host contribution inventory. OpenClaw validates and records it without importing plugin runtime. See [hostIntegrationBundle reference](#hostintegrationbundle-reference).                                                                                                    |
 | `configContracts`                    | No       | `object`                     | Manifest-owned config behavior consumed by generic core helpers: dangerous-flag detection, SecretRef migration targets, and legacy config-path narrowing. See [configContracts reference](#configcontracts-reference).                                                                         |
 | `mediaUnderstandingProviderMetadata` | No       | `Record<string, object>`     | Cheap media-understanding defaults for provider ids declared in `contracts.mediaUnderstandingProviders`.                                                                                                                                                                                       |
 | `imageGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap image-generation auth metadata for provider ids declared in `contracts.imageGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                             |
@@ -625,6 +626,47 @@ the channel root and under `accounts.<id>`. A channel that declares its own
 `help` for one of those keys always wins, so override it whenever the shared
 wording is wrong for your provider. Provider-specific keys such as credentials,
 hosts, and webhooks still need their own hints.
+
+## hostIntegrationBundle reference
+
+Use `hostIntegrationBundle` when one host plugin needs to publish a coherent inventory of contributions that other OpenClaw owners can inspect. OpenClaw reads and validates the bundle before importing plugin runtime code. The declaration does not activate contributions, evaluate readiness, resolve credentials, select owners, or grant runtime authority.
+
+```json
+{
+  "hostIntegrationBundle": {
+    "contractVersion": "host-integration-bundle/v1",
+    "id": "acme/host",
+    "version": "1.0.0",
+    "contributions": [
+      {
+        "owner": "model-provider",
+        "kind": "model-provider-adapter",
+        "id": "acme/inference",
+        "contractVersion": "model-provider-adapter/v1"
+      },
+      {
+        "owner": "provider-request",
+        "kind": "credential-slot-resolver",
+        "id": "acme/inference-token",
+        "contractVersion": "credential-slot-resolver/v1"
+      }
+    ]
+  }
+}
+```
+
+The bundle object has these fields:
+
+| Field             | Type       | Required | Constraints                                                   |
+| ----------------- | ---------- | -------- | ------------------------------------------------------------- |
+| `contractVersion` | `string`   | Yes      | Must be exactly `host-integration-bundle/v1`.                 |
+| `id`              | `string`   | Yes      | Lowercase namespaced id such as `acme/host`.                  |
+| `version`         | `string`   | Yes      | Exact SemVer; ranges such as `^1.0.0` are rejected.           |
+| `contributions`   | `object[]` | Yes      | Non-empty. Contribution ids must be unique within the bundle. |
+
+Each contribution requires `owner`, `kind`, `id`, and `contractVersion`. The owner and kind are lowercase canonical tokens. The id is lowercase and namespaced. The contribution contract version uses a versioned id such as `credential-slot-resolver/v1`.
+
+The schema is closed: unknown bundle or contribution fields make the plugin manifest invalid. This prevents a declaration from implying unsupported activation or readiness behavior. If multiple plugins declare the same bundle id, OpenClaw records an error and rejects every conflicting bundle declaration instead of choosing a winner. Enabled, non-failed declarations retain loader-owned plugin id, source, root, and origin provenance in the current plugin registry snapshot.
 
 ## contracts reference
 

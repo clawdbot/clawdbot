@@ -2,6 +2,7 @@ import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-ty
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type { PluginManifestHostIntegrationBundle } from "./host-integration-bundle.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
@@ -405,6 +406,8 @@ export type PluginManifest = {
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  /** Atomic, inert host contribution inventory owned by this plugin manifest. */
+  hostIntegrationBundle?: PluginManifestHostIntegrationBundle;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */
   mediaUnderstandingProviderMetadata?: Record<
     string,

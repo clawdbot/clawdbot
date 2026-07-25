@@ -311,6 +311,7 @@ export function createManifestPluginRecord(params: {
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
+    hostIntegrationBundle: manifestRecord.hostIntegrationBundle,
     dashboard: manifestRecord.dashboard,
     mcpServers: manifestRecord.mcpServers,
   });
