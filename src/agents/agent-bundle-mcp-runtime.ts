@@ -455,6 +455,19 @@ export function createSessionMcpRuntime(params: {
     } catch (error) {
       if (tracksFailureBackoff) {
         recordServerToolFailure(serverName, nowMs);
+        // At the threshold, replace the transport rather than parking it — but only when
+        // the server has stopped responding. Parking is the right answer for a server that
+        // is answering with errors. Clearing the backoff entry is part of recycling: the
+        // replacement must not inherit the failure count of the transport it replaces, or
+        // the first request after recycling is refused by a cooldown that belongs to a
+        // process which no longer exists.
+        if (
+          (serverBackoff.get(serverName)?.failures ?? 0) >= BUNDLE_MCP_FAILURE_THRESHOLD &&
+          isUnresponsiveServerFailure(serverName, error)
+        ) {
+          serverBackoff.delete(serverName);
+          recycleServer(serverName, "repeated request failures");
+        }
       }
       throw error;
     }
@@ -510,6 +523,43 @@ export function createSessionMcpRuntime(params: {
     sessions.delete(serverName);
     await disposeSession(session);
     return true;
+  };
+  /**
+   * Tear down one server's transport and invalidate the catalog so the next request
+   * rebuilds it. Used when a server keeps failing: the cooldown alone only delays the
+   * next attempt against the same, still-broken transport, so a server that stops
+   * responding never recovers on its own.
+   *
+   * Best-effort and fire-and-forget — the caller is already throwing, and the
+   * reconnect belongs to the next request rather than to the failing one.
+   */
+  /**
+   * Distinguishes "this server stopped responding" from "this server answered, with an
+   * error". Only the former warrants replacing the transport: a server that returns
+   * JSON-RPC errors is healthy and reachable, and recycling it would throw away a working
+   * connection because a tool was called with bad arguments or its backend is down.
+   */
+  const isUnresponsiveServerFailure = (serverName: string, error: unknown): boolean => {
+    if (isMcpConfigRecord(error) && error.code === ErrorCode.RequestTimeout) {
+      return true;
+    }
+    return sessions.get(serverName)?.connected === false;
+  };
+  const recycleServer = (serverName: string, reason: string) => {
+    const session = sessions.get(serverName);
+    if (disposed || !session || session.retiring) {
+      return;
+    }
+    catalogInvalidationGeneration += 1;
+    catalog = null;
+    catalogRetryAfterMs = undefined;
+    catalogInFlight = undefined;
+    logWarn(`bundle-mcp: recycling server "${serverName}" (${reason}); next request reconnects`);
+    void retireSessionIfCurrent(serverName, session).catch((error: unknown) => {
+      logWarn(
+        `bundle-mcp: failed to retire server "${serverName}" while recycling: ${redactMcpDiagnosticError(error)}`,
+      );
+    });
   };
 
   const loadCatalog = async (retryBaseCatalog?: McpToolCatalog): Promise<McpToolCatalog> => {
@@ -666,8 +716,36 @@ export function createSessionMcpRuntime(params: {
                 // terminal for this client/transport pair.
                 // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
                 client.onclose = () => {
+                  const wasConnected = createdSession.connected;
                   createdSession.connected = false;
                   createdSession.disconnectReason = "mcp transport closed";
+                  // Terminal for this pair, but NOT for the server: invalidate the catalog so
+                  // the next request rebuilds and reconnects. Without this the dead session
+                  // stays cached behind a memoized catalog, so every later request fails
+                  // `requireConnectedSession` indefinitely — the server only ever comes back
+                  // via idle eviction, a config-fingerprint change, or a restart.
+                  //
+                  // Deliberately not deleting from `sessions` here: the catalog rebuild retires
+                  // a disconnected session through `disposeSession`, and dropping the entry
+                  // directly would skip that teardown.
+                  //
+                  // Only an ESTABLISHED connection that was lost is interesting. A transport
+                  // that closes while still connecting is the startup-failure path, which the
+                  // catalog builder already handles — invalidating there would discard the
+                  // in-flight build (generation mismatch) and spin up a rebuild loop.
+                  if (!wasConnected || disposed || createdSession.retiring) {
+                    return;
+                  }
+                  if (sessions.get(serverName) !== createdSession) {
+                    return;
+                  }
+                  catalogInvalidationGeneration += 1;
+                  catalog = null;
+                  catalogRetryAfterMs = undefined;
+                  catalogInFlight = undefined;
+                  logWarn(
+                    `bundle-mcp: server "${serverName}" transport closed; catalog invalidated so the next request reconnects`,
+                  );
                 };
                 session = createdSession;
                 sessions.set(serverName, session);

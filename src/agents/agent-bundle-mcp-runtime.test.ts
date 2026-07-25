@@ -322,27 +322,46 @@ async function waitForPredicate(
   throw new Error(`Timed out waiting for ${description}`);
 }
 
-async function waitForErrorMessage(
-  action: () => Promise<unknown>,
-  expectedText: string,
-  timeoutMs: number,
-): Promise<string> {
+/** Retries an action until it stops throwing — for behavior that recovers asynchronously. */
+async function waitForRecovery(action: () => Promise<unknown>, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  let lastMessage = "";
+  let lastError: unknown;
   while (Date.now() < deadline) {
     try {
       await action();
+      return;
     } catch (error) {
-      lastMessage = error instanceof Error ? error.message : String(error);
-      if (lastMessage.includes(expectedText)) {
-        return lastMessage;
-      }
+      lastError = error;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    }
+  }
+  throw new Error(
+    `Timed out waiting for the runtime to recover; last error: ${
+      lastError instanceof Error ? lastError.message : String(lastError)
+    }`,
+  );
+}
+
+/** Waits for a replacement child to register a pid different from the one that died. */
+async function waitForChangedPid(
+  pidPath: string,
+  previousPid: number,
+  timeoutMs: number,
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const raw = await fs.readFile(pidPath, "utf8").catch(() => "");
+    const pid = Number.parseInt(raw.trim(), 10);
+    if (Number.isFinite(pid) && pid !== previousPid) {
+      return pid;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 10);
     });
   }
-  throw new Error(`Timed out waiting for ${expectedText}; saw ${JSON.stringify(lastMessage)}`);
+  throw new Error(`Timed out waiting for a replacement child pid (still ${previousPid})`);
 }
 
 function makeRuntime(
@@ -1460,7 +1479,7 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("fails fast with an attributable error after an MCP child process exits", async () => {
+  it("reconnects on the next request after an MCP child process exits", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-child-exit-"));
     const serverPath = path.join(tempDir, "server.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -1486,14 +1505,29 @@ process.on("SIGINT", shutdown);`,
       });
       await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
-      process.kill(pid);
+      // SIGKILL rather than the default SIGTERM: this test is about what happens once the
+      // child is actually gone, so the kill must not race the assertions below.
+      process.kill(pid, "SIGKILL");
 
-      const message = await waitForErrorMessage(
+      // The close invalidates the catalog, so the runtime rebuilds it and starts a
+      // replacement child. Previously the dead session stayed cached behind a memoized
+      // catalog and every later request failed with "is disconnected" until the runtime
+      // was evicted or the process restarted.
+      //
+      // Polled rather than asserted on the immediate next call: a request already in
+      // flight when the transport closes still fails ("Connection closed"), and that is
+      // correct. The guarantee is that the runtime recovers on its own, promptly — not
+      // that one specific call wins the race with the close propagating.
+      await waitForRecovery(
         () => runtime.callTool("child", "slow_tool", {}),
-        "is disconnected",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
-      expect(message).toBe('bundle-mcp server "child" is disconnected: mcp transport closed');
+      const replacementPid = await waitForChangedPid(
+        pidPath,
+        pid,
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      expect(replacementPid).not.toBe(pid);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -1537,9 +1571,12 @@ process.on("SIGINT", shutdown);`,
       const refreshedCatalog = await runtime.getCatalog();
       expect(refreshedCatalog.tools).toEqual([]);
       expect(refreshedCatalog.diagnostics?.[0]?.serverName).toBe("child");
-      await expect(runtime.callTool("child", "slow_tool", {})).rejects.toThrow(
-        'bundle-mcp server "child" is not connected',
-      );
+      // The refresh reports the exited server, but the runtime does not stay stuck on it:
+      // the closed transport invalidated the catalog, so the next request rebuilds against
+      // a fresh child instead of failing with "is not connected" indefinitely.
+      await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
