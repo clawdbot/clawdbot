@@ -868,6 +868,68 @@ ${command}
     }
   });
 
+  it("streams proxied npm tarballs without buffering a content length", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-tarball-proxy-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    const upstreamBody = "x".repeat(1024 * 1024);
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const upstream = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.write(upstreamBody.slice(0, upstreamBody.length / 2));
+      response.end(upstreamBody.slice(upstreamBody.length / 2));
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("expected upstream registry address");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const response = await requestFixtureRegistry(
+        port,
+        "/@openai/codex/-/codex-0.145.0-linux-arm64.tgz",
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.contentLength).toBeUndefined();
+      expect(response.body).toBe(upstreamBody);
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      await new Promise<void>((resolve) => {
+        upstream.close(() => resolve());
+      });
+    }
+  });
+
   it("rejects oversized upstream bodies without stopping the fixture registry", async () => {
     const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-limit-");
     const portFile = path.join(root, "port");
