@@ -3493,6 +3493,60 @@ describe("runMessageAction plugin dispatch", () => {
       expect(handleAction).not.toHaveBeenCalled();
     });
 
+    it("preserves planned per-channel broadcast rejection without resolving a target", async () => {
+      const result = await runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "broadcast",
+        params: {
+          targets: ["resolved"],
+          accountId: "missing",
+          message: "hi",
+        },
+        broadcastAccountPlan: {
+          accountId: "missing",
+          candidateChannels: ["accountchat"],
+          secretChannels: [],
+        },
+      });
+
+      expect(result).toMatchObject({
+        kind: "broadcast",
+        payload: {
+          results: [
+            {
+              channel: "accountchat",
+              ok: false,
+              error: expect.stringContaining("Unknown account"),
+            },
+          ],
+        },
+      });
+      expect(listGroupsLive).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
+    it("rejects an empty broadcast account plan instead of reporting empty success", async () => {
+      await expect(
+        runMessageAction({
+          cfg: {} as OpenClawConfig,
+          action: "broadcast",
+          params: {
+            targets: ["resolved"],
+            accountId: "missing",
+            message: "hi",
+          },
+          broadcastAccountPlan: {
+            accountId: "missing",
+            candidateChannels: [],
+            secretChannels: [],
+          },
+        }),
+      ).rejects.toThrow("Broadcast requires at least one configured channel");
+
+      expect(listGroupsLive).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
     it("preserves an unlisted host-derived binding account", async () => {
       await runMessageAction({
         cfg: {} as OpenClawConfig,

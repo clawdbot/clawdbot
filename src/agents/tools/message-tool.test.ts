@@ -59,21 +59,19 @@ const mocks = vi.hoisted(() => ({
     ({
       config,
       channel,
+      channels,
       accountId,
     }: {
       config?: { channels?: Record<string, unknown> };
       channel?: string | null;
+      channels?: readonly string[];
       accountId?: string | null;
     }) => {
       const allowedPaths = new Set<string>();
       const targetIds = new Set<string>();
-      const scopedChannel = channel?.trim();
+      const scopedChannels = channels ?? (channel?.trim() ? [channel.trim()] : []);
       const scopedAccountId = accountId?.trim();
-      const scopedConfig =
-        scopedChannel && config?.channels && typeof config.channels[scopedChannel] === "object"
-          ? (config.channels[scopedChannel] as Record<string, unknown>)
-          : null;
-      if (!scopedChannel || !scopedConfig) {
+      if (scopedChannels.length === 0) {
         return { targetIds };
       }
 
@@ -88,29 +86,38 @@ const mocks = vi.hoisted(() => ({
         }
       };
 
-      maybeCollectSecretPath(`channels.${scopedChannel}.token`, scopedConfig.token);
-      maybeCollectSecretPath(`channels.${scopedChannel}.botToken`, scopedConfig.botToken);
-      maybeCollectSecretPath(`channels.${scopedChannel}.appPassword`, scopedConfig.appPassword);
-      if (scopedAccountId) {
-        const accountRecord =
-          scopedConfig.accounts &&
-          typeof scopedConfig.accounts === "object" &&
-          !Array.isArray(scopedConfig.accounts) &&
-          typeof (scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] === "object"
-            ? ((scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] as Record<
-                string,
-                unknown
-              >)
+      for (const scopedChannel of scopedChannels) {
+        const scopedConfig =
+          config?.channels && typeof config.channels[scopedChannel] === "object"
+            ? (config.channels[scopedChannel] as Record<string, unknown>)
             : null;
-        if (accountRecord) {
-          maybeCollectSecretPath(
-            `channels.${scopedChannel}.accounts.${scopedAccountId}.token`,
-            accountRecord.token,
-          );
-          maybeCollectSecretPath(
-            `channels.${scopedChannel}.accounts.${scopedAccountId}.botToken`,
-            accountRecord.botToken,
-          );
+        if (!scopedConfig) {
+          continue;
+        }
+        maybeCollectSecretPath(`channels.${scopedChannel}.token`, scopedConfig.token);
+        maybeCollectSecretPath(`channels.${scopedChannel}.botToken`, scopedConfig.botToken);
+        maybeCollectSecretPath(`channels.${scopedChannel}.appPassword`, scopedConfig.appPassword);
+        if (scopedAccountId) {
+          const accountRecord =
+            scopedConfig.accounts &&
+            typeof scopedConfig.accounts === "object" &&
+            !Array.isArray(scopedConfig.accounts) &&
+            typeof (scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] === "object"
+              ? ((scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] as Record<
+                  string,
+                  unknown
+                >)
+              : null;
+          if (accountRecord) {
+            maybeCollectSecretPath(
+              `channels.${scopedChannel}.accounts.${scopedAccountId}.token`,
+              accountRecord.token,
+            );
+            maybeCollectSecretPath(
+              `channels.${scopedChannel}.accounts.${scopedAccountId}.botToken`,
+              accountRecord.botToken,
+            );
+          }
         }
       }
 
@@ -137,6 +144,11 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 
 type RunMessageActionInput = {
   agentId?: string;
+  broadcastAccountPlan?: {
+    accountId: string;
+    candidateChannels: string[];
+    secretChannels: string[];
+  };
   cfg?: unknown;
   conversationReadOrigin?: "delegated" | "direct-operator";
   defaultAccountId?: string;
@@ -1643,6 +1655,88 @@ describe("message tool secret scoping", () => {
 
     expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve secrets for broadcast channels that reject the explicit account", async () => {
+    const slackPlugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+      actions: ["send"],
+      config: {
+        listAccountIds: () => ["shared"],
+        resolveAccount: () => ({ enabled: true }),
+      },
+    });
+    const telegramPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "test",
+      actions: ["send"],
+      config: {
+        listAccountIds: () => ["shared"],
+        resolveAccount: () => ({ enabled: false }),
+      },
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "slack", source: "test", plugin: slackPlugin },
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+      ]),
+    );
+    const rawConfig = {
+      channels: {
+        slack: {
+          accounts: {
+            shared: {
+              botToken: { source: "env", provider: "default", id: "SLACK_SHARED_TOKEN" },
+            },
+          },
+        },
+        telegram: {
+          accounts: {
+            shared: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_SHARED_TOKEN" },
+            },
+          },
+        },
+      },
+    };
+    mockSendResult({ channel: "slack", to: "channel:ops" });
+    const tool = createMessageTool({
+      config: rawConfig as never,
+      getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets as never,
+      resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await tool.execute("1", {
+      action: "broadcast",
+      targets: ["slack:channel:ops", "telegram:123"],
+      accountId: "shared",
+      message: "hi",
+    });
+
+    expect(mocks.getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: rawConfig,
+      channel: undefined,
+      channels: ["slack"],
+      accountId: "shared",
+    });
+    const secretResolveCall = latestSecretResolveCall();
+    expect(secretResolveCall.targetIds).toEqual(
+      new Set(["channels.slack.accounts.shared.botToken"]),
+    );
+    expect(secretResolveCall.allowedPaths).toEqual(
+      new Set(["channels.slack.accounts.shared.botToken"]),
+    );
+    expect(firstRunMessageActionInput()?.broadcastAccountPlan).toEqual({
+      accountId: "shared",
+      candidateChannels: ["slack", "telegram"],
+      secretChannels: ["slack"],
+    });
   });
 
   it("resolves scoped channel SecretRefs even when constructed with a config snapshot", async () => {

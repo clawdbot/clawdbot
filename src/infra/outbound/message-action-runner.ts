@@ -72,7 +72,10 @@ import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
-import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
+import {
+  type MessageBroadcastAccountPlan,
+  validateExplicitMessageAccountSelection,
+} from "./message-account-selection.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
@@ -153,6 +156,8 @@ export type RunMessageActionParams = {
   requesterSenderE164?: string | null;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
+  broadcastAccountPlan?: MessageBroadcastAccountPlan;
   /**
    * Authorization facts resolved from the host-issued current-turn capability.
    * Presence means ambient routing fields must not be used as identity.
@@ -987,16 +992,29 @@ async function handleBroadcastAction(
     throw new Error("Broadcast requires at least one target in --targets.");
   }
   const channelHint = readStringParam(params, "channel");
+  const explicitAccountId = validateExplicitMessageAccountSelection({
+    cfg: input.cfg,
+    accountId: readStringParam(params, "accountId"),
+    checkResolvedAccount: false,
+  });
+  if (input.broadcastAccountPlan && input.broadcastAccountPlan.accountId !== explicitAccountId) {
+    throw new Error("Broadcast account plan does not match the requested account.");
+  }
   const targetChannels =
     channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
       ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
-      : await (async () => {
-          const configured = await listConfiguredMessageChannels(input.cfg);
-          if (configured.length === 0) {
-            throw new Error("Broadcast requires at least one configured channel.");
-          }
-          return configured;
-        })();
+      : input.broadcastAccountPlan
+        ? input.broadcastAccountPlan.candidateChannels
+        : await (async () => {
+            const configured = await listConfiguredMessageChannels(input.cfg);
+            if (configured.length === 0) {
+              throw new Error("Broadcast requires at least one configured channel.");
+            }
+            return configured;
+          })();
+  if (targetChannels.length === 0) {
+    throw new Error("Broadcast requires at least one configured channel.");
+  }
   const results: Array<{
     channel: ChannelId;
     to: string;
@@ -1012,16 +1030,16 @@ async function handleBroadcastAction(
     for (const target of rawTargets) {
       throwIfAborted(input.abortSignal);
       try {
-        const explicitAccountId = validateExplicitMessageAccountSelection({
+        const targetAccountId = validateExplicitMessageAccountSelection({
           cfg: input.cfg,
           channel: targetChannel,
-          accountId: readStringParam(params, "accountId"),
+          accountId: explicitAccountId,
         });
         const resolved = await resolveResolvedTargetOrThrow({
           cfg: input.cfg,
           channel: targetChannel,
           input: target,
-          accountId: explicitAccountId,
+          accountId: targetAccountId,
         });
         const sendResult = await runMessageAction({
           ...input,

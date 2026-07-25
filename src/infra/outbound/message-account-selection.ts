@@ -1,11 +1,20 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelAccountEnabled } from "../../channels/account-summary.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import { isConfiguredChannel } from "./channel-selection.js";
+
+export type MessageBroadcastAccountPlan = {
+  accountId: string;
+  candidateChannels: ChannelId[];
+  secretChannels: ChannelId[];
+};
 
 function resolveListedAccountId(params: {
   plugin: ChannelPlugin;
@@ -85,4 +94,76 @@ export function validateExplicitMessageAccountSelection(params: {
     }
   }
   return accountId;
+}
+
+function isPotentialBroadcastChannel(params: {
+  cfg: OpenClawConfig;
+  plugin: ChannelPlugin;
+}): params is { cfg: OpenClawConfig; plugin: ChannelPlugin & { id: ChannelId } } {
+  if (!isDeliverableMessageChannel(params.plugin.id)) {
+    return false;
+  }
+  const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
+    params.plugin.id
+  ];
+  if (
+    channelConfig &&
+    typeof channelConfig === "object" &&
+    !Array.isArray(channelConfig) &&
+    (channelConfig as { enabled?: unknown }).enabled === false
+  ) {
+    return false;
+  }
+  if (isConfiguredChannel(params.cfg, params.plugin.id)) {
+    return true;
+  }
+  try {
+    return (
+      params.plugin.config.hasConfiguredState?.({ cfg: params.cfg, env: process.env }) === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Plans an unscoped broadcast before SecretRefs are resolved. Rejected routes
+ * stay in candidateChannels for per-channel errors but cannot expose secrets.
+ * Host-derived binding/default accounts do not use this explicit-account plan.
+ */
+export function resolveMessageBroadcastAccountPlan(params: {
+  cfg: OpenClawConfig;
+  accountId: unknown;
+}): MessageBroadcastAccountPlan | undefined {
+  const accountId = validateExplicitMessageAccountSelection({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    checkResolvedAccount: false,
+  });
+  if (!accountId) {
+    return undefined;
+  }
+
+  const candidatePlugins = listChannelPlugins().filter((plugin) =>
+    isPotentialBroadcastChannel({ cfg: params.cfg, plugin }),
+  );
+  const secretChannels = candidatePlugins.flatMap((plugin) => {
+    try {
+      validateExplicitMessageAccountSelection({
+        cfg: params.cfg,
+        channel: plugin.id,
+        accountId,
+        plugin,
+      });
+      return [plugin.id];
+    } catch {
+      return [];
+    }
+  });
+
+  return {
+    accountId,
+    candidateChannels: candidatePlugins.map((plugin) => plugin.id),
+    secretChannels,
+  };
 }

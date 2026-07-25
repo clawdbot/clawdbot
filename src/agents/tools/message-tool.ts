@@ -51,7 +51,10 @@ import {
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
-import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
+import {
+  resolveMessageBroadcastAccountPlan,
+  validateExplicitMessageAccountSelection,
+} from "../../infra/outbound/message-account-selection.js";
 import {
   parseInteractiveParam,
   parseJsonMessageParam,
@@ -1575,9 +1578,17 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         scope.accountId = explicitAccountId;
         params.accountId = explicitAccountId;
       }
+      const broadcastAccountPlan =
+        action === "broadcast" && !scope.channel && explicitAccountId
+          ? resolveMessageBroadcastAccountPlan({
+              cfg: rawConfig,
+              accountId: explicitAccountId,
+            })
+          : undefined;
       const scopedTargets = getScopedSecretTargetsForTool({
         config: rawConfig,
         channel: scope.channel,
+        ...(broadcastAccountPlan ? { channels: broadcastAccountPlan.secretChannels } : {}),
         accountId: scope.accountId,
       });
       const cfg = (
@@ -1732,6 +1743,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           },
           senderIsOwner: options?.senderIsOwner,
           conversationReadOrigin: options?.conversationReadOrigin,
+          broadcastAccountPlan,
           gateway,
           toolContext,
           sessionKey: options?.agentSessionKey,

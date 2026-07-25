@@ -1,12 +1,27 @@
 // Message command tests cover CLI message sending, environment handling, and runtime dependency wiring.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 
+type ResetPluginRuntimeStateForTest =
+  typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
+type SetActivePluginRegistry = typeof import("../plugins/runtime.js").setActivePluginRegistry;
+type CreateTestRegistry = typeof import("../test-utils/channel-plugins.js").createTestRegistry;
+
+let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
+let setActivePluginRegistry: SetActivePluginRegistry;
+let createTestRegistry: CreateTestRegistry;
+
 type RunMessageActionParams = {
   cfg?: unknown;
   action: string;
+  broadcastAccountPlan?: {
+    accountId: string;
+    candidateChannels: string[];
+    secretChannels: string[];
+  };
   params: Record<string, unknown>;
   agentId?: string;
   senderIsOwner?: boolean;
@@ -100,6 +115,9 @@ let messageCommand: typeof import("./message.js").messageCommand;
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(async () => {
+  ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("../plugins/runtime.js"));
+  ({ createTestRegistry } = await import("../test-utils/channel-plugins.js"));
   ({ messageCommand } = await import("./message.js"));
 });
 
@@ -112,6 +130,8 @@ const runtime: RuntimeEnv = {
 };
 
 beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createTestRegistry([]));
   envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);
   process.env.TELEGRAM_BOT_TOKEN = "";
   process.env.DISCORD_BOT_TOKEN = "";
@@ -128,7 +148,26 @@ beforeEach(() => {
 
 afterEach(() => {
   envSnapshot.restore();
+  resetPluginRuntimeStateForTest();
 });
+
+function createAccountPlugin(id: "slack" | "telegram", accountIds: string[]): ChannelPlugin {
+  return {
+    id,
+    meta: {
+      id,
+      label: id,
+      selectionLabel: id,
+      docsPath: `/channels/${id}`,
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct", "group"], media: true },
+    config: {
+      listAccountIds: () => accountIds,
+      resolveAccount: () => ({ enabled: true }),
+    },
+  };
+}
 
 const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   sendMessageWhatsApp: vi.fn(),
@@ -194,6 +233,45 @@ describe("messageCommand", () => {
 
     expect(resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
     expect(runMessageActionMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes unqualified broadcast secrets to channels accepting the explicit account", async () => {
+    const slackPlugin = createAccountPlugin("slack", ["shared"]);
+    const telegramPlugin = createAccountPlugin("telegram", ["default"]);
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "slack", source: "test", plugin: slackPlugin },
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+      ]),
+    );
+    testConfig = {
+      channels: {
+        slack: { accounts: { shared: { botToken: { $secret: "vault://slack/shared" } } } },
+        telegram: {
+          accounts: { default: { botToken: { $secret: "vault://telegram/default" } } },
+        },
+      },
+    };
+
+    await runMessageCommand({
+      action: "broadcast",
+      channel: "all",
+      target: undefined,
+      targets: ["slack:channel:ops", "telegram:123"],
+      accountId: "shared",
+    });
+
+    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: testConfig,
+      channel: undefined,
+      channels: ["slack"],
+      accountId: "shared",
+    });
+    expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
+      accountId: "shared",
+      candidateChannels: ["slack", "telegram"],
+      secretChannels: ["slack"],
+    });
   });
 
   it("threads resolved SecretRef config into message actions", async () => {

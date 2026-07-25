@@ -19,7 +19,10 @@ import { parsePositiveIntOrUndefined } from "../cli/program/helpers.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
-import { validateExplicitMessageAccountSelection } from "../infra/outbound/message-account-selection.js";
+import {
+  resolveMessageBroadcastAccountPlan,
+  validateExplicitMessageAccountSelection,
+} from "../infra/outbound/message-account-selection.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -61,6 +64,9 @@ export async function messageCommand(
   runtime: RuntimeEnv,
 ) {
   const loadedRaw = getRuntimeConfig();
+  const rawAction = normalizeOptionalString(opts.action) ?? "";
+  const actionInput = rawAction || "send";
+  const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
   const scope = resolveMessageSecretScope({
     channel: opts.channel,
     target: opts.target,
@@ -77,9 +83,19 @@ export async function messageCommand(
     scope.accountId = explicitAccountId;
     opts.accountId = explicitAccountId;
   }
+  // The message CLI wrapper preloads configured channel plugins before this
+  // command runs, so the operation-local plan sees the canonical registry.
+  const broadcastAccountPlan =
+    normalizedActionInput === "broadcast" && !scope.channel && explicitAccountId
+      ? resolveMessageBroadcastAccountPlan({
+          cfg: loadedRaw,
+          accountId: explicitAccountId,
+        })
+      : undefined;
   const scopedTargets = getScopedChannelsCommandSecretTargets({
     config: loadedRaw,
     channel: scope.channel,
+    ...(broadcastAccountPlan ? { channels: broadcastAccountPlan.secretChannels } : {}),
     accountId: scope.accountId,
   });
   const { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
@@ -90,9 +106,6 @@ export async function messageCommand(
     runtime,
     autoEnable: true,
   });
-  const rawAction = normalizeOptionalString(opts.action) ?? "";
-  const actionInput = rawAction || "send";
-  const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
   const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
     (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );
@@ -118,6 +131,7 @@ export async function messageCommand(
       agentId: resolveDefaultAgentId(cfg),
       senderIsOwner: opts.senderIsOwner !== false,
       conversationReadOrigin: "direct-operator",
+      broadcastAccountPlan,
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
