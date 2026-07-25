@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
 import { runCopilotAttempt } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
@@ -916,12 +917,14 @@ describe("runCopilotAttempt", () => {
   });
 
   it("hydrates offloaded prompt images before creating SDK blob attachments", async () => {
-    const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-offloaded-image-"));
-    const inboundDir = path.join(stateDir, "media", "inbound");
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "copilot-offloaded-image-",
+    });
+    const inboundDir = openClawState.statePath("media", "inbound");
     const mediaId = "telegram-photo.png";
     await fsp.mkdir(inboundDir, { recursive: true });
     await fsp.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
 
@@ -960,8 +963,7 @@ describe("runCopilotAttempt", () => {
         },
       ]);
     } finally {
-      vi.unstubAllEnvs();
-      await fsp.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 
