@@ -50,6 +50,7 @@ type ConfiguredEmbeddingProvider = {
   baseUrl?: string;
   apiKey?: unknown;
   headers?: Record<string, unknown>;
+  request?: { allowPrivateNetwork?: boolean };
   localService?: ModelProviderLocalServiceConfig;
 };
 
@@ -400,7 +401,10 @@ async function createOpenAICompatibleEmbeddingClient(
     providerId,
     baseUrl,
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    ssrfPolicy: {
+      ...ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+      ...(configuredProvider?.request?.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+    },
     model,
     ...(configuredProvider?.localService && !remoteBaseUrl
       ? {
