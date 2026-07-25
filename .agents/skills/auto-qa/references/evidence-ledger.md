@@ -4,7 +4,7 @@ Maintain one Markdown ledger in the user-requested report. Resume its existing n
 
 Record campaign-wide facts:
 
-- Requested target and minimum soak duration.
+- The operator's current requested target and minimum soak duration; update the active target without erasing earlier historical progress.
 - Exact current `origin/main` SHA and refresh time.
 - At least ten named, meaningfully distinct active subsystem lanes.
 - Owned gateway ports, isolated state, health, CPU/memory/load, and remote lease state.
@@ -15,7 +15,7 @@ For each candidate use one explicit state:
 
 - **Hypothesis:** worker reported a potential issue; no independent reproduction.
 - **Reproduced:** failing current-main user path or focused regression established.
-- **Fix validated:** exact branch head passes relevant user-path, regression, independent review, and required checks.
+- **Fix validated:** the canonical-owner root-cause refactor passes relevant user-path, sibling regressions, independent review, and required exact-head checks.
 - **Review required:** large, sensitive, uncertain, compatibility-affecting, or explicitly owner-reviewed work; link the separate PR without counting it.
 - **Merged:** exact hosted checks passed, native maintainer landing succeeded, and canonical main contains the merge SHA.
 - **Rejected or duplicate:** record the actual reason and canonical root cause; do not increment progress.
@@ -27,6 +27,7 @@ For every accepted merge include:
 subsystem: <canonical owner and affected user surface>
 main baseline: <full SHA>
 root cause: <repo-root source paths and current behavior>
+canonical refactor: <owner, shared invariant, affected callers and siblings>
 before: <actual failing user repro or regression>
 after: <exact passing product path and focused regression>
 live proof: <model, nonzero scenario/test counts, or exact packaging proof>
@@ -37,4 +38,4 @@ merged main SHA: <verified canonical full SHA>
 risk: low; autonomous landing explicitly authorized
 ```
 
-Do not accept mere workflow dispatch, queued CI, old-head success, a green summary with zero executed scenarios, mocked model responses, stale screenshots, a test skipped for missing credentials, or a GitHub merge request without verified canonical main state. Stop the count at the actual number of verified merges; never round up toward the user-requested target.
+Do not accept a symptom-only guard, one-sided workaround, compatibility shim, duplicate count, mere workflow dispatch, queued CI, old-head success, a green summary with zero executed scenarios, mocked model responses, stale screenshots, a test skipped for missing credentials, or a GitHub merge request without verified canonical main state. Stop the count at the actual number of verified root-cause merges; never round up toward the user-requested target.

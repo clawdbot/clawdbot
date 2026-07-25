@@ -4,7 +4,7 @@ Update the operator-requested report throughout the run. Never place credentials
 
 ## Campaign header
 
-Record the user-approved scope, requested fix target, actual start time, requested soak duration, current immutable `origin/main` SHA, authorized landing policy, report location, and machine-load budget. Update the current baseline after every safe refresh.
+Record the user-approved scope, current requested fix target, actual start time, requested soak duration, current immutable `origin/main` SHA, authorized landing policy, report location, and machine-load budget. Update the current baseline after every safe refresh. If the user changes the target, update the active goal and every current ledger denominator while preserving historical time-stamped progress; never treat the old target as campaign completion.
 
 ## Audit lane
 
@@ -37,6 +37,8 @@ observed:
 expected:
 independent_verification:
 root_cause:
+affected_callers_and_siblings:
+canonical_owner_refactor:
 regression_or_live_proof_after:
 exact_reviewed_head:
 exact_head_hosted_checks:
@@ -46,7 +48,7 @@ risk: low
 status: merged
 ```
 
-Keep an independent `review-required` section for persistence, migrations, auth, security, SDK, protocol, broad changes, uncertain ownership, and other user decisions. Give the exact reproduction, proposed PR, real completed validation, risk, and outstanding gates. Do not include them in the merged-fix count.
+Require evidence that the repair eliminates the canonical cause, not only the observed symptom. Record which sibling paths were checked, which were fixed together, and which are unaffected; count a shared invariant once. Keep an independent `review-required` section for persistence, migrations, auth, security, SDK, protocol, high-impact architectural changes, uncertain ownership, and other user decisions. Give the exact reproduction, proposed PR, real completed validation, risk, and outstanding gates. Do not include them in the merged-fix count.
 
 ## Long-running evidence
 
