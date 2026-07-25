@@ -36,13 +36,13 @@ import {
 } from "../skills/loading/source.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
+import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
 import type {
+  HookBlockedReason,
   HookContext,
   ToolOutcomeObservation,
   ToolOutcomeObserver,
-} from "./agent-tools.before-tool-call.js";
-import type { HookBlockedReason } from "./agent-tools.before-tool-call.policy.js";
-import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
+} from "./agent-tools.before-tool-call.types.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { BEFORE_TOOL_CALL_SOURCE_TOOL } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
@@ -259,7 +259,7 @@ export function resolveToolResultTerminalDiagnostic(
   };
 }
 
-export type ToolDiagnosticIdentity = {
+type ToolDiagnosticIdentity = {
   toolSource: DiagnosticToolSource;
   toolOwner?: string;
 };

@@ -26,15 +26,7 @@ import {
   resolveToolTerminalPresentation,
   summarizeToolParams,
 } from "./agent-tools.before-tool-call.diagnostics.js";
-import type {
-  BeforeToolCallFailureDisposition,
-  HookContext,
-} from "./agent-tools.before-tool-call.js";
-import {
-  runBeforeToolCallHook,
-  type HookBlockedReason,
-  type HookOutcome,
-} from "./agent-tools.before-tool-call.policy.js";
+import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
@@ -45,6 +37,12 @@ import {
   recordToolExecutionTracked,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
+import type {
+  BeforeToolCallFailureDisposition,
+  HookBlockedReason,
+  HookContext,
+  HookOutcome,
+} from "./agent-tools.before-tool-call.types.js";
 import {
   BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
   BEFORE_TOOL_CALL_HOOK_CONTEXT,

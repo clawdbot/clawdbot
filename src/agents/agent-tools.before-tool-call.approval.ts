@@ -26,8 +26,11 @@ import {
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { isPlainObject } from "../utils.js";
 import { resolveToolErrorDiagnostic } from "./agent-tools.before-tool-call.diagnostics.js";
-import type { DeferredPluginToolApproval, HookContext } from "./agent-tools.before-tool-call.js";
-import type { HookOutcome } from "./agent-tools.before-tool-call.policy.js";
+import type {
+  DeferredPluginToolApproval,
+  HookContext,
+  HookOutcome,
+} from "./agent-tools.before-tool-call.types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;

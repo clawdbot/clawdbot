@@ -14,11 +14,7 @@ import {
   hasTrustedToolPolicies,
   runTrustedToolPolicies,
 } from "../plugins/trusted-tool-policy.js";
-import type {
-  PluginApprovalResolution,
-  PluginHookToolInputKind,
-  PluginHookToolKind,
-} from "../plugins/types.js";
+import type { PluginHookToolInputKind, PluginHookToolKind } from "../plugins/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { resolveClientVoiceToolConfirmationPolicy } from "../talk/client-voice-confirmation.js";
 import {
@@ -39,36 +35,15 @@ import {
   unwrapErrorCause,
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import type {
-  BeforeToolCallFailureDisposition,
   BeforeToolCallPolicyDiagnosticState,
-  DeferredPluginToolApproval,
   HookContext,
-} from "./agent-tools.before-tool-call.js";
+  HookOutcome,
+} from "./agent-tools.before-tool-call.types.js";
 import {
   getCodeModeExecBeforeHookMetadataForToolKind,
   normalizeCodeModeExecBeforeHookParamsForToolKind,
 } from "./code-mode-control-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
-
-export type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
-type HookBlockedOutcome = {
-  blocked: true;
-  deniedReason?: HookBlockedReason;
-  reason: string;
-  params?: unknown;
-};
-export type HookOutcome =
-  | (HookBlockedOutcome & { kind: "veto" })
-  | (HookBlockedOutcome & {
-      kind: "failure";
-      disposition: BeforeToolCallFailureDisposition;
-    })
-  | {
-      blocked: false;
-      params: unknown;
-      approvalResolution?: PluginApprovalResolution;
-      deferredApproval?: DeferredPluginToolApproval;
-    };
 
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
