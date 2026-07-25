@@ -12,7 +12,11 @@ import type {
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { createEmbeddingProvider } from "./embeddings.js";
+import {
+  createEmbeddingProvider,
+  type EmbeddingProvider,
+  type EmbeddingProviderRuntime,
+} from "./embeddings.js";
 import {
   cleanupAgedMemoryReindexTempFiles,
   closeMemoryDatabase,
@@ -33,6 +37,7 @@ import {
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexIdentityState,
   type MemoryIndexMeta,
+  type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
 import { MEMORY_INDEX_META_KEY, type MemorySyncProgressState } from "./manager-sync-base.js";
@@ -44,10 +49,32 @@ import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
+export type MemorySyncProviderGeneration = {
+  provider: EmbeddingProvider;
+  runtime?: EmbeddingProviderRuntime;
+  providerKey: string;
+  identities: MemoryIndexProviderIdentity[];
+};
+
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
+  protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
+
+  protected beginSyncProviderGeneration(): void {}
+  protected endSyncProviderGeneration(): void {}
+
+  protected override shouldDeferSourceWideBatch(): boolean {
+    const provider = this.syncProviderGeneration?.provider ?? this.provider;
+    const providerRuntime = this.syncProviderGeneration?.runtime ?? this.providerRuntime;
+    return Boolean(
+      this.batch.enabled &&
+      provider &&
+      providerRuntime?.batchEmbed &&
+      providerRuntime.sourceWideBatchEmbed === true,
+    );
+  }
 
   protected async retireCurrentProvider(): Promise<void> {
     const provider = this.provider;

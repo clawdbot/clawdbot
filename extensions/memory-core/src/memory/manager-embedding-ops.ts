@@ -52,8 +52,11 @@ import {
   resolveMemoryIndexProviderIdentities,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
-import type { MemorySyncProviderGeneration } from "./manager-sync-base.js";
-import { MemoryManagerSyncOps, type MemoryIndexWorkItem } from "./manager-sync-ops.js";
+import {
+  MemoryManagerSyncOps,
+  type MemoryIndexWorkItem,
+  type MemorySyncProviderGeneration,
+} from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 

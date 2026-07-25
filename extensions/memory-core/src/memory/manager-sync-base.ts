@@ -74,13 +74,6 @@ export type MemoryIndexWorkItem = {
   afterIndex?: () => void;
 };
 
-export type MemorySyncProviderGeneration = {
-  provider: EmbeddingProvider;
-  runtime?: EmbeddingProviderRuntime;
-  providerKey: string;
-  identities: MemoryIndexProviderIdentity[];
-};
-
 export type MemorySourceSyncPlan = {
   indexItems: MemoryIndexWorkItem[];
   finalize: () => Promise<void> | void;
@@ -126,7 +119,6 @@ export abstract class MemoryManagerSyncBase {
   protected abstract providerUnavailableReason?: string;
   protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
-  protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
   protected abstract batch: {
     enabled: boolean;
     wait: boolean;
@@ -186,8 +178,6 @@ export abstract class MemoryManagerSyncBase {
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
-  protected beginSyncProviderGeneration(): void {}
-  protected endSyncProviderGeneration(): void {}
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(
@@ -275,13 +265,11 @@ export abstract class MemoryManagerSyncBase {
   }
 
   protected shouldDeferSourceWideBatch(): boolean {
-    const provider = this.syncProviderGeneration?.provider ?? this.provider;
-    const providerRuntime = this.syncProviderGeneration?.runtime ?? this.providerRuntime;
     return Boolean(
       this.batch.enabled &&
-      provider &&
-      providerRuntime?.batchEmbed &&
-      providerRuntime.sourceWideBatchEmbed === true,
+      this.provider &&
+      this.providerRuntime?.batchEmbed &&
+      this.providerRuntime.sourceWideBatchEmbed === true,
     );
   }
 
