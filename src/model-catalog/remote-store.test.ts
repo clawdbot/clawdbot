@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  ensureRemoteModelCatalogSchema,
   markRemoteModelCatalogChecked,
   readRemoteModelCatalog,
   writeRemoteModelCatalog,
@@ -23,8 +22,8 @@ describe("remote model catalog store", () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-")));
     roots.push(root);
     const options = { path: path.join(root, "state.sqlite") };
-    ensureRemoteModelCatalogSchema(options);
-    ensureRemoteModelCatalogSchema(options);
+    expect(readRemoteModelCatalog(options)).toBeUndefined();
+    expect(readRemoteModelCatalog(options)).toBeUndefined();
     writeRemoteModelCatalog(
       {
         bundle_json: '{"schemaVersion":1}',

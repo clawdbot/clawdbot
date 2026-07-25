@@ -1,33 +1,23 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 
-export type RemoteModelCatalogStoreRow = {
-  id: number;
-  bundle_json: string;
-  generated_at: number;
-  min_version: string | null;
-  source_url: string;
-  etag: string | null;
-  last_modified: string | null;
-  checked_at: number;
-};
+type RemoteModelCatalogDatabase = Pick<OpenClawStateKyselyDatabase, "model_catalog_remote">;
+type RemoteModelCatalogStoreRow = Selectable<OpenClawStateKyselyDatabase["model_catalog_remote"]>;
 
-export type RemoteModelCatalogWriteResult =
+type RemoteModelCatalogWriteResult =
   | { status: "written" }
   | { status: "retained-newer"; row: RemoteModelCatalogStoreRow };
-
-type RemoteModelCatalogDatabase = {
-  model_catalog_remote: RemoteModelCatalogStoreRow;
-};
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
 const REMOTE_MODEL_CATALOG_SCHEMA_SQL = `
@@ -43,14 +33,19 @@ CREATE TABLE IF NOT EXISTS model_catalog_remote (
 ) STRICT;
 `;
 
-export function ensureRemoteModelCatalogSchema(options: OpenClawStateDatabaseOptions = {}): void {
+function ensureRemoteModelCatalogSchema(options: OpenClawStateDatabaseOptions = {}): void {
   const database = openOpenClawStateDatabase(options);
   if (ensuredDatabases.has(database.db)) {
     return;
   }
-  runOpenClawStateWriteTransaction(({ db }) => db.exec(REMOTE_MODEL_CATALOG_SCHEMA_SQL), options, {
-    operationLabel: "model-catalog.remote.schema.ensure",
-  });
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      // sqlite-allow-raw -- feature-local additive schema DDL; catalog rows use Kysely below.
+      db.exec(REMOTE_MODEL_CATALOG_SCHEMA_SQL);
+    },
+    options,
+    { operationLabel: "model-catalog.remote.schema.ensure" },
+  );
   ensuredDatabases.add(database.db);
 }
 
