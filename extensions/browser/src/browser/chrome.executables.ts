@@ -118,14 +118,9 @@ function exists(filePath: string) {
   }
 }
 
-function isExecutable(filePath: string, requireExecutePermission = true): boolean {
-  if (!exists(filePath)) {
-    return false;
-  }
-  if (!requireExecutePermission) {
-    return true;
-  }
+function isExecutable(filePath: string): boolean {
   try {
+    // Node treats X_OK as F_OK on Windows, preserving existence-only discovery there.
     fs.accessSync(filePath, fs.constants.X_OK);
     return true;
   } catch {
@@ -335,7 +330,7 @@ function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   if (!exePath) {
     return null;
   }
-  if (!isExecutable(exePath, false)) {
+  if (!isExecutable(exePath)) {
     return null;
   }
   const directPath = resolveDirectWindowsBrowserExecutable(exePath);
@@ -534,12 +529,9 @@ function extractWindowsExecutablePath(command: string): string | null {
   return null;
 }
 
-function findFirstExecutable(
-  candidates: Array<BrowserExecutable>,
-  requireExecutePermission = true,
-): BrowserExecutable | null {
+function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecutable | null {
   for (const candidate of candidates) {
-    if (isExecutable(candidate.path, requireExecutePermission)) {
+    if (isExecutable(candidate.path)) {
       return candidate;
     }
   }
@@ -547,12 +539,9 @@ function findFirstExecutable(
   return null;
 }
 
-function findFirstChromeExecutable(
-  candidates: string[],
-  requireExecutePermission = true,
-): BrowserExecutable | null {
+function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | null {
   for (const candidate of candidates) {
-    if (isExecutable(candidate, requireExecutePermission)) {
+    if (isExecutable(candidate)) {
       const normalizedPath = normalizeLowercaseStringOrEmpty(candidate);
       return {
         kind:
@@ -779,7 +768,7 @@ function findChromeExecutableWindows(): BrowserExecutable | null {
     path: joinWin(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
   });
 
-  return findFirstExecutable(candidates, false);
+  return findFirstExecutable(candidates);
 }
 
 function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
@@ -795,7 +784,7 @@ function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
   candidates.push(joinWin(programFiles, "Google", "Chrome", "Application", "chrome.exe"));
   candidates.push(joinWin(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"));
 
-  return findFirstChromeExecutable(candidates, false);
+  return findFirstChromeExecutable(candidates);
 }
 
 /** Resolve the Google Chrome executable for a named platform when available. */

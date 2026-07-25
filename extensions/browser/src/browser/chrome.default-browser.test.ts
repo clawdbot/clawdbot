@@ -67,11 +67,23 @@ describe("browser default executable detection", () => {
     });
   }
 
+  function mockExecutableAccessDeniedFor(inaccessiblePath: string): void {
+    vi.mocked(fs.accessSync).mockImplementation((candidate) => {
+      if (String(candidate) === inaccessiblePath || !fs.existsSync(candidate)) {
+        throw new Error("EACCES");
+      }
+    });
+  }
+
   beforeEach(() => {
     vi.mocked(execFileSync).mockReset();
     vi.mocked(fs.accessSync).mockReset();
-    vi.mocked(fs.accessSync).mockImplementation(() => undefined);
     vi.mocked(fs.existsSync).mockReset();
+    vi.mocked(fs.accessSync).mockImplementation((candidate) => {
+      if (!fs.existsSync(candidate)) {
+        throw new Error("ENOENT");
+      }
+    });
     vi.mocked(fs.readFileSync).mockReset();
     vi.mocked(os.homedir).mockReset();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
@@ -92,6 +104,25 @@ describe("browser default executable detection", () => {
 
     expect(exe?.path).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
     expect(exe?.kind).toBe("chrome");
+  });
+
+  it("skips non-executable Linux auto-discovery candidates", () => {
+    const firstCandidate = "/usr/bin/google-chrome";
+    const executableCandidate = "/usr/bin/google-chrome-stable";
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => {
+      return [firstCandidate, executableCandidate].includes(String(candidate));
+    });
+    mockExecutableAccessDeniedFor(firstCandidate);
+
+    const config = {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0];
+    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+      kind: "chrome",
+      path: executableCandidate,
+    });
+    expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
+      kind: "chrome",
+      path: executableCandidate,
+    });
   });
 
   it("detects Edge via LaunchServices bundle ID (com.microsoft.edgemac)", () => {
