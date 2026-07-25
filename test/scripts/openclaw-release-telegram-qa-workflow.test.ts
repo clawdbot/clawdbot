@@ -613,8 +613,8 @@ describe("release Telegram QA workflow", () => {
     );
     expect(runStep?.run).toContain("--list-scenarios");
     expect(runStep?.run).toContain('if [[ "$scenario_id" == "channel-canary" ]]; then');
-    expect(runStep?.run).toContain('has_channel_canary=true');
-    expect(runStep?.run).toContain('Candidate Telegram QA catalog has no default scenarios.');
+    expect(runStep?.run).toContain("has_channel_canary=true");
+    expect(runStep?.run).toContain("Candidate Telegram QA catalog has no default scenarios.");
     expect(runStep?.run).toContain(
       'run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"',
     );
