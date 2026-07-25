@@ -1508,6 +1508,7 @@ describe("memory index", () => {
     });
 
     const closePromise = manager.close();
+    const concurrentClosePromise = manager.close();
     try {
       await Promise.resolve();
       expect(providerCloseCalls).toBe(0);
@@ -1522,7 +1523,7 @@ describe("memory index", () => {
     } finally {
       resolveSync();
     }
-    await closePromise;
+    await Promise.all([closePromise, concurrentClosePromise]);
     expect(providerCloseCalls).toBe(1);
   });
 
@@ -1580,7 +1581,7 @@ describe("memory index", () => {
     expect(providerCloseCalls).toBe(1);
   });
 
-  it("evicts scoped memory index managers before close settles", async () => {
+  it("waits for scoped manager close before initializing a replacement", async () => {
     let releaseProviderClose: () => void = () => {};
     providerCloseGate = new Promise<void>((resolve) => {
       releaseProviderClose = resolve;
@@ -1592,24 +1593,82 @@ describe("memory index", () => {
     managersForCleanup.add(first);
     await first.probeEmbeddingAvailability();
     const closePromise = closeMemoryIndexManagersForAgent({ cfg, agentId: "main" });
-    let second: MemoryIndexManager | null;
+    const callsBeforeReplacement = providerCalls.length;
+    const secondPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
+      requireManager(result),
+    );
+    const concurrentSecondPromise = getMemorySearchManager({ cfg, agentId: "main" }).then(
+      (result) => requireManager(result),
+    );
+    const secondProbe = secondPromise.then(async (manager) => {
+      await manager.probeEmbeddingAvailability();
+    });
+    let secondSettled = false;
+    void secondPromise.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      },
+    );
     try {
       await vi.waitFor(() => {
         expect(providerCloseCalls).toBe(1);
       });
-
-      second = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
-      managersForCleanup.add(second);
-      expect(second).not.toBe(first);
+      await Promise.resolve();
+      expect(secondSettled).toBe(false);
+      expect(providerCalls).toHaveLength(callsBeforeReplacement);
     } finally {
       releaseProviderClose();
       providerCloseGate = null;
     }
     await closePromise;
+    const second = await secondPromise;
+    const concurrentSecond = await concurrentSecondPromise;
+    await secondProbe;
+    managersForCleanup.add(second);
+    expect(second === first).toBe(false);
+    expect(concurrentSecond).toBe(second);
 
     const third = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
     managersForCleanup.add(third);
     expect(third).toBe(second);
+  });
+
+  it("retains a failed scoped close owner until provider retirement succeeds", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    providerCloseFailuresRemaining = 2;
+
+    await expect(closeMemoryIndexManagersForAgent({ cfg, agentId: "main" })).rejects.toThrow(
+      "provider close failed",
+    );
+    expect(providerCloseCalls).toBe(2);
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const callsBeforeReplacement = providerCalls.length;
+    const replacementPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
+      requireManager(result),
+    );
+    try {
+      await vi.waitFor(() => expect(providerCloseCalls).toBe(3));
+      expect(providerCalls).toHaveLength(callsBeforeReplacement);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const replacement = await replacementPromise;
+    managersForCleanup.add(replacement);
+    expect(replacement === first).toBe(false);
   });
 
   it("does not reuse memory index managers across local-service hosts", async () => {

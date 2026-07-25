@@ -7,6 +7,7 @@ import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-s
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
+  resolveGlobalSingleton,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
@@ -104,6 +105,7 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
+const MEMORY_INDEX_MANAGER_SCOPE_CLOSES_KEY = Symbol.for("openclaw.memoryIndexManagerScopeCloses");
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
@@ -117,6 +119,10 @@ type MemoryEmbeddingProviderRequirement = {
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
+const INDEX_SCOPE_CLOSES = resolveGlobalSingleton<Map<string, Promise<void>>>(
+  MEMORY_INDEX_MANAGER_SCOPE_CLOSES_KEY,
+  () => new Map(),
+);
 
 type EmbeddingProbeCacheEntry = {
   result: MemoryEmbeddingProbeResult;
@@ -271,27 +277,58 @@ function isMemoryIndexManagerCacheKeyInScope(
   );
 }
 
+function resolveMemoryIndexManagerScopeKey(params: {
+  agentId: string;
+  workspaceDir: string;
+  purpose: MemoryIndexManagerPurpose;
+}): string {
+  return JSON.stringify([params.agentId, params.workspaceDir, params.purpose]);
+}
+
 async function closeMemoryIndexManagersForScope(params: {
   agentId: string;
   workspaceDir: string;
   purpose: MemoryIndexManagerPurpose;
   exceptKey?: string;
 }): Promise<void> {
-  const isScopedKey = (key: string) =>
-    key !== params.exceptKey && isMemoryIndexManagerCacheKeyInScope(key, params);
-  const pending = Array.from(INDEX_CACHE_PENDING.entries())
-    .filter(([key]) => isScopedKey(key))
-    .map(([, value]) => value);
-  if (pending.length > 0) {
-    await Promise.allSettled(pending);
-  }
-  const entries = Array.from(INDEX_CACHE.entries()).filter(([key]) => isScopedKey(key));
-  for (const [key, manager] of entries) {
-    INDEX_CACHE.delete(key);
-    try {
-      await manager.close();
-    } catch (err) {
-      log.warn(`failed to close memory index manager for agent ${params.agentId}: ${String(err)}`);
+  const scopeKey = resolveMemoryIndexManagerScopeKey(params);
+  const previousClose = INDEX_SCOPE_CLOSES.get(scopeKey) ?? Promise.resolve();
+  const closePromise = previousClose
+    .catch(() => undefined)
+    .then(async () => {
+      const isScopedKey = (key: string) =>
+        key !== params.exceptKey && isMemoryIndexManagerCacheKeyInScope(key, params);
+      const pending = Array.from(INDEX_CACHE_PENDING.entries())
+        .filter(([key]) => isScopedKey(key))
+        .map(([, value]) => value);
+      if (pending.length > 0) {
+        await Promise.allSettled(pending);
+      }
+      const entries = Array.from(INDEX_CACHE.entries()).filter(([key]) => isScopedKey(key));
+      let firstError: unknown;
+      for (const [key, manager] of entries) {
+        try {
+          await manager.close();
+          if (INDEX_CACHE.get(key) === manager) {
+            INDEX_CACHE.delete(key);
+          }
+        } catch (err) {
+          firstError ??= err;
+          log.warn(
+            `failed to close memory index manager for agent ${params.agentId}: ${String(err)}`,
+          );
+        }
+      }
+      if (firstError) {
+        throw firstError;
+      }
+    });
+  INDEX_SCOPE_CLOSES.set(scopeKey, closePromise);
+  try {
+    await closePromise;
+  } finally {
+    if (INDEX_SCOPE_CLOSES.get(scopeKey) === closePromise) {
+      INDEX_SCOPE_CLOSES.delete(scopeKey);
     }
   }
 }
@@ -311,6 +348,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private providerInitialized = false;
   private providerRetirementPromise: Promise<void> = Promise.resolve();
   private providersPendingRetirement = new Set<EmbeddingProvider>();
+  private closePromise: Promise<void> | null = null;
+  private closeTeardownComplete = false;
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
   protected providerUnavailableReason?: string;
@@ -419,11 +458,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
     const transient = purpose === "status" || purpose === "cli";
     if (!transient) {
+      const cachedManager = INDEX_CACHE.get(key);
       await closeMemoryIndexManagersForScope({
         agentId,
         workspaceDir,
         purpose,
-        exceptKey: key,
+        ...(cachedManager?.closed ? {} : { exceptKey: key }),
       });
     }
     return await getOrCreateManagedCacheEntry({
@@ -676,6 +716,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       log.warn(`memory embeddings: failed to close previous provider: ${formatErrorMessage(err)}`);
     });
     return retirement;
+  }
+
+  private async drainPendingProviderRetirements(): Promise<unknown[]> {
+    const errors: unknown[] = [];
+    for (
+      let attempt = 0;
+      attempt < 2 && (this.provider !== null || this.providersPendingRetirement.size > 0);
+      attempt += 1
+    ) {
+      try {
+        await this.retireCurrentProvider();
+      } catch (err) {
+        errors.push(err);
+        log.warn(`memory close: pending manager work failed: ${formatErrorMessage(err)}`);
+      }
+    }
+    return errors;
   }
 
   protected isRequiredProviderUnavailable(): boolean {
@@ -1612,9 +1669,34 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   async close(): Promise<void> {
-    if (this.closed) {
+    const existingClose = this.closePromise;
+    if (existingClose) {
+      await existingClose;
       return;
     }
+    const closeOperation = this.closeTeardownComplete ? this.retryFailedClose() : this.closeOnce();
+    this.closePromise = closeOperation;
+    try {
+      await closeOperation;
+    } catch (err) {
+      if (this.closePromise === closeOperation) {
+        this.closePromise = null;
+      }
+      throw err;
+    }
+  }
+
+  private async retryFailedClose(): Promise<void> {
+    const retirementErrors = await this.drainPendingProviderRetirements();
+    if (this.providersPendingRetirement.size > 0) {
+      throw toLintErrorObject(retirementErrors.at(-1), "Embedding provider retirement failed");
+    }
+    if (INDEX_CACHE.get(this.cacheKey) === this) {
+      INDEX_CACHE.delete(this.cacheKey);
+    }
+  }
+
+  private async closeOnce(): Promise<void> {
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
     const pendingFallbackInit = this.getPendingFallbackProviderInitialization();
@@ -1684,7 +1766,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const reportPendingWorkError = (err: unknown) => {
       log.warn(`memory close: pending manager work failed: ${formatErrorMessage(err)}`);
     };
-    const retirementErrors: unknown[] = [];
     const awaitCurrentSync = async () => {
       const pendingSync = this.syncing;
       if (!pendingSync) {
@@ -1704,33 +1785,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       onError: reportPendingWorkError,
     });
     await awaitCurrentSync();
-    for (
-      let attempt = 0;
-      attempt < 2 && (this.provider !== null || this.providersPendingRetirement.size > 0);
-      attempt += 1
-    ) {
-      try {
-        await this.retireCurrentProvider();
-      } catch (err) {
-        retirementErrors.push(err);
-        reportPendingWorkError(err);
-      }
-    }
+    const retirementErrors = await this.drainPendingProviderRetirements();
     rememberCurrentProvider();
     try {
       rememberCurrentProvider();
       await drainTrackedProviders();
     } finally {
       closeMemoryDatabase(this.db);
-      if (INDEX_CACHE.get(this.cacheKey) === this) {
-        INDEX_CACHE.delete(this.cacheKey);
-      }
+      this.closeTeardownComplete = true;
     }
     const closeError =
       (this.providersPendingRetirement.size > 0 ? retirementErrors.at(-1) : undefined) ??
       closeErrors.values().next().value;
     if (closeError) {
       throw toLintErrorObject(closeError, "Non-Error thrown");
+    }
+    if (INDEX_CACHE.get(this.cacheKey) === this) {
+      INDEX_CACHE.delete(this.cacheKey);
     }
   }
 }
