@@ -249,13 +249,13 @@ async function checkGitUpdateStatus(params: {
         .catch(() => false)
     : null;
 
-  // Freeze the post-fetch upstream for both graph queries; --end-of-options accepts dashed refs.
-  // Three-dot rev-list still counts disconnected or truncated shallow histories, so require a
-  // visible common ancestor before presenting those counts as divergence.
+  // Freeze the post-fetch upstream for both graph queries. Resolve via @{upstream} rather than
+  // its display name so dashed remotes stay operands on older Git versions. Three-dot rev-list
+  // still counts disconnected or truncated histories, so require a visible common ancestor.
   const upstreamCommitRes =
     upstream && sha
       ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-parse", "--verify", "--end-of-options", `${upstream}^{commit}`],
+          ["git", "-C", root, "rev-parse", "--verify", "@{upstream}^{commit}"],
           { timeoutMs },
         ).catch(() => null)
       : null;
@@ -263,10 +263,9 @@ async function checkGitUpdateStatus(params: {
     upstreamCommitRes?.code === 0 ? upstreamCommitRes.stdout.trim() || null : null;
   const mergeBase =
     sha && upstreamCommit
-      ? await runCommandWithTimeout(
-          ["git", "-C", root, "merge-base", "--end-of-options", sha, upstreamCommit],
-          { timeoutMs },
-        ).catch(() => null)
+      ? await runCommandWithTimeout(["git", "-C", root, "merge-base", sha, upstreamCommit], {
+          timeoutMs,
+        }).catch(() => null)
       : null;
   const counts =
     sha && upstreamCommit && mergeBase?.code === 0 && mergeBase.stdout.trim().length > 0
