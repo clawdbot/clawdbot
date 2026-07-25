@@ -1690,6 +1690,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       pendingProviderInit: pendingFallbackInit?.then(() => undefined),
       onError: reportPendingWorkError,
     });
+    await awaitCurrentSync();
     for (
       let attempt = 0;
       attempt < 2 && (this.provider !== null || this.providersPendingRetirement.size > 0);
@@ -1704,7 +1705,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     rememberCurrentProvider();
     try {
-      await awaitCurrentSync();
       rememberCurrentProvider();
       await drainTrackedProviders();
     } finally {
