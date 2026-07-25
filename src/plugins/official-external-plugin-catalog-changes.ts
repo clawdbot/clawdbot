@@ -9,7 +9,7 @@ import {
   type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 
-export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHANGES_PAYLOAD_TYPE =
+const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHANGES_PAYLOAD_TYPE =
   "openclaw.official-external-plugin-catalog-changes.v1";
 
 const INCREMENTAL_SNAPSHOT_KIND = "official-external-plugin-catalog-changes-v1";
@@ -26,7 +26,7 @@ type CatalogChange =
   | { sequence: number; operation: "remove"; entryId: string; entryType: "plugin" | "skill" }
   | { sequence: number; operation: "metadata"; metadata: { description: string | null } };
 
-export type OfficialExternalPluginCatalogChangePage = {
+type OfficialExternalPluginCatalogChangePage = {
   schemaVersion: 1;
   feedId: string;
   fromSequence: number;
@@ -41,7 +41,7 @@ export type OfficialExternalPluginCatalogChangePage = {
   nextCursor: string | null;
 };
 
-export type OfficialExternalPluginCatalogResetRequired = {
+type OfficialExternalPluginCatalogResetRequired = {
   schemaVersion: 1;
   feedId: string;
   fromSequence: number;
@@ -52,20 +52,20 @@ export type OfficialExternalPluginCatalogResetRequired = {
   snapshotUrl: string;
 };
 
-export type OfficialExternalPluginCatalogIncrementalSnapshot = {
+type OfficialExternalPluginCatalogIncrementalSnapshot = {
   kind: typeof INCREMENTAL_SNAPSHOT_KIND;
   baseBody: string;
   changeBodies: readonly string[];
   materializedFeedSha256?: string;
 };
 
-export type OfficialExternalPluginCatalogResetFloorSnapshot = {
+type OfficialExternalPluginCatalogResetFloorSnapshot = {
   kind: typeof RESET_FLOOR_SNAPSHOT_KIND;
   snapshotBody: string;
   minimumSequence: number;
 };
 
-export type VerifiedOfficialExternalPluginCatalogChangePayload = {
+type VerifiedOfficialExternalPluginCatalogChangePayload = {
   payload: OfficialExternalPluginCatalogChangePage | OfficialExternalPluginCatalogResetRequired;
   signedBy: string;
   signatureCount: number;
@@ -267,7 +267,7 @@ function parseProjectionHeader(value: Record<string, unknown>) {
   return { feedId, generatedAt, expiresAt };
 }
 
-export function parseOfficialExternalPluginCatalogChangePayload(
+function parseOfficialExternalPluginCatalogChangePayload(
   value: unknown,
 ): OfficialExternalPluginCatalogChangePage | OfficialExternalPluginCatalogResetRequired {
   if (!isRecord(value)) {

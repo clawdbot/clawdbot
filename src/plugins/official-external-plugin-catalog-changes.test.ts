@@ -1,15 +1,15 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
-  OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHANGES_PAYLOAD_TYPE,
   applyVerifiedOfficialExternalPluginCatalogChangeBodies,
   applyVerifiedOfficialExternalPluginCatalogChanges,
-  parseOfficialExternalPluginCatalogChangePayload,
   parseOfficialExternalPluginCatalogIncrementalSnapshot,
   serializeOfficialExternalPluginCatalogIncrementalSnapshot,
   verifyOfficialExternalPluginCatalogChangeEnvelopeBody,
 } from "./official-external-plugin-catalog-changes.js";
 import type { OfficialExternalPluginCatalogFeed } from "./official-external-plugin-catalog.js";
+
+const CHANGES_PAYLOAD_TYPE = "openclaw.official-external-plugin-catalog-changes.v1";
 
 const keys = crypto.generateKeyPairSync("ed25519", {
   publicKeyEncoding: { type: "spki", format: "pem" },
@@ -18,16 +18,16 @@ const keys = crypto.generateKeyPairSync("ed25519", {
 
 function signChangePayload(payload: unknown): string {
   const payloadBytes = Buffer.from(JSON.stringify(payload), "utf8");
-  const typeBytes = Buffer.from(OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHANGES_PAYLOAD_TYPE, "utf8");
+  const typeBytes = Buffer.from(CHANGES_PAYLOAD_TYPE, "utf8");
   const signingInput = Buffer.concat([
     Buffer.from(
-      `DSSEv1 ${typeBytes.length} ${OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHANGES_PAYLOAD_TYPE} ${payloadBytes.length} `,
+      `DSSEv1 ${typeBytes.length} ${CHANGES_PAYLOAD_TYPE} ${payloadBytes.length} `,
       "utf8",
     ),
     payloadBytes,
   ]);
   return JSON.stringify({
-    payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHANGES_PAYLOAD_TYPE,
+    payloadType: CHANGES_PAYLOAD_TYPE,
     payload: payloadBytes.toString("base64url"),
     signatures: [
       {
@@ -171,12 +171,19 @@ describe("official external plugin catalog changes", () => {
       resetRequired: true,
       snapshotUrl: "https://clawhub.ai/api/v1/feeds/plugins",
     };
-    expect(parseOfficialExternalPluginCatalogChangePayload(reset)).toMatchObject({
+    const verified = verifyOfficialExternalPluginCatalogChangeEnvelopeBody(
+      signChangePayload(reset),
+      { trustedKeys: [{ keyId: "catalog-root", publicKey: keys.publicKey }] },
+    );
+    expect(verified.payload).toMatchObject({
       resetRequired: true,
       currentSequence: 9,
     });
     expect(() =>
-      parseOfficialExternalPluginCatalogChangePayload({ ...reset, unexpected: true }),
+      verifyOfficialExternalPluginCatalogChangeEnvelopeBody(
+        signChangePayload({ ...reset, unexpected: true }),
+        { trustedKeys: [{ keyId: "catalog-root", publicKey: keys.publicKey }] },
+      ),
     ).toThrow("reset response is malformed");
   });
 
@@ -218,16 +225,19 @@ describe("official external plugin catalog changes", () => {
         ],
       },
     };
-    const parsed = parseOfficialExternalPluginCatalogChangePayload(
-      page({
-        toSequence: 2,
-        changeCount: 1,
-        changes: [{ sequence: 2, operation: "upsert", entry }],
-        nextCursor: null,
-      }),
+    const verified = verifyOfficialExternalPluginCatalogChangeEnvelopeBody(
+      signChangePayload(
+        page({
+          toSequence: 2,
+          changeCount: 1,
+          changes: [{ sequence: 2, operation: "upsert", entry }],
+          nextCursor: null,
+        }),
+      ),
+      { trustedKeys: [{ keyId: "catalog-root", publicKey: keys.publicKey }] },
     );
 
-    expect(parsed).toMatchObject({ changes: [{ entry }] });
+    expect(verified.payload).toMatchObject({ changes: [{ entry }] });
   });
 
   it("applies pages that the live path has already verified", () => {
