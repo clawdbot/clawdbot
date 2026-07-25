@@ -11,7 +11,6 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import "../../styles/sessions.css";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
@@ -47,7 +46,7 @@ import {
   type SessionsGroupBy,
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
-import { searchForSession, type SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import { pathForSessionKey, type SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -1503,9 +1502,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       : null;
   const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
-  const chatUrl = canLink
-    ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
-    : null;
+  const chatUrl = canLink ? pathForSessionKey("chat", row.key, props.basePath, row) : null;
   const displayKind = resolveSessionDisplayKind(row);
   const kindClass = `session-kind session-kind--${displayKind}`;
   const rowClass = [

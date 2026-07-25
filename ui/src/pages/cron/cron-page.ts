@@ -32,7 +32,7 @@ import {
   type CronModelSuggestionsState,
   type CronState,
 } from "../../lib/cron/index.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { pathForSessionKey } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
@@ -462,7 +462,9 @@ class CronPage extends OpenClawLightDomElement {
               );
             }),
           onNavigateToChat: (sessionKey) =>
-            this.context.navigate("chat", { search: searchForSession(sessionKey) }),
+            this.context.navigate("chat", {
+              pathname: pathForSessionKey("chat", sessionKey, this.context.basePath),
+            }),
         }),
       )}
     `;

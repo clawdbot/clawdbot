@@ -1,5 +1,7 @@
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { pathForSession } from "../../app-route-paths.ts";
+import type { BoardFace } from "../board/settings.ts";
 import { isCronSessionKey } from "../session-display.ts";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -21,6 +23,7 @@ import {
   resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
+  resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
 export type SessionArchivedFilter = "active" | "archived" | "all";
 
@@ -338,6 +341,17 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   };
 }
 
-export function searchForSession(sessionKey: string): string {
-  return `?session=${encodeURIComponent(sessionKey)}`;
+export function pathForSessionKey(
+  face: BoardFace,
+  sessionKey: string,
+  basePath = "",
+  row?: Pick<GatewaySessionRow, "displayName" | "key" | "sessionId">,
+  mainKey?: string | null,
+): string {
+  const key = row?.key ?? sessionKey;
+  return pathForSession(face, resolveAgentIdFromSessionKey(key), key, basePath, {
+    displayName: row?.displayName,
+    mainKey,
+    sessionId: row?.sessionId,
+  });
 }

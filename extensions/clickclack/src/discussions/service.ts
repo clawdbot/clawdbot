@@ -334,7 +334,9 @@ export class ClickClackDiscussionService {
     const deleted = entry === undefined;
     const label = entry ? resolveDiscussionLabel(entry.label, sessionKey) : binding.label;
     const section = entry?.category?.trim() || account.discussions.section;
-    const externalUrl = controlSessionUrl(account.discussions.controlUrlBase, sessionKey) ?? "";
+    const externalUrl =
+      controlSessionUrl(account.discussions.controlUrlBase, sessionKey, entry?.sessionId, label) ??
+      "";
     const patch: {
       archived?: boolean;
       external_url?: string;

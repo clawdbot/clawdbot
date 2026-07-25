@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createApplicationRouter,
   locationForRoute,
+  pathForSession,
   pathForRoute,
   routeIdFromPath,
   startApplicationRouter,
@@ -14,7 +15,7 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalentForHost } from "../lib/sessions/session-key.ts";
+import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
@@ -65,14 +66,14 @@ function normalizeInitialApplicationLocation(
     return location;
   }
 
-  const search = new URLSearchParams(location.search);
-  if (!search.get("session")?.trim()) {
-    search.set("session", sessionKey);
-  }
   return {
     ...location,
-    pathname: routeId === null ? pathForRoute("chat", basePath) : location.pathname,
-    search: `?${search.toString()}`,
+    pathname: pathForSession(
+      "chat",
+      resolveAgentIdFromSessionKey(sessionKey),
+      sessionKey,
+      basePath,
+    ),
   };
 }
 
@@ -438,10 +439,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const stopModelSetupRedirect = firstRunDefaultLanding
     ? startModelSetupFirstRunRedirect({
         context,
-        isStillDefaultLanding: () =>
-          locationsMatch(history.location(), expectedDefaultLanding, (left, right) =>
-            areUiSessionKeysEquivalentForHost({ hello: gateway.snapshot.hello }, left, right),
-          ),
+        isStillDefaultLanding: () => locationsMatch(history.location(), expectedDefaultLanding),
       })
     : () => undefined;
   return {

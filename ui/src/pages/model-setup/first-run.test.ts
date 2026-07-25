@@ -3,7 +3,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { areUiSessionKeysEquivalentForHost } from "../../lib/sessions/session-key.ts";
 import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
 import {
   isDefaultChatLanding,
@@ -20,15 +19,11 @@ describe("model setup first-run redirect", () => {
       isDefaultChatLanding({ pathname: "/chat", search: "", hash: "" }, "", routeIdFromPath),
     ).toBe(true);
     expect(
-      isDefaultChatLanding(
-        { pathname: "/chat", search: "?session=main", hash: "" },
-        "",
-        routeIdFromPath,
-      ),
+      isDefaultChatLanding({ pathname: "/chat/main", search: "", hash: "" }, "", routeIdFromPath),
     ).toBe(false);
     expect(
       isDefaultChatLanding(
-        { pathname: "/chat", search: "", hash: "#session=main" },
+        { pathname: "/dashboard/main", search: "", hash: "" },
         "",
         routeIdFromPath,
       ),
@@ -42,33 +37,11 @@ describe("model setup first-run redirect", () => {
     ).toBe(false);
   });
 
-  it("keeps the default landing eligible when the gateway canonicalizes its session key", () => {
-    const expected = { pathname: "/chat", search: "?session=main", hash: "" };
-    const host = {
-      hello: {
-        snapshot: {
-          sessionDefaults: {
-            defaultAgentId: "main",
-            mainKey: "main",
-            mainSessionKey: "agent:main:main",
-          },
-        },
-      },
-    };
-
+  it("compares the canonical route location directly", () => {
+    const expected = { pathname: "/chat/main", search: "", hash: "" };
+    expect(locationsMatch({ ...expected }, expected)).toBe(true);
     expect(
-      locationsMatch(
-        { pathname: "/chat", search: "?session=agent%3Amain%3Amain", hash: "" },
-        expected,
-        (left, right) => areUiSessionKeysEquivalentForHost(host, left, right),
-      ),
-    ).toBe(true);
-    expect(
-      locationsMatch(
-        { pathname: "/chat", search: "?session=agent%3Aother%3Amain", hash: "" },
-        expected,
-        (left, right) => areUiSessionKeysEquivalentForHost(host, left, right),
-      ),
+      locationsMatch({ pathname: "/chat/other", search: "", hash: "" }, expected),
     ).toBe(false);
   });
 

@@ -2,6 +2,7 @@ import type { PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -9,7 +10,7 @@ import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
-  searchForSession,
+  pathForSessionKey,
   sessionMatchesArchivedFilter,
 } from "../lib/sessions/index.ts";
 import {
@@ -167,14 +168,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       this.sessionCreatorFilterId = null;
       void this.context?.sessions.setCreatorFilter(null);
     }
-    const activeRouteKey = this.activeRouteId === "chat" ? this.getRouteSessionKey() : "";
+    const activeRouteKey = isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "";
     if (activeRouteKey !== this.collapsedActiveRouteKey) {
       this.collapsedActiveRouteKey = activeRouteKey;
       if (this.collapsedActiveChildSessionKeys.size > 0) {
         this.collapsedActiveChildSessionKeys = new Set();
       }
     }
-    if (this.activeRouteId === "chat") {
+    if (isSessionRouteId(this.activeRouteId)) {
       void this.sessionData.loadActiveSessionLineage(activeRouteKey);
     }
     const pending = [...this.visibleSessionRowsInOrder()];
@@ -263,7 +264,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       showCron: this.sessionsShowCron,
       statusFilter: this.sessionsStatusFilter,
       compareSessions: this.compareSidebarSessionRows,
-      highlightCurrentSession: this.activeRouteId === "chat",
+      highlightCurrentSession: isSessionRouteId(this.activeRouteId),
       runtimeSampledAtByRow: this.runtimeSampledAtByRow,
       loadingChildSessionKeys: this.sessionData.loadingChildSessionKeys,
       outboxCountForSessionKey: (sessionKey) => this.outboxCountForSessionKey(sessionKey),
@@ -283,7 +284,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   readonly selectSession = (sessionKey: string) => {
     this.context?.gateway.setSessionKey(sessionKey);
     this.onNavigate?.("chat", {
-      search: searchForSession(sessionKey),
+      pathname: pathForSessionKey(
+        "chat",
+        sessionKey,
+        this.basePath,
+        this.findSidebarSessionByKey(sessionKey),
+      ),
     });
   };
 
@@ -414,9 +420,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   readonly replaceCurrentSession = (sessionKey: string) => {
     this.context?.gateway.setSessionKey(sessionKey);
-    if (this.activeRouteId === "chat") {
+    if (isSessionRouteId(this.activeRouteId)) {
       this.onNavigate?.("chat", {
-        search: searchForSession(sessionKey),
+        pathname: pathForSessionKey(
+          "chat",
+          sessionKey,
+          this.basePath,
+          this.findSidebarSessionByKey(sessionKey),
+        ),
       });
     }
   };
@@ -515,7 +526,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const key = this.agentResumeKey(agentId);
     const draft = encodeURIComponent(t("chat.welcome.suggestions.whatCanYouDo"));
     this.context?.gateway.setSessionKey(key);
-    this.onNavigate?.("chat", { search: `${searchForSession(key)}&draft=${draft}` });
+    this.onNavigate?.("chat", {
+      pathname: pathForSessionKey("chat", key, this.basePath, this.findSidebarSessionByKey(key)),
+      search: `?draft=${draft}`,
+    });
   }
 
   knownSessionGroups(): string[] {

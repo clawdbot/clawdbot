@@ -155,7 +155,9 @@ describe("ClickClack discussion service contracts", () => {
     );
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
+      pending: expect.objectContaining({
+        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+      }),
     });
   });
 
@@ -196,7 +198,9 @@ describe("ClickClack discussion service contracts", () => {
     );
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
+      pending: expect.objectContaining({
+        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+      }),
     });
   });
 
@@ -513,7 +517,9 @@ describe("ClickClack discussion service contracts", () => {
     await expect(harness.service.open(sessionKey)).rejects.toThrow("SQLITE_FULL");
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
+      pending: expect.objectContaining({
+        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+      }),
     });
     expect(harness.revokedStore.entries()).toHaveLength(1);
   });
@@ -595,7 +601,7 @@ describe("ClickClack discussion service contracts", () => {
       "https://new-control.example";
     await harness.service.reconcile(sessionKey);
     expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
-      external_url: `https://new-control.example/chat?session=${encodeURIComponent(sessionKey)}`,
+      external_url: "https://new-control.example/chat/main/support-12345678",
     });
   });
 
@@ -612,7 +618,7 @@ describe("ClickClack discussion service contracts", () => {
       kind: "public",
       external_managed: true,
       external_ref: testExternalRef(sessionKey),
-      external_url: `https://control.example/control/chat?session=${encodeURIComponent(sessionKey)}`,
+      external_url: "https://control.example/control/chat/main/support-12345678",
       sidebar_section: "Projects",
       archived: false,
       created_at: "2026-07-19T00:00:00.000Z",

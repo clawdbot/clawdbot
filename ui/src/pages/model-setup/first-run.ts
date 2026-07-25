@@ -1,5 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { RouteId } from "../../app-routes.ts";
+import { sessionRefFromPath } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -15,33 +16,15 @@ export function isDefaultChatLanding(
   if (routeId !== null && routeId !== "chat") {
     return false;
   }
-  const searchSession = new URLSearchParams(location.search).get("session")?.trim();
-  const hash = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
-  const hashSession = new URLSearchParams(hash).get("session")?.trim();
-  return !searchSession && !hashSession;
+  return sessionRefFromPath(location.pathname, basePath) === null;
 }
 
 export function locationsMatch(
   left: RouteLocation,
   right: RouteLocation,
-  sessionKeysMatch: (left: string, right: string) => boolean = (candidateLeft, candidateRight) =>
-    candidateLeft === candidateRight,
 ): boolean {
-  if (left.pathname !== right.pathname || left.hash !== right.hash) {
-    return false;
-  }
-  if (left.search === right.search) {
-    return true;
-  }
-  const leftSearch = new URLSearchParams(left.search);
-  const rightSearch = new URLSearchParams(right.search);
-  const leftSession = leftSearch.get("session")?.trim();
-  const rightSession = rightSearch.get("session")?.trim();
-  leftSearch.delete("session");
-  rightSearch.delete("session");
   return (
-    leftSearch.toString() === rightSearch.toString() &&
-    Boolean(leftSession && rightSession && sessionKeysMatch(leftSession, rightSession))
+    left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
   );
 }
 

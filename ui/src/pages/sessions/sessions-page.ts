@@ -26,8 +26,8 @@ import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
   filterSessionRows,
+  pathForSessionKey,
   scopedAgentParamsForSession,
-  searchForSession,
   type SessionArchivedFilter,
 } from "../../lib/sessions/index.ts";
 import {
@@ -957,7 +957,10 @@ class SessionsPage extends OpenClawLightDomElement {
         return;
       }
       if (forkedKey) {
-        scope.context.navigate("chat", { search: searchForSession(forkedKey), hash: "" });
+        scope.context.navigate("chat", {
+          pathname: pathForSessionKey("chat", forkedKey, scope.context.basePath),
+          hash: "",
+        });
       } else if (scope.sessions.state.error) {
         this.error = scope.sessions.state.error;
       }
@@ -1049,7 +1052,13 @@ class SessionsPage extends OpenClawLightDomElement {
         agentId: this.sessionAgentId(sessionKey, scope.context),
       });
       if (this.isRequestScopeCurrent(scope)) {
-        scope.context.navigate("chat", { search: searchForSession(result.key), hash: "" });
+        scope.context.navigate("chat", {
+          pathname: pathForSessionKey("chat", result.key, scope.context.basePath, {
+            key: result.key,
+            sessionId: result.sessionId,
+          }),
+          hash: "",
+        });
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
@@ -1195,7 +1204,10 @@ class SessionsPage extends OpenClawLightDomElement {
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
             case "open-chat":
-              context.navigate("chat", { search: searchForSession(row.key), hash: "" });
+              context.navigate("chat", {
+                pathname: pathForSessionKey("chat", row.key, context.basePath, row),
+                hash: "",
+              });
               break;
             case "open-pr":
               openExternalUrlSafe(action.url);
@@ -1360,7 +1372,15 @@ class SessionsPage extends OpenClawLightDomElement {
           },
           onDeleteSelected: () => void this.deleteSelected(),
           onNavigateToChat: (sessionKey) =>
-            context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
+            context.navigate("chat", {
+              pathname: pathForSessionKey(
+                "chat",
+                sessionKey,
+                context.basePath,
+                this.result?.sessions.find((row) => row.key === sessionKey),
+              ),
+              hash: "",
+            }),
           onOpenSessionMenu: (row, position, trigger) =>
             this.openSessionMenu(row, position, trigger),
           onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),

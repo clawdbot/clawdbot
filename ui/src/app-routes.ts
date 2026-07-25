@@ -3,6 +3,7 @@ import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import {
   pathForRoute,
   routeIdFromPath,
+  sessionRefFromPath,
   workboardBoardIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";
@@ -13,7 +14,7 @@ import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as appsPage } from "./pages/apps/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
-import { page as chatPage } from "./pages/chat/route.ts";
+import { pages as chatPages } from "./pages/chat/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
@@ -50,7 +51,7 @@ export type ApplicationRouter = Router<
 type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
 
 const APP_ROUTE_TREE = [
-  chatPage,
+  ...chatPages,
   custodianPage,
   newSessionPage,
   activityPage,
@@ -97,16 +98,19 @@ export function createApplicationRouter(): ApplicationRouter {
 
 function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, basePath: string) {
   const boardId = workboardBoardIdFromPath(location.pathname, basePath);
-  if (!boardId) {
-    return location;
+  if (boardId) {
+    const search = new URLSearchParams(location.search);
+    search.set("board", boardId);
+    return {
+      ...location,
+      pathname: pathForRoute("workboard", basePath),
+      search: `?${search.toString()}`,
+    };
   }
-  const search = new URLSearchParams(location.search);
-  search.set("board", boardId);
-  return {
-    ...location,
-    pathname: pathForRoute("workboard", basePath),
-    search: `?${search.toString()}`,
-  };
+  const sessionRef = sessionRefFromPath(location.pathname, basePath);
+  return sessionRef
+    ? { ...location, pathname: pathForRoute(sessionRef.face, basePath) }
+    : location;
 }
 
 export async function startApplicationRouter(
@@ -126,6 +130,7 @@ export async function startApplicationRouter(
     location = history.location();
   }
   const initialBoardId = workboardBoardIdFromPath(location.pathname, basePath);
+  const initialSessionRef = sessionRefFromPath(location.pathname, basePath);
   const applicationHistory: RouterHistory = {
     location: () => routerHistoryLocation(history.location(), basePath),
     push: (next) => history.push(next),
@@ -140,6 +145,15 @@ export async function startApplicationRouter(
             });
           return;
         }
+        const sessionRef = sessionRefFromPath(next.pathname, basePath);
+        if (sessionRef) {
+          void router
+            .navigate(sessionRef.face, context, { history: "none" }, next)
+            .catch((error: unknown) => {
+              console.error("[openclaw] Session route navigation failed", error);
+            });
+          return;
+        }
         listener(next);
       }),
   };
@@ -148,6 +162,13 @@ export async function startApplicationRouter(
     // Replace the synthetic exact-match location with the real browser path
     // before the shell renders; the matching board data is already cached.
     await router.navigate("workboard", context, { history: "none", revalidate: true }, location);
+  } else if (initialSessionRef) {
+    await router.navigate(
+      initialSessionRef.face,
+      context,
+      { history: "none", revalidate: true },
+      location,
+    );
   }
 }
 

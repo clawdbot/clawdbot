@@ -13,7 +13,7 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { pathForSessionKey } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -1008,7 +1008,9 @@ class NewSessionPage extends OpenClawLightDomElement {
         return;
       }
       context.gateway.setSessionKey(result.key);
-      context.navigate("chat", { search: searchForSession(result.key) });
+      context.navigate("chat", {
+        pathname: pathForSessionKey("chat", result.key, context.basePath),
+      });
     } finally {
       if (requestId === this.submitRequestToken) {
         this.submitting = false;
@@ -1444,7 +1446,9 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         this.context?.gateway.setSessionKey(sessionKey);
-        this.context?.navigate("chat", { search: searchForSession(sessionKey) });
+        this.context?.navigate("chat", {
+          pathname: pathForSessionKey("chat", sessionKey, this.context.basePath),
+        });
       },
     });
   }

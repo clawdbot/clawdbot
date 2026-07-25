@@ -11,7 +11,7 @@ import {
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { pathForSessionKey } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   applyTaskEvent,
@@ -372,7 +372,9 @@ class TasksPage extends OpenClawLightDomElement {
         cancellingTaskIds: this.cancellingTaskIds,
         onCancel: (taskId) => void this.cancelTask(taskId),
         onNavigateToChat: (sessionKey) =>
-          this.context.navigate("chat", { search: searchForSession(sessionKey) }),
+          this.context.navigate("chat", {
+            pathname: pathForSessionKey("chat", sessionKey, this.context.basePath),
+          }),
       })}
     `;
   }

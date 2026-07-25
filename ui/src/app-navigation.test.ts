@@ -14,7 +14,9 @@ import {
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
+  pathForSession,
   pathForWorkboardBoard,
+  sessionRefFromPath,
   workboardBoardIdFromPath,
 } from "./app-route-paths.ts";
 import {
@@ -352,6 +354,62 @@ describe("routeIdFromPath", () => {
     expect(pathForWorkboardBoard("ops", "/ui")).toBe("/ui/workboard/ops");
     expect(workboardBoardIdFromPath("/ui/workboard/ops", "/ui")).toBe("ops");
     expect(inferBasePathFromPathname("/ui/workboard/ops")).toBe("/ui");
+  });
+
+  it("builds canonical chat and dashboard session paths", () => {
+    const key = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    expect(
+      pathForSession("chat", "main", key, "", {
+        displayName: "Deploy Monitor",
+        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+      }),
+    ).toBe("/chat/main/deploy-monitor-12345678");
+    expect(
+      pathForSession("dashboard", "ops", key, "/ui", {
+        displayName: "",
+        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+      }),
+    ).toBe("/ui/dashboard/ops/12345678");
+    expect(pathForSession("chat", "main", "agent:main:main")).toBe("/chat/main");
+  });
+
+  it("keeps trailing hex tokens out of decorative slugs", () => {
+    expect(
+      pathForSession(
+        "chat",
+        "main",
+        "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+        "",
+        {
+          displayName: "Deploy face deadbeef",
+          sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+        },
+      ),
+    ).toBe("/chat/main/deploy-12345678");
+  });
+
+  it("parses both route namespaces and disambiguates one-segment forms", () => {
+    expect(sessionRefFromPath("/chat/main")).toEqual({
+      face: "chat",
+      kind: "main",
+      agentId: "main",
+    });
+    expect(sessionRefFromPath("/dashboard/12345678")).toEqual({
+      face: "dashboard",
+      kind: "session",
+      shortId: "12345678",
+    });
+    expect(sessionRefFromPath("/chat/wrong/wrong-slug-1234567890ab")).toEqual({
+      face: "chat",
+      kind: "session",
+      agentId: "wrong",
+      shortId: "1234567890ab",
+    });
+    expect(
+      sessionRefFromPath("/chat/12345678-90ab-cdef-1234-567890abcdef"),
+    ).toEqual({ face: "chat", kind: "session", shortId: "1234567890abcdef1234567890abcdef" });
+    expect(routeIdFromPath("/dashboard/main/deploy-12345678")).toBe("dashboard");
+    expect(inferBasePathFromPathname("/ui/chat/main/deploy-12345678")).toBe("/ui");
   });
 
   it("keeps dotted board IDs from resembling static asset paths", () => {

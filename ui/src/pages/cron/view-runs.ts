@@ -5,7 +5,6 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import type { CronDeliveryStatus, CronRunsStatusValue, CronSortDir } from "../../api/types.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -17,7 +16,7 @@ import {
   formatMs,
   formatTokens,
 } from "../../lib/format.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { pathForSessionKey } from "../../lib/sessions/index.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
 // it local (instead of importing CronProps from view.ts) avoids a module
@@ -287,7 +286,7 @@ function renderRun(
 ) {
   const chatUrl =
     typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
-      ? `${pathForRoute("chat", basePath)}${searchForSession(entry.sessionKey)}`
+      ? pathForSessionKey("chat", entry.sessionKey, basePath)
       : null;
   const status = runStatusLabel(entry.status ?? "unknown");
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");

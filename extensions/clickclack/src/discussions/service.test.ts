@@ -40,7 +40,7 @@ describe("ClickClack discussion service", () => {
       kind: "public",
       external_managed: true,
       external_ref: testExternalRef(sessionKey),
-      external_url: "https://control.example/control/chat?session=agent%3Amain%3Amain",
+      external_url: "https://control.example/control/chat/main",
       sidebar_section: "Projects",
     });
   });
@@ -71,7 +71,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
       expect.objectContaining({
-        external_url: `https://control.example/control/chat?tenant=alpha&session=${encodeURIComponent(sessionKey)}`,
+        external_url: "https://control.example/control/chat/main/control-link-12345678?tenant=alpha",
       }),
     );
   });
@@ -108,6 +108,7 @@ describe("ClickClack discussion service", () => {
     await harness.service.reconcile(sessionKey);
     expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
       archived: true,
+      external_url: "https://control.example/control/chat/main/renamed-session-12345678",
       name: "renamed-session",
       sidebar_section: "Incidents",
     });
@@ -121,7 +122,10 @@ describe("ClickClack discussion service", () => {
 
     harness.setSessionEntry(undefined);
     await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", { archived: true });
+    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
+      archived: true,
+      external_url: "",
+    });
     expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
   });
 
@@ -312,7 +316,7 @@ describe("ClickClack discussion service", () => {
         kind: "public",
         external_managed: true,
         external_ref: externalRef,
-        external_url: `https://control.example/control/chat?session=${encodeURIComponent(sessionKey)}`,
+        external_url: "https://control.example/control/chat/main/release-planning-12345678",
         sidebar_section: "Projects",
         archived: false,
         created_at: "2026-07-19T00:00:00.000Z",
@@ -467,7 +471,9 @@ describe("ClickClack discussion service", () => {
     );
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
+      pending: expect.objectContaining({
+        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+      }),
     });
   });
 
@@ -479,7 +485,9 @@ describe("ClickClack discussion service", () => {
     await expect(harness.service.open(sessionKey)).rejects.toThrow("connection reset");
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
+      pending: expect.objectContaining({
+        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+      }),
     });
   });
 
@@ -514,7 +522,9 @@ describe("ClickClack discussion service", () => {
     await expect(harness.service.open(sessionKey)).rejects.toThrow("connection reset");
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
+      pending: expect.objectContaining({
+        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+      }),
     });
     expect(harness.revokedStore.entries()).toHaveLength(1);
   });
@@ -716,7 +726,7 @@ describe("ClickClack discussion service", () => {
         kind: "public",
         external_managed: true,
         external_ref: externalRef,
-        external_url: `https://control.example/control/chat?session=${encodeURIComponent(sessionKey)}`,
+        external_url: "https://control.example/control/chat/main/release-planning-12345678",
         sidebar_section: "Sessions",
         archived: false,
         created_at: "2026-07-19T00:00:00.000Z",

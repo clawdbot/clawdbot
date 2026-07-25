@@ -16,8 +16,8 @@ import {
   groupCatalogSessionsByProject,
   type CatalogProjectGrouping,
 } from "../lib/sessions/catalog-project-grouping.ts";
-import { searchForSession } from "../lib/sessions/index.ts";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import { pathForSessionKey } from "../lib/sessions/index.ts";
+import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import {
   formatSidebarTimestamp,
@@ -360,15 +360,28 @@ function renderCatalogSessionRow(
   const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey);
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
-  const search = searchForSession(key);
-  const href = `${pathForRoute("chat", params.basePath)}${search}`;
+  const routeId = session.sessionKey ? "chat" : "new-session";
+  const navigation: ApplicationNavigationOptions = session.sessionKey
+    ? { pathname: pathForSessionKey("chat", session.sessionKey, params.basePath) }
+    : {
+        search: newSessionSearch(params.newSessionAgentId, { catalogId: catalog.id }),
+      };
+  const href = session.sessionKey
+    ? (navigation.pathname ?? pathForRoute("chat", params.basePath))
+    : `${pathForRoute("new-session", params.basePath)}${navigation.search}`;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
   const openTerminal = () => params.onOpenTerminal(catalogKey);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(
-      { key: catalogKey, search, canOpenTerminal: session.canOpenTerminal === true, meta },
+      {
+        key: catalogKey,
+        routeId,
+        navigation,
+        canOpenTerminal: session.canOpenTerminal === true,
+        meta,
+      },
       x,
       y,
       trigger,
@@ -400,7 +413,7 @@ function renderCatalogSessionRow(
           if (params.catalogOpenTarget === "terminal" && canOpenTerminal) {
             openTerminal();
           } else {
-            params.onNavigate?.("chat", { search });
+            params.onNavigate?.(routeId, navigation);
           }
         }}
       >

@@ -1,10 +1,9 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { pathForSessionKey } from "../../lib/sessions/index.ts";
 import {
   partitionTasks,
   taskDetail,
@@ -34,7 +33,7 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
   if (!sessionKey) {
     return nothing;
   }
-  const href = `${pathForRoute("chat", props.basePath)}${searchForSession(sessionKey)}`;
+  const href = pathForSessionKey("chat", sessionKey, props.basePath);
   return html`<a
     class="session-link"
     href=${href}

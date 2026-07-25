@@ -1,7 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -18,8 +17,8 @@ import {
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
+  pathForSessionKey,
   resolveSessionNavigation,
-  searchForSession,
 } from "../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -116,7 +115,7 @@ export function buildSidebarSessionNavigationState(input: {
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
       meta: formatSidebarTimestamp(row.updatedAt),
       subtitle: resolveSessionWorkSubtitle(row),
-      href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
+      href: pathForSessionKey("chat", row.key, context?.basePath ?? "", row),
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: row.archived !== true && Boolean(row.hasActiveRun),

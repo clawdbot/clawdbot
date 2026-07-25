@@ -91,7 +91,13 @@ export function createHarness(
     agent: {
       session: {
         getSessionEntry: vi.fn(() =>
-          sessionEntry ? { sessionId: "session-id", updatedAt: 1, ...sessionEntry } : undefined,
+          sessionEntry
+            ? {
+                sessionId: "12345678-90ab-cdef-1234-567890abcdef",
+                updatedAt: 1,
+                ...sessionEntry,
+              }
+            : undefined,
         ),
       },
     },
@@ -116,7 +122,7 @@ export function createHarness(
       external_managed: patch.external_managed ?? true,
       external_ref: patch.external_ref ?? "agent:main:main",
       external_url:
-        patch.external_url ?? "https://control.example/control/chat?session=agent%3Amain%3Amain",
+        patch.external_url ?? "https://control.example/control/chat/main",
       sidebar_section: patch.sidebar_section ?? "Projects",
       archived: patch.archived ?? false,
       created_at: "2026-07-19T00:00:00.000Z",
@@ -178,7 +184,10 @@ export function createHarness(
   };
 }
 
-export function testExternalRef(sessionKey: string, sessionId = "session-id"): string {
+export function testExternalRef(
+  sessionKey: string,
+  sessionId = "12345678-90ab-cdef-1234-567890abcdef",
+): string {
   return discussionExternalRef(
     TEST_INSTALLATION_ID,
     sessionKey,

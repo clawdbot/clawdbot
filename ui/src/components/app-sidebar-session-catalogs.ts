@@ -42,7 +42,8 @@ export type CatalogBackingSessionDisplay = {
 
 export type CatalogSessionMenuRequest = {
   key: CatalogSessionKey;
-  search: string;
+  routeId: "chat" | "new-session";
+  navigation: ApplicationNavigationOptions;
   canOpenTerminal: boolean;
   meta: string;
 };

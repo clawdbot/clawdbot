@@ -709,7 +709,11 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     shell.handleGatewayEvent({
       event: "ui.command",
       payload: {
-        command: { kind: "split", direction: "right", sessionKey: "agent:main:other" },
+        command: {
+          kind: "split",
+          direction: "right",
+          sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+        },
       },
     });
     shell.handleGatewayEvent({
@@ -726,8 +730,10 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         detail: { open: true, dock: "right", terminalSessionId: "terminal-agent-1" },
       }),
     );
-    expect(setSessionKey).toHaveBeenCalledWith("agent:main:other");
-    expect(navigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Aother" });
+    expect(setSessionKey).toHaveBeenCalledWith(
+      "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+    );
+    expect(navigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/12345678" });
     expect(uiCommandEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({
         detail: {
