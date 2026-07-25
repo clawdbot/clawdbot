@@ -1,5 +1,26 @@
 // Provides small synchronous config cache helpers.
 
+import fs from "node:fs";
+
+export type FileStatSnapshot = {
+  ctimeNs?: bigint;
+  mtimeNs?: bigint;
+  sizeBytes?: number;
+};
+
+export function getFileStatSnapshot(filePath: string): FileStatSnapshot {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    return {
+      ctimeNs: stat.ctimeNs,
+      mtimeNs: stat.mtimeNs,
+      sizeBytes: Number(stat.size),
+    };
+  } catch {
+    return {};
+  }
+}
+
 /** Returns whether a TTL keeps cache reads and writes active. */
 export function isCacheEnabled(ttlMs: number): boolean {
   return ttlMs > 0;
@@ -7,6 +28,18 @@ export function isCacheEnabled(ttlMs: number): boolean {
 
 type CacheTtlResolver = number | (() => number);
 type CachePruneIntervalResolver = number | ((ttlMs: number) => number);
+
+export function resolveCacheTtlMs(options: { envValue?: string; defaultTtlMs: number }): number {
+  const trimmed = options.envValue?.trim();
+  if (!trimmed) {
+    return options.defaultTtlMs;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return options.defaultTtlMs;
+  }
+  return Math.floor(parsed);
+}
 
 type ExpiringMapCacheEntry<TValue> = {
   storedAt: number;
