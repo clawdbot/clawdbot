@@ -20,6 +20,7 @@ import {
 } from "./snapshot-provider.js";
 
 const durabilityTestState = vi.hoisted(() => ({
+  beforePin: undefined as ((directoryPath: string) => void | Promise<void>) | undefined,
   beforeSync: undefined as ((directoryPath: string) => void | Promise<void>) | undefined,
   pinnedSyncOutcome: undefined as
     | { status: "synced" }
@@ -32,6 +33,10 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   return {
     ...actual,
     pinDirectory: async (...args: Parameters<typeof actual.pinDirectory>) => {
+      const directory = args[0];
+      await durabilityTestState.beforePin?.(
+        typeof directory === "string" ? path.resolve(directory) : directory.path,
+      );
       const pinned = await actual.pinDirectory(...args);
       return {
         receipt: pinned.receipt,
@@ -61,6 +66,7 @@ const DURABLE_PLUGIN_BLOB_MARKER = "durable-plugin-blob-control";
 const STATE_LEASE_MARKER = "snapshot-must-not-retain-active-lease";
 
 afterEach(() => {
+  durabilityTestState.beforePin = undefined;
   durabilityTestState.beforeSync = undefined;
   durabilityTestState.pinnedSyncOutcome = undefined;
 });
@@ -550,6 +556,177 @@ describe("local SQLite snapshot repository", () => {
     await fs.mkdir(path.join(repositoryPath, "empty-final"));
 
     await expect(provider.list()).resolves.toEqual([second, first]);
+  });
+
+  it("recovers a complete snapshot left pending after a crash", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const snapshot = await provider.create({
+      path: sourcePath,
+      identity: { role: "generic", id: "recover-complete-pending" },
+    });
+    const pendingPath = path.join(snapshot.ref.path, ".pending");
+    await fs.writeFile(pendingPath, "");
+
+    await expect(provider.list()).resolves.toEqual([snapshot]);
+    await expect(fs.access(pendingPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(provider.verify(snapshot.ref)).resolves.toMatchObject({ ok: true });
+  });
+
+  it("recovers a complete pending snapshot through direct verify and restore", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    const restorePath = path.join(tempDir, "restore", "source.sqlite");
+    createGenericDatabase(sourcePath, { values: ["durable"] });
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const snapshot = await provider.create({
+      path: sourcePath,
+      identity: { role: "generic", id: "direct-pending-recovery" },
+    });
+    const pendingPath = path.join(snapshot.ref.path, ".pending");
+
+    await fs.writeFile(pendingPath, "");
+    await expect(provider.verify(snapshot.ref)).resolves.toEqual({
+      ok: true,
+      manifest: snapshot.manifest,
+    });
+    await expect(fs.access(pendingPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await fs.writeFile(pendingPath, "");
+    await expect(provider.restoreFresh(snapshot.ref, restorePath)).resolves.toEqual({
+      ok: true,
+      manifest: snapshot.manifest,
+    });
+    await expect(fs.access(pendingPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const sqlite = requireNodeSqlite();
+    const restored = new sqlite.DatabaseSync(restorePath, { readOnly: true });
+    try {
+      expect(restored.prepare("SELECT value FROM entries").all()).toEqual([{ value: "durable" }]);
+    } finally {
+      restored.close();
+    }
+  });
+
+  it("allows concurrent callers to recover the same complete pending snapshot", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const snapshot = await provider.create({
+      path: sourcePath,
+      identity: { role: "generic", id: "concurrent-pending-recovery" },
+    });
+    const pendingPath = path.join(snapshot.ref.path, ".pending");
+    await fs.writeFile(pendingPath, "");
+
+    let syncArrivals = 0;
+    let releaseSyncs: (() => void) | undefined;
+    const syncBarrier = new Promise<void>((resolve) => {
+      releaseSyncs = resolve;
+    });
+    durabilityTestState.beforeSync = async (directoryPath) => {
+      if (directoryPath !== snapshot.ref.path || syncArrivals >= 2) {
+        return;
+      }
+      syncArrivals += 1;
+      if (syncArrivals === 2) {
+        releaseSyncs?.();
+      }
+      await syncBarrier;
+    };
+
+    await expect(Promise.all([provider.list(), provider.list()])).resolves.toEqual([
+      [snapshot],
+      [snapshot],
+    ]);
+    expect(syncArrivals).toBe(2);
+    await expect(fs.access(pendingPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("accepts a concurrent commit after classifying a complete pending snapshot", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const snapshot = await provider.create({
+      path: sourcePath,
+      identity: { role: "generic", id: "concurrent-pending-commit" },
+    });
+    const pendingPath = path.join(snapshot.ref.path, ".pending");
+    await fs.writeFile(pendingPath, "");
+    durabilityTestState.beforePin = async (directoryPath) => {
+      if (directoryPath === snapshot.ref.path) {
+        durabilityTestState.beforePin = undefined;
+        await fs.unlink(pendingPath);
+      }
+    };
+
+    await expect(provider.list()).resolves.toEqual([snapshot]);
+    await expect(provider.verify(snapshot.ref)).resolves.toMatchObject({ ok: true });
+  });
+
+  it("preserves the pending marker when recovery cannot guarantee directory durability", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const snapshot = await provider.create({
+      path: sourcePath,
+      identity: { role: "generic", id: "unsupported-pending-recovery" },
+    });
+    const pendingPath = path.join(snapshot.ref.path, ".pending");
+    await fs.writeFile(pendingPath, "");
+    durabilityTestState.pinnedSyncOutcome = { status: "unsupported", code: "ENOTSUP" };
+
+    await expect(provider.list()).rejects.toThrow(/crash-durable directory synchronization/u);
+    await expect(fs.access(pendingPath)).resolves.toBeUndefined();
+
+    durabilityTestState.pinnedSyncOutcome = undefined;
+    await expect(provider.list()).resolves.toEqual([snapshot]);
+  });
+
+  it("rejects a hardlinked pending marker without committing the snapshot", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const snapshot = await provider.create({
+      path: sourcePath,
+      identity: { role: "generic", id: "hardlinked-pending-recovery" },
+    });
+    const pendingPath = path.join(snapshot.ref.path, ".pending");
+    const markerSourcePath = path.join(tempDir, "pending-marker");
+    await fs.writeFile(markerSourcePath, "");
+    await fs.link(markerSourcePath, pendingPath);
+
+    await expect(provider.list()).rejects.toThrow(/pending marker is unsafe/u);
+    await expect(fs.access(pendingPath)).resolves.toBeUndefined();
+  });
+
+  it("preserves a complete pending snapshot that fails recovery verification", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const snapshot = await provider.create({
+      path: sourcePath,
+      identity: { role: "generic", id: "reject-invalid-pending" },
+    });
+    const pendingPath = path.join(snapshot.ref.path, ".pending");
+    await fs.writeFile(pendingPath, "");
+    await fs.appendFile(path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME), "corrupt");
+
+    await expect(provider.list()).rejects.toThrow(/size mismatch|hash mismatch/u);
+    await expect(fs.access(pendingPath)).resolves.toBeUndefined();
   });
 
   it.each([SNAPSHOT_SQLITE_FILENAME, SNAPSHOT_MANIFEST_FILENAME])(

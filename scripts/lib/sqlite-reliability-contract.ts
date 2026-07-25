@@ -135,13 +135,13 @@ export type ReliabilityReport = {
         visibleSnapshotsAfterCrash: number;
       };
       pending: {
-        crashSnapshotVerifiedAfterCrash: false;
-        crashSnapshotVisibleAfterCrash: false;
+        crashSnapshotVerifiedAfterCrash: true;
+        crashSnapshotVisibleAfterCrash: true;
         exit: {
           code: number | null;
           signal: NodeJS.Signals | null;
         };
-        incompleteEntries: 1;
+        incompleteEntries: 0;
         payload: {
           bytes: number;
           idSum: number;
