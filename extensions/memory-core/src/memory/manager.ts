@@ -1074,6 +1074,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           minScore,
         });
       }
+      let semanticProvider = this.provider;
+      let vectorProviderIdentity = {
+        model: semanticProvider.model,
+        aliases: this.resolveProviderIndexIdentities()
+          .slice(1)
+          .map((identity) => identity.model),
+      };
 
       // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
       const loadKeywordResults = async () =>
@@ -1094,7 +1101,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
       let queryVec: number[];
       try {
-        queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal);
+        queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal, semanticProvider);
       } catch (err) {
         // An aborted caller already stopped waiting; skip fallback-provider
         // activation so the abandoned search stops instead of re-embedding.
@@ -1119,7 +1126,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             return [];
           }
           keywordResults = await loadKeywordResults();
-          queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal);
+          if (!this.provider) {
+            return [];
+          }
+          semanticProvider = this.provider;
+          vectorProviderIdentity = {
+            model: semanticProvider.model,
+            aliases: this.resolveProviderIndexIdentities()
+              .slice(1)
+              .map((identity) => identity.model),
+          };
+          queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal, semanticProvider);
         } else if (!this.provider && this.fts.enabled && this.fts.available) {
           this.assertRequiredProviderAvailable("search");
           log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
@@ -1135,7 +1152,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
       const hasVector = queryVec.some((v) => v !== 0);
       const vectorResults = hasVector
-        ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err: unknown) => {
+        ? await this.searchVector(
+            queryVec,
+            candidates,
+            sourceFilterList,
+            vectorProviderIdentity,
+          ).catch((err: unknown) => {
             log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
             return [];
           })
@@ -1254,18 +1276,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     queryVec: number[],
     limit: number,
     sourceFilterList: MemorySource[],
+    providerIdentity: { model: string; aliases: string[] },
   ): Promise<Array<MemorySearchResult & { id: string }>> {
-    // This method should never be called without a provider
-    if (!this.provider) {
-      return [];
-    }
     const results = await searchVector({
       db: this.db,
       vectorTable: VECTOR_TABLE,
-      providerModel: this.provider.model,
-      providerModelAliases: this.resolveProviderIndexIdentities()
-        .slice(1)
-        .map((identity) => identity.model),
+      providerModel: providerIdentity.model,
+      providerModelAliases: providerIdentity.aliases,
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,

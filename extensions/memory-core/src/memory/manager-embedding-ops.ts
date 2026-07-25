@@ -570,8 +570,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected async embedQueryWithRetry(text: string, signal?: AbortSignal): Promise<number[]> {
-    const provider = this.provider;
+  protected async embedQueryWithRetry(
+    text: string,
+    signal?: AbortSignal,
+    providerOverride?: EmbeddingProvider,
+  ): Promise<number[]> {
+    const provider = providerOverride ?? this.provider;
     if (!provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
