@@ -186,6 +186,50 @@ describe("resolveTuiSessionKey", () => {
     ).toBe("agent:ops:incident");
   });
 
+  it.each([
+    {
+      raw: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
+      expected: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
+    },
+    {
+      raw: "Matrix:Channel:!MixedRoomAbCdEf:example.org",
+      expected: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
+    },
+    {
+      raw: "Agent:Main:Matrix:Channel:!MixedRoomAbCdEf:example.org:Thread:$EventAbCdEf",
+      expected: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org:thread:$EventAbCdEf",
+    },
+    {
+      raw: "Agent:Ops:Matrix:Channel:!MixedRoomAbCdEf:example.org",
+      expected: "agent:ops:matrix:channel:!MixedRoomAbCdEf:example.org",
+    },
+    {
+      raw: "agent:main:signal:group:AbC123=",
+      expected: "agent:main:signal:group:AbC123=",
+    },
+    {
+      raw: "Agent:Ops:Signal:Group:AbC123=",
+      expected: "agent:ops:signal:group:AbC123=",
+    },
+    {
+      raw: "Signal:Group:AbC123=",
+      expected: "agent:main:signal:group:AbC123=",
+    },
+    {
+      raw: "Telegram:Group:MixedHandle",
+      expected: "agent:main:telegram:group:mixedhandle",
+    },
+  ])("preserves canonical provider-owned session identity for $raw", ({ raw, expected }) => {
+    expect(
+      resolveTuiSessionKey({
+        raw,
+        sessionScope: "per-sender",
+        currentAgentId: "main",
+        sessionMainKey: "main",
+      }),
+    ).toBe(expected);
+  });
+
   it("lowercases session keys with uppercase characters", () => {
     // Uppercase in agent-prefixed form
     expect(

@@ -32,6 +32,8 @@ scenario:
       }
     kind: flow
     suiteIsolation: isolated
+    transportPolicy:
+      requireGroupMention: true
     summary: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
     config:
       expectedMarker: QA-CHANNEL-BASELINE-OK
