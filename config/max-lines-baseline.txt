@@ -143,7 +143,6 @@ extensions/matrix/src/matrix/client/config.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
-extensions/matrix/src/matrix/sdk.ts
 extensions/matrix/src/matrix/sdk/verification-manager.ts
 extensions/matrix/src/matrix/send.test.ts
 extensions/matrix/src/onboarding.ts
