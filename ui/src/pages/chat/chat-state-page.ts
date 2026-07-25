@@ -28,7 +28,7 @@ type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
 };
 
-export function clearImageLightbox(state: ChatPageHost) {
+function clearImageLightbox(state: ChatPageHost) {
   const item = state.imageLightbox;
   state.imageLightbox = null;
   item?.release?.();
