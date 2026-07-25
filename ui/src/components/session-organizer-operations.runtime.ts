@@ -47,13 +47,17 @@ export async function patchSession(
   session: SidebarRecentSession,
   patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
+  refresh: { deferListRefresh?: boolean } = {},
 ): Promise<SidebarSessionMutationResult> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+  const agentId = sessionRowAgentId(session, scope);
   try {
-    const patched = await scope.sessions.patch(session.key, patch, { agentId });
+    const patched = await scope.sessions.patch(session.key, patch, {
+      agentId,
+      ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
+    });
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return "stale";
     }
@@ -70,7 +74,7 @@ export async function patchSession(
     if (patch.pinned === false || (patch.archived === true && session.pinned)) {
       host.pruneSidebarSessionEntry(session.key);
     }
-    if (host.sidebarSessionStatusFilter() !== "active") {
+    if (!refresh.deferListRefresh && host.sidebarSessionStatusFilter() !== "active") {
       await host.sessionData.refreshSidebarSessions(agentId);
       if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return "stale";
@@ -98,6 +102,47 @@ export async function patchSession(
   }
 }
 
+function sessionRowAgentId(
+  session: SidebarRecentSession,
+  scope: SidebarSessionMutationScope,
+): string {
+  return parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+}
+
+/**
+ * One list refresh per owning agent, replacing the per-row refreshes a batch
+ * defers; each deferred row skipped a full `sessions.list` round trip and rode
+ * pushed `sessions.changed` events instead. Agents come from the rows, not the
+ * scope, because `patchSession` routes every mutation by its own key. The
+ * result carries the stale/failed reporting the per-row refresh owed its caller.
+ */
+async function refreshSessionsAfterBatch(
+  host: SessionOrganizerControllerHost,
+  scope: SidebarSessionMutationScope,
+  rows: readonly SidebarRecentSession[],
+): Promise<SidebarSessionMutationResult> {
+  const agentIds = [...new Set(rows.map((row) => sessionRowAgentId(row, scope)))];
+  const refreshSidebar = host.sidebarSessionStatusFilter() !== "active";
+  for (const agentId of agentIds) {
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return "stale";
+    }
+    try {
+      await scope.sessions.refreshReplacement(agentId);
+      if (refreshSidebar && host.sessionData.isSessionMutationScopeCurrent(scope)) {
+        await host.sessionData.refreshSidebarSessions(agentId);
+      }
+    } catch (error) {
+      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+        return "stale";
+      }
+      host.sessionData.publishSessionMutationError(scope, error);
+      return "failed";
+    }
+  }
+  return host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
+}
+
 export async function patchSessions(
   host: SessionOrganizerControllerHost,
   rows: readonly SidebarRecentSession[],
@@ -107,11 +152,14 @@ export async function patchSessions(
   if (!scope) {
     return "stale";
   }
+  if (rows.length === 0) {
+    return "completed";
+  }
   let result: SidebarSessionMutationResult = "completed";
   // Sequential like deleteMany: parallel patches would race the shared
   // session-state publishes inside the capability.
   for (const row of rows) {
-    const rowResult = await patchSession(host, row, patch, scope);
+    const rowResult = await patchSession(host, row, patch, scope, { deferListRefresh: true });
     if (rowResult === "stale") {
       return "stale";
     }
@@ -119,7 +167,8 @@ export async function patchSessions(
       result = "failed";
     }
   }
-  return result;
+  const refreshed = await refreshSessionsAfterBatch(host, scope, rows);
+  return refreshed === "completed" ? result : refreshed;
 }
 
 export async function archiveSessionWithUndo(
@@ -145,9 +194,14 @@ async function archiveSessionsWithUndo(
   rows: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
 ) {
+  if (rows.length === 0) {
+    return;
+  }
   const archived: Array<{ session: SidebarRecentSession; pinned: boolean }> = [];
   for (const session of rows) {
-    const result = await patchSession(host, session, { archived: true }, scope);
+    const result = await patchSession(host, session, { archived: true }, scope, {
+      deferListRefresh: true,
+    });
     if (result === "stale") {
       return;
     }
@@ -155,7 +209,8 @@ async function archiveSessionsWithUndo(
       archived.push({ session, pinned: session.pinned });
     }
   }
-  if (archived.length === 0 || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const refreshed = await refreshSessionsAfterBatch(host, scope, rows);
+  if (archived.length === 0 || refreshed === "stale") {
     return;
   }
   showToast({
@@ -183,6 +238,7 @@ async function restoreArchivedSessions(
       session,
       { archived: false, ...(pinned ? { pinned: true } : {}) },
       scope,
+      { deferListRefresh: true },
     );
     if (result === "stale") {
       return;
@@ -191,7 +247,12 @@ async function restoreArchivedSessions(
       restoredActiveKey = session.key;
     }
   }
-  if (restoredActiveKey && host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const refreshed = await refreshSessionsAfterBatch(
+    host,
+    scope,
+    archived.map((entry) => entry.session),
+  );
+  if (restoredActiveKey && refreshed !== "stale") {
     host.replaceCurrentSession(restoredActiveKey);
   }
 }

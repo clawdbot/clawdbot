@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawChatUI
 
 /// A borderless panel that can still accept key focus (needed for typing).
 final class WebChatPanel: NSPanel {
@@ -36,6 +37,32 @@ struct WebChatRoute: Equatable, Sendable {
     }
 }
 
+struct WebChatSessionObserverVisibilityOwners {
+    private var ownersByConnection: [ObjectIdentifier: Set<ObjectIdentifier>] = [:]
+
+    mutating func setVisible(
+        _ visible: Bool,
+        owner: ObjectIdentifier,
+        connection: ObjectIdentifier) -> Bool?
+    {
+        let wasVisible = self.isVisible(connection: connection)
+        if visible {
+            self.ownersByConnection[connection, default: []].insert(owner)
+        } else {
+            self.ownersByConnection[connection]?.remove(owner)
+            if self.ownersByConnection[connection]?.isEmpty == true {
+                self.ownersByConnection.removeValue(forKey: connection)
+            }
+        }
+        let isVisible = self.isVisible(connection: connection)
+        return wasVisible == isVisible ? nil : isVisible
+    }
+
+    func isVisible(connection: ObjectIdentifier) -> Bool {
+        self.ownersByConnection[connection]?.isEmpty == false
+    }
+}
+
 @MainActor
 final class WebChatManager {
     static let shared = WebChatManager()
@@ -54,6 +81,11 @@ final class WebChatManager {
     private var profileWindows: [UUID: ProfileWindowInstance] = [:]
     private var profileWindowOrder: [UUID] = []
     private var unavailableProfileIDs: Set<String> = []
+    private var sessionObserverOwners = WebChatSessionObserverVisibilityOwners()
+    private var sessionObserverMonitors: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var sessionObserverRequests: [ObjectIdentifier: (id: UUID, task: Task<Void, Never>)] = [:]
+    private var sessionObserverDeclarations:
+        [ObjectIdentifier: (lease: GatewayConnection.ServerLease, visible: Bool)] = [:]
 
     private static let lastGatewayProfileIDKey = "openclaw.webchat.lastGatewayProfileID"
 
@@ -84,11 +116,15 @@ final class WebChatManager {
             agentID: route.agentID,
             initialDraft: draft,
             presentation: .window)
-        controller.onVisibilityChanged = { [weak self] visible in
-            self?.onPanelVisibilityChanged?(visible)
+        controller.onVisibilityChanged = { [weak self, weak controller] visible in
+            guard let self, let controller else { return }
+            self.setSessionObserverVisible(visible, owner: controller, connection: .shared)
+            self.onPanelVisibilityChanged?(visible)
         }
         controller.onClosed = { [weak self, weak controller] in
-            guard let self, let controller, self.windowController === controller else { return }
+            guard let self, let controller else { return }
+            self.setSessionObserverVisible(false, owner: controller, connection: .shared)
+            guard self.windowController === controller else { return }
             if self.currentChatRoute == self.windowRoute {
                 self.currentChatRoute = self.panelRoute
             }
@@ -171,11 +207,14 @@ final class WebChatManager {
             gatewayID: profile.id,
             windowTitle: "\(profile.name) — OpenClaw",
             windowAutosaveName: "OpenClawChatWindow-\(profile.id)")
+        controller.onVisibilityChanged = { [weak self, weak controller] visible in
+            guard let self, let controller else { return }
+            self.setSessionObserverVisible(visible, owner: controller, connection: connection)
+        }
         controller.onClosed = { [weak self, weak controller] in
-            guard let self,
-                  let controller,
-                  self.profileWindows[windowID]?.controller === controller
-            else { return }
+            guard let self, let controller else { return }
+            self.setSessionObserverVisible(false, owner: controller, connection: connection)
+            guard self.profileWindows[windowID]?.controller === controller else { return }
             self.profileWindows.removeValue(forKey: windowID)
             self.profileWindowOrder.removeAll { $0 == windowID }
         }
@@ -295,6 +334,117 @@ final class WebChatManager {
         self.resetTunnels()
     }
 
+    private func setSessionObserverVisible(
+        _ visible: Bool,
+        owner: WebChatSwiftUIWindowController,
+        connection: GatewayConnection)
+    {
+        let connectionID = ObjectIdentifier(connection)
+        guard let aggregateVisibility = self.sessionObserverOwners.setVisible(
+            visible,
+            owner: ObjectIdentifier(owner),
+            connection: connectionID)
+        else { return }
+
+        if aggregateVisibility, self.sessionObserverMonitors[connectionID] == nil {
+            // Visibility and subscriptions belong to a physical socket; a reconnect
+            // must redeclare both while any window on that connection remains open.
+            self.sessionObserverMonitors[connectionID] = Task { @MainActor [weak self] in
+                let pushes = await connection.subscribe(bufferingNewest: 1)
+                for await push in pushes {
+                    guard !Task.isCancelled else { return }
+                    guard case .snapshot = push else { continue }
+                    guard let self else { return }
+                    self.scheduleSessionObserverVisibility(
+                        self.sessionObserverOwners.isVisible(connection: connectionID),
+                        connection: connection)
+                }
+            }
+        }
+        self.scheduleSessionObserverVisibility(aggregateVisibility, connection: connection)
+    }
+
+    private func scheduleSessionObserverVisibility(
+        _ visible: Bool,
+        connection: GatewayConnection,
+        remainingHiddenRetries: Int = 1)
+    {
+        let connectionID = ObjectIdentifier(connection)
+        let previous = self.sessionObserverRequests[connectionID]?.task
+        let requestID = UUID()
+        let task = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self,
+                  self.sessionObserverOwners.isVisible(connection: connectionID) == visible,
+                  let lease = await connection.captureServerLease(),
+                  self.sessionObserverOwners.isVisible(connection: connectionID) == visible
+            else {
+                self?.finishSessionObserverRequest(connection: connectionID, id: requestID)
+                return
+            }
+
+            if let declaration = self.sessionObserverDeclarations[connectionID],
+               declaration.visible == visible,
+               await connection.isCurrentServerLease(declaration.lease)
+            {
+                self.finishSessionObserverRequest(connection: connectionID, id: requestID)
+                return
+            }
+
+            // A timed-out mutation may already have changed the Gateway. Clear
+            // the old confirmation before dispatch so reopening retries truthfully.
+            self.sessionObserverDeclarations.removeValue(forKey: connectionID)
+            do {
+                if visible {
+                    let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
+                    _ = try await connection.request(
+                        method: subscribe.method,
+                        params: subscribe.params,
+                        timeoutMs: subscribe.timeoutMs,
+                        ifCurrentServerLease: lease)
+                }
+                guard self.sessionObserverOwners.isVisible(connection: connectionID) == visible else {
+                    self.finishSessionObserverRequest(connection: connectionID, id: requestID)
+                    return
+                }
+                let request = OpenClawChatGatewayRequests.setSessionObserverVisibility(visible)
+                _ = try await connection.request(
+                    method: request.method,
+                    params: request.params,
+                    timeoutMs: request.timeoutMs,
+                    ifCurrentServerLease: lease)
+                if visible {
+                    self.sessionObserverDeclarations[connectionID] = (lease: lease, visible: true)
+                } else {
+                    self.sessionObserverDeclarations.removeValue(forKey: connectionID)
+                    if !self.sessionObserverOwners.isVisible(connection: connectionID) {
+                        self.sessionObserverMonitors.removeValue(forKey: connectionID)?.cancel()
+                    }
+                }
+            } catch {
+                // A hidden mutation can time out after dispatch. Retry once on its
+                // original socket; keep the snapshot monitor for a replaced socket.
+                if !visible,
+                   remainingHiddenRetries > 0,
+                   await connection.isCurrentServerLease(lease),
+                   !self.sessionObserverOwners.isVisible(connection: connectionID)
+                {
+                    self.scheduleSessionObserverVisibility(
+                        false,
+                        connection: connection,
+                        remainingHiddenRetries: remainingHiddenRetries - 1)
+                }
+            }
+            self.finishSessionObserverRequest(connection: connectionID, id: requestID)
+        }
+        self.sessionObserverRequests[connectionID] = (id: requestID, task: task)
+    }
+
+    private func finishSessionObserverRequest(connection: ObjectIdentifier, id: UUID) {
+        guard self.sessionObserverRequests[connection]?.id == id else { return }
+        self.sessionObserverRequests.removeValue(forKey: connection)
+    }
+
     private func panelHidden() {
         self.onPanelVisibilityChanged?(false)
         // Keep panel controller cached so reopening doesn't re-bootstrap.
@@ -353,6 +503,10 @@ final class WebChatManager {
     }
 
     #if DEBUG
+    func _testSessionObserverVisible(connection: GatewayConnection) -> Bool {
+        self.sessionObserverOwners.isVisible(connection: ObjectIdentifier(connection))
+    }
+
     func _testProfileWindowCount(profileID: String) -> Int {
         self.profileWindows.values.count { $0.profileID == profileID }
     }
