@@ -132,11 +132,15 @@ async function assertRawParentWithinRoot(params: {
   const hasTrailingSeparator = rawAbsolute.endsWith(path.sep);
   const rawParent = hasTrailingSeparator ? rawAbsolute : path.dirname(rawAbsolute);
   const finalSegment = hasTrailingSeparator ? "." : path.basename(rawAbsolute);
+  const rootResolved = path.resolve(params.root);
   const [rootCanonical, parentCanonical] = await Promise.all([
-    resolveRawPathViaExistingAncestor(path.resolve(params.root)),
+    resolveRawPathViaExistingAncestor(rootResolved),
     resolveRawPathViaExistingAncestor(rawParent),
   ]);
-  const targetCanonical = path.resolve(parentCanonical, finalSegment);
+  const targetCanonical =
+    path.resolve(rawAbsolute) === rootResolved
+      ? await resolveRawPathViaExistingAncestor(rawAbsolute)
+      : path.resolve(parentCanonical, finalSegment);
   if (targetCanonical !== rootCanonical && !isPathInside(rootCanonical, targetCanonical)) {
     throw new Error(
       `Path escapes sandbox root (${shortenHomePath(rootCanonical)}): ${params.filePath}`,

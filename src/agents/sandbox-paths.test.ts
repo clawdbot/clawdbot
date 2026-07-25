@@ -144,6 +144,9 @@ describe("assertSandboxPath", () => {
             root,
           }),
         ).rejects.toThrow(/escapes sandbox root/i);
+        await expect(
+          assertSandboxPath({ filePath: `${root}/sub/up/../..`, cwd: root, root }),
+        ).rejects.toThrow(/escapes sandbox root/i);
 
         await fs.symlink(outside, path.join(root, "outside-link"));
         await expect(
@@ -193,7 +196,7 @@ describe("assertSandboxPath", () => {
     },
   );
 
-  it("accepts a path beneath a root that has not been created yet", async () => {
+  it("accepts not-yet-created and symlinked roots", async () => {
     const parent = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-missing-root-")),
     );
@@ -202,6 +205,14 @@ describe("assertSandboxPath", () => {
       await expect(
         assertSandboxPath({ filePath: "nested/new.txt", cwd: root, root }),
       ).resolves.toMatchObject({ relative: path.join("nested", "new.txt") });
+
+      const realRoot = path.join(parent, "real-workspace");
+      const linkedRoot = path.join(parent, "linked-workspace");
+      await fs.mkdir(realRoot);
+      await fs.symlink(realRoot, linkedRoot);
+      await expect(
+        assertSandboxPath({ filePath: linkedRoot, cwd: linkedRoot, root: linkedRoot }),
+      ).resolves.toMatchObject({ relative: "" });
     } finally {
       await fs.rm(parent, { recursive: true, force: true });
     }
