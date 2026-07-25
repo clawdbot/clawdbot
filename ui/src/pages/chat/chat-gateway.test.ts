@@ -3041,6 +3041,37 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStream).toBeNull();
   });
 
+  it("keeps a newly sent repeated user message when history reload is still stale", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      timestamp: 10,
+      __openclaw: {
+        id: "first-user-message",
+        idempotencyKey: "first-run:user",
+        seq: 1,
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      timestamp: 20,
+      __openclaw: { idempotencyKey: "second-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, optimisticUser]);
+  });
+
   it("keeps active streamed assistant text when history reload returns a stale snapshot", async () => {
     const persistedUser = {
       role: "user",

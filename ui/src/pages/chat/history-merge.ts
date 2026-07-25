@@ -80,9 +80,19 @@ export function preserveOptimisticTailMessages(
   let sharedPreviousIndex = -1;
   let sharedHistoryIndex = -1;
   for (let index = previousMessages.length - 1; index >= 0; index--) {
-    const signature = messageDisplaySignature(previousMessages[index]);
+    const message = previousMessages[index];
+    // Only transcript-backed rows can anchor history; a newer optimistic turn
+    // may intentionally repeat an earlier user's exact visible text.
+    if (isLocallyOptimisticHistoryMessage(message)) {
+      continue;
+    }
+    const signature = messageDisplaySignature(message);
     const historyIndex = signature ? historySignatureIndexes.get(signature) : undefined;
-    if (typeof historyIndex === "number") {
+    const sequence = readTranscriptSequence(message);
+    if (
+      typeof historyIndex === "number" &&
+      (sequence === null || readTranscriptSequence(historyMessages[historyIndex]) === sequence)
+    ) {
       sharedPreviousIndex = index;
       sharedHistoryIndex = historyIndex;
       break;
@@ -97,7 +107,7 @@ export function preserveOptimisticTailMessages(
       return historyMessages;
     }
     const signature = messageDisplaySignature(message);
-    if (!signature || historySignatureIndexes.has(signature)) {
+    if (!signature) {
       return historyMessages;
     }
     optimisticTail.push(message);
