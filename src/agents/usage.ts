@@ -335,12 +335,24 @@ export function deriveContextPromptTokens(params: {
   return derivePromptTokens(params.usage);
 }
 
+export function hasReliableProviderContextUsage(params: {
+  lastCallUsage?: NormalizedUsage;
+  usage?: NormalizedUsage;
+}): boolean {
+  return (
+    params.lastCallUsage?.contextUsage?.state === "available" ||
+    params.usage?.contextUsage?.state === "available"
+  );
+}
+
 /** Derive the session prompt-token snapshot stored for context display. */
 export function deriveSessionTotalTokens(params: {
   lastCallUsage?: NormalizedUsage;
   usage?: NormalizedUsage;
   contextTokens?: number;
   promptTokens?: number;
+  /** When true, only accept provider contextUsage (not last-call input/output). */
+  requireContextUsage?: boolean;
 }): number | undefined {
   const promptOverride = params.promptTokens;
   const hasPromptOverride =
@@ -348,6 +360,25 @@ export function deriveSessionTotalTokens(params: {
 
   const usage = params.usage;
   if (!params.lastCallUsage && !usage && !hasPromptOverride) {
+    return undefined;
+  }
+
+  if (params.requireContextUsage) {
+    if (params.lastCallUsage?.contextUsage?.state === "available") {
+      const tokens = params.lastCallUsage.contextUsage.promptTokens;
+      if (typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0) {
+        return tokens;
+      }
+    }
+    if (usage?.contextUsage?.state === "available") {
+      const tokens = usage.contextUsage.promptTokens;
+      if (typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0) {
+        return tokens;
+      }
+    }
+    // Explicit agentMeta.promptTokens may still be a full-context snapshot from
+    // a harness that computed it locally; accept only when contextUsage is also
+    // available OR when callers pass requireContextUsage=false.
     return undefined;
   }
 

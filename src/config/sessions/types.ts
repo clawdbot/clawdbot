@@ -506,6 +506,17 @@ export type SessionEntry = SessionRestartRecoveryState &
     fallbackNoticeActiveModel?: string;
     fallbackNoticeReason?: string;
     contextTokens?: number;
+    /**
+     * Slim local tokenizer breakdown for the chat context ring (full session).
+     * Additive session metadata; not a Gateway protocol version bump.
+     */
+    contextUsageBreakdown?: {
+      categories: Array<{ id: string; tokens: number }>;
+      totalTokens: number;
+      estimatedAt: number;
+      approximate: boolean;
+      encoding: string;
+    };
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
@@ -869,7 +880,23 @@ export type SessionSystemPromptReport = {
       schemaChars: number;
       schemaHash?: string;
       propertiesCount?: number | null;
+      /** Optional tool provenance for MCP vs core schema bucketing. */
+      source?: string;
     }>;
+  };
+  /**
+   * Local tokenizer snapshot for prompt assembly buckets (excludes transcript).
+   * Used when providers omit contextUsage so the UI can still show full-session
+   * context pressure.
+   */
+  promptTokenEstimate?: {
+    encoding: string;
+    approximate: boolean;
+    system: number;
+    tools: number;
+    mcpTools: number;
+    rules: number;
+    skills: number;
   };
 };
 

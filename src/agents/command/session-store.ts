@@ -11,13 +11,27 @@ import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  buildContextUsageBreakdown,
+  countConversationTokensFromMessages,
+} from "../../shared/context-usage-breakdown.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
+import { resolveTokenEncoding } from "../../shared/token-counter.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import {
+  createMessageCharEstimateCache,
+  estimateMessageCharsCached,
+} from "../embedded-agent-runner/tool-result-char-estimator.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
+import type { AgentMessage } from "../runtime/index.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
+
+const sessionMessagesModuleLoader = createLazyImportLoader(
+  () => import("../../gateway/session-transcript-readers.js"),
+);
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
@@ -30,6 +44,122 @@ async function getUsageFormatModule() {
 
 async function getContextModule() {
   return await contextModuleLoader.load();
+}
+
+async function getSessionMessagesModule() {
+  return await sessionMessagesModuleLoader.load();
+}
+
+function extractMessageTextForTokens(message: { role?: string }): string {
+  const record = message as Record<string, unknown>;
+  const content = record.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const typed = block as { type?: string; text?: string; thinking?: string; summary?: string };
+      if (typeof typed.text === "string") {
+        parts.push(typed.text);
+      } else if (typeof typed.thinking === "string") {
+        parts.push(typed.thinking);
+      } else if (typeof typed.summary === "string") {
+        parts.push(typed.summary);
+      } else {
+        try {
+          parts.push(JSON.stringify(block));
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return parts.join("\n");
+  }
+  if (typeof record.summary === "string") {
+    return record.summary;
+  }
+  if (typeof record.command === "string" || typeof record.output === "string") {
+    return `${String(record.command ?? "")}\n${String(record.output ?? "")}`;
+  }
+  return "";
+}
+
+async function resolveLocalContextUsageBreakdown(params: {
+  sessionId: string;
+  storePath: string;
+  sessionFile?: string;
+  sessionKey?: string;
+  agentId?: string;
+  report: SessionEntry["systemPromptReport"];
+  provider: string;
+  model: string;
+}): Promise<NonNullable<SessionEntry["contextUsageBreakdown"]> | undefined> {
+  try {
+    const { readSessionMessagesAsync } = await getSessionMessagesModule();
+    // Prefer the SQLite-aware transcript seam. JSONL-only readers miss
+    // sqlite: sessionFile markers and undercount conversation/summaries to 0.
+    const rawMessages = (await readSessionMessagesAsync(
+      {
+        sessionId: params.sessionId,
+        storePath: params.storePath,
+        ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.sessionFile
+          ? { sessionEntry: { sessionFile: params.sessionFile, sessionId: params.sessionId } }
+          : {}),
+      },
+      { mode: "full", reason: "context usage breakdown" },
+    )) as AgentMessage[];
+    const encoding = resolveTokenEncoding({
+      provider: params.provider,
+      model: params.model,
+      encodingOverride: params.report?.promptTokenEstimate?.encoding,
+    }).encoding;
+    const conversationTokens = countConversationTokensFromMessages({
+      messages: rawMessages,
+      extractText: extractMessageTextForTokens,
+      encoding,
+      extras: {
+        runtimeContextChars: params.report?.currentTurn?.runtimeContextChars,
+        modelOnlyPromptChars: params.report?.currentTurn?.modelOnlyPromptChars,
+      },
+    });
+    // Keep char estimator path warm for callers that only have WeakMap caches.
+    const cache = createMessageCharEstimateCache();
+    for (const message of rawMessages) {
+      estimateMessageCharsCached(message, cache);
+    }
+    const breakdown = buildContextUsageBreakdown({
+      report: params.report,
+      conversation: conversationTokens.charTotals,
+      provider: params.provider,
+      model: params.model,
+      conversationTokenOverrides: {
+        summaries: conversationTokens.summaries,
+        conversation: conversationTokens.conversation,
+      },
+    });
+    if (conversationTokens.approximate) {
+      breakdown.approximate = true;
+    }
+    return breakdown.totalTokens > 0 || params.report?.promptTokenEstimate != null
+      ? breakdown
+      : undefined;
+  } catch {
+    if (!params.report) {
+      return undefined;
+    }
+    return buildContextUsageBreakdown({
+      report: params.report,
+      provider: params.provider,
+      model: params.model,
+    });
+  }
 }
 
 function resolvePositiveInteger(value: number | undefined): number | undefined {
@@ -212,6 +342,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
+    // Prefer provider last-call / contextUsage snapshots when present (CLI +
+    // OpenAI contracts). Local tokenizer fills the ring only when those are
+    // missing — the common custom-provider gap.
     const totalTokens = deriveSessionTotalTokens({
       lastCallUsage,
       contextTokens,
@@ -232,6 +365,20 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const hasUsageTotalTokens =
       typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0;
     const useCompactionSnapshot = compactionTokensAfter !== undefined && !hasUsageTotalTokens;
+    const localBreakdown = !useCompactionSnapshot
+      ? await resolveLocalContextUsageBreakdown({
+          sessionId,
+          storePath,
+          sessionFile: next.sessionFile ?? entry.sessionFile,
+          sessionKey,
+          report: next.systemPromptReport ?? entry.systemPromptReport,
+          provider: providerUsed,
+          model: modelUsed,
+        })
+      : undefined;
+    if (localBreakdown) {
+      next.contextUsageBreakdown = localBreakdown;
+    }
     if (useCompactionSnapshot) {
       next.totalTokens = compactionTokensAfter;
       next.totalTokensFresh = true;
@@ -243,6 +390,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     } else if (hasUsageTotalTokens) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
+    } else if (localBreakdown && localBreakdown.totalTokens > 0) {
+      next.totalTokens = localBreakdown.totalTokens;
+      next.totalTokensFresh = false;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
@@ -265,14 +415,31 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.cacheRead = undefined;
     next.cacheWrite = undefined;
     next.contextBudgetStatus = undefined;
-  } else if (
-    !preserveUserFacingRunState &&
-    typeof entry.totalTokens === "number" &&
-    Number.isFinite(entry.totalTokens) &&
-    entry.totalTokens > 0
-  ) {
-    next.totalTokens = entry.totalTokens;
-    next.totalTokensFresh = false;
+  } else if (!preserveUserFacingRunState) {
+    const localBreakdown = await resolveLocalContextUsageBreakdown({
+      sessionId,
+      storePath,
+      sessionFile: next.sessionFile ?? entry.sessionFile,
+      sessionKey,
+      report: next.systemPromptReport ?? entry.systemPromptReport,
+      provider: providerUsed,
+      model: modelUsed,
+    });
+    if (localBreakdown && localBreakdown.totalTokens > 0) {
+      next.contextUsageBreakdown = localBreakdown;
+      next.totalTokens = localBreakdown.totalTokens;
+      next.totalTokensFresh = false;
+    } else if (
+      typeof entry.totalTokens === "number" &&
+      Number.isFinite(entry.totalTokens) &&
+      entry.totalTokens > 0
+    ) {
+      next.totalTokens = entry.totalTokens;
+      next.totalTokensFresh = false;
+      if (entry.contextUsageBreakdown) {
+        next.contextUsageBreakdown = entry.contextUsageBreakdown;
+      }
+    }
   }
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;

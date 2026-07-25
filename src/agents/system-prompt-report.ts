@@ -6,6 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
+import { countTextTokens, resolveTokenEncoding } from "../shared/token-counter.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { AgentTool } from "./runtime/index.js";
@@ -82,6 +83,17 @@ function buildToolSchemaStats(
   return stats;
 }
 
+function resolveToolSource(tool: AgentTool): string | undefined {
+  const record = tool as AgentTool & { source?: unknown; pluginId?: unknown };
+  if (typeof record.source === "string" && record.source.trim()) {
+    return record.source.trim();
+  }
+  if (typeof record.pluginId === "string" && record.pluginId.trim()) {
+    return record.pluginId.trim();
+  }
+  return undefined;
+}
+
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
     const cached = toolReportEntryCache.get(tool);
@@ -92,10 +104,108 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
     const schemaStats = buildToolSchemaStats(tool.parameters);
-    const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
+    const source = resolveToolSource(tool);
+    const entry = {
+      name,
+      summaryChars,
+      summaryHash: sha256(summary),
+      ...schemaStats,
+      ...(source ? { source } : {}),
+    };
     toolReportEntryCache.set(tool, entry);
     return entry;
   });
+}
+
+function isMcpToolSource(source: string | undefined, name: string): boolean {
+  const normalized = (source ?? "").trim().toLowerCase();
+  if (normalized === "mcp" || normalized === "bundle-mcp" || normalized.includes("mcp")) {
+    return true;
+  }
+  const toolName = name.trim().toLowerCase();
+  return toolName.startsWith("mcp_") || toolName.startsWith("mcp__");
+}
+
+function buildPromptTokenEstimate(params: {
+  provider?: string;
+  model?: string;
+  systemPrompt: string;
+  skillsPrompt: string;
+  tools: AgentTool[];
+  injectedFiles: EmbeddedContextFile[];
+  projectContextChars: number;
+  nonProjectContextChars: number;
+}): SessionSystemPromptReport["promptTokenEstimate"] {
+  const resolved = resolveTokenEncoding({
+    provider: params.provider,
+    model: params.model,
+  });
+  const encoding = resolved.encoding;
+  let approximate = resolved.approximate;
+
+  const skillsCounted = countTextTokens(params.skillsPrompt, { encoding });
+  approximate = approximate || skillsCounted.approximate;
+
+  let toolsTokens = 0;
+  let mcpToolsTokens = 0;
+  for (const tool of params.tools) {
+    const summary = tool.description?.trim() || tool.label?.trim() || "";
+    let schemaJson = "";
+    try {
+      schemaJson = JSON.stringify(tool.parameters ?? {});
+    } catch {
+      schemaJson = "";
+    }
+    const counted = countTextTokens(`${summary}\n${schemaJson}`, { encoding });
+    approximate = approximate || counted.approximate;
+    if (isMcpToolSource(resolveToolSource(tool), tool.name)) {
+      mcpToolsTokens += counted.tokens;
+    } else {
+      toolsTokens += counted.tokens;
+    }
+  }
+
+  const injectedText = params.injectedFiles
+    .map((file) => `${file.path}\n${file.content ?? ""}`)
+    .join("\n");
+  const rulesCounted = countTextTokens(injectedText, { encoding });
+  approximate = approximate || rulesCounted.approximate;
+
+  // System base excludes skills + project context (same treemap dedupe).
+  const systemBaseChars = Math.max(0, params.nonProjectContextChars - params.skillsPrompt.length);
+  const systemRatio =
+    params.systemPrompt.length > 0 ? systemBaseChars / params.systemPrompt.length : 0;
+  const fullSystemCounted = countTextTokens(params.systemPrompt, { encoding });
+  approximate = approximate || fullSystemCounted.approximate;
+  const systemTokens = Math.max(0, Math.round(fullSystemCounted.tokens * systemRatio));
+
+  // Project frame (headers around injected files) counted into rules.
+  const injectedChars = params.injectedFiles.reduce(
+    (sum, file) => sum + (file.content?.length ?? 0),
+    0,
+  );
+  const projectFrameChars = Math.max(0, params.projectContextChars - injectedChars);
+  const frameCounted =
+    projectFrameChars > 0
+      ? countTextTokens(params.systemPrompt.slice(0, Math.min(projectFrameChars, 8_192)), {
+          encoding,
+        })
+      : { tokens: 0, approximate: false };
+  // Prefer char-proportional frame estimate from full system tokenize.
+  const frameTokens =
+    params.systemPrompt.length > 0
+      ? Math.round(fullSystemCounted.tokens * (projectFrameChars / params.systemPrompt.length))
+      : frameCounted.tokens;
+
+  return {
+    encoding,
+    approximate,
+    system: systemTokens,
+    tools: toolsTokens,
+    mcpTools: mcpToolsTokens,
+    rules: rulesCounted.tokens + frameTokens,
+    skills: skillsCounted.tokens,
+  };
 }
 
 function measureRenderedProjectContextChars(systemPrompt: string): number {
@@ -124,9 +234,20 @@ export function buildSystemPromptReport(params: {
 }): SessionSystemPromptReport {
   const systemPromptChars = params.systemPrompt.length;
   const projectContextChars = measureRenderedProjectContextChars(params.systemPrompt);
+  const nonProjectContextChars = Math.max(0, systemPromptChars - projectContextChars);
   const toolsEntries = buildToolsEntries(params.tools);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
   const skillsEntries = parseSkillBlocks(params.skillsPrompt);
+  const promptTokenEstimate = buildPromptTokenEstimate({
+    provider: params.provider,
+    model: params.model,
+    systemPrompt: params.systemPrompt,
+    skillsPrompt: params.skillsPrompt,
+    tools: params.tools,
+    injectedFiles: params.injectedFiles,
+    projectContextChars,
+    nonProjectContextChars,
+  });
 
   return {
     source: params.source,
@@ -144,7 +265,7 @@ export function buildSystemPromptReport(params: {
       chars: systemPromptChars,
       hash: sha256(params.systemPrompt),
       projectContextChars,
-      nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
+      nonProjectContextChars,
     },
     ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
     injectedWorkspaceFiles: buildBootstrapInjectionStats({
@@ -161,5 +282,6 @@ export function buildSystemPromptReport(params: {
       schemaChars: toolsSchemaChars,
       entries: toolsEntries,
     },
+    promptTokenEstimate,
   };
 }
