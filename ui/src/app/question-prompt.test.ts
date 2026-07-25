@@ -62,13 +62,18 @@ describe("question event parsing", () => {
   it("round-trips requested and resolved event payloads", () => {
     const state = createState();
     expect(
-      handleQuestionPromptEvent(state, {
-        event: "question.requested",
-        payload: requestedPayload(),
-      }),
+      handleQuestionPromptEvent(
+        state,
+        {
+          event: "question.requested",
+          payload: requestedPayload(),
+        },
+        "run-question",
+      ),
     ).toBe(true);
     expect(state.prompts.get("question-1")).toMatchObject({
       id: "question-1",
+      runId: "run-question",
       sessionKey: "agent:main:main",
       status: "pending",
       questions: [{ questionId: "format", options: [{ label: "Compact" }, { label: "Detailed" }] }],
@@ -84,6 +89,7 @@ describe("question event parsing", () => {
       }),
     ).toBe(true);
     expect(state.prompts.get("question-1")).toMatchObject({
+      runId: "run-question",
       status: "answered",
       answers: { answers: { format: ["Compact"] } },
     });

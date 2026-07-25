@@ -23,6 +23,8 @@ export type QuestionPrompt = {
   questions: Question[];
   agentId?: string;
   sessionKey?: string;
+  /** UI-local run ownership captured when the request event arrives. */
+  runId?: string;
   createdAtMs: number;
   expiresAtMs: number;
   status: QuestionPromptStatus;
@@ -294,6 +296,7 @@ function promptFromRecord(
     questions: record.questions,
     ...(record.agentId ? { agentId: record.agentId } : {}),
     ...(record.sessionKey ? { sessionKey: record.sessionKey } : {}),
+    ...(previous?.runId ? { runId: previous.runId } : {}),
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
     status: record.status,
@@ -342,6 +345,7 @@ function applyQuestionResolution(
 export function handleQuestionPromptEvent(
   state: QuestionPromptState,
   event: Pick<GatewayEventFrame, "event" | "payload">,
+  activeRunId?: string | null,
 ): boolean {
   if (event.event === "question.requested") {
     const record = parseQuestionRequestedEvent(event.payload);
@@ -353,6 +357,9 @@ export function handleQuestionPromptEvent(
       return true;
     }
     const prompt = promptFromRecord(state, record, previous);
+    if (!prompt.runId && activeRunId) {
+      prompt.runId = activeRunId;
+    }
     const unmatched = state.unmatchedResolutions.get(record.id);
     if (unmatched) {
       state.unmatchedResolutions.delete(record.id);

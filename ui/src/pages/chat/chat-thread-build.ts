@@ -248,7 +248,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   // the stable history + queued-send rows by timestamp below. We never reorder
   // the stable rows themselves, so optimistic user bubbles stay after the
   // preceding assistant reply even when client and Gateway clocks disagree.
-  const toolStreamItems: ChatItem[] = [];
+  const timestampedProjectionItems: ChatItem[] = [];
   const appendQueuedSend = (queued: ChatQueueItem, beforeMessage?: unknown) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
@@ -381,11 +381,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const maxLen = Math.max(indexedSegments.length, tools.length);
   let previousAccumulatedStreamText: string | null = null;
   const toolStreamPredecessors = new Map<string, string>();
-  const toolStreamInsertionBounds = new Map<string, TurnInsertionBounds>();
+  const projectionInsertionBounds = new Map<string, TurnInsertionBounds>();
   const applyRunBounds = (key: string, runId: unknown) => {
     const bounds = resolveRunInsertionBounds(items, runId, props.runId, currentTurnBounds);
     if (bounds) {
-      toolStreamInsertionBounds.set(key, bounds);
+      projectionInsertionBounds.set(key, bounds);
     }
   };
   for (let i = 0; i < maxLen; i++) {
@@ -411,7 +411,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           startedAt: segment.ts,
           isStreaming: false,
         };
-        toolStreamItems.push(streamItem);
+        timestampedProjectionItems.push(streamItem);
         applyRunBounds(streamItem.key, segment.runId);
         const toolCallId = segment.toolCallId?.trim();
         const toolKey = toolCallId ? toolKeysByCallId.get(toolCallId) : undefined;
@@ -429,7 +429,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         key: tool.key,
         message: tool.message,
       };
-      toolStreamItems.push(toolItem);
+      timestampedProjectionItems.push(toolItem);
       applyRunBounds(toolItem.key, asRecord(tool.message)?.runId);
     }
   }
@@ -445,17 +445,37 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       startedAt: segment.ts,
       isStreaming: false,
     };
-    toolStreamItems.push(commentaryItem);
+    timestampedProjectionItems.push(commentaryItem);
     applyRunBounds(commentaryItem.key, segment.runId);
   }
 
-  // Merge collected live tool/stream rows into the stable transcript order.
+  for (const prompt of props.questionPrompts ?? []) {
+    // Pending questions live in the composer dock. Their terminal summaries are
+    // timestamped transient projections, so keep their historical placement.
+    if (
+      prompt.status === "pending" ||
+      !prompt.sessionKey ||
+      !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)
+    ) {
+      continue;
+    }
+    const questionItem: ChatItem = {
+      kind: "question",
+      key: `question:${prompt.id}`,
+      questionId: prompt.id,
+      startedAt: prompt.createdAtMs,
+    };
+    timestampedProjectionItems.push(questionItem);
+    applyRunBounds(questionItem.key, prompt.runId);
+  }
+
+  // Merge timestamped transient projections into the stable transcript order.
   // The latest user row is a causal floor: current-run items must not jump
   // above it under clock skew, then jump back when history materializes them.
   insertChatItemsByTimestamp(
     items,
-    toolStreamItems,
-    toolStreamInsertionBounds,
+    timestampedProjectionItems,
+    projectionInsertionBounds,
     toolStreamPredecessors,
   );
 
@@ -521,22 +541,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   }
   if (props.runActive === true && props.planStatus && props.planStatus.steps.length > 0) {
     items.push({ kind: "plan", key: `plan:${props.sessionKey}:active` });
-  }
-  for (const prompt of props.questionPrompts ?? []) {
-    // Pending questions live in the composer dock. Only their terminal summary becomes transcript.
-    if (
-      prompt.status === "pending" ||
-      !prompt.sessionKey ||
-      !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)
-    ) {
-      continue;
-    }
-    items.push({
-      kind: "question",
-      key: `question:${prompt.id}`,
-      questionId: prompt.id,
-      startedAt: prompt.createdAtMs,
-    });
   }
 
   // Future queued turns are a causal ceiling for every current-run projection.
