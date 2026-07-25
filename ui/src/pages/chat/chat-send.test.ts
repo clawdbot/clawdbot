@@ -795,6 +795,54 @@ describe("refreshChatAvatar", () => {
     expect(host.chatAvatarUrl).toBe("blob:local-avatar");
   });
 
+  it("retries local avatar bytes with a device token that appears after a 401", async () => {
+    const createObjectURL = vi.fn(() => "blob:device-avatar");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const host = makeHost({ basePath: "", sessionKey: "agent:main" });
+    let avatarFetchCount = 0;
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url === "/avatar/main?meta=1") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ avatarUrl: "/avatar/main" }),
+        });
+      }
+      if (url === "/avatar/main") {
+        avatarFetchCount += 1;
+        if (avatarFetchCount === 1) {
+          host.hello = { auth: { deviceToken: "device-token" } } as ChatHost["hello"];
+          return Promise.resolve({ ok: false, status: 401 });
+        }
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["avatar"]),
+        });
+      }
+      throw new Error(`Unexpected avatar URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    await refreshChatAvatar(host);
+
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/avatar/main?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
+    expect(fetchInit(fetchMock as unknown as MockCallSource, 1)).not.toHaveProperty("headers");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 2)).toBe("/avatar/main");
+    expect(fetchInit(fetchMock as unknown as MockCallSource, 2).headers).toEqual({
+      Authorization: "Bearer device-token",
+    });
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(host.chatAvatarUrl).toBe("blob:device-avatar");
+  });
+
   it("prefers the paired device token for avatar metadata and local avatar URLs", async () => {
     const createObjectURL = vi.fn(() => "blob:device-avatar");
     const revokeObjectURL = vi.fn();

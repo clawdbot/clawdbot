@@ -2,7 +2,10 @@
 import { html } from "lit";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { normalizeBasePath } from "../../app-route-paths.ts";
-import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
+import {
+  resolveControlUiAuthCandidates,
+  resolveControlUiAuthHeader,
+} from "../../app/control-ui-auth.ts";
 import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
@@ -384,11 +387,32 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   const avatarController = new AbortController();
   const avatarTimeout = scheduleChatAvatarFetchTimeout(avatarController, "chat avatar image fetch");
   try {
-    const avatarRes = await fetch(avatarUrl, {
+    let avatarRes = await fetch(avatarUrl, {
       method: "GET",
       ...(headers ? { headers } : {}),
       signal: avatarController.signal,
     });
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+      return;
+    }
+    if (!avatarRes.ok && (avatarRes.status === 401 || avatarRes.status === 403)) {
+      const retryAuthHeaders = resolveControlUiAuthCandidates(host)
+        .map((candidate) => `Bearer ${candidate}`)
+        .filter((candidate) => candidate !== authHeader);
+      for (const retryAuthHeader of retryAuthHeaders) {
+        avatarRes = await fetch(avatarUrl, {
+          method: "GET",
+          headers: { Authorization: retryAuthHeader },
+          signal: avatarController.signal,
+        });
+        if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+          return;
+        }
+        if (avatarRes.ok || (avatarRes.status !== 401 && avatarRes.status !== 403)) {
+          break;
+        }
+      }
+    }
     if (!avatarRes.ok) {
       if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
         clearChatAvatarUrl(host);
