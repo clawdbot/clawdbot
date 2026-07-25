@@ -1,4 +1,5 @@
 // Collects configured model, generation, voice, and memory provider ownership.
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   buildModelCatalogMergeKey,
   parseModelCatalogRef,
@@ -58,29 +59,8 @@ export function manifestOwnsConfiguredWebSearchProvider(params: {
   });
 }
 
-function listModelProviderRefs(value: unknown): string[] {
-  if (typeof value === "string") {
-    return [value];
-  }
-  if (!isRecord(value)) {
-    return [];
-  }
-  const refs: string[] = [];
-  if (typeof value.primary === "string") {
-    refs.push(value.primary);
-  }
-  if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
-      if (typeof fallback === "string") {
-        refs.push(fallback);
-      }
-    }
-  }
-  return refs;
-}
-
 function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
-  return listModelProviderRefs(value)
+  return listModelRefsFromConfigValue(value)
     .map(parseModelCatalogRef)
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
     .map(({ provider, modelId }) => ({ providerId: provider, modelId }));
@@ -88,7 +68,7 @@ function listModelProviderRefParts(value: unknown): Array<{ providerId: string; 
 
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {
   return new Set(
-    listModelProviderRefs(value)
+    listModelRefsFromConfigValue(value)
       .map((ref) => {
         const slashIndex = ref.indexOf("/");
         return slashIndex > 0 ? normalizeProviderId(ref.slice(0, slashIndex)) : "";
