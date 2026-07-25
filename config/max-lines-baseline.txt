@@ -394,7 +394,6 @@ src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner.ts
 src/agents/cli-runner/claude-live-session.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
-src/agents/cli-runner/execute.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
 src/agents/code-mode-namespaces.ts
