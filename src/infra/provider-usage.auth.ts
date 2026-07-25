@@ -23,7 +23,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
+import { isOAuthOnlyUsageProvider, resolveUsageProviderId } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -31,6 +31,7 @@ export type ProviderAuth = {
   token: string;
   accountId?: string;
   authProfileId?: string;
+  credentialType?: "api_key" | "token" | "oauth";
   hookProvider?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
@@ -493,7 +494,11 @@ export async function resolveProviderAuthProfile(params: {
     syncExternalCli: false,
   });
   const credential = store.profiles[authProfileId];
-  if (!credential || normalizeProviderId(credential.provider) !== provider) {
+  const credentialProvider = credential
+    ? (resolveUsageProviderId(credential.provider, { credentialType: credential.type }) ??
+      normalizeProviderId(credential.provider))
+    : undefined;
+  if (!credential || credentialProvider !== provider) {
     return null;
   }
 
@@ -509,7 +514,10 @@ export async function resolveProviderAuthProfile(params: {
   } catch {
     return null;
   }
-  if (!resolved || normalizeProviderId(resolved.provider) !== provider) {
+  const resolvedProvider = resolveUsageProviderId(resolved?.provider, {
+    credentialType: credential.type,
+  });
+  if (!resolved || (resolvedProvider ?? normalizeProviderId(resolved.provider)) !== provider) {
     return null;
   }
 
@@ -534,6 +542,7 @@ export async function resolveProviderAuthProfile(params: {
     provider,
     token: resolved.apiKey,
     authProfileId,
+    credentialType: credential.type,
     ...(accountId ? { accountId } : {}),
     ...(subscriptionType ? { subscriptionType } : {}),
     ...(rateLimitTier ? { rateLimitTier } : {}),

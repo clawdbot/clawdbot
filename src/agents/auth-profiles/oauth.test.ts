@@ -15,6 +15,9 @@ vi.hoisted(() => {
 });
 
 const providerOAuthMocks = vi.hoisted(() => ({
+  formatProviderAuthProfileApiKeyWithPlugin: vi.fn(
+    async (params: { context?: { access?: string } }) => params.context?.access,
+  ),
   refreshProviderOAuthCredentialWithPlugin: vi.fn(async () => null),
 }));
 
@@ -26,8 +29,9 @@ vi.mock("../cli-credentials.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
-    params.context?.access,
+  buildProviderAuthDoctorHintWithPlugin: async () => undefined,
+  formatProviderAuthProfileApiKeyWithPlugin:
+    providerOAuthMocks.formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin:
     providerOAuthMocks.refreshProviderOAuthCredentialWithPlugin,
 }));
@@ -125,6 +129,10 @@ beforeAll(loadOAuthModuleForTest);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  providerOAuthMocks.formatProviderAuthProfileApiKeyWithPlugin.mockReset();
+  providerOAuthMocks.formatProviderAuthProfileApiKeyWithPlugin.mockImplementation(
+    async (params: { context?: { access?: string } }) => params.context?.access,
+  );
   providerOAuthMocks.refreshProviderOAuthCredentialWithPlugin.mockClear();
   setActiveDegradedSecretOwners([]);
   // SecretRef cases consume the materialized store published by runtime activation.
@@ -289,6 +297,46 @@ describe("resolveApiKeyForProfile no-refresh mode", () => {
       provider: "openai",
       email: undefined,
     });
+    expect(providerOAuthMocks.refreshProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
+  });
+
+  it("does not enter legacy profile fallback when no-refresh formatting fails", async () => {
+    const profileId = "openai:default";
+    const agentDir = "/tmp/openclaw-no-refresh-oauth";
+    const failure = new Error("format failed");
+    providerOAuthMocks.formatProviderAuthProfileApiKeyWithPlugin.mockRejectedValueOnce(failure);
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "default-access",
+          refresh: "default-refresh",
+          expires: createUsableOAuthExpiry(),
+        },
+        "openai:other": {
+          type: "oauth",
+          provider: "openai",
+          access: "other-access",
+          refresh: "other-refresh",
+          expires: createUsableOAuthExpiry(),
+        },
+      },
+    };
+    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "openai", "oauth"),
+        store,
+        profileId,
+        agentDir,
+        allowRefresh: false,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(providerOAuthMocks.formatProviderAuthProfileApiKeyWithPlugin).toHaveBeenCalledTimes(1);
     expect(providerOAuthMocks.refreshProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
   });
 

@@ -495,6 +495,9 @@ export async function resolveApiKeyForProfile(
       credential: resolved.credential,
     });
   } catch (error) {
+    if (params.allowRefresh === false) {
+      throw error;
+    }
     let refreshedStore =
       error instanceof OAuthManagerRefreshError
         ? error.getRefreshedStore()

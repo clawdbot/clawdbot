@@ -443,6 +443,7 @@ describe("resolveProviderAuths plugin boundary", () => {
       provider: "zai",
       token: "materialized-zai-key",
       authProfileId: "zai:work",
+      credentialType: "api_key",
     });
 
     expect(ensureAuthProfileStoreWithoutExternalProfilesMock).toHaveBeenCalledTimes(1);
@@ -457,6 +458,47 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(resolveAuthProfileOrderMock).not.toHaveBeenCalled();
     expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { storedProvider: "claude-cli", requestedProvider: "anthropic" },
+    { storedProvider: "minimax-portal", requestedProvider: "minimax" },
+  ])(
+    "accepts $storedProvider exact profiles for canonical $requestedProvider usage",
+    async ({ storedProvider, requestedProvider }) => {
+      const profileId = `${storedProvider}:work`;
+      ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: storedProvider,
+            access: "profile-access",
+            refresh: "profile-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      resolveApiKeyForProfileMock.mockResolvedValueOnce({
+        apiKey: "profile-access",
+        provider: storedProvider,
+      });
+
+      await expect(
+        resolveProviderAuthProfile({
+          provider: requestedProvider,
+          authProfileId: profileId,
+          config: {},
+        }),
+      ).resolves.toEqual({
+        provider: requestedProvider,
+        token: "profile-access",
+        authProfileId: profileId,
+        credentialType: "oauth",
+      });
+      expect(resolveApiKeyForProfileMock).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId, allowRefresh: false }),
+      );
+    },
+  );
 
   it("fails closed when the requested profile belongs to another provider", async () => {
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({

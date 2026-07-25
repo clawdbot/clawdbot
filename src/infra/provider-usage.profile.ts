@@ -1,13 +1,17 @@
 // Exact-profile, read-only provider usage service for trusted plugin runtimes.
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
-import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
+import {
+  resolveProviderUsageAuthWithPlugin,
+  resolveProviderUsageSnapshotWithPlugin,
+} from "../plugins/provider-runtime.js";
 import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { resolveProviderAuthProfile } from "./provider-usage.auth.js";
 import {
   DEFAULT_TIMEOUT_MS,
   resolveProviderUsageDisplayName,
+  resolveUsageProviderId,
   withTimeout,
 } from "./provider-usage.shared.js";
 import type {
@@ -165,7 +169,8 @@ export async function readProviderUsageProfile(
     throw new TypeError("provider usage authProfileId must be a string");
   }
 
-  const provider = normalizeProviderId(params.providerId);
+  const normalizedProvider = normalizeProviderId(params.providerId);
+  const provider = resolveUsageProviderId(normalizedProvider) ?? normalizedProvider;
   const authProfileId = params.authProfileId.trim();
   if (!provider) {
     throw new TypeError("provider usage providerId must not be empty");
@@ -200,28 +205,88 @@ export async function readProviderUsageProfile(
     windows: [],
     error,
   });
+  const exactUsageToken = {
+    token: auth.token,
+    ...(auth.accountId ? { accountId: auth.accountId } : {}),
+    ...(auth.subscriptionType ? { subscriptionType: auth.subscriptionType } : {}),
+    ...(auth.rateLimitTier ? { rateLimitTier: auth.rateLimitTier } : {}),
+    ...(auth.email ? { email: auth.email } : {}),
+  };
+  const isApiKeyCredential = auth.credentialType === "api_key" || auth.credentialType === "token";
+  const isOAuthCredential = auth.credentialType === "oauth" || auth.credentialType === "token";
+  const matchesExactProvider = (providerIds: string[] | undefined): boolean =>
+    providerIds === undefined ||
+    providerIds.some((providerId) => {
+      const normalized = normalizeProviderId(providerId);
+      return (resolveUsageProviderId(normalized) ?? normalized) === provider;
+    });
   const snapshot = await withTimeout(
-    resolveProviderUsageSnapshotWithPlugin({
-      provider,
-      config,
-      workspaceDir: options.workspaceDir,
-      env,
-      context: {
+    (async () => {
+      const providerAuth = await resolveProviderUsageAuthWithPlugin({
+        provider,
         config,
-        agentDir: options.agentDir,
         workspaceDir: options.workspaceDir,
         env,
+        context: {
+          config,
+          agentDir: options.agentDir,
+          workspaceDir: options.workspaceDir,
+          // Exact-profile reads must not let provider auth policy switch to an
+          // ambient credential. Only the scoped resolver callbacks below can
+          // return secret material.
+          env: {},
+          provider,
+          resolveApiKeyFromConfigAndStore: (request) =>
+            isApiKeyCredential && matchesExactProvider(request?.providerIds)
+              ? auth.token
+              : undefined,
+          resolveApiKeyCandidatesFromConfigAndStore: async (request) =>
+            isApiKeyCredential && matchesExactProvider(request?.providerIds) ? [auth.token] : [],
+          resolveOAuthToken: async (request) => {
+            if (!isOAuthCredential) {
+              return null;
+            }
+            if (request?.provider) {
+              const normalizedRequestedProvider = normalizeProviderId(request.provider);
+              const requestedProvider =
+                resolveUsageProviderId(normalizedRequestedProvider, {
+                  credentialType: auth.credentialType,
+                }) ?? normalizedRequestedProvider;
+              if (requestedProvider !== provider) {
+                return null;
+              }
+            }
+            return exactUsageToken;
+          },
+        },
+      });
+      if (providerAuth && "handled" in providerAuth) {
+        return failureSnapshot("Provider usage auth unavailable");
+      }
+      const fetchAuth = providerAuth ?? exactUsageToken;
+      const value = await resolveProviderUsageSnapshotWithPlugin({
         provider,
-        token: auth.token,
-        accountId: auth.accountId,
-        authProfileId,
-        subscriptionType: auth.subscriptionType,
-        rateLimitTier: auth.rateLimitTier,
-        email: auth.email,
-        timeoutMs,
-        fetchFn,
-      },
-    }).then((value) => value ?? failureSnapshot("Unsupported provider")),
+        config,
+        workspaceDir: options.workspaceDir,
+        env,
+        context: {
+          config,
+          agentDir: options.agentDir,
+          workspaceDir: options.workspaceDir,
+          env,
+          provider,
+          token: fetchAuth.token,
+          accountId: fetchAuth.accountId,
+          authProfileId,
+          subscriptionType: fetchAuth.subscriptionType,
+          rateLimitTier: fetchAuth.rateLimitTier,
+          email: fetchAuth.email,
+          timeoutMs,
+          fetchFn,
+        },
+      });
+      return value ?? failureSnapshot("Unsupported provider");
+    })(),
     timeoutMs + 1_000,
     failureSnapshot("Timeout"),
   ).catch((error: unknown) => {
