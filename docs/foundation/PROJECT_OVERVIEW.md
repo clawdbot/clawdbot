@@ -3,7 +3,7 @@ title: "OpenClaw Project Overview"
 version: "1.0"
 status: "Foundational"
 owner: "OpenClaw Architecture"
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-25"
 category: "Mission"
 source_document: "PROJECT_OVERVIEW.md"
 ---
@@ -60,7 +60,7 @@ OpenClaw is best understood as a **plugin-centric gateway OS**, not a monolithic
 | `packages/`       | Workspace packages: `plugin-sdk`, `sdk` (external client), `memory-host-sdk`                           |
 | `ui/`             | Control UI — Vite + Lit SPA (`openclaw-control-ui`)                                                    |
 | `apps/`           | Native clients: macOS, iOS, Android, shared `OpenClawKit`, voice (`swabble`)                           |
-| `docs/`           | Mintlify documentation (published to https://docs.openclaw.ai)                                         |
+| `docs/`           | Mintlify documentation (published to [docs.openclaw.ai](https://docs.openclaw.ai))                     |
 | `scripts/`        | Build, test wrappers, protocol codegen, Crabbox, release, lint gates                                   |
 | `skills/`         | Bundled agent skills shipped with npm package                                                          |
 | `dist/`           | Built JS output (core + internal bundled plugins)                                                      |
@@ -96,6 +96,22 @@ The single long-lived daemon per host. Responsibilities:
 - Validates frames against JSON Schema (`src/gateway/protocol/`)
 - Emits events: `agent`, `chat`, `presence`, `health`, `heartbeat`, `cron`, `shutdown`
 - RPC methods: `agent`, `chat`, `send`, `sessions`, `config`, `nodes`, `cron`, `tools`, `health`, `status`, etc.
+- Exposes the disabled-by-default `ai.execute` operator RPC for database-backed AI routing and ordered fallback.
+
+### AI Intelligence Runtime (`tools/ai_intelligence/`)
+
+The AI Intelligence runtime provides deterministic, database-driven model selection and bounded execution:
+
+- reads approved primary and fallback assignments from PostgreSQL;
+- enforces model status, routing mode, and privacy policy;
+- executes candidates in configured order through provider adapters;
+- returns structured attempt history and the selected model;
+- raises structured exhaustion failures after approved candidates are exhausted;
+- enters the Gateway through a bounded JSON process bridge.
+
+The Gateway boundary requires `operator.write`, validates requests and responses, and is disabled unless explicitly enabled for an approved environment. It is additive and does not silently replace the established agent, chat, or channel pipelines.
+
+The canonical detailed design is [Phase 2F Runtime AI Router Architecture](/architecture/phase-2f-runtime-ai-router).
 
 ### Agent Runtime (`src/agents/`)
 
@@ -483,7 +499,7 @@ No first-party Prometheus/Grafana stack in core; observability is CLI + diagnost
 
 Ollama is a **bundled provider plugin** at `extensions/ollama/` (40 source files). It provides local and remote open-model inference via the Ollama HTTP API.
 
-### Plugin Registration
+### Ollama Plugin Registration
 
 | File                                      | Role                                                        |
 | ----------------------------------------- | ----------------------------------------------------------- |

@@ -1329,7 +1329,6 @@
                   "clawhub/cli",
                   "clawhub/publishing",
                   "clawhub/skill-format",
-                  "clawhub/soul-format",
                   "clawhub/auth",
                   "clawhub/telemetry",
                   "clawhub/troubleshooting"

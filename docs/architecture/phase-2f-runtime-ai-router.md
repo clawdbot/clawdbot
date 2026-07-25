@@ -1,6 +1,6 @@
 # Phase 2F — Runtime AI Router Architecture
 
-**Status:** Approved for implementation  
+**Status:** Development implementation complete; activation proof pending
 **Project:** OpenClaw AI Intelligence Layer  
 **Environment:** Development first  
 **Core requirement:** Automatic failover is mandatory
@@ -86,7 +86,7 @@ Selection, execution, failure, and failover decisions must be recordable for ope
 
 ## 5. Public Interface
 
-The initial Python interface will use an `AIRouter` class.
+The internal Python interface uses the execution engine and routing request contract.
 
 ```python
 router = AIRouter()
@@ -106,6 +106,37 @@ decision = router.route(
     task_type="private_property_data",
 )
 ```
+
+The first OpenClaw control-plane integration is the typed Gateway RPC:
+
+```json
+{
+  "method": "ai.execute",
+  "params": {
+    "componentId": "telegram_ranch_bot",
+    "prompt": "Summarize the current ranch status.",
+    "requestId": "example-request",
+    "timeoutSeconds": 60
+  }
+}
+```
+
+The method requires `operator.write` scope. The Gateway validates both the request and bridge response. It invokes the Python engine through a single-request JSON process boundary rather than importing the Python runtime into the Node.js process.
+
+The boundary is disabled unless the Gateway process has:
+
+```text
+OPENCLAW_AI_INTELLIGENCE_GATEWAY_ENABLED=1
+```
+
+Runtime controls include:
+
+- a request timeout range of 0.1 to 300 seconds;
+- an execution grace period before forced process termination;
+- a combined standard-output and standard-error limit of 1 MiB;
+- generic client errors with detailed failures restricted to Gateway logs;
+- database credentials sourced only from the runtime environment or protected credentials file;
+- response-schema validation before data is returned to the caller.
 
 ## 6. Routing Decision Contract
 
@@ -361,7 +392,7 @@ Tests must use fakes or mocks and must not require real provider calls.
 
 ### Phase 2F.4 — First Runtime Integration
 
-Integrate one component first.
+The additive `ai.execute` Gateway method is implemented on the `development` branch. It provides the control-plane seam without changing existing chat, agent, or channel routing.
 
 Recommended initial component:
 
@@ -369,7 +400,30 @@ Recommended initial component:
 telegram_ranch_bot
 ```
 
-The existing implementation must be inspected before selecting the exact integration point.
+Activation must occur in the development Gateway first. The feature flag must remain off in production until the development proof and production-promotion checkpoint are complete.
+
+### Phase 2F.4G Gateway Execution Boundary
+
+Implemented:
+
+- typed request and result schemas;
+- `operator.write` method registration;
+- disabled-by-default activation control;
+- bounded Node.js to Python process bridge;
+- engine construction from the approved database environment;
+- ordered attempt details in successful results;
+- sanitized Gateway error responses;
+- focused Gateway tests and bridge serialization tests.
+
+Pending:
+
+- enable the flag in the development Gateway service;
+- restart only the development Gateway;
+- submit a real `ai.execute` request;
+- demonstrate primary success;
+- demonstrate primary failure and approved fallback success;
+- confirm operational logs are useful and client errors do not expose secrets;
+- capture the activation and rollback checkpoint before any production promotion.
 
 ### Phase 2F.5 — Usage and Failover Telemetry
 
@@ -389,6 +443,9 @@ Phase 2F must not be promoted to production until:
 - Complete fallback exhaustion is demonstrated.
 - No production configuration was modified during development.
 - Changes are committed to the feature branch and reviewed.
+- The Gateway boundary has been enabled and exercised in development.
+- The development Gateway can be disabled by removing the feature flag and restarting the service.
+- The production service configuration and rollback point are recorded before activation.
 
 ## 19. Future Dynamic Routing
 
