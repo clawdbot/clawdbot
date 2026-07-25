@@ -958,6 +958,7 @@ describe("Discord native plugin command dispatch", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectFollowUpFields(interaction, { content: "direct plugin output" });
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
   it("returns an explicit warning instead of success when dispatch produces zero visible replies", async () => {
@@ -1017,6 +1018,7 @@ describe("Discord native plugin command dispatch", () => {
 
     expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a native reply visible when a later Discord chunk expires", async () => {
@@ -1057,6 +1059,7 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.followUp).toHaveBeenCalledTimes(2);
     expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
   it("does not classify an already-deferred interaction as partial before this payload sends", async () => {
@@ -1112,6 +1115,7 @@ describe("Discord native plugin command dispatch", () => {
     );
     expect(fallback.content).toBe("⚠️ Command produced no visible reply.");
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
   it("preserves partial delivery when a later Discord chunk fails without expiry", async () => {
@@ -1238,6 +1242,7 @@ describe("Discord native plugin command dispatch", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
   it("forwards Discord thread metadata into direct plugin command execution", async () => {

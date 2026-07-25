@@ -22,6 +22,7 @@ import {
   DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
   safeDiscordInteractionCall,
+  settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import type { DiscordConfig } from "./native-command.types.js";
@@ -118,6 +119,10 @@ export async function dispatchDiscordNativeAgentReply(params: {
     },
   });
 
+  if (!didReply && (params.suppressReplies || settledWithoutVisibleReply)) {
+    await settleDiscordInteractionWithoutVisibleReply(params.interaction);
+    return;
+  }
   if (
     params.suppressReplies ||
     didReply ||

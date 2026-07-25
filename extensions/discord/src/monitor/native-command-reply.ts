@@ -68,6 +68,19 @@ export async function safeDiscordInteractionCall<T>(
   }
 }
 
+export async function settleDiscordInteractionWithoutVisibleReply(
+  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction,
+): Promise<void> {
+  // Only slash-command defers create Discord's visible loading response. Component
+  // defers own an existing message, so deleting their original response would erase UI.
+  if (interaction.responseState !== "deferred") {
+    return;
+  }
+  await safeDiscordInteractionCall("interaction delete deferred reply", () =>
+    interaction.deleteReply(),
+  );
+}
+
 export async function deliverDiscordInteractionReply(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   payload: ReplyPayload;
