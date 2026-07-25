@@ -88,8 +88,7 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 export { isRecord };
 
-// Keep this local; importing the broad media-runtime SDK barrel pulls image/audio runtimes into
-// hot MSTeams attachment tests for one tiny estimator.
+// Keep this local; the broad media-runtime barrel pulls image/audio runtimes into hot tests.
 function estimateBase64DecodedBytes(base64: string): number {
   let effectiveLen = 0;
   for (let i = 0; i < base64.length; i += 1) {
@@ -539,13 +538,7 @@ export function applyAuthorizationHeaderForUrl(params: {
 
 export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undefined {
   const policy = buildHostnameAllowlistPolicyFromSuffixAllowlist(allowHosts);
-  if (!policy?.hostnameAllowlist?.length) {
-    return policy;
-  }
-  return {
-    ...policy,
-    allowRfc2544BenchmarkRange: true,
-  };
+  return policy ? { ...policy, allowRfc2544BenchmarkRange: true } : undefined;
 }
 
 /**

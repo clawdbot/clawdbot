@@ -36,6 +36,7 @@ async function safeFetch(params: SafeFetchParams) {
   const { allowHosts, authorizationAllowHosts, ...request } = params;
   return await safeFetchWithPolicy({
     ...request,
+    resolveFn: request.resolveFn,
     policy: {
       allowHosts,
       authAllowHosts: authorizationAllowHosts ?? [],
