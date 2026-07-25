@@ -107,6 +107,8 @@ export type RealtimeVoiceProviderResolveConfigContext = {
 export type RealtimeVoiceProviderConfiguredContext = {
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
+  /** Runtime surface being selected; browser-only routes must not make gateway bridges eligible. */
+  surface?: "browser-session" | "bridge";
 };
 
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
@@ -196,11 +198,11 @@ export type RealtimeVoiceBrowserSession =
   | RealtimeVoiceBrowserGatewayRelaySession
   | RealtimeVoiceBrowserManagedRoomSession;
 
-/** Provider-owned alternate browser-session route selected by provider config. */
+/** Provider-owned alternate browser-session route selected by the provider. */
 export type RealtimeVoiceBrowserSessionBroker = {
+  id: string;
   providerId: RealtimeVoiceProviderId;
-  authMode: string;
-  /** Auth-route-specific capability overrides owned by the alternate session broker. */
+  /** Route-specific capability overrides owned by the alternate session broker. */
   capabilities?: Partial<RealtimeVoiceProviderCapabilities>;
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   createBrowserSession: (

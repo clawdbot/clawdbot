@@ -9,8 +9,8 @@ const unregisterCallbacks: Array<() => void> = [];
 
 function registerBroker(label: string): RealtimeVoiceBrowserSessionBroker {
   const broker: RealtimeVoiceBrowserSessionBroker = {
+    id: " Codex-OAuth ",
     providerId: " OpenAI ",
-    authMode: " Codex-OAuth ",
     isConfigured: vi.fn(() => true),
     createBrowserSession: vi.fn(async () => ({
       provider: "openai",
@@ -33,8 +33,8 @@ describe("realtime browser session broker registry", () => {
     registerBroker("first");
 
     expect(getRealtimeVoiceBrowserSessionBroker("OPENAI", "CODEX-OAUTH")).toMatchObject({
+      id: "codex-oauth",
       providerId: "openai",
-      authMode: "codex-oauth",
     });
   });
 

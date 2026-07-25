@@ -164,14 +164,17 @@ the ChatGPT Codex backend instead; they are not interchangeable with Platform
 API keys for the public Realtime endpoints.
 
 Control UI and iOS WebRTC Talk can instead use the experimental Codex
-app-server route by setting
-`talk.realtime.providers.openai.authMode: "codex-oauth"`. This explicit route
-uses the bundled Codex plugin's logged-in subscription without exposing its
-OAuth token to OpenClaw or the browser. It is limited to client-owned WebRTC;
-Voice Call and Gateway-relay realtime still require Platform credentials.
-Codex owns the realtime model, base prompt, and native agent delegation on this
-route. OpenClaw adds configured Talk instructions and bounded profile context
-as developer context without replacing that prompt. Direct Realtime function
+app-server route automatically when no Platform credential is configured and
+the bundled Codex runtime is active. OpenAI OAuth/Codex agent sessions activate
+that runtime without an additional Talk auth setting. Platform auth wins in this order:
+configured realtime API key, `openai` API-key profile, then `OPENAI_API_KEY`.
+Only when all three are absent does browser WebRTC use the Codex plugin's
+logged-in subscription. The OAuth token is never exposed to OpenClaw or the
+browser. This fallback is limited to client-owned WebRTC; Voice Call and
+Gateway-relay realtime still require Platform credentials. Codex owns the
+realtime model, base prompt, and native agent delegation on this route.
+OpenClaw adds configured Talk instructions and bounded profile context as
+developer context without replacing that prompt. Direct Realtime function
 tools, VAD/reasoning tuning, and Video Talk remain Platform-only.
 
 If API-key auth reports missing billing, top up Platform credits at
@@ -948,14 +951,13 @@ compatibility fallback when the shared
     minted ephemeral client secret and a direct browser WebRTC SDP exchange
     against the OpenAI Realtime API when using Platform credentials. The
     Gateway mints that client secret with the selected `openai` credential.
-    Configured keys, API-key profiles, and `OPENAI_API_KEY` use that path.
-    Codex OAuth is not an automatic fallback: explicitly set
-    `talk.realtime.providers.openai.authMode: "codex-oauth"` to route browser
-    WebRTC setup through the bundled Codex plugin and its app-server. Gateway
-    relay and Voice Call backend realtime WebSocket bridges continue to use
-    Platform credentials. The Codex route keeps Codex's native realtime prompt,
-    model selection, and agent handoff; it does not accept the direct Platform
-    model/tool/camera controls.
+    Configured realtime keys, API-key profiles, and `OPENAI_API_KEY` use that
+    path in that order. When none exists and the bundled Codex runtime is
+    active, browser WebRTC falls back to the logged-in Codex app-server
+    automatically. Gateway relay and Voice Call backend realtime WebSocket
+    bridges continue to use Platform credentials. The Codex route keeps
+    Codex's native realtime prompt, model selection, and agent handoff; it does
+    not accept the direct Platform model/tool/camera controls.
     Maintainer live verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
     the OpenAI legs verify both the backend WebSocket bridge and the browser

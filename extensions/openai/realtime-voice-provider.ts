@@ -16,6 +16,7 @@ import type {
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionBroker,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,
@@ -62,7 +63,6 @@ type OpenAIRealtimeVoice =
   | "verse";
 
 type OpenAIRealtimeVoiceProviderConfig = {
-  authMode?: "api-key" | "codex-oauth";
   apiKey?: string;
   model?: string;
   voice?: OpenAIRealtimeVoice;
@@ -95,6 +95,7 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
 };
 
 const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
+const OPENAI_CODEX_OAUTH_BROKER_MODE = "codex-oauth";
 const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   transports: ["webrtc", "gateway-relay"],
@@ -235,9 +236,7 @@ function normalizeProviderConfig(
   config: RealtimeVoiceProviderConfig,
 ): OpenAIRealtimeVoiceProviderConfig {
   const raw = resolveOpenAIProviderConfigRecord(config);
-  const authMode = trimToUndefined(raw?.authMode)?.toLowerCase();
   return {
-    authMode: authMode === "api-key" || authMode === "codex-oauth" ? authMode : undefined,
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
@@ -1498,31 +1497,54 @@ function resolveOpenAIRealtimeBrowserOfferHeaders(): Record<string, string> | un
   return Object.keys(browserHeaders).length > 0 ? browserHeaders : undefined;
 }
 
+const browserSessionBrokers = new WeakMap<
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionBroker
+>();
+
+function resolveConfiguredCodexRealtimeBroker(params: {
+  cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
+  providerConfig: RealtimeVoiceProviderConfig;
+}): RealtimeVoiceBrowserSessionBroker | undefined {
+  const broker = getRealtimeVoiceBrowserSessionBroker("openai", OPENAI_CODEX_OAUTH_BROKER_MODE);
+  return broker?.isConfigured(params) === true ? broker : undefined;
+}
+
 async function createOpenAIRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
 ): Promise<RealtimeVoiceBrowserSession> {
   const config = normalizeProviderConfig(req.providerConfig);
-  if (config.authMode === "codex-oauth") {
-    const broker = getRealtimeVoiceBrowserSessionBroker("openai", config.authMode);
-    if (!broker) {
-      throw new Error(
-        "Codex OAuth realtime voice is unavailable; enable the bundled Codex plugin and restart the gateway",
-      );
-    }
-    return await broker.createBrowserSession(req);
-  }
   if (config.azureEndpoint || config.azureDeployment) {
     throw new Error("OpenAI Realtime browser sessions do not support Azure endpoints yet");
+  }
+
+  const auth = await resolveOpenAIRealtimePlatformAuth({
+    configuredApiKey: config.apiKey,
+    cfg: req.cfg,
+  });
+  if (auth.status === "missing") {
+    // An authored Platform credential stays authoritative even when it cannot
+    // be resolved. Falling through would hide a broken key behind OAuth.
+    if (
+      !hasOpenAIRealtimePlatformAuthInput({
+        configuredApiKey: config.apiKey,
+        cfg: req.cfg,
+      })
+    ) {
+      const broker = resolveConfiguredCodexRealtimeBroker(req);
+      if (broker) {
+        const session = await broker.createBrowserSession(req);
+        browserSessionBrokers.set(session, broker);
+        return session;
+      }
+    }
+    throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
   }
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
   if (isOpenAIGptLiveModel(model)) {
     throw new Error(OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE);
   }
-  const auth = await requireOpenAIRealtimePlatformAuth({
-    configuredApiKey: config.apiKey,
-    cfg: req.cfg,
-  });
   const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
   const tools = normalizeOpenAIRealtimeTools(req.tools);
   const session: Record<string, unknown> = {
@@ -1580,16 +1602,12 @@ async function createOpenAIRealtimeBrowserSession(
 }
 
 async function cancelOpenAIRealtimeBrowserSession(
-  req: RealtimeVoiceBrowserSessionCreateRequest,
+  _req: RealtimeVoiceBrowserSessionCreateRequest,
   session: RealtimeVoiceBrowserSession,
 ): Promise<void> {
-  const config = normalizeProviderConfig(req.providerConfig);
-  if (config.authMode !== "codex-oauth") {
-    return;
-  }
-  await getRealtimeVoiceBrowserSessionBroker("openai", config.authMode)?.cancelBrowserSession?.(
-    session,
-  );
+  const broker = browserSessionBrokers.get(session);
+  browserSessionBrokers.delete(session);
+  await broker?.cancelBrowserSession?.(session);
 }
 
 export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
@@ -1599,12 +1617,25 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
-    resolveCapabilities: ({ providerConfig }) => {
+    resolveCapabilities: ({ cfg, providerConfig, surface }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (config.authMode !== "codex-oauth") {
+      if (
+        config.azureEndpoint ||
+        config.azureDeployment ||
+        hasOpenAIRealtimePlatformAuthInput({
+          configuredApiKey: config.apiKey,
+          cfg,
+        })
+      ) {
         return OPENAI_REALTIME_CAPABILITIES;
       }
-      const broker = getRealtimeVoiceBrowserSessionBroker("openai", config.authMode);
+      if (surface !== "browser-session") {
+        return OPENAI_REALTIME_CAPABILITIES;
+      }
+      const broker = resolveConfiguredCodexRealtimeBroker({ cfg, providerConfig });
+      if (!broker) {
+        return OPENAI_REALTIME_CAPABILITIES;
+      }
       return {
         ...OPENAI_REALTIME_CAPABILITIES,
         handlesAgentConsult: true,
@@ -1614,29 +1645,26 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       };
     },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ cfg, providerConfig }) => {
+    isConfigured: ({ cfg, providerConfig, surface }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (config.authMode === "codex-oauth") {
-        return (
-          getRealtimeVoiceBrowserSessionBroker("openai", config.authMode)?.isConfigured({
-            cfg,
-            providerConfig,
-          }) === true
-        );
-      }
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
-      return hasOpenAIRealtimePlatformAuthInput({
-        configuredApiKey: config.apiKey,
-        cfg,
-      });
+      if (
+        hasOpenAIRealtimePlatformAuthInput({
+          configuredApiKey: config.apiKey,
+          cfg,
+        })
+      ) {
+        return true;
+      }
+      return (
+        surface === "browser-session" &&
+        resolveConfiguredCodexRealtimeBroker({ cfg, providerConfig }) !== undefined
+      );
     },
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      if (config.authMode === "codex-oauth") {
-        throw new Error("Codex OAuth realtime voice supports browser WebRTC sessions only");
-      }
       if (isOpenAIGptLiveModel(config.model)) {
         throw new Error(OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE);
       }

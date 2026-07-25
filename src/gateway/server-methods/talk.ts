@@ -251,6 +251,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
         defaultModel: realtimeConfig.model,
+        surface: "browser-session",
       }).provider.id,
   );
   const activeRealtimeProvider = realtimeSelection.activeProvider;
@@ -351,12 +352,17 @@ function buildTalkCatalog(config: OpenClawConfig) {
           provider,
           providerConfig,
           cfg: config,
+          surface: "browser-session",
         });
         const entry: Record<string, unknown> = {
           id: provider.id,
           label: provider.label,
           configured: configuredOrFalse(() =>
-            provider.isConfigured({ cfg: config, providerConfig }),
+            provider.isConfigured({
+              cfg: config,
+              providerConfig,
+              surface: "browser-session",
+            }),
           ),
           modes: ["realtime"],
           brains:

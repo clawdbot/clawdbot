@@ -24,23 +24,23 @@ function resolveRegistryState(): BrowserSessionBrokerRegistryState {
   return created;
 }
 
-function normalizeBrokerKey(providerId: string, authMode: string): string | undefined {
+function normalizeBrokerKey(providerId: string, brokerId: string): string | undefined {
   const provider = normalizeOptionalLowercaseString(providerId);
-  const mode = normalizeOptionalLowercaseString(authMode);
-  return provider && mode ? `${provider}:${mode}` : undefined;
+  const broker = normalizeOptionalLowercaseString(brokerId);
+  return provider && broker ? `${provider}:${broker}` : undefined;
 }
 
 export function registerRealtimeVoiceBrowserSessionBroker(
   broker: RealtimeVoiceBrowserSessionBroker,
 ): () => void {
-  const key = normalizeBrokerKey(broker.providerId, broker.authMode);
+  const key = normalizeBrokerKey(broker.providerId, broker.id);
   if (!key) {
-    throw new Error("Realtime voice browser-session broker requires providerId and authMode");
+    throw new Error("Realtime voice browser-session broker requires id and providerId");
   }
   const normalized = {
     ...broker,
+    id: normalizeOptionalLowercaseString(broker.id)!,
     providerId: normalizeOptionalLowercaseString(broker.providerId)!,
-    authMode: normalizeOptionalLowercaseString(broker.authMode)!,
   };
   const state = resolveRegistryState();
   state.brokersByKey.set(key, normalized);
@@ -53,8 +53,8 @@ export function registerRealtimeVoiceBrowserSessionBroker(
 
 export function getRealtimeVoiceBrowserSessionBroker(
   providerId: string,
-  authMode: string,
+  brokerId: string,
 ): RealtimeVoiceBrowserSessionBroker | undefined {
-  const key = normalizeBrokerKey(providerId, authMode);
+  const key = normalizeBrokerKey(providerId, brokerId);
   return key ? resolveRegistryState().brokersByKey.get(key) : undefined;
 }

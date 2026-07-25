@@ -47,6 +47,41 @@ describe("realtime voice provider resolver", () => {
     });
   });
 
+  it("keeps browser-only providers out of bridge auto-selection", () => {
+    const browserOnly: RealtimeVoiceProviderPlugin = {
+      id: "browser-only",
+      label: "Browser only",
+      autoSelectOrder: 1,
+      isConfigured: ({ surface }) => surface === "browser-session",
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+    const bridge: RealtimeVoiceProviderPlugin = {
+      id: "bridge",
+      label: "Bridge",
+      autoSelectOrder: 2,
+      isConfigured: () => true,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+
+    expect(
+      resolveConfiguredRealtimeVoiceProvider({
+        cfg: {},
+        providers: [browserOnly, bridge],
+      }).provider.id,
+    ).toBe("bridge");
+    expect(
+      resolveConfiguredRealtimeVoiceProvider({
+        cfg: {},
+        providers: [browserOnly, bridge],
+        surface: "browser-session",
+      }).provider.id,
+    ).toBe("browser-only");
+  });
+
   it("applies a default model before provider config resolution", () => {
     const resolution = resolveConfiguredRealtimeVoiceProvider({
       cfg: {},
@@ -141,6 +176,7 @@ describe("realtime voice provider resolver", () => {
       resolveRealtimeVoiceProviderCapabilities({
         provider,
         providerConfig: { authMode: "native" },
+        surface: "browser-session",
       })?.supportsVideoFrames,
     ).toBe(false);
   });

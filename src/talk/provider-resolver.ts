@@ -32,6 +32,8 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   providers?: RealtimeVoiceProviderPlugin[];
   /** Model injected before provider-specific resolveConfig runs. */
   defaultModel?: string;
+  /** Runtime surface being selected. Defaults to the provider bridge path. */
+  surface?: "browser-session" | "bridge";
   noRegisteredProviderMessage?: string;
 };
 
@@ -39,11 +41,13 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   cfg?: OpenClawConfig;
+  surface?: "browser-session" | "bridge";
 }): RealtimeVoiceProviderCapabilities | undefined {
   return (
     params.provider.resolveCapabilities?.({
       cfg: params.cfg,
       providerConfig: params.providerConfig,
+      surface: params.surface,
     }) ?? params.provider.capabilities
   );
 }
@@ -82,7 +86,7 @@ export function resolveConfiguredRealtimeVoiceProvider(
       );
     },
     isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-      provider.isConfigured({ cfg, providerConfig }),
+      provider.isConfigured({ cfg, providerConfig, surface: params.surface }),
   });
 
   if (!resolution.ok && resolution.code === "missing-configured-provider") {

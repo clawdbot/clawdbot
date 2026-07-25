@@ -153,6 +153,7 @@ describe("Codex OAuth realtime browser session", () => {
     });
     const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
     expect(realtime.broker.capabilities).toEqual({
+      transports: ["webrtc"],
       handlesAgentConsult: true,
       supportsToolCalls: false,
       supportsVideoFrames: false,

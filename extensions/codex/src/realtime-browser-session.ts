@@ -220,9 +220,10 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
   };
 
   const broker: RealtimeVoiceBrowserSessionBroker = {
+    id: "codex-oauth",
     providerId: "openai",
-    authMode: "codex-oauth",
     capabilities: {
+      transports: ["webrtc"],
       handlesAgentConsult: true,
       supportsToolCalls: false,
       supportsVideoFrames: false,

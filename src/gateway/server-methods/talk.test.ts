@@ -35,14 +35,20 @@ const mocks = vi.hoisted(() => ({
       provider,
       providerConfig,
       cfg,
+      surface,
     }: {
       provider: {
         capabilities?: unknown;
-        resolveCapabilities?: (ctx: { providerConfig: unknown; cfg?: unknown }) => unknown;
+        resolveCapabilities?: (ctx: {
+          providerConfig: unknown;
+          cfg?: unknown;
+          surface?: "browser-session" | "bridge";
+        }) => unknown;
       };
       providerConfig: unknown;
       cfg?: unknown;
-    }) => provider.resolveCapabilities?.({ providerConfig, cfg }) ?? provider.capabilities,
+      surface?: "browser-session" | "bridge";
+    }) => provider.resolveCapabilities?.({ providerConfig, cfg, surface }) ?? provider.capabilities,
   ),
   createTalkRealtimeRelaySession: vi.fn(),
   sendTalkRealtimeRelayAudio: vi.fn(),
@@ -3001,6 +3007,7 @@ describe("talk.client.create handler", () => {
       configuredProviderId: "openai",
       providerConfigs: { openai: { apiKey: "openai-key" } },
       defaultModel: "gpt-realtime",
+      surface: "browser-session",
     });
     const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
     expectRecordFields(createInput, {
@@ -3080,7 +3087,7 @@ describe("talk.client.create handler", () => {
     };
     mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
       provider,
-      providerConfig: { authMode: "codex-oauth" },
+      providerConfig: {},
     });
 
     const respond = vi.fn();
@@ -3099,7 +3106,7 @@ describe("talk.client.create handler", () => {
             talk: {
               realtime: {
                 provider: "openai",
-                providers: { openai: { authMode: "codex-oauth" } },
+                providers: { openai: {} },
                 instructions: "Speak warmly.",
               },
             },
@@ -3170,7 +3177,7 @@ describe("talk.client.create handler", () => {
         cancelBrowserSession,
         createBridge: vi.fn(),
       },
-      providerConfig: { authMode: "codex-oauth" },
+      providerConfig: {},
     });
     const respond = vi.fn();
 
@@ -3187,7 +3194,7 @@ describe("talk.client.create handler", () => {
     });
 
     expect(cancelBrowserSession).toHaveBeenCalledWith(
-      expect.objectContaining({ providerConfig: { authMode: "codex-oauth" } }),
+      expect.objectContaining({ providerConfig: {} }),
       browserSession,
     );
     expect(mocks.createOrResumeClientVoiceSession).not.toHaveBeenCalled();
@@ -3211,7 +3218,7 @@ describe("talk.client.create handler", () => {
         cancelBrowserSession,
         createBridge: vi.fn(),
       },
-      providerConfig: { authMode: "codex-oauth" },
+      providerConfig: {},
     });
     const respond = vi.fn();
 

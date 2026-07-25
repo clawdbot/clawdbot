@@ -14,10 +14,7 @@ import {
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   buildAgentMainSessionKey,
   resolveAgentIdFromSessionKey,
@@ -218,12 +215,14 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         cfg: runtimeConfig,
         cfgForResolve: runtimeConfig,
         defaultModel: realtimeConfig.model,
+        surface: "browser-session",
         noRegisteredProviderMessage: "No realtime voice provider registered",
       });
       const providerCapabilities = resolveRealtimeVoiceProviderCapabilities({
         provider: resolution.provider,
         providerConfig: resolution.providerConfig,
         cfg: runtimeConfig,
+        surface: "browser-session",
       });
       if (wantsCameraFrames && providerCapabilities?.supportsVideoFrames !== true) {
         respond(

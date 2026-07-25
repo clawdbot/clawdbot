@@ -29,8 +29,7 @@
     "onCommands": ["codex"],
     "onConfigPaths": [
       "plugins.entries.codex.config.sessionCatalog.enabled",
-      "plugins.entries.codex.config.supervision.enabled",
-      "talk.realtime.providers.openai.authMode"
+      "plugins.entries.codex.config.supervision.enabled"
     ]
   },
   "commandAliases": [
