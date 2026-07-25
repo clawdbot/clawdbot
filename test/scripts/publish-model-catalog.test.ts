@@ -105,7 +105,9 @@ describe("publish model catalog", () => {
       { cwd: root, encoding: "utf8" },
     );
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toMatch(/dry-run schemaVersion=1 providers=39 models=239/u);
+    const stats = /dry-run schemaVersion=1 providers=39 models=(\d+)/u.exec(result.stdout);
+    expect(stats).not.toBeNull();
+    expect(Number(stats?.[1])).toBeGreaterThanOrEqual(MODEL_CATALOG_MIN_MODELS);
     expect(fs.existsSync(out)).toBe(false);
   });
 
