@@ -731,9 +731,10 @@ function buildParams(
 
   type ChatCompletionRequestParams = Omit<
     OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-    "reasoning_effort"
+    "reasoning_effort" | "response_format"
   > & {
     reasoning_effort?: string;
+    response_format?: Record<string, unknown>;
     stream_options?: { include_usage: boolean };
     max_tokens?: number;
     prompt_cache_key?: string;
