@@ -206,6 +206,11 @@ describe("LINE send helpers", () => {
           contents: [
             { type: "text", text: "Open", action: oversizedUri },
             { type: "button", action: oversizedPostback },
+            {
+              type: "text",
+              text: "Still works",
+              action: { type: "message", label: "Unavailable", text: "keep" },
+            },
           ],
         },
       },
@@ -223,42 +228,37 @@ describe("LINE send helpers", () => {
     expect(pushed.messages[0]?.contents).toEqual(replied.messages[0]?.contents);
 
     const contents = pushed.messages[0]?.contents as {
-      action: unknown;
-      hero: { type: string; contents: Array<{ type: string; text?: string }> };
-      body: { action: unknown; contents: Array<{ action: unknown }> };
+      action?: unknown;
+      hero: { type: string; action?: unknown };
+      body: { action?: unknown; contents: Array<{ action?: unknown; text?: string }> };
     };
     const unavailableAction = {
       type: "message",
       label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",
     };
-    const unavailableLink = {
+    expect(contents.action).toBeUndefined();
+    expect(contents.hero).toEqual({
+      type: "video",
+      url: "https://e.example/video.mp4",
+      previewUrl: "https://e.example/preview.jpg",
+      altContent: {
+        type: "image",
+        url: "https://e.example/preview.jpg",
+        size: "full",
+      },
+    });
+    expect(contents.body.action).toBeUndefined();
+    expect(contents.body.contents[0]?.action).toBeUndefined();
+    expect(contents.body.contents[1]?.action).toEqual(unavailableAction);
+    expect(contents.body.contents[2]?.action).toEqual({
       type: "message",
       label: "Unavailable",
-      text: "Link unavailable: URL exceeds LINE's limit.",
-    };
-    expect(contents.action).toEqual(unavailableAction);
-    expect(contents.hero).toEqual({
-      type: "box",
-      layout: "vertical",
-      contents: [
-        {
-          type: "image",
-          url: "https://e.example/preview.jpg",
-          size: "full",
-        },
-        {
-          type: "text",
-          text: "Link unavailable: URL exceeds LINE's limit.",
-          wrap: true,
-          size: "sm",
-          color: "#666666",
-        },
-      ],
+      text: "keep",
     });
-    expect(contents.body.action).toEqual(unavailableAction);
-    expect(contents.body.contents[0]?.action).toEqual(unavailableLink);
-    expect(contents.body.contents[1]?.action).toEqual(unavailableAction);
+    expect(contents.body.contents.slice(3).map((item) => item.text)).toEqual([
+      "Action unavailable: callback data exceeds LINE's limit.\nLink unavailable: URL exceeds LINE's limit.",
+    ]);
     expect(message.contents.action).toBe(oversizedPostback);
   });
 

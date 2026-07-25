@@ -32,12 +32,19 @@ function truncateLineActionData(data: string): string {
   return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
 }
 
+const unavailableActionMarker = Symbol("lineUnavailableAction");
+type UnavailableAction = Extract<Action, { type: "message" }> & {
+  [unavailableActionMarker]: true;
+};
+
 function unavailableAction(kind: "Action" | "Link", reason: string): Action {
-  return {
+  const action = {
     type: "message",
     label: "Unavailable",
     text: `${kind} unavailable: ${reason}`,
-  };
+  } satisfies Action;
+  Object.defineProperty(action, unavailableActionMarker, { value: true });
+  return action;
 }
 
 const actionTypes = new Set([
@@ -60,11 +67,15 @@ function isLineAction(value: unknown): value is Action {
   return isRecord(value) && typeof value.type === "string" && actionTypes.has(value.type);
 }
 
-function normalizeNestedActions(value: unknown, labelLimit: number): unknown {
+function isUnavailableAction(action: Action): action is UnavailableAction {
+  return (action as Partial<UnavailableAction>)[unavailableActionMarker] === true;
+}
+
+function normalizeNestedActions(value: unknown, labelLimit: number, warnings?: string[]): unknown {
   if (Array.isArray(value)) {
     const normalized: unknown[] = [];
     for (const item of value) {
-      normalized.push(normalizeNestedActions(item, labelLimit));
+      normalized.push(normalizeNestedActions(item, labelLimit, warnings));
     }
     return normalized;
   }
@@ -72,42 +83,78 @@ function normalizeNestedActions(value: unknown, labelLimit: number): unknown {
     return value;
   }
 
-  if (value.type === "video" && isLineAction(value.action)) {
-    const action = normalizeLineAction(value.action, labelLimit);
-    if (action.type !== "uri") {
-      // Flex video accepts only URI actions. Replace the video with its visual
-      // fallback and an explicit warning instead of dropping the tap target.
-      const contents: unknown[] = [];
-      if (isRecord(value.altContent)) {
-        contents.push(normalizeNestedActions(value.altContent, labelLimit));
-      }
-      contents.push({
-        type: "text",
-        text:
-          action.type === "message" && action.text
-            ? action.text
-            : "Action unavailable in this video.",
-        wrap: true,
-        size: "sm",
-        color: "#666666",
-      });
-      return { type: "box", layout: "vertical", contents };
-    }
-  }
-
   const normalized: Record<string, unknown> = { ...value };
   for (const [key, nested] of Object.entries(value)) {
     if ((key === "action" || key === "defaultAction") && isLineAction(nested)) {
-      normalized[key] = normalizeLineAction(nested, labelLimit);
+      const action = normalizeLineAction(nested, labelLimit);
+      if (
+        warnings &&
+        key === "action" &&
+        ((value.type === "video" && action.type !== "uri") ||
+          (value.type !== "button" && isUnavailableAction(action)))
+      ) {
+        delete normalized[key];
+        warnings.push(
+          isUnavailableAction(action)
+            ? (action.text ?? "Action unavailable.")
+            : "Action unavailable in this video.",
+        );
+      } else {
+        normalized[key] = action;
+      }
     } else if (key === "actions" && Array.isArray(nested)) {
       normalized[key] = nested.map((action) =>
         isLineAction(action) ? normalizeLineAction(action, labelLimit) : action,
       );
     } else {
-      normalized[key] = normalizeNestedActions(nested, labelLimit);
+      normalized[key] = normalizeNestedActions(nested, labelLimit, warnings);
     }
   }
   return normalized;
+}
+
+function normalizeFlexBubbleActions(value: unknown): unknown {
+  if (!isRecord(value) || value.type !== "bubble") {
+    return normalizeNestedActions(value, 40);
+  }
+
+  const warnings: string[] = [];
+  const normalized = normalizeNestedActions(value, 40, warnings);
+  if (!isRecord(normalized) || warnings.length === 0) {
+    return normalized;
+  }
+
+  const warning = {
+    type: "text",
+    text: [...new Set(warnings)].join("\n"),
+    wrap: true,
+    size: "sm",
+    color: "#B45309",
+    margin: "md",
+  };
+  const body = normalized.body;
+  if (isRecord(body) && Array.isArray(body.contents)) {
+    normalized.body = { ...body, contents: [...body.contents, warning] };
+  } else {
+    normalized.body = { type: "box", layout: "vertical", contents: [warning] };
+  }
+  return normalized;
+}
+
+function normalizeFlexContainerActions(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  if (value.type === "bubble") {
+    return normalizeFlexBubbleActions(value);
+  }
+  if (value.type === "carousel" && Array.isArray(value.contents)) {
+    return {
+      ...value,
+      contents: value.contents.map((bubble) => normalizeFlexBubbleActions(bubble)),
+    };
+  }
+  return normalizeNestedActions(value, 40);
 }
 
 export function normalizeLineMessageActions(message: Message): Message {
@@ -115,7 +162,7 @@ export function normalizeLineMessageActions(message: Message): Message {
   if (message.type === "flex") {
     normalized = {
       ...message,
-      contents: normalizeNestedActions(message.contents, 40) as messagingApi.FlexContainer,
+      contents: normalizeFlexContainerActions(message.contents) as messagingApi.FlexContainer,
     };
   } else if (message.type === "template") {
     const labelLimit = message.template.type === "image_carousel" ? 12 : 20;
@@ -138,6 +185,9 @@ export function normalizeLineMessageActions(message: Message): Message {
 }
 
 export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LABEL_LIMIT): Action {
+  if (isUnavailableAction(action)) {
+    return action;
+  }
   const label =
     action.label === undefined ? undefined : truncateLineActionLabel(action.label, labelLimit);
 
