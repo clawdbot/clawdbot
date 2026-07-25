@@ -51,6 +51,15 @@ export const DEFAULT_USER_FILENAME = "USER.md";
 export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
+export const GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES = [
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+] as const;
+const GENERATED_WORKSPACE_BOOTSTRAP_FILENAME_SET: ReadonlySet<string> = new Set(
+  GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
+);
 const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -374,7 +383,7 @@ async function workspaceRequiredBootstrapLooksCustomized(
   dir: string,
   opts?: { generatedHashes?: ReadonlyMap<string, string> },
 ): Promise<boolean> {
-  const fileNames = [DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME];
+  const fileNames = [DEFAULT_AGENTS_FILENAME];
   const generatedHashes = opts?.generatedHashes;
   if (generatedHashes && generatedHashes.size > 0) {
     for (const fileName of fileNames) {
@@ -383,7 +392,7 @@ async function workspaceRequiredBootstrapLooksCustomized(
       try {
         const content = await fs.readFile(filePath, "utf-8");
         const contentHash = createHash("sha256").update(content).digest("hex");
-        if (!generatedHash || contentHash !== generatedHash) {
+        if (contentHash !== generatedHash && content !== (await loadTemplate(fileName))) {
           return true;
         }
       } catch {
@@ -404,13 +413,15 @@ async function workspaceAttestedGeneratedFilesIntact(
   dir: string,
   generatedHashes: ReadonlyMap<string, string>,
 ): Promise<boolean> {
-  if (
-    !generatedHashes.has(DEFAULT_AGENTS_FILENAME) ||
-    !generatedHashes.has(DEFAULT_TOOLS_FILENAME)
-  ) {
+  if (!generatedHashes.has(DEFAULT_AGENTS_FILENAME)) {
     return false;
   }
   for (const [fileName, generatedHash] of generatedHashes) {
+    // Retiring a generated bootstrap file must not make an attested workspace
+    // look vanished merely because its historical hash row remains.
+    if (!GENERATED_WORKSPACE_BOOTSTRAP_FILENAME_SET.has(fileName)) {
+      continue;
+    }
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");
       const contentHash = createHash("sha256").update(content).digest("hex");
@@ -484,14 +495,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
 
 async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string, string>> {
   const hashes = new Map<string, string>();
-  const fileNames = [
-    DEFAULT_AGENTS_FILENAME,
-    DEFAULT_SOUL_FILENAME,
-    DEFAULT_TOOLS_FILENAME,
-    DEFAULT_IDENTITY_FILENAME,
-    DEFAULT_USER_FILENAME,
-  ];
-  for (const fileName of fileNames) {
+  for (const fileName of GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES) {
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");
       if (content === (await loadTemplate(fileName))) {

@@ -290,7 +290,7 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 
-  it("refuses to accept old generated bootstrap files recorded by SQLite attestation", async () => {
+  it("accepts an intact historical AGENTS.md recorded by SQLite attestation", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const oldGeneratedAgents = "old generated agents\n";
     await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), oldGeneratedAgents);
@@ -306,9 +306,9 @@ describe("ensureAgentWorkspace", () => {
       ]),
     });
 
-    await expectWorkspaceVanished(
+    await expect(
       ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
-    );
+    ).resolves.toMatchObject({ dir: tempDir });
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 
@@ -359,6 +359,82 @@ describe("ensureAgentWorkspace", () => {
       ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
     ).resolves.toMatchObject({ dir: tempDir });
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+  });
+
+  it("ignores retired generated-file hashes when checking workspace survival", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.rm(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const snapshot = readWorkspaceStateSnapshot(tempDir);
+    replaceWorkspaceAttestation({
+      workspaceDir: tempDir,
+      attestedAtMs: Date.now(),
+      generatedHashes: new Map([
+        ...snapshot.attestation!.generatedHashes,
+        ["RETIRED.md", "a".repeat(64)],
+      ]),
+    });
+
+    await expect(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    ).resolves.toMatchObject({ dir: tempDir });
+  });
+
+  it("requires an AGENTS.md hash before trusting generated-file survival evidence", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.rm(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    const snapshot = readWorkspaceStateSnapshot(tempDir);
+    const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
+    generatedHashes.delete(DEFAULT_AGENTS_FILENAME);
+    replaceWorkspaceAttestation({
+      workspaceDir: tempDir,
+      attestedAtMs: Date.now(),
+      generatedHashes,
+    });
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    );
+  });
+
+  it("accepts customized AGENTS.md when its attestation hash is missing", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.rm(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "custom instructions\n");
+    const snapshot = readWorkspaceStateSnapshot(tempDir);
+    const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
+    generatedHashes.delete(DEFAULT_AGENTS_FILENAME);
+    replaceWorkspaceAttestation({
+      workspaceDir: tempDir,
+      attestedAtMs: Date.now(),
+      generatedHashes,
+    });
+
+    await expect(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    ).resolves.toMatchObject({ dir: tempDir });
+  });
+
+  it("rejects a corrupted AGENTS.md attestation hash", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.rm(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    const snapshot = readWorkspaceStateSnapshot(tempDir);
+    const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
+    generatedHashes.set(DEFAULT_AGENTS_FILENAME, "0".repeat(64));
+    replaceWorkspaceAttestation({
+      workspaceDir: tempDir,
+      attestedAtMs: Date.now(),
+      generatedHashes,
+    });
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    );
   });
 
   it("accepts a recently attested workspace when only custom skills survive", async () => {
