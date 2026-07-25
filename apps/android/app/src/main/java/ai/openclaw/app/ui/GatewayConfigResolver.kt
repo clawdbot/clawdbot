@@ -397,10 +397,10 @@ private fun resolveGatewayManualAuthority(hostInput: String): URI? {
   // query/fragment components could quietly connect credentials to another host.
   if (
     uri.host.isNullOrEmpty() ||
-      uri.rawUserInfo != null ||
-      uri.rawQuery != null ||
-      uri.rawFragment != null ||
-      uri.rawPath.isNotEmpty()
+    uri.rawUserInfo != null ||
+    uri.rawQuery != null ||
+    uri.rawFragment != null ||
+    uri.rawPath.isNotEmpty()
   ) {
     return null
   }
