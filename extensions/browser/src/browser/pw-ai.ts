@@ -53,6 +53,7 @@ import { responseBodyViaPlaywright } from "./pw-tools-core.responses.js";
 import {
   closePageViaPlaywright,
   navigateViaPlaywright,
+  pageContentViaPlaywright,
   pdfViaPlaywright,
   resizeViewportViaPlaywright,
   snapshotAiViaPlaywright,
@@ -121,6 +122,7 @@ export const pwAi = {
   highlightViaPlaywright,
   hoverViaPlaywright,
   navigateViaPlaywright,
+  pageContentViaPlaywright,
   pdfViaPlaywright,
   pressKeyViaPlaywright,
   resizeViewportViaPlaywright,
