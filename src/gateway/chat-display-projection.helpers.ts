@@ -71,7 +71,7 @@ export function isAssistantTextContentType(type: unknown): boolean {
   return type === "text" || type === "input_text" || type === "output_text";
 }
 
-export function isAssistantInternalReasoningContentType(type: unknown): boolean {
+function isAssistantInternalReasoningContentType(type: unknown): boolean {
   return type === "thinking" || type === "reasoning" || type === "redacted_thinking";
 }
 
