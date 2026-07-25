@@ -30,7 +30,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 3;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;

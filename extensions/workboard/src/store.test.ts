@@ -303,7 +303,7 @@ describe("WorkboardStore", () => {
         );
         INSERT INTO workboard_boards SELECT * FROM workboard_boards_strict;
         DROP TABLE workboard_boards_strict;
-        DELETE FROM workboard_schema_migrations WHERE id = 'schema-4';
+        DELETE FROM workboard_schema_migrations WHERE id = 'schema-3';
         INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
         VALUES ('schema-2', 1);
       `);
@@ -329,9 +329,100 @@ describe("WorkboardStore", () => {
         ).toEqual({ strict: 1 });
         expect(
           migrated
-            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
             .get(),
         ).toEqual({ found: 1 });
+      } finally {
+        migrated.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds the proof verification column without advancing the schema version", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-migration-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const initialized = createWorkboardSqliteStores({ dbPath });
+    const initialStore = new WorkboardStore(initialized.cards, {
+      boards: initialized.boards,
+      subscriptions: initialized.subscriptions,
+      attachments: initialized.attachments,
+    });
+    const card = await initialStore.create({ title: "Legacy proof" });
+    await initialStore.addProof(card.id, {
+      status: "passed",
+      command: "legacy proof command",
+    });
+    initialized.close();
+
+    const legacy = new DatabaseSync(dbPath);
+    try {
+      legacy.exec(`
+        ALTER TABLE workboard_card_proof RENAME TO workboard_card_proof_legacy;
+        CREATE TABLE workboard_card_proof (
+          id TEXT PRIMARY KEY,
+          card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
+          ordinal INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          label TEXT,
+          command TEXT,
+          url TEXT,
+          note TEXT,
+          created_at INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO workboard_card_proof
+          (id, card_id, ordinal, status, label, command, url, note, created_at)
+        SELECT id, card_id, ordinal, status, label, command, url, note, created_at
+        FROM workboard_card_proof_legacy;
+        DROP TABLE workboard_card_proof_legacy;
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    try {
+      const migratedStores = createWorkboardSqliteStores({ dbPath });
+      const migratedStore = new WorkboardStore(migratedStores.cards, {
+        boards: migratedStores.boards,
+        subscriptions: migratedStores.subscriptions,
+        attachments: migratedStores.attachments,
+      });
+      try {
+        await expect(migratedStore.get(card.id)).resolves.toMatchObject({
+          metadata: {
+            proof: [
+              expect.objectContaining({
+                status: "passed",
+                verification: "worker_reported",
+                command: "legacy proof command",
+              }),
+            ],
+          },
+        });
+      } finally {
+        migratedStores.close();
+      }
+
+      const migrated = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          migrated
+            .prepare(
+              "SELECT name, \"notnull\" AS notnull_value, dflt_value FROM pragma_table_info('workboard_card_proof') WHERE name = 'verification'",
+            )
+            .get(),
+        ).toEqual({ name: "verification", notnull_value: 1, dflt_value: "'worker_reported'" });
+        expect(
+          migrated
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+            .get(),
+        ).toEqual({ found: 1 });
+        expect(
+          migrated
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
+            .get(),
+        ).toBeUndefined();
       } finally {
         migrated.close();
       }
