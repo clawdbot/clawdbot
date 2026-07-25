@@ -11,6 +11,7 @@ type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
   client?: GatewayRequestOptions["client"];
   isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
+  agentId?: string;
   pluginId?: string;
   pluginSource?: string;
   pluginOrigin?: PluginOrigin;
@@ -20,6 +21,7 @@ type PluginRuntimeGatewayRequestScope = {
 
 type PluginRuntimePluginScope = {
   pluginId: string;
+  agentId?: string;
   pluginSource?: string;
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
@@ -57,6 +59,9 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
         pluginId: scope.pluginId,
         isWebchatConnect: () => false,
       };
+  if (scope.agentId !== undefined) {
+    scoped.agentId = scope.agentId;
+  }
   if (scope.pluginSource !== undefined) {
     scoped.pluginSource = scope.pluginSource;
   } else {

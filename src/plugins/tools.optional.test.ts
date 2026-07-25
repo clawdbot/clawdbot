@@ -531,12 +531,13 @@ describe("resolvePluginTools optional tools", () => {
     vi.useRealTimers();
   });
 
-  it("runs plugin tool factories, prepare callbacks, and execute callbacks under the owning plugin scope", async () => {
-    const context = createContext();
+  it("runs plugin tool factories, prepare callbacks, and execute callbacks under the owning plugin and agent scope", async () => {
+    const context = { ...createContext(), agentId: "work" };
     const observed: Array<{
       phase: "factory" | "prepare" | "execute";
       pluginId?: string;
       pluginSource?: string;
+      agentId?: string;
     }> = [];
 
     setRegistry(
@@ -551,6 +552,7 @@ describe("resolvePluginTools optional tools", () => {
             phase: "factory",
             pluginId: scope?.pluginId,
             pluginSource: scope?.pluginSource,
+            agentId: scope?.agentId,
           });
           return {
             name: `${pluginId}_tool`,
@@ -562,6 +564,7 @@ describe("resolvePluginTools optional tools", () => {
                 phase: "prepare",
                 pluginId: prepareScope?.pluginId,
                 pluginSource: prepareScope?.pluginSource,
+                agentId: prepareScope?.agentId,
               });
               return args;
             },
@@ -571,6 +574,7 @@ describe("resolvePluginTools optional tools", () => {
                 phase: "execute",
                 pluginId: executeScope?.pluginId,
                 pluginSource: executeScope?.pluginSource,
+                agentId: executeScope?.agentId,
               });
               return { content: [{ type: "text", text: pluginId }] };
             },
@@ -600,23 +604,41 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
     expect(observed).toEqual([
-      { phase: "factory", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      {
+        phase: "factory",
+        pluginId: "multi",
+        pluginSource: "/tmp/multi.js",
+        agentId: "work",
+      },
       {
         phase: "factory",
         pluginId: "optional-demo",
         pluginSource: "/tmp/optional-demo.js",
+        agentId: "work",
       },
-      { phase: "prepare", pluginId: "multi", pluginSource: "/tmp/multi.js" },
-      { phase: "execute", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      {
+        phase: "prepare",
+        pluginId: "multi",
+        pluginSource: "/tmp/multi.js",
+        agentId: "work",
+      },
+      {
+        phase: "execute",
+        pluginId: "multi",
+        pluginSource: "/tmp/multi.js",
+        agentId: "work",
+      },
       {
         phase: "prepare",
         pluginId: "optional-demo",
         pluginSource: "/tmp/optional-demo.js",
+        agentId: "work",
       },
       {
         phase: "execute",
         pluginId: "optional-demo",
         pluginSource: "/tmp/optional-demo.js",
+        agentId: "work",
       },
     ]);
   });

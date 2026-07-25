@@ -74,6 +74,7 @@ describe("readProviderUsageProfile", () => {
           provider: "openai",
           token: "private-token",
           authProfileId: "openai:work",
+          exactProfileRead: true,
           accountId: "account-1",
           email: "private@example.com",
           timeoutMs: 5_000,

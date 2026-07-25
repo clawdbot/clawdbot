@@ -278,6 +278,7 @@ export async function readProviderUsageProfile(
           token: fetchAuth.token,
           accountId: fetchAuth.accountId,
           authProfileId,
+          exactProfileRead: true,
           subscriptionType: fetchAuth.subscriptionType,
           rateLimitTier: fetchAuth.rateLimitTier,
           email: fetchAuth.email,

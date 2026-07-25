@@ -483,7 +483,7 @@ function formatClaudePlanLabel(
 // network call is not.
 function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
   const fromAuth = formatClaudePlanLabel(ctx.subscriptionType, ctx.rateLimitTier);
-  if (fromAuth) {
+  if (fromAuth || ctx.exactProfileRead) {
     return fromAuth;
   }
   const credential = readClaudeCliCredentialsCached({

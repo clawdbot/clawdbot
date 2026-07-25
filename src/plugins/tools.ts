@@ -103,14 +103,19 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
   }
 }
 
-function pluginToolScopeKey(entry: PluginToolRegistration): string {
-  return JSON.stringify([entry.pluginId, entry.source]);
+function pluginToolScopeKey(entry: PluginToolRegistration, agentId?: string): string {
+  return JSON.stringify([entry.pluginId, entry.source, agentId ?? null]);
 }
 
-function runWithPluginToolScope<T>(entry: PluginToolRegistration, run: () => T): T {
+function runWithPluginToolScope<T>(
+  entry: PluginToolRegistration,
+  agentId: string | undefined,
+  run: () => T,
+): T {
   return withPluginRuntimePluginScope(
     {
       pluginId: entry.pluginId,
+      ...(agentId ? { agentId } : {}),
       ...(entry.source ? { pluginSource: entry.source } : {}),
     },
     run,
@@ -126,8 +131,12 @@ function isAgentTool(value: unknown): value is AnyAgentTool {
   );
 }
 
-function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTool): AnyAgentTool {
-  const key = pluginToolScopeKey(entry);
+function wrapPluginToolCallbacks(
+  entry: PluginToolRegistration,
+  tool: AnyAgentTool,
+  agentId?: string,
+): AnyAgentTool {
+  const key = pluginToolScopeKey(entry, agentId);
   const scopedByKey = scopedPluginTools.get(tool);
   const cached = scopedByKey?.get(key);
   if (cached) {
@@ -137,7 +146,7 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
   const prepareArguments = tool.prepareArguments;
   const scopedPrepareArguments = prepareArguments
     ? (args: unknown) =>
-        runWithPluginToolScope(entry, () => Reflect.apply(prepareArguments, tool, [args]))
+        runWithPluginToolScope(entry, agentId, () => Reflect.apply(prepareArguments, tool, [args]))
     : undefined;
   const scopedExecute = (
     toolCallId: string,
@@ -147,6 +156,7 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
   ) =>
     runWithPluginToolScope(
       entry,
+      agentId,
       () =>
         Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
           AnyAgentTool["execute"]
@@ -193,16 +203,20 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
 function wrapPluginToolFactoryResult(
   entry: PluginToolRegistration,
   result: PluginToolFactoryResult,
+  agentId?: string,
 ): PluginToolFactoryResult {
   if (Array.isArray(result)) {
-    return result.map((tool) => (isAgentTool(tool) ? wrapPluginToolCallbacks(entry, tool) : tool));
+    return result.map((tool) =>
+      isAgentTool(tool) ? wrapPluginToolCallbacks(entry, tool, agentId) : tool,
+    );
   }
-  return isAgentTool(result) ? wrapPluginToolCallbacks(entry, result) : result;
+  return isAgentTool(result) ? wrapPluginToolCallbacks(entry, result, agentId) : result;
 }
 
 function resolvePluginToolFactory(entry: PluginToolRegistration, ctx: OpenClawPluginToolContext) {
-  return runWithPluginToolScope(entry, () =>
-    wrapPluginToolFactoryResult(entry, entry.factory(ctx)),
+  const agentId = typeof ctx.agentId === "string" ? ctx.agentId.trim() || undefined : undefined;
+  return runWithPluginToolScope(entry, agentId, () =>
+    wrapPluginToolFactoryResult(entry, entry.factory(ctx), agentId),
   );
 }
 

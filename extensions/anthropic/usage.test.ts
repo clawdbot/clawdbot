@@ -220,6 +220,23 @@ describe("Anthropic provider usage", () => {
     expect(snapshot.windows).toHaveLength(2);
   });
 
+  it("does not use Claude CLI plan metadata for an exact-profile read", async () => {
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ five_hour: { utilization: 22 } }), { status: 200 }),
+    );
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: "oauth-token",
+      exactProfileRead: true,
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.plan).toBeUndefined();
+    expect(snapshot.windows).toHaveLength(1);
+  });
+
   it("attaches the resolved credential email to OAuth usage snapshots", async () => {
     const fetchFn = vi.fn(
       async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
