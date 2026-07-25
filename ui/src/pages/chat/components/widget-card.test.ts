@@ -73,6 +73,47 @@ describe("widget-card", () => {
     lease.stop();
   });
 
+  it("mounts a new document on the rotated surface URL within one connection", () => {
+    const preview = {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "cv_surface_lease_mounted",
+      url: "/__openclaw__/canvas/documents/cv_surface_lease_mounted/index.html",
+      sandbox: "scripts",
+    } as const;
+    const mountedHost = document.createElement("div");
+    render(
+      renderToolPreview(preview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+      }),
+      mountedHost,
+    );
+    expect(mountedHost.querySelector("iframe")?.getAttribute("src")).toContain(
+      "/__openclaw__/cap/one/",
+    );
+
+    // The renewal that fixes expired widgets only helps if a widget created
+    // after the rotation picks up the fresh capability instead of the mounted
+    // document's cached one.
+    const rotatedHost = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          ...preview,
+          viewId: "cv_surface_lease_rotated",
+          url: "/__openclaw__/canvas/documents/cv_surface_lease_rotated/index.html",
+        },
+        "chat_message",
+        { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two" },
+      ),
+      rotatedHost,
+    );
+    expect(rotatedHost.querySelector("iframe")?.getAttribute("src")).toContain(
+      "/__openclaw__/cap/two/",
+    );
+  });
+
   it("dispatches canvas HTML and MCP App content and ignores unknown kinds", () => {
     const canvas = document.createElement("div");
     render(
