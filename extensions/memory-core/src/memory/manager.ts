@@ -423,6 +423,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private providersPendingRetirement = new Set<EmbeddingProvider>();
   private closePromise: Promise<void> | null = null;
   private closeTeardownComplete = false;
+  private closing = false;
   private activeManagerOperations = 0;
   private managerIdleWaiters = new Set<() => void>();
   protected override fallbackFrom?: EmbeddingProviderId;
@@ -913,7 +914,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
-    if (this.closed) {
+    if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
     }
     this.activeManagerOperations += 1;
@@ -970,7 +971,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           // A fresh process can receive its first search before background watch/session
           // syncs have built the index. Force one synchronous bootstrap so the first
           // lookup after restart does not fail closed with empty results.
-          await this.sync({ reason: "search", force: true });
+          await this.syncAdmitted({ reason: "search", force: true });
         } catch (err) {
           log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
         }
@@ -989,7 +990,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         enabled: this.settings.sync.onSearch,
         dirty: this.dirty,
         sessionsDirty: this.sessionsDirty,
-        sync: async (params) => await this.sync(params),
+        sync: async (params) => await this.syncAdmitted(params),
         onError: (err) => {
           log.warn(`memory sync failed (search): ${String(err)}`);
         },
@@ -1569,9 +1570,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   async sync(params?: MemorySyncParams): Promise<void> {
-    if (this.closed) {
+    if (this.closing || this.closed) {
       return;
     }
+    return await this.syncAdmitted(params);
+  }
+
+  private async syncAdmitted(params?: MemorySyncParams): Promise<void> {
     if (this.syncing) {
       if (hasTargetedSessionSyncParams(params)) {
         return this.enqueueTargetedSessionSync(params);
@@ -1605,7 +1610,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
-        sync: async (params) => await this.sync(params),
+        sync: async (params) => await this.syncAdmitted(params),
       },
       targets,
     );
@@ -1893,8 +1898,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private async closeOnce(): Promise<void> {
-    this.closed = true;
+    this.closing = true;
     await this.awaitManagerIdle();
+    this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
     const pendingFallbackInit = this.getPendingFallbackProviderInitialization();
     if (this.watchTimer) {

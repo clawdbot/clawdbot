@@ -2864,6 +2864,8 @@ describe("memory index", () => {
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
       searchVector: () => Promise<unknown[]>;
+      closing: boolean;
+      closed: boolean;
     };
     let releaseVectorSearch: () => void = () => {};
     let markVectorSearchStarted: () => void = () => {};
@@ -2894,6 +2896,8 @@ describe("memory index", () => {
     try {
       await Promise.resolve();
       expect(closeSettled).toBe(false);
+      expect(fields.closing).toBe(true);
+      expect(fields.closed).toBe(false);
       expect(providerCloseCalls).toBe(0);
     } finally {
       releaseVectorSearch();
