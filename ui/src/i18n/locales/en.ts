@@ -3840,6 +3840,15 @@ export const en: TranslationMap = {
       oneMessage: "{count} message",
       messages: "{count} messages",
       activeBranch: "Active branch",
+      gatewayPicker: {
+        menuLabel: "Gateway: {gateway}",
+        primaryTag: "primary",
+        setPrimary: "Set as primary…",
+        openSettings: "Gateway settings…",
+        connected: "Connected",
+        unreachable: "Unreachable",
+        unknown: "Unknown status",
+      },
     },
     board: {
       faceLabel: "Thread face",

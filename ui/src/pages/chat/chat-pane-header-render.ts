@@ -148,6 +148,8 @@ export abstract class ChatPaneHeaderRender extends ChatPaneHeader {
         board.dock,
         (dock) => this.handleBoardDockChange(dock),
       ),
+      nativeGateways: this.nativeGateways,
+      onboarding: this.onboarding,
       onBeginRename: () => row && this.beginHeaderRename(row),
       onRenameInput: (value) => {
         this.headerRenameValue = value;
