@@ -213,7 +213,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
           createMetadataIfMissing: previousVersion < OPENCLAW_STATE_SCHEMA_VERSION,
         });
         if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
-          assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+          assertCurrentStateRuntimeSchema(db, pathname);
         }
         if (rebuiltIndexNames.size > 0) {
           applied.push(`Rebuilt canonical shared-state SQLite indexes (${rebuiltIndexNames.size})`);

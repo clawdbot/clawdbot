@@ -100,6 +100,8 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
     }
     if (hasCurrentVersion) {
       repairCanonicalSqliteIndexes(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
+        // The maintenance contract is the runtime owner/schema contract plus
+        // an exact user_version gate, so table drift rolls this savepoint back.
         validateAfterRepair: () =>
           assertOpenClawAgentDatabaseForMaintenance(database, {
             agentId,

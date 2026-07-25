@@ -1887,6 +1887,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(() => openOpenClawStateDatabase(options)).toThrow(
       /unexpected unique index on diagnostic_events/iu,
     );
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("unexpected unique index on diagnostic_events")],
+    });
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
       expect(
