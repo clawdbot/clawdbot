@@ -207,6 +207,9 @@
       "openclaw/plugin-sdk/test-node-mocks": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/test-node-mocks.d.ts"
       ],
+      "openclaw/plugin-sdk/test-state": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/test-state.d.ts"
+      ],
       "openclaw/plugin-sdk/time-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/time-runtime.d.ts"
       ],
