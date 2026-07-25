@@ -14,7 +14,11 @@ import {
   hasTrustedToolPolicies,
   runTrustedToolPolicies,
 } from "../plugins/trusted-tool-policy.js";
-import type { PluginHookToolInputKind, PluginHookToolKind } from "../plugins/types.js";
+import type {
+  PluginApprovalResolution,
+  PluginHookToolInputKind,
+  PluginHookToolKind,
+} from "../plugins/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { resolveClientVoiceToolConfirmationPolicy } from "../talk/client-voice-confirmation.js";
 import {
