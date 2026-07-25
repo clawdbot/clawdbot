@@ -762,17 +762,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.provider?.id !== "local") {
       return;
     }
-    if (!isLocalEmbeddingWorkerFailure(err)) {
+    const workerFailure = isLocalEmbeddingWorkerFailure(err)
+      ? err
+      : err instanceof Error && isLocalEmbeddingWorkerFailure(err.cause)
+        ? err.cause
+        : null;
+    if (!workerFailure) {
       return;
     }
-    const message = formatErrorMessage(err);
+    const message = formatErrorMessage(workerFailure);
     const degradedProvider = this.provider;
     void this.retireCurrentProvider();
     this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
     this.providerLifecycle = createDegradedMemoryProviderLifecycle({
       providerId: degradedProvider.id,
       reason: message,
-      code: err.code,
+      code: workerFailure.code,
     });
     EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
     this.providerKey = this.computeProviderKey();
@@ -1097,58 +1102,81 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
               return [];
             })
           : [];
-      let keywordResults = await loadKeywordResults();
-
+      let keywordResults: Awaited<ReturnType<typeof loadKeywordResults>> = [];
       let queryVec: number[];
+      const releaseSemanticProvider = this.acquireProviderUse(semanticProvider);
       try {
-        queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal, semanticProvider);
-      } catch (err) {
-        // An aborted caller already stopped waiting; skip fallback-provider
-        // activation so the abandoned search stops instead of re-embedding.
-        if (opts?.signal?.aborted) {
-          throw err;
-        }
-        const message = formatErrorMessage(err);
-        const activatedFallback = this.shouldFallbackOnError(err)
-          ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
-              log.warn(
-                `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+        keywordResults = await loadKeywordResults();
+        try {
+          queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal, semanticProvider, false);
+        } catch (err) {
+          releaseSemanticProvider();
+          this.markLocalEmbeddingProviderDegraded(err);
+          // An aborted caller already stopped waiting; skip fallback-provider
+          // activation so the abandoned search stops instead of re-embedding.
+          if (opts?.signal?.aborted) {
+            throw err;
+          }
+          const message = formatErrorMessage(err);
+          const activatedFallback = this.shouldFallbackOnError(err)
+            ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
+                log.warn(
+                  `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+                );
+                return false;
+              })
+            : false;
+          if (activatedFallback) {
+            if (
+              this.refreshIndexIdentityDirty({
+                providerKeyKnown: this.providerInitialized,
+              }).status !== "valid"
+            ) {
+              return [];
+            }
+            if (!this.provider) {
+              return [];
+            }
+            semanticProvider = this.provider;
+            vectorProviderIdentity = {
+              model: semanticProvider.model,
+              aliases: this.resolveProviderIndexIdentities()
+                .slice(1)
+                .map((identity) => identity.model),
+            };
+            const releaseFallbackProvider = this.acquireProviderUse(semanticProvider);
+            try {
+              keywordResults = await loadKeywordResults();
+              queryVec = await this.embedQueryWithRetry(
+                cleaned,
+                opts?.signal,
+                semanticProvider,
+                false,
               );
-              return false;
-            })
-          : false;
-        if (activatedFallback) {
-          if (
-            this.refreshIndexIdentityDirty({
-              providerKeyKnown: this.providerInitialized,
-            }).status !== "valid"
-          ) {
-            return [];
+            } catch (fallbackErr) {
+              releaseFallbackProvider();
+              this.markLocalEmbeddingProviderDegraded(fallbackErr);
+              throw fallbackErr;
+            } finally {
+              releaseFallbackProvider();
+            }
+          } else if (!this.provider && this.fts.enabled && this.fts.available) {
+            this.assertRequiredProviderAvailable("search");
+            log.warn(
+              `memory search: embeddings unavailable; using keyword-only results: ${message}`,
+            );
+            return await this.finalizeKeywordOnlyResults({
+              results: keywordResults,
+              temporalDecay: hybrid.temporalDecay,
+              maxResults,
+              minScore,
+            });
+          } else {
+            throw err;
           }
-          keywordResults = await loadKeywordResults();
-          if (!this.provider) {
-            return [];
-          }
-          semanticProvider = this.provider;
-          vectorProviderIdentity = {
-            model: semanticProvider.model,
-            aliases: this.resolveProviderIndexIdentities()
-              .slice(1)
-              .map((identity) => identity.model),
-          };
-          queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal, semanticProvider);
-        } else if (!this.provider && this.fts.enabled && this.fts.available) {
-          this.assertRequiredProviderAvailable("search");
-          log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
-          return await this.finalizeKeywordOnlyResults({
-            results: keywordResults,
-            temporalDecay: hybrid.temporalDecay,
-            maxResults,
-            minScore,
-          });
-        } else {
-          throw err;
         }
+      } finally {
+        releaseSemanticProvider();
       }
       const hasVector = queryVec.some((v) => v !== 0);
       const vectorResults = hasVector

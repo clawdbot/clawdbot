@@ -219,25 +219,37 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   private activeProviderUses = new Map<EmbeddingProvider, number>();
   private providerIdleWaiters = new Map<EmbeddingProvider, Set<() => void>>();
 
+  protected acquireProviderUse(provider: EmbeddingProvider): () => void {
+    this.activeProviderUses.set(provider, (this.activeProviderUses.get(provider) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const remaining = (this.activeProviderUses.get(provider) ?? 1) - 1;
+      if (remaining > 0) {
+        this.activeProviderUses.set(provider, remaining);
+        return;
+      }
+      this.activeProviderUses.delete(provider);
+      const waiters = this.providerIdleWaiters.get(provider);
+      this.providerIdleWaiters.delete(provider);
+      for (const resolve of waiters ?? []) {
+        resolve();
+      }
+    };
+  }
+
   protected async withProviderUse<T>(
     provider: EmbeddingProvider,
     run: () => Promise<T>,
   ): Promise<T> {
-    this.activeProviderUses.set(provider, (this.activeProviderUses.get(provider) ?? 0) + 1);
+    const release = this.acquireProviderUse(provider);
     try {
       return await run();
     } finally {
-      const remaining = (this.activeProviderUses.get(provider) ?? 1) - 1;
-      if (remaining > 0) {
-        this.activeProviderUses.set(provider, remaining);
-      } else {
-        this.activeProviderUses.delete(provider);
-        const waiters = this.providerIdleWaiters.get(provider);
-        this.providerIdleWaiters.delete(provider);
-        for (const resolve of waiters ?? []) {
-          resolve();
-        }
-      }
+      release();
     }
   }
 
@@ -574,6 +586,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     text: string,
     signal?: AbortSignal,
     providerOverride?: EmbeddingProvider,
+    markDegraded = true,
   ): Promise<number[]> {
     const provider = providerOverride ?? this.provider;
     if (!provider) {
@@ -605,7 +618,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           }),
       );
     } catch (err) {
-      this.markLocalEmbeddingProviderDegraded(err);
+      if (markDegraded) {
+        this.markLocalEmbeddingProviderDegraded(err);
+      }
       throw createMemoryEmbeddingOperationError({
         operation: "query",
         providerId: provider.id,
