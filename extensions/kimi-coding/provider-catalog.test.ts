@@ -51,7 +51,7 @@ describe("kimi provider catalog", () => {
       "kimi-for-coding-highspeed",
     );
     expect(isKimiK3ModelId("k3")).toBe(true);
-    expect(isKimiK3ModelId("k3[1m]")).toBe(true);
+    expect(isKimiK3ModelId("K3-256K")).toBe(true);
     expect(isKimiK3ModelId("kimi-for-coding")).toBe(false);
   });
 });

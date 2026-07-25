@@ -31,7 +31,7 @@ describe("Kimi Code provider policy", () => {
 
   it("recognizes K3 wire ids case-insensitively", () => {
     expect(isKimiK3ModelId("K3")).toBe(true);
-    expect(isKimiK3ModelId("k3[1M]")).toBe(true);
+    expect(isKimiK3ModelId("K3-256K")).toBe(true);
     expect(isKimiK3ModelId("kimi-for-coding")).toBe(false);
   });
 });
