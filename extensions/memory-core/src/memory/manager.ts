@@ -102,7 +102,9 @@ const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 const MEMORY_INDEX_MANAGER_SCOPE_CLOSES_KEY = Symbol.for("openclaw.memoryIndexManagerScopeCloses");
-const MEMORY_INDEX_MANAGER_GLOBAL_CLOSE_KEY = Symbol.for("openclaw.memoryIndexManagerGlobalClose");
+const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
+  "openclaw.memoryIndexManagerGlobalLifecycle.v2",
+);
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
@@ -120,10 +122,53 @@ const INDEX_SCOPE_CLOSES = resolveGlobalSingleton<Map<string, Promise<void>>>(
   MEMORY_INDEX_MANAGER_SCOPE_CLOSES_KEY,
   () => new Map(),
 );
-const INDEX_GLOBAL_CLOSE = resolveGlobalSingleton<{ promise: Promise<void> | null }>(
-  MEMORY_INDEX_MANAGER_GLOBAL_CLOSE_KEY,
-  () => ({ promise: null }),
-);
+const INDEX_GLOBAL_LIFECYCLE = resolveGlobalSingleton<{
+  tail: Promise<void>;
+  closeFailed: boolean;
+}>(MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY, () => ({
+  tail: Promise.resolve(),
+  closeFailed: false,
+}));
+
+async function runMemoryIndexManagerGlobalOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = INDEX_GLOBAL_LIFECYCLE.tail.then(operation, operation);
+  INDEX_GLOBAL_LIFECYCLE.tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return await result;
+}
+
+async function closeAllMemoryIndexManagersUnlocked(): Promise<void> {
+  const scopedCloses = Array.from(INDEX_SCOPE_CLOSES.values());
+  if (scopedCloses.length > 0) {
+    await Promise.allSettled(scopedCloses);
+  }
+  const pending = Array.from(INDEX_CACHE_PENDING.values());
+  if (pending.length > 0) {
+    await Promise.allSettled(pending);
+  }
+  const entries = Array.from(INDEX_CACHE.entries());
+  let firstError: unknown;
+  let closeFailed = false;
+  for (const [key, manager] of entries) {
+    try {
+      await manager.close();
+      if (INDEX_CACHE.get(key) === manager) {
+        INDEX_CACHE.delete(key);
+      }
+    } catch (err) {
+      if (!closeFailed) {
+        firstError = err;
+      }
+      closeFailed = true;
+      log.warn(`failed to close memory index manager: ${String(err)}`);
+    }
+  }
+  if (closeFailed) {
+    throw firstError;
+  }
+}
 
 type EmbeddingProbeCacheEntry = {
   result: MemoryEmbeddingProbeResult;
@@ -176,44 +221,15 @@ const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   EMBEDDING_PROBE_CACHE.clear();
-  const previousClose = INDEX_GLOBAL_CLOSE.promise ?? Promise.resolve();
-  const closePromise = previousClose
-    .catch(() => undefined)
-    .then(async () => {
-      const scopedCloses = Array.from(INDEX_SCOPE_CLOSES.values());
-      if (scopedCloses.length > 0) {
-        await Promise.allSettled(scopedCloses);
-      }
-      const pending = Array.from(INDEX_CACHE_PENDING.values());
-      if (pending.length > 0) {
-        await Promise.allSettled(pending);
-      }
-      const entries = Array.from(INDEX_CACHE.entries());
-      let firstError: unknown;
-      let closeFailed = false;
-      for (const [key, manager] of entries) {
-        try {
-          await manager.close();
-          if (INDEX_CACHE.get(key) === manager) {
-            INDEX_CACHE.delete(key);
-          }
-        } catch (err) {
-          if (!closeFailed) {
-            firstError = err;
-          }
-          closeFailed = true;
-          log.warn(`failed to close memory index manager: ${String(err)}`);
-        }
-      }
-      if (closeFailed) {
-        throw firstError;
-      }
-    });
-  INDEX_GLOBAL_CLOSE.promise = closePromise;
-  await closePromise;
-  if (INDEX_GLOBAL_CLOSE.promise === closePromise) {
-    INDEX_GLOBAL_CLOSE.promise = null;
-  }
+  await runMemoryIndexManagerGlobalOperation(async () => {
+    try {
+      await closeAllMemoryIndexManagersUnlocked();
+      INDEX_GLOBAL_LIFECYCLE.closeFailed = false;
+    } catch (err) {
+      INDEX_GLOBAL_LIFECYCLE.closeFailed = true;
+      throw err;
+    }
+  });
 }
 
 export async function closeMemoryIndexManagersForAgent(params: {
@@ -317,56 +333,76 @@ function resolveMemoryIndexManagerScopeKey(params: {
   return JSON.stringify([params.agentId, params.workspaceDir, params.purpose]);
 }
 
+async function runMemoryIndexManagerScopeOperation<T>(
+  params: {
+    agentId: string;
+    workspaceDir: string;
+    purpose: MemoryIndexManagerPurpose;
+  },
+  operation: () => Promise<T>,
+): Promise<T> {
+  const scopeKey = resolveMemoryIndexManagerScopeKey(params);
+  const previousOperation = INDEX_SCOPE_CLOSES.get(scopeKey) ?? Promise.resolve();
+  const result = previousOperation.then(operation, operation);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  INDEX_SCOPE_CLOSES.set(scopeKey, tail);
+  try {
+    return await result;
+  } finally {
+    if (INDEX_SCOPE_CLOSES.get(scopeKey) === tail) {
+      INDEX_SCOPE_CLOSES.delete(scopeKey);
+    }
+  }
+}
+
+async function closeMemoryIndexManagersForScopeUnlocked(params: {
+  agentId: string;
+  workspaceDir: string;
+  purpose: MemoryIndexManagerPurpose;
+  exceptKey?: string;
+}): Promise<void> {
+  const isScopedKey = (key: string) =>
+    key !== params.exceptKey && isMemoryIndexManagerCacheKeyInScope(key, params);
+  const pending = Array.from(INDEX_CACHE_PENDING.entries())
+    .filter(([key]) => isScopedKey(key))
+    .map(([, value]) => value);
+  if (pending.length > 0) {
+    await Promise.allSettled(pending);
+  }
+  const entries = Array.from(INDEX_CACHE.entries()).filter(([key]) => isScopedKey(key));
+  let firstError: unknown;
+  let closeFailed = false;
+  for (const [key, manager] of entries) {
+    try {
+      await manager.close();
+      if (INDEX_CACHE.get(key) === manager) {
+        INDEX_CACHE.delete(key);
+      }
+    } catch (err) {
+      if (!closeFailed) {
+        firstError = err;
+      }
+      closeFailed = true;
+      log.warn(`failed to close memory index manager for agent ${params.agentId}: ${String(err)}`);
+    }
+  }
+  if (closeFailed) {
+    throw firstError;
+  }
+}
+
 async function closeMemoryIndexManagersForScope(params: {
   agentId: string;
   workspaceDir: string;
   purpose: MemoryIndexManagerPurpose;
   exceptKey?: string;
 }): Promise<void> {
-  const scopeKey = resolveMemoryIndexManagerScopeKey(params);
-  const previousClose = INDEX_SCOPE_CLOSES.get(scopeKey) ?? Promise.resolve();
-  const closePromise = previousClose
-    .catch(() => undefined)
-    .then(async () => {
-      const isScopedKey = (key: string) =>
-        key !== params.exceptKey && isMemoryIndexManagerCacheKeyInScope(key, params);
-      const pending = Array.from(INDEX_CACHE_PENDING.entries())
-        .filter(([key]) => isScopedKey(key))
-        .map(([, value]) => value);
-      if (pending.length > 0) {
-        await Promise.allSettled(pending);
-      }
-      const entries = Array.from(INDEX_CACHE.entries()).filter(([key]) => isScopedKey(key));
-      let firstError: unknown;
-      let closeFailed = false;
-      for (const [key, manager] of entries) {
-        try {
-          await manager.close();
-          if (INDEX_CACHE.get(key) === manager) {
-            INDEX_CACHE.delete(key);
-          }
-        } catch (err) {
-          if (!closeFailed) {
-            firstError = err;
-          }
-          closeFailed = true;
-          log.warn(
-            `failed to close memory index manager for agent ${params.agentId}: ${String(err)}`,
-          );
-        }
-      }
-      if (closeFailed) {
-        throw firstError;
-      }
-    });
-  INDEX_SCOPE_CLOSES.set(scopeKey, closePromise);
-  try {
-    await closePromise;
-  } finally {
-    if (INDEX_SCOPE_CLOSES.get(scopeKey) === closePromise) {
-      INDEX_SCOPE_CLOSES.delete(scopeKey);
-    }
-  }
+  await runMemoryIndexManagerScopeOperation(params, async () => {
+    await closeMemoryIndexManagersForScopeUnlocked(params);
+  });
 }
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
@@ -471,16 +507,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     purpose?: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
-    while (INDEX_GLOBAL_CLOSE.promise) {
-      const pendingGlobalClose = INDEX_GLOBAL_CLOSE.promise;
-      try {
-        await pendingGlobalClose;
-      } catch {
-        if (INDEX_GLOBAL_CLOSE.promise === pendingGlobalClose) {
-          await closeAllMemoryIndexManagers();
+    return await runMemoryIndexManagerGlobalOperation(async () => {
+      if (INDEX_GLOBAL_LIFECYCLE.closeFailed) {
+        try {
+          await closeAllMemoryIndexManagersUnlocked();
+          INDEX_GLOBAL_LIFECYCLE.closeFailed = false;
+        } catch (err) {
+          INDEX_GLOBAL_LIFECYCLE.closeFailed = true;
+          throw err;
         }
       }
-    }
+      return await MemoryIndexManager.getWithinGlobalLifecycle(params);
+    });
+  }
+
+  private static async getWithinGlobalLifecycle(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    purpose?: MemoryIndexManagerPurpose;
+    acquireLocalService?: MemoryCoreAcquireLocalService;
+  }): Promise<MemoryIndexManager | null> {
     const { cfg, agentId } = params;
     const settings = resolveMemorySearchConfig(cfg, agentId);
     if (!settings) {
@@ -503,45 +549,53 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       acquireLocalService: params.acquireLocalService,
     });
     const transient = purpose === "status" || purpose === "cli";
-    if (!transient) {
-      const cachedManager = INDEX_CACHE.get(key);
-      await closeMemoryIndexManagersForScope({
-        agentId,
-        workspaceDir,
-        purpose,
-        ...(cachedManager?.closed ? {} : { exceptKey: key }),
+    const getOrCreate = async () =>
+      await getOrCreateManagedCacheEntry({
+        cache: INDEX_CACHE,
+        pending: INDEX_CACHE_PENDING,
+        key,
+        bypassCache: transient,
+        create: async () => {
+          const manager = new MemoryIndexManager({
+            cacheKey: key,
+            cfg,
+            agentId,
+            workspaceDir,
+            settings,
+            providerRequirement,
+            purpose: params.purpose,
+            acquireLocalService: params.acquireLocalService,
+          });
+          // Lightweight dirty-file detection for status mode: check for unindexed
+          // session files on disk without triggering a full sync. This runs before
+          // any caller reads manager.status(), so the dirty flag is accurate when
+          // status() reads sessionsDirty.
+          if (purpose === "status" && manager.sources.has("sessions")) {
+            try {
+              await manager.markSessionStartupCatchupDirtyFiles();
+            } catch (err) {
+              log.warn("memory status session dirty detection failed: " + String(err));
+            }
+          }
+          return manager;
+        },
       });
+    if (transient) {
+      return await getOrCreate();
     }
-    return await getOrCreateManagedCacheEntry({
-      cache: INDEX_CACHE,
-      pending: INDEX_CACHE_PENDING,
-      key,
-      bypassCache: transient,
-      create: async () => {
-        const manager = new MemoryIndexManager({
-          cacheKey: key,
-          cfg,
+    return await runMemoryIndexManagerScopeOperation(
+      { agentId, workspaceDir, purpose },
+      async () => {
+        const cachedManager = INDEX_CACHE.get(key);
+        await closeMemoryIndexManagersForScopeUnlocked({
           agentId,
           workspaceDir,
-          settings,
-          providerRequirement,
-          purpose: params.purpose,
-          acquireLocalService: params.acquireLocalService,
+          purpose,
+          ...(cachedManager?.closed ? {} : { exceptKey: key }),
         });
-        // Lightweight dirty-file detection for status mode: check for unindexed
-        // session files on disk without triggering a full sync. This runs before
-        // any caller reads manager.status(), so the dirty flag is accurate when
-        // status() reads sessionsDirty.
-        if (purpose === "status" && manager.sources.has("sessions")) {
-          try {
-            await manager.markSessionStartupCatchupDirtyFiles();
-          } catch (err) {
-            log.warn("memory status session dirty detection failed: " + String(err));
-          }
-        }
-        return manager;
+        return await getOrCreate();
       },
-    });
+    );
   }
 
   private constructor(params: {

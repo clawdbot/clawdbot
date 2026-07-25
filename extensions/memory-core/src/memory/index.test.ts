@@ -1638,6 +1638,45 @@ describe("memory index", () => {
     expect(third).toBe(second);
   });
 
+  it("serializes concurrent acquisitions with different cache identities", async () => {
+    const firstCfg = createCfg({
+      model: "first-model",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg: firstCfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+
+    const secondPromise = getMemorySearchManager({
+      cfg: createCfg({ model: "second-model" }),
+      agentId: "main",
+    }).then((result) => requireManager(result));
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+    const thirdPromise = getMemorySearchManager({
+      cfg: createCfg({ model: "third-model" }),
+      agentId: "main",
+    }).then((result) => requireManager(result));
+    try {
+      await Promise.resolve();
+      expect(providerCalls).toHaveLength(1);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const [second, third] = await Promise.all([secondPromise, thirdPromise]);
+    managersForCleanup.add(second);
+    managersForCleanup.add(third);
+    expect(second === first).toBe(false);
+    expect(third === second).toBe(false);
+    expect((second as unknown as { closed: boolean }).closed).toBe(true);
+    expect((third as unknown as { closed: boolean }).closed).toBe(false);
+  });
+
   it("retains a failed scoped close owner until provider retirement succeeds", async () => {
     const cfg = createCfg({
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -1715,7 +1754,7 @@ describe("memory index", () => {
     await concurrentGlobalClose;
     managersForCleanup.add(replacement);
     expect(replacement === first).toBe(false);
-    expect((replacement as unknown as { closed: boolean }).closed).toBe(false);
+    expect((replacement as unknown as { closed: boolean }).closed).toBe(true);
   });
 
   it("does not reuse memory index managers across local-service hosts", async () => {
