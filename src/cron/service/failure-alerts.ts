@@ -199,6 +199,15 @@ export function maybeEmitFailureAlert(
   if (!params.alertConfig || params.consecutiveCount < params.alertConfig.after) {
     return;
   }
+  if (
+    params.status === "error" &&
+    !params.job.failureAlert &&
+    params.job.delivery?.failureDestination
+  ) {
+    // Completion delivery owns explicit failure routes and clear-only opt-outs.
+    // Suppress failed-run duplicates without disabling global skipped alerts.
+    return;
+  }
   const isBestEffort = params.job.delivery?.bestEffort === true;
   if (isBestEffort) {
     return;
