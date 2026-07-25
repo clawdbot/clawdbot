@@ -234,6 +234,37 @@ TAILSCALE_PEERS="$(tailscale status 2>/dev/null | grep -E 'andrew-m4-max|ipad|ip
 [ "$POSTGRES_STATUS" = "running" ] && add_healthy "PostgreSQL running" || add_warning "PostgreSQL is $POSTGRES_STATUS"
 [ "$SCRYPTED_STATUS" = "running" ] && add_healthy "Scrypted running" || add_warning "Scrypted is $SCRYPTED_STATUS"
 
+AI_TELEMETRY_STATUS="unavailable"
+AI_TELEMETRY_SUMMARY="AI routing telemetry unavailable"
+AI_PYTHON="$BASE/tools/ai_intelligence/.venv/bin/python"
+if [ ! -x "$AI_PYTHON" ]; then
+  AI_PYTHON="$BASE/.venv/bin/python"
+fi
+if [ -x "$AI_PYTHON" ] && [ -f "$BASE/tools/ai_intelligence/report_routing_telemetry.py" ]; then
+  if AI_TELEMETRY_OUTPUT="$("$AI_PYTHON" "$BASE/tools/ai_intelligence/report_routing_telemetry.py" 2>/dev/null)"; then
+    AI_TELEMETRY_SUMMARY="$(printf '%s\n' "$AI_TELEMETRY_OUTPUT" | head -n 8)"
+    AI_TELEMETRY_STATUS="$(printf '%s\n' "$AI_TELEMETRY_OUTPUT" | awk -F': ' '/^Status:/{print $2; exit}')"
+    case "$AI_TELEMETRY_STATUS" in
+      healthy)
+        add_healthy "AI routing telemetry healthy"
+        ;;
+      failover-active)
+        add_warning "AI routing telemetry reports recent failover"
+        add_action "Review AI routing telemetry: $BASE/reports/ai_intelligence/routing-telemetry-latest.txt"
+        ;;
+      attention)
+        add_warning "AI routing telemetry needs attention"
+        add_action "Review AI routing drift/failover: $BASE/reports/ai_intelligence/routing-telemetry-latest.txt"
+        ;;
+      *)
+        add_warning "AI routing telemetry status is ${AI_TELEMETRY_STATUS:-unknown}"
+        ;;
+    esac
+  else
+    add_warning "AI routing telemetry report failed"
+  fi
+fi
+
 if [ -n "$DOCKER_UNHEALTHY" ]; then
   add_warning "Docker has unhealthy containers: $DOCKER_UNHEALTHY"
   add_action "Run: docker ps --filter health=unhealthy"
@@ -382,6 +413,10 @@ Intel Mini:
 
 M4 AI Workstation:
 • Ollama: $M4_STATUS
+
+AI Routing Telemetry:
+• Status: ${AI_TELEMETRY_STATUS:-unavailable}
+$AI_TELEMETRY_SUMMARY
 
 ━━━━━━━━━━━━━━━━━━
 💾 Backup Status

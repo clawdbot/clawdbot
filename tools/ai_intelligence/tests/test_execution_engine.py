@@ -217,6 +217,9 @@ class ExecutionEngineTests(unittest.TestCase):
             )
 
     @patch(
+        "tools.ai_intelligence.database.DatabaseConfig.from_env"
+    )
+    @patch(
         "tools.ai_intelligence.ollama_provider."
         "build_ollama_provider"
     )
@@ -228,6 +231,7 @@ class ExecutionEngineTests(unittest.TestCase):
         self,
         build_router: Any,
         build_provider: Any,
+        from_env: Any,
     ) -> None:
         router = FakeRouter()
         provider = FakeProvider(
@@ -235,6 +239,7 @@ class ExecutionEngineTests(unittest.TestCase):
         )
         build_router.return_value = router
         build_provider.return_value = provider
+        from_env.return_value = object()
 
         engine = build_execution_engine_from_environment()
 
@@ -251,6 +256,7 @@ class ExecutionEngineTests(unittest.TestCase):
         self.assertEqual(provider.requests, [])
         build_router.assert_called_once_with()
         build_provider.assert_called_once_with()
+        from_env.assert_called_once_with()
 
     def test_returns_primary_success(self) -> None:
         routing_request = RoutingRequest(

@@ -59,14 +59,18 @@ The bridge has a bounded timeout and output limit. Client-facing failures are no
 
 ## Implementation status
 
-Phase 2F.4G is merged into the `development` branch:
+Phase 2F.4G is implemented and activation-proved on the loopback Gateway:
 
 - database-backed execution engine and ordered fallback are implemented;
 - constructor and configuration validation are implemented;
 - the typed `ai.execute` Gateway boundary is implemented;
-- focused Gateway, TypeScript, and AI Intelligence tests pass in the development VM;
-- the Gateway boundary remains disabled pending explicit development activation;
-- production has not been activated by this integration.
+- focused Gateway, TypeScript, and AI Intelligence tests pass;
+- live `ai.execute` primary success is demonstrated for `telegram_ranch_bot`;
+- live primary failure with approved fallback success is demonstrated;
+- client errors stay sanitized while Gateway logs retain operational detail;
+- activation and rollback checkpoint is recorded under `reports/architect/`;
+- usage and failover telemetry persist to `ai_intelligence.observed_model_usage`;
+- Daily Executive Briefing and OpenClaw dashboard surface routing telemetry status.
 
 ## Kimi K3 decision
 
@@ -74,4 +78,4 @@ Kimi K3 is registered as an evaluation candidate, not a production default. Its 
 
 ## Next implementation phase
 
-Activate `ai.execute` in the development Gateway, demonstrate primary failure followed by approved fallback success through the real Gateway boundary, and verify sanitized logging. After that proof, add usage and failover telemetry and expose the scorecard in the RanchBrain dashboard. Production promotion requires a separate checkpoint and rollback plan.
+Formal production-promotion review still requires the broader Phase 2F acceptance checklist. Usage and failover telemetry now feed the Daily Executive Briefing and OpenClaw dashboard; continue refining scorecard presentation in RanchBrain as needed.

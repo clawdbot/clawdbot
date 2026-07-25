@@ -6,6 +6,7 @@ enforce routing policy, or execute failover.
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ from typing import Any, Iterator, Mapping, Sequence
 
 import psycopg2
 from psycopg2.extensions import connection as PgConnection
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -114,7 +115,7 @@ class DeploymentAssignmentRecord:
 
 
 class AIIntelligenceDatabase:
-    """Read-only database adapter for AI Intelligence runtime data."""
+    """Database adapter for AI Intelligence runtime reads and telemetry writes."""
 
     def __init__(
         self,
@@ -126,6 +127,16 @@ class AIIntelligenceDatabase:
 
     @contextmanager
     def connection(self) -> Iterator[PgConnection]:
+        with self._connect(readonly=True) as connection:
+            yield connection
+
+    @contextmanager
+    def writable_connection(self) -> Iterator[PgConnection]:
+        with self._connect(readonly=False) as connection:
+            yield connection
+
+    @contextmanager
+    def _connect(self, *, readonly: bool) -> Iterator[PgConnection]:
         connection: PgConnection | None = None
 
         try:
@@ -140,7 +151,7 @@ class AIIntelligenceDatabase:
             )
 
             connection.set_session(
-                readonly=True,
+                readonly=readonly,
                 autocommit=True,
             )
 
@@ -276,3 +287,128 @@ class AIIntelligenceDatabase:
                 rows = cursor.fetchall()
 
         return tuple(row[0] for row in rows)
+
+    def record_observed_usage(
+        self,
+        *,
+        component_id: str,
+        model_id: str,
+        request_id: str | None,
+        task_type: str | None,
+        routing_mode: str | None,
+        selected_as: str | None,
+        success: bool | None,
+        duration_ms: int | None,
+        privacy_tier: str | None,
+        usage_metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Persist one observed routing/execution outcome."""
+
+        query = """
+            INSERT INTO ai_intelligence.observed_model_usage (
+                component_id,
+                model_id,
+                request_id,
+                task_type,
+                routing_mode,
+                selected_as,
+                success,
+                duration_ms,
+                privacy_tier,
+                usage_metadata
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+        """
+
+        with self.writable_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    query,
+                    (
+                        component_id,
+                        model_id,
+                        request_id,
+                        task_type,
+                        routing_mode,
+                        selected_as,
+                        success,
+                        duration_ms,
+                        privacy_tier,
+                        Json(dict(usage_metadata or {})),
+                    ),
+                )
+
+    def list_deployment_drift(self) -> Sequence[Mapping[str, Any]]:
+        """Return configured-primary versus latest-observed model drift."""
+
+        query = """
+            SELECT
+                component_id,
+                component_name,
+                configured_primary_model,
+                latest_observed_model,
+                observed_at,
+                deployment_status
+            FROM ai_intelligence.deployment_drift
+            ORDER BY component_id
+        """
+
+        with self.connection() as connection:
+            with connection.cursor(
+                cursor_factory=RealDictCursor
+            ) as cursor:
+                cursor.execute(query)
+                rows = cursor.fetchall()
+
+        return tuple(dict(row) for row in rows)
+
+    def list_recent_observed_usage(
+        self,
+        *,
+        limit: int = 20,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return recent observed usage rows for operator summaries."""
+
+        if limit < 1:
+            raise DatabaseConfigurationError(
+                "limit must be at least 1"
+            )
+
+        query = """
+            SELECT
+                component_id,
+                model_id,
+                request_id,
+                selected_as,
+                success,
+                duration_ms,
+                routing_mode,
+                usage_metadata,
+                observed_at
+            FROM ai_intelligence.observed_model_usage
+            ORDER BY observed_at DESC, observed_usage_id DESC
+            LIMIT %s
+        """
+
+        with self.connection() as connection:
+            with connection.cursor(
+                cursor_factory=RealDictCursor
+            ) as cursor:
+                cursor.execute(query, (limit,))
+                rows = cursor.fetchall()
+
+        normalized: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            metadata = item.get("usage_metadata")
+            if isinstance(metadata, str):
+                item["usage_metadata"] = json.loads(metadata)
+            elif metadata is None:
+                item["usage_metadata"] = {}
+            else:
+                item["usage_metadata"] = dict(metadata)
+            normalized.append(item)
+
+        return tuple(normalized)

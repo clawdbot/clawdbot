@@ -705,6 +705,63 @@ def graphs(filename):
 
 
 
+def ai_routing_telemetry_panel_html():
+    report_path = REPORT_DIR / "ai_intelligence" / "routing-telemetry-latest.json"
+    text_path = REPORT_DIR / "ai_intelligence" / "routing-telemetry-latest.txt"
+
+    if not report_path.exists():
+        return """
+        <div class='panel'>
+            <h2>AI Routing Telemetry</h2>
+            <div class='warning-box'>
+                No routing telemetry report found yet.<br><br>
+                Generate with tools/ai_intelligence/report_routing_telemetry.py
+            </div>
+        </div>
+        """
+
+    try:
+        summary = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return f"""
+        <div class='panel'>
+            <h2>AI Routing Telemetry</h2>
+            <div class='warning-box'>
+                Failed to read routing telemetry report.<br><br>
+                {html.escape(str(exc)[:160])}
+            </div>
+        </div>
+        """
+
+    status = str(summary.get("status", "unknown"))
+    configured = summary.get("configured_versus_observed", {})
+    color = {
+        "healthy": "#7CFC00",
+        "failover-active": "#fbbf24",
+        "attention": "#f97316",
+    }.get(status, "#ef4444")
+    preview = ""
+    if text_path.exists():
+        preview = html.escape(
+            "\n".join(text_path.read_text(encoding="utf-8").splitlines()[:12])
+        )
+
+    return f"""
+    <div class='panel'>
+        <h2>AI Routing Telemetry</h2>
+        <div class='status-box'>
+            <b>Status:</b> <span style='color:{color};'>{html.escape(status)}</span><br><br>
+            <b>Matched:</b> {html.escape(str(configured.get('matched', 0)))}<br>
+            <b>Drift:</b> {html.escape(str(configured.get('drift', 0)))}<br>
+            <b>Not observed:</b> {html.escape(str(configured.get('not_observed', 0)))}<br>
+            <b>Recent failovers:</b> {html.escape(str(summary.get('recent_failover_count', 0)))}<br>
+            <b>Recent failures:</b> {html.escape(str(summary.get('recent_failure_count', 0)))}
+        </div>
+        <div class='output'>{preview or 'No text summary available.'}</div>
+    </div>
+    """
+
+
 def m4_ai_health_panel_html():
     m4_tail_ip = "100.104.100.96"
     m4_user = "andrewgraves"
@@ -3477,6 +3534,7 @@ All monitored OpenClaw services are connected.
         """
 
     html += m4_ai_health_panel_html()
+    html += ai_routing_telemetry_panel_html()
 
     html += "<div class='panel'><h2>Model Status</h2><div class='output'>"
 

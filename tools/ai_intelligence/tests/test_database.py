@@ -134,6 +134,50 @@ class AIIntelligenceDatabaseTests(unittest.TestCase):
         )
         self.connection.close.assert_called_once()
 
+    def test_record_observed_usage_writes_through_writable_connection(
+        self,
+    ) -> None:
+        self.database.record_observed_usage(
+            component_id="telegram_ranch_bot",
+            model_id="ollama-hermes3-8b",
+            request_id="req-1",
+            task_type="conversation",
+            routing_mode="production-safe",
+            selected_as="primary",
+            success=True,
+            duration_ms=12,
+            privacy_tier="local",
+            usage_metadata={"failover_occurred": False},
+        )
+
+        self.connection.set_session.assert_called_once_with(
+            readonly=False,
+            autocommit=True,
+        )
+        self.assertTrue(self.cursor.execute.called)
+        sql = self.cursor.execute.call_args.args[0]
+        self.assertIn(
+            "INSERT INTO ai_intelligence.observed_model_usage",
+            sql,
+        )
+
+    def test_list_deployment_drift_maps_rows(self) -> None:
+        self.cursor.fetchall.return_value = [
+            {
+                "component_id": "telegram_ranch_bot",
+                "component_name": "Telegram Ranch Bot",
+                "configured_primary_model": "ollama-hermes3-8b",
+                "latest_observed_model": "ollama-llama3.2-3b",
+                "observed_at": None,
+                "deployment_status": "drift",
+            }
+        ]
+
+        rows = self.database.list_deployment_drift()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["deployment_status"], "drift")
+
 
 if __name__ == "__main__":
     unittest.main()

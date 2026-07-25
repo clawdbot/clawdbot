@@ -27,6 +27,11 @@ from tools.ai_intelligence.routing_models import (
     RoutingDecision,
     RoutingRequest,
 )
+from tools.ai_intelligence.telemetry import (
+    ExecutionTelemetryRecorder,
+    build_observed_usage_record,
+    warn_telemetry_failure,
+)
 
 
 class ExecutionEngineConfigurationError(ValueError):
@@ -55,6 +60,32 @@ class ExecutionProviderRegistry(Protocol):
         ...
 
 
+class DatabaseExecutionTelemetryRecorder:
+    """Persist observed usage through the AI Intelligence database."""
+
+    def __init__(self, database: Any) -> None:
+        self._database = database
+
+    def record(
+        self,
+        decision: RoutingDecision,
+        result: ExecutionResult,
+    ) -> None:
+        record = build_observed_usage_record(decision, result)
+        self._database.record_observed_usage(
+            component_id=record.component_id,
+            model_id=record.model_id,
+            request_id=record.request_id,
+            task_type=record.task_type,
+            routing_mode=record.routing_mode,
+            selected_as=record.selected_as,
+            success=record.success,
+            duration_ms=record.duration_ms,
+            privacy_tier=record.privacy_tier,
+            usage_metadata=record.usage_metadata,
+        )
+
+
 class ExecutionEngine:
     """Route requests and return the first successful provider response."""
 
@@ -62,6 +93,7 @@ class ExecutionEngine:
         self,
         router: ExecutionRouter,
         provider_registry: ExecutionProviderRegistry,
+        telemetry_recorder: ExecutionTelemetryRecorder | None = None,
     ) -> None:
         if (
             not isinstance(router, ExecutionRouter)
@@ -80,8 +112,21 @@ class ExecutionEngine:
                 "get_provider(model_id)"
             )
 
+        if telemetry_recorder is not None and (
+            not isinstance(
+                telemetry_recorder,
+                ExecutionTelemetryRecorder,
+            )
+            or not callable(telemetry_recorder.record)
+        ):
+            raise ExecutionEngineConfigurationError(
+                "telemetry_recorder must implement "
+                "record(decision, result)"
+            )
+
         self._router = router
         self._provider_registry = provider_registry
+        self._telemetry_recorder = telemetry_recorder
 
     @property
     def router(self) -> ExecutionRouter:
@@ -163,7 +208,7 @@ class ExecutionEngine:
             )
             attempts.append(attempt)
 
-            return ExecutionResult(
+            result = ExecutionResult(
                 request_id=request_id,
                 component_id=routing_request.component_id,
                 status=ExecutionStatus.SUCCESS,
@@ -171,13 +216,30 @@ class ExecutionEngine:
                 content=response.content,
                 selected_model_id=response.model_id,
             )
+            self._record_telemetry(decision, result)
+            return result
 
-        return ExecutionResult(
+        result = ExecutionResult(
             request_id=request_id,
             component_id=routing_request.component_id,
             status=ExecutionStatus.FAILED,
             attempts=tuple(attempts),
         )
+        self._record_telemetry(decision, result)
+        return result
+
+    def _record_telemetry(
+        self,
+        decision: RoutingDecision,
+        result: ExecutionResult,
+    ) -> None:
+        if self._telemetry_recorder is None:
+            return
+
+        try:
+            self._telemetry_recorder.record(decision, result)
+        except Exception as exc:  # noqa: BLE001 - telemetry must not fail requests
+            warn_telemetry_failure(exc)
 
     @staticmethod
     def _validate_response(
@@ -229,6 +291,10 @@ class ExecutionEngine:
 def build_execution_engine_from_environment() -> ExecutionEngine:
     """Build the production-shaped engine from environment configuration."""
 
+    from tools.ai_intelligence.database import (
+        AIIntelligenceDatabase,
+        DatabaseConfig,
+    )
     from tools.ai_intelligence.ollama_provider import (
         build_ollama_provider,
     )
@@ -239,9 +305,14 @@ def build_execution_engine_from_environment() -> ExecutionEngine:
         build_router_from_environment,
     )
 
+    database = AIIntelligenceDatabase(DatabaseConfig.from_env())
+
     return ExecutionEngine(
         router=build_router_from_environment(),
         provider_registry=ProviderRegistry(
             (build_ollama_provider(),)
+        ),
+        telemetry_recorder=DatabaseExecutionTelemetryRecorder(
+            database
         ),
     )

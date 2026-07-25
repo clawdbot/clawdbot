@@ -1,6 +1,6 @@
 # Phase 2F — Runtime AI Router Architecture
 
-**Status:** Development implementation complete; activation proof pending
+**Status:** Implementation complete; Gateway activation proved; usage/failover telemetry implemented
 **Project:** OpenClaw AI Intelligence Layer  
 **Environment:** Development first  
 **Core requirement:** Automatic failover is mandatory
@@ -413,23 +413,28 @@ Implemented:
 - engine construction from the approved database environment;
 - ordered attempt details in successful results;
 - sanitized Gateway error responses;
-- focused Gateway tests and bridge serialization tests.
+- focused Gateway tests and bridge serialization tests;
+- real `ai.execute` activation proof on the loopback Gateway for `telegram_ranch_bot`;
+- primary success through the live Gateway boundary;
+- primary failure with approved fallback success through the live Gateway boundary;
+- sanitized client errors with detailed operational Gateway logs;
+- activation and rollback checkpoint recorded under `reports/architect/`.
 
 Pending:
 
-- enable the flag in the development Gateway service;
-- restart only the development Gateway;
-- submit a real `ai.execute` request;
-- demonstrate primary success;
-- demonstrate primary failure and approved fallback success;
-- confirm operational logs are useful and client errors do not expose secrets;
-- capture the activation and rollback checkpoint before any production promotion.
+- separate production-promotion review after telemetry and broader acceptance checks;
+- keep the feature flag removable by drop-in edit plus Gateway restart.
 
 ### Phase 2F.5 — Usage and Failover Telemetry
 
-- Record configured versus observed routing.
-- Record model attempts and final selection.
-- Surface failover status in the dashboard and Daily Executive Briefing.
+Implemented:
+
+- persist configured versus observed routing into `ai_intelligence.observed_model_usage`;
+- record ordered attempt details, failover flag, and final selection in `usage_metadata`;
+- soft-fail telemetry so recording errors never block a valid model response;
+- operator report via `tools/ai_intelligence/report_routing_telemetry.py`;
+- Daily Executive Briefing AI routing telemetry summary;
+- OpenClaw dashboard AI routing telemetry panel.
 
 ## 18. Production Promotion Requirements
 
