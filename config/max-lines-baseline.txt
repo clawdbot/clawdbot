@@ -430,7 +430,6 @@ src/agents/embedded-agent-runner/run.overflow-compaction.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
 src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts
-src/agents/embedded-agent-runner/run/attempt.session-lock.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.test.ts
