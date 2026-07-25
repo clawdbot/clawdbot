@@ -74,14 +74,8 @@ function areAsciiCaseVariants(left: string | undefined, right: string | undefine
 }
 
 function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
-  const hasNonAscii = (value: string) => {
-    for (let index = 0; index < value.length; index += 1) {
-      if (value.charCodeAt(index) > 0x7f) {
-        return true;
-      }
-    }
-    return false;
-  };
+  const hasNonAscii = (value: string) =>
+    value.split("").some((character) => character.charCodeAt(0) > 0x7f);
   if (!hasNonAscii(left) && !hasNonAscii(right)) {
     return false;
   }
