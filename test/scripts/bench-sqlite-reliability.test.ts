@@ -159,6 +159,7 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORE_INTERRUPTION=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_REPOSITORY_INTERRUPTION=verified");
+    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_INDEX_REPAIR_INTERRUPTION=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_VACUUM_INTERRUPTION=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
     const firstReport = JSON.parse(fs.readFileSync(firstOutput, "utf8")) as ReliabilityReport;
@@ -200,6 +201,28 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(
       firstReport.publicationInterruptionProof.afterPublish.exit.code !== null ||
         firstReport.publicationInterruptionProof.afterPublish.exit.signal !== null,
+    ).toBe(true);
+    expect(firstReport.indexRepairInterruptionProof.rollbackJournal).toMatchObject({
+      recoveryVerified: true,
+      repairedIndexes: ["idx_openclaw_reliability_records_identity"],
+      rowsPreserved: 32_768,
+    });
+    expect(
+      firstReport.indexRepairInterruptionProof.rollbackJournal.journalBytesObserved,
+    ).toBeGreaterThan(0);
+    expect(
+      firstReport.indexRepairInterruptionProof.rollbackJournal.exit.code !== null ||
+        firstReport.indexRepairInterruptionProof.rollbackJournal.exit.signal !== null,
+    ).toBe(true);
+    expect(firstReport.indexRepairInterruptionProof.wal).toMatchObject({
+      recoveryVerified: true,
+      repairedIndexes: ["idx_openclaw_reliability_records_identity"],
+      rowsPreserved: 32_768,
+    });
+    expect(firstReport.indexRepairInterruptionProof.wal.walBytesObserved).toBeGreaterThan(0);
+    expect(
+      firstReport.indexRepairInterruptionProof.wal.exit.code !== null ||
+        firstReport.indexRepairInterruptionProof.wal.exit.signal !== null,
     ).toBe(true);
     expect(firstReport.transactionProof.committedWalSentinel).toBe(true);
     expect(firstReport.transactionProof.heldRows).toBeGreaterThan(0);
