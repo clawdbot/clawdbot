@@ -3,8 +3,10 @@ import {
   publishFileExclusive,
   syncDirectory,
   type DirectorySyncOutcome,
+  type PublishFileExclusiveFailureDetails,
 } from "@openclaw/fs-safe/durability";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { FsSafeError } from "./fs-safe.js";
 
 export {
   ensureDurableDirectory,
@@ -16,6 +18,7 @@ export {
   type DirectoryReceipt,
   type DurableDirectoryReceipt,
   type PinnedDirectory,
+  type PublishFileExclusiveFailureDetails,
 } from "@openclaw/fs-safe/durability";
 
 type DirectoryDurabilityOutcome = DirectorySyncOutcome | { status: "not-needed" };
@@ -37,6 +40,25 @@ export function requireDirectorySync(outcome: DirectoryDurabilityOutcome, label:
   }
   const code = outcome.code ? ` (${outcome.code})` : "";
   throw new Error(`${label} does not support crash-durable directory synchronization${code}.`);
+}
+
+export function getPublishFileExclusiveFailureDetails(
+  error: unknown,
+): PublishFileExclusiveFailureDetails | undefined {
+  if (!(error instanceof FsSafeError)) {
+    return undefined;
+  }
+  const details = error.details;
+  if (
+    !details ||
+    typeof details.targetCreated !== "boolean" ||
+    (details.cleanup !== "removed" &&
+      details.cleanup !== "preserved" &&
+      details.cleanup !== "unknown")
+  ) {
+    return undefined;
+  }
+  return details as PublishFileExclusiveFailureDetails;
 }
 
 /** Publish one file without replacement under OpenClaw's durability policy. */
