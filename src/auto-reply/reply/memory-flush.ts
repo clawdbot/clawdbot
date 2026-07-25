@@ -1,10 +1,12 @@
-// Builds memory flush prompts when conversation context exceeds model budget.
+import { COMPACTION_CONTEXT_USAGE_RATIO } from "../../agents/agent-compaction-constants.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { legacyModelKey, modelKey } from "../../agents/model-ref-shared.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+
+export { COMPACTION_CONTEXT_USAGE_RATIO };
 
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
@@ -98,6 +100,8 @@ export function resolveResponsesServerCompactionThreshold(params: {
   return resolvePositiveIntegerParam(sources, "responsesCompactThreshold");
 }
 
+/** Preflight/threshold compaction fires once projected usage reaches this share of the window. */
+
 function resolveMemoryFlushGateState<
   TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh">,
 >(params: {
@@ -131,6 +135,18 @@ function resolveMemoryFlushGateState<
   }
 
   return { entry: params.entry, totalTokens, threshold };
+}
+
+/** Token threshold for preflight compaction (~85% of the model context window). */
+export function resolvePreflightCompactionThreshold(params: {
+  contextWindowTokens: number;
+  minimumThresholdTokens?: number;
+}): number {
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  return Math.max(
+    Math.floor(contextWindow * COMPACTION_CONTEXT_USAGE_RATIO),
+    Math.floor(params.minimumThresholdTokens ?? 0),
+  );
 }
 
 export function shouldRunMemoryFlush(params: {
@@ -169,12 +185,32 @@ export function shouldRunPreflightCompaction(params: {
    */
   tokenCount?: number;
   contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
+  /**
+   * @deprecated Unused for preflight compaction. Kept so call sites can share
+   * the memory-flush plan fields without a separate shape. Soft threshold only
+   * gates memory flush, not compaction.
+   */
+  reserveTokensFloor?: number;
+  /**
+   * @deprecated Unused for preflight compaction. Soft threshold only gates
+   * memory flush so compaction does not fire earlier than ~85% of the window.
+   */
+  softThresholdTokens?: number;
   minimumThresholdTokens?: number;
 }): boolean {
-  const state = resolveMemoryFlushGateState(params);
-  return Boolean(state && state.totalTokens >= state.threshold);
+  if (!params.entry) {
+    return false;
+  }
+  const totalTokens =
+    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
+  if (!totalTokens || totalTokens <= 0) {
+    return false;
+  }
+  const threshold = resolvePreflightCompactionThreshold({
+    contextWindowTokens: params.contextWindowTokens,
+    minimumThresholdTokens: params.minimumThresholdTokens,
+  });
+  return threshold > 0 && totalTokens >= threshold;
 }
 
 /**

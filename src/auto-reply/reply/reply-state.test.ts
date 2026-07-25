@@ -398,16 +398,42 @@ describe("shouldRunPreflightCompaction", () => {
     ).toBe(false);
   });
 
-  it("triggers when a projected token count crosses the threshold", () => {
+  it("triggers when a projected token count crosses the 85% threshold", () => {
     expect(
       shouldRunPreflightCompaction({
         entry: { totalTokens: 10, totalTokensFresh: false },
-        tokenCount: 93_000,
+        tokenCount: 85_000,
         contextWindowTokens: 100_000,
         reserveTokensFloor: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(true);
+  });
+
+  it("does not trigger below the 85% threshold", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 10, totalTokensFresh: false },
+        tokenCount: 84_999,
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores softThresholdTokens for compaction gating", () => {
+    // Old formula window - reserve - soft would fire much earlier; soft must
+    // only affect memory flush, not preflight compaction.
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 10, totalTokensFresh: false },
+        tokenCount: 84_999,
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 1,
+        softThresholdTokens: 50_000,
+      }),
+    ).toBe(false);
   });
 });
 

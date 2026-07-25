@@ -11,6 +11,10 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+import {
+  resolveLiveToolResultAggregateMaxChars,
+  truncateToolResultMessage,
+} from "../../agents/embedded-agent-runner/tool-result-truncation.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -24,6 +28,7 @@ import {
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
 } from "../../agents/thinking-runtime.js";
+import { resolveLiveToolResultMaxChars } from "../../agents/tool-result-limits.js";
 import {
   deriveContextPromptTokens,
   hasNonzeroUsage,
@@ -67,6 +72,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolvePreflightCompactionThreshold,
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -651,11 +657,82 @@ type TranscriptTokenEstimate = {
   transcriptBytesTokens?: number;
 };
 
+function toolResultTextLength(message: AgentMessage): number {
+  if ((message as { role?: string }).role !== "toolResult") {
+    return 0;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let total = 0;
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      "text" in block &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      total += (block as { text: string }).text.length;
+    }
+  }
+  return total;
+}
+
+/**
+ * Estimate transcript tokens the way the live prompt sees them: apply per-result
+ * and aggregate tool-result caps before counting. Raw disk tool dumps otherwise
+ * massively over-trigger preflight compaction.
+ */
+function estimateModelVisibleTranscriptTokens(
+  messages: AgentMessage[],
+  contextWindowTokens: number,
+): number | undefined {
+  if (messages.length === 0) {
+    return undefined;
+  }
+  const windowTokens = Math.max(1, Math.floor(contextWindowTokens));
+  const perResultMaxChars = resolveLiveToolResultMaxChars({
+    contextWindowTokens: windowTokens,
+  });
+  const aggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
+    contextWindowTokens: windowTokens,
+    perResultMaxChars,
+  });
+
+  let capped = messages.map((message) =>
+    (message as { role?: string }).role === "toolResult"
+      ? truncateToolResultMessage(message, perResultMaxChars)
+      : message,
+  );
+
+  let toolChars = capped.reduce((sum, message) => sum + toolResultTextLength(message), 0);
+  if (toolChars > aggregateMaxChars) {
+    let remaining = toolChars - aggregateMaxChars;
+    capped = capped.map((message) => {
+      if (remaining <= 0 || (message as { role?: string }).role !== "toolResult") {
+        return message;
+      }
+      const length = toolResultTextLength(message);
+      if (length <= 0) {
+        return message;
+      }
+      const reduceBy = Math.min(length, remaining);
+      remaining -= reduceBy;
+      return truncateToolResultMessage(message, Math.max(0, length - reduceBy));
+    });
+  }
+
+  const tokens = estimateMessagesTokens(capped);
+  return Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : undefined;
+}
+
 async function estimatePromptTokensFromSessionTranscript(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   storePath?: string;
+  contextWindowTokens: number;
 }): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
@@ -670,6 +747,8 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       includeByteSize: true,
       includeUsage: true,
     });
+    // Byte/4 is only diagnostic for the optional maxActiveTranscriptBytes path —
+    // never treat it as a prompt-token estimate (JSON overhead false-triggers).
     const transcriptBytesTokens =
       typeof snapshot.byteSize === "number" &&
       Number.isFinite(snapshot.byteSize) &&
@@ -705,13 +784,10 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         maxBytes: 1024 * 1024,
       },
     )) as AgentMessage[];
-    const estimatedMessageTokens = (() => {
-      if (messages.length === 0) {
-        return undefined;
-      }
-      const tokens = estimateMessagesTokens(messages);
-      return Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : undefined;
-    })();
+    const estimatedMessageTokens = estimateModelVisibleTranscriptTokens(
+      messages,
+      params.contextWindowTokens,
+    );
     if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
       const usagePromptTokens = Math.ceil(promptTokens) + (trailingBytesTokens ?? 0);
       return {
@@ -724,12 +800,11 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         transcriptBytesTokens,
       };
     }
-    const estimatedTokens = estimatedMessageTokens ?? transcriptBytesTokens;
-    if (estimatedTokens === undefined) {
+    if (estimatedMessageTokens === undefined) {
       return undefined;
     }
     return {
-      promptTokens: Math.ceil(estimatedTokens),
+      promptTokens: estimatedMessageTokens,
       transcriptByteSize: snapshot.byteSize,
       transcriptBytesTokens,
     };
@@ -752,6 +827,8 @@ export async function runPreflightCompactionIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
+  /** Active chat/agent run id so Control UI compaction events correlate to the turn. */
+  runId?: string;
   onCompactionNotice?: (phase: CompactionNoticePhase) => Promise<void> | void;
 }): Promise<SessionEntry | undefined> {
   const deps = {
@@ -825,10 +902,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
-  const threshold = Math.max(
-    contextWindowTokens - reserveTokensFloor - softThresholdTokens,
-    serverCompactionThreshold ?? 0,
-  );
+  const threshold = resolvePreflightCompactionThreshold({
+    contextWindowTokens,
+    minimumThresholdTokens: serverCompactionThreshold,
+  });
   const freshNeedsOutputRead =
     typeof freshPersistedTokens === "number" &&
     typeof promptTokenEstimate === "number" &&
@@ -844,6 +921,7 @@ export async function runPreflightCompactionIfNeeded(params: {
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
           storePath: params.storePath,
+          contextWindowTokens,
         });
   const transcriptSizeSnapshot =
     shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
@@ -1004,6 +1082,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
       abortSignal: params.replyOperation.abortSignal,
+      ...(params.runId ? { runId: params.runId } : {}),
     });
 
     if (!result?.ok) {

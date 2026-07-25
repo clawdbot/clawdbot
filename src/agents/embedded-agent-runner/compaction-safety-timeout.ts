@@ -5,6 +5,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
@@ -102,6 +103,30 @@ export async function compactWithSafetyTimeout<T>(
 /** Parameters for a single {@link ContextEngine.compact} invocation. */
 type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
 
+function resolveContextEngineCompactionEventRunId(params: ContextEngineCompactParams): string {
+  const runtimeRunId = params.runtimeContext?.runId;
+  if (typeof runtimeRunId === "string" && runtimeRunId.trim()) {
+    return runtimeRunId.trim();
+  }
+  // Engine-owned compaction bypasses AgentSession compaction_start/end, so the
+  // Control UI never learns the run is compacting unless we emit here. Prefer a
+  // stable synthetic id when the caller did not thread the active chat runId.
+  return `context-engine-compact:${params.sessionKey}:${params.sessionId}`;
+}
+
+function emitContextEngineCompactionAgentEvent(
+  params: ContextEngineCompactParams,
+  data: { phase: "start" } | { phase: "end"; completed: boolean },
+): void {
+  emitAgentEvent({
+    runId: resolveContextEngineCompactionEventRunId(params),
+    stream: "compaction",
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    data,
+  });
+}
+
 /**
  * Invoke a plugin-owned {@link ContextEngine.compact} bounded by the same
  * finite safety timeout that protects native runtime compaction.
@@ -117,23 +142,36 @@ type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
  *  - the timeout signal and caller `abortSignal` are both raced against the
  *    call (so a non-cooperating engine is still bounded) and threaded into the
  *    `compact()` params (so cooperating engines can cancel their own in-flight
- *    work).
+ *    work);
+ *  - start/end `stream: "compaction"` agent events are emitted so Control UI
+ *    can show the compacting indicator (AgentSession never fires for this path).
  *
  * Callers keep their existing try/catch — a timeout or abort surfaces as a
  * thrown error, never a silent hang.
  */
-export function compactContextEngineWithSafetyTimeout(
+export async function compactContextEngineWithSafetyTimeout(
   contextEngine: Pick<ContextEngine, "compact">,
   params: ContextEngineCompactParams,
   timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
   abortSignal?: AbortSignal,
 ): Promise<CompactResult> {
-  return compactWithSafetyTimeout(
-    (compactAbortSignal) =>
-      contextEngine.compact(
-        compactAbortSignal ? { ...params, abortSignal: compactAbortSignal } : params,
-      ),
-    timeoutMs,
-    abortSignal ? { abortSignal } : undefined,
-  );
+  emitContextEngineCompactionAgentEvent(params, { phase: "start" });
+  try {
+    const result = await compactWithSafetyTimeout(
+      (compactAbortSignal) =>
+        contextEngine.compact(
+          compactAbortSignal ? { ...params, abortSignal: compactAbortSignal } : params,
+        ),
+      timeoutMs,
+      abortSignal ? { abortSignal } : undefined,
+    );
+    emitContextEngineCompactionAgentEvent(params, {
+      phase: "end",
+      completed: Boolean(result.ok && result.compacted),
+    });
+    return result;
+  } catch (err) {
+    emitContextEngineCompactionAgentEvent(params, { phase: "end", completed: false });
+    throw err;
+  }
 }

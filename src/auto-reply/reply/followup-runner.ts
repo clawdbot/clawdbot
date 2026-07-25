@@ -828,6 +828,7 @@ export function createFollowupRunner(params: {
           storePath,
           isHeartbeat: opts?.isHeartbeat === true,
           replyOperation,
+          runId,
           onCompactionNotice: notifyPreflightCompaction,
         });
         preflightCompactionApplied =

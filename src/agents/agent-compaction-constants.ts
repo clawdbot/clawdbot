@@ -10,3 +10,9 @@ export const MIN_PROMPT_BUDGET_TOKENS = 8_000;
  * content after reserve tokens are subtracted.
  */
 export const MIN_PROMPT_BUDGET_RATIO = 0.5;
+
+/**
+ * Preflight and threshold maintenance compact once projected usage reaches
+ * this share of the model context window.
+ */
+export const COMPACTION_CONTEXT_USAGE_RATIO = 0.85;

@@ -235,6 +235,7 @@ export async function executePreparedReplyAgentRun(
         storePath,
         isHeartbeat,
         replyOperation,
+        runId: normalizeOptionalString(opts?.runId),
         onCompactionNotice: sendDirectCompactionNotice,
       }),
     );

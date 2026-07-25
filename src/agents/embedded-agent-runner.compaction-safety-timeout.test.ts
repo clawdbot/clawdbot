@@ -7,6 +7,18 @@ import {
   resolveCompactionTimeoutMs,
 } from "./embedded-agent-runner/compaction-safety-timeout.js";
 
+const emitAgentEventMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../infra/agent-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/agent-events.js")>(
+    "../infra/agent-events.js",
+  );
+  return {
+    ...actual,
+    emitAgentEvent: (...args: unknown[]) => emitAgentEventMock(...args),
+  };
+});
+
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
 describe("compactWithSafetyTimeout", () => {
@@ -190,11 +202,74 @@ describe("compactContextEngineWithSafetyTimeout", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllTimers();
+    emitAgentEventMock.mockClear();
   });
 
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it("emits compaction start/end agent events around a successful compact()", async () => {
+    const result: CompactResult = {
+      ok: true,
+      compacted: true,
+      result: { tokensBefore: 1000, tokensAfter: 200 },
+    };
+    const compact = vi.fn<CompactFn>(async () => result);
+
+    await expect(compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30)).resolves.toBe(
+      result,
+    );
+
+    expect(emitAgentEventMock.mock.calls.map((call) => call[0])).toEqual([
+      {
+        runId: "context-engine-compact:agent:main:session-1:session-1",
+        stream: "compaction",
+        sessionKey: "agent:main:session-1",
+        data: { phase: "start" },
+      },
+      {
+        runId: "context-engine-compact:agent:main:session-1:session-1",
+        stream: "compaction",
+        sessionKey: "agent:main:session-1",
+        data: { phase: "end", completed: true },
+      },
+    ]);
+  });
+
+  it("prefers runtimeContext.runId for compaction agent events", async () => {
+    const result: CompactResult = {
+      ok: true,
+      compacted: false,
+      reason: "already compact",
+    };
+    const compact = vi.fn<CompactFn>(async () => result);
+
+    await compactContextEngineWithSafetyTimeout(
+      { compact },
+      {
+        ...baseParams,
+        agentId: "main",
+        runtimeContext: { runId: "chat-run-42" },
+      },
+      30,
+    );
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "chat-run-42",
+        stream: "compaction",
+        agentId: "main",
+        data: { phase: "start" },
+      }),
+    );
+    expect(emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "chat-run-42",
+        data: { phase: "end", completed: false },
+      }),
+    );
   });
 
   it("bounds a hung plugin compact() and rejects with a timeout error", async () => {
@@ -207,6 +282,12 @@ describe("compactContextEngineWithSafetyTimeout", () => {
     await vi.advanceTimersByTimeAsync(30);
     await assertion;
     expect(vi.getTimerCount()).toBe(0);
+    expect(emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "compaction",
+        data: { phase: "end", completed: false },
+      }),
+    );
   });
 
   it("returns the plugin compact() result when it settles in time", async () => {
@@ -304,6 +385,12 @@ describe("compactContextEngineWithSafetyTimeout", () => {
 
     await expect(compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30)).rejects.toBe(
       error,
+    );
+    expect(emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "compaction",
+        data: { phase: "end", completed: false },
+      }),
     );
   });
 });

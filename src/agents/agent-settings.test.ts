@@ -37,19 +37,20 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
       }),
     };
 
+    // 100k window → reserve = 100_000 - floor(100_000 * 0.85) = 15_000.
     const first = applyAgentCompactionSettingsFromConfig({
       settingsManager,
       contextTokenBudget: 100_000,
     });
-    expect(first.compaction.reserveTokens).toBe(DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR);
+    expect(first.compaction.reserveTokens).toBe(15_000);
 
     reserve = 16_384;
     const second = applyAgentCompactionSettingsFromConfig({
       settingsManager,
       contextTokenBudget: 100_000,
     });
-    expect(second.compaction.reserveTokens).toBe(DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR);
-    expect(reserve).toBe(DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR);
+    expect(second.compaction.reserveTokens).toBe(15_000);
+    expect(reserve).toBe(15_000);
   });
 
   it("does not override when already above floor and not in safeguard mode", () => {
@@ -129,7 +130,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
 
   it("caps the effective reserve so small-context models do not compact at token one", () => {
     // Embedded runner default reserveTokens is 16 384. With a 16 384 context window
-    // both the default reserve and floor exceed the safe maximum of 8 384.
+    // align reserve to ~15% (2 458) while still keeping the min-prompt-budget cap.
     const settingsManager = SettingsManager.inMemory();
     const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
 
@@ -138,14 +139,14 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
       contextTokenBudget: 16_384,
     });
 
-    expect(result.compaction).toEqual({ reserveTokens: 8_384, keepRecentTokens: 20_000 });
+    expect(result.compaction).toEqual({ reserveTokens: 2_458, keepRecentTokens: 20_000 });
     expect(result.didOverride).toBe(true);
     expect(applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: 8_384 },
+      compaction: { reserveTokens: 2_458 },
     });
     expect(settingsManager.getCompactionSettings()).toEqual({
       enabled: true,
-      reserveTokens: 8_384,
+      reserveTokens: 2_458,
       keepRecentTokens: 20_000,
     });
     expect(shouldCompact(1, 16_384, { enabled: true, ...result.compaction })).toBe(false);
@@ -153,8 +154,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
 
   it("applies capped floor when current reserve is below it on small-context models", () => {
     // Simulate an embedded runner default of 4 096 with a 16 384 context window.
-    // minPromptBudget = min(8_000, floor(16_384 * 0.5)) = 8_000.
-    // maxReserve = 16_384 - 8_000 = 8_384.
+    // ratioReserve = ceil(16_384 * 0.15) = 2_458; maxReserve = 8_384 → 2_458.
     const settingsManager = {
       getCompactionReserveTokens: () => 4_096,
       getCompactionKeepRecentTokens: () => 20_000,
@@ -167,50 +167,48 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
 
     expect(result.didOverride).toBe(true);
-    expect(result.compaction.reserveTokens).toBe(8_384);
+    expect(result.compaction.reserveTokens).toBe(2_458);
     expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: 8_384 },
+      compaction: { reserveTokens: 2_458 },
     });
   });
 
-  it("does not cap the reserve floor for a mid-size context", () => {
+  it("aligns mid-size context reserve to ~15% of the window", () => {
     const settingsManager = {
       getCompactionReserveTokens: () => 16_384,
       getCompactionKeepRecentTokens: () => 20_000,
       applyOverrides: vi.fn(),
     };
 
-    // 32 768 context window → minPromptBudget = min(8_000, floor(32_768 * 0.5)) = 8_000.
-    // maxReserve = 32_768 - 8_000 = 24_768, so the 20 000 floor remains intact.
+    // 32 768 context → ceil(32_768 * 0.15) = 4_916 (~15% free for the 85% gate).
     const result = applyAgentCompactionSettingsFromConfig({
       settingsManager,
       contextTokenBudget: 32_768,
     });
 
-    expect(result.compaction.reserveTokens).toBe(DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR);
+    expect(result.compaction.reserveTokens).toBe(4_916);
     expect(result.compaction.keepRecentTokens).toBe(20_000);
     expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR },
+      compaction: { reserveTokens: 4_916 },
     });
   });
 
-  it("does not cap floor when context window is large enough", () => {
+  it("aligns large context reserve to ~15% of the window", () => {
     const settingsManager = {
       getCompactionReserveTokens: () => 16_384,
       getCompactionKeepRecentTokens: () => 20_000,
       applyOverrides: vi.fn(),
     };
 
-    // 200 000 context window → maxReserve = 200_000 - 8_000 = 192_000.
-    // floor (20 000) is well within that cap.
+    // 200 000 context → ceil(200_000 * 0.15) = 30_000.
     const result = applyAgentCompactionSettingsFromConfig({
       settingsManager,
       contextTokenBudget: 200_000,
     });
 
-    expect(result.compaction.reserveTokens).toBe(DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR);
+    expect(result.compaction.reserveTokens).toBe(30_000);
     expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
-      compaction: { reserveTokens: DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR },
+      compaction: { reserveTokens: 30_000 },
     });
   });
 
