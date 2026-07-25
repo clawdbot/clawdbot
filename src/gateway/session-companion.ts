@@ -1,5 +1,4 @@
 import type {
-  SessionCompanionExchange,
   SessionsCompanionAskResult,
   SessionsCompanionStateResult,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
@@ -7,24 +6,8 @@ import {
   createSessionCompanionAskRuntime,
   type SessionCompanionAskDeps,
 } from "./session-companion-ask.js";
+import type { SessionCompanionThread } from "./session-companion-state.js";
 import { onGatewaySessionReset } from "./session-reset-notifications.js";
-
-export type SessionCompanionSeedMessage = {
-  role: "user" | "assistant";
-  text: string;
-  ts: number;
-};
-
-export type SessionCompanionThread = {
-  exchanges: SessionCompanionExchange[];
-  seed: {
-    messages: SessionCompanionSeedMessage[];
-    digestJson: string;
-  };
-  lastNoteSequence: number;
-  busy: boolean;
-  lastUsedAt: number;
-};
 
 export type SessionCompanionService = {
   ask: (params: {
@@ -42,27 +25,8 @@ export type SessionCompanionDeps = SessionCompanionAskDeps & {
   clearIntervalFn?: typeof clearInterval;
 };
 
-export const SESSION_COMPANION_MAX_EXCHANGES = 24;
-export const SESSION_COMPANION_MAX_EXCHANGE_BYTES = 48 * 1024;
 export const SESSION_COMPANION_IDLE_TTL_MS = 2 * 60 * 60_000;
 const SESSION_COMPANION_SWEEP_INTERVAL_MS = 10 * 60_000;
-
-function exchangeBytes(exchange: SessionCompanionExchange): number {
-  return Buffer.byteLength(exchange.question, "utf8") + Buffer.byteLength(exchange.answer, "utf8");
-}
-
-export function trimSessionCompanionExchanges(exchanges: SessionCompanionExchange[]): void {
-  let bytes = exchanges.reduce((total, exchange) => total + exchangeBytes(exchange), 0);
-  // Dropping the oldest exchange intentionally breaks the replay byte prefix;
-  // the count and byte caps take priority once a long-lived thread is bounded.
-  while (
-    exchanges.length > SESSION_COMPANION_MAX_EXCHANGES ||
-    bytes > SESSION_COMPANION_MAX_EXCHANGE_BYTES
-  ) {
-    const removed = exchanges.shift();
-    bytes -= removed ? exchangeBytes(removed) : 0;
-  }
-}
 
 export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompanionService {
   const now = deps.now ?? Date.now;

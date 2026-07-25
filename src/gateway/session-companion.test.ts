@@ -10,11 +10,8 @@ import {
   SessionCompanionAskError,
   type SessionCompanionPromptMessage,
 } from "./session-companion-ask.js";
-import {
-  createSessionCompanion,
-  SESSION_COMPANION_IDLE_TTL_MS,
-  trimSessionCompanionExchanges,
-} from "./session-companion.js";
+import { trimSessionCompanionExchanges } from "./session-companion-state.js";
+import { createSessionCompanion, SESSION_COMPANION_IDLE_TTL_MS } from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 

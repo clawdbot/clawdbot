@@ -18,7 +18,7 @@ import {
   trimSessionCompanionExchanges,
   type SessionCompanionSeedMessage,
   type SessionCompanionThread,
-} from "./session-companion.js";
+} from "./session-companion-state.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { loadSessionEntryReadOnly } from "./session-utils.js";
 
