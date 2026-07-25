@@ -373,13 +373,17 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("postbackAction truncates labels but visibly disables overlong callback data", () => {
-    // 299 ASCII chars + 😀 = 301 code units; the 300-unit slice cuts the emoji.
-    const data = `${"d".repeat(299)}😀`;
+    const exactData = `${"d".repeat(298)}😀`;
+    const overlongData = `${"d".repeat(299)}😀`;
     const action = postbackAction(labelWithEmoji, "data") as { label: string };
-    const unavailable = postbackAction("Label", data);
+    const exact = postbackAction("Label", exactData) as { data: string };
+    const unavailable = postbackAction("Label", overlongData);
 
+    expect(exactData).toHaveLength(300);
+    expect(overlongData).toHaveLength(301);
     expect(action.label).toBe("1234567890123456789");
     expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(exact.data).toBe(exactData);
     expect(unavailable).toEqual({
       type: "message",
       label: "Action unavailable",
@@ -400,12 +404,17 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("datetimePickerAction truncates labels but visibly disables overlong callback data", () => {
-    const data = `${"d".repeat(299)}😀`;
+    const exactData = `${"d".repeat(298)}😀`;
+    const overlongData = `${"d".repeat(299)}😀`;
     const action = datetimePickerAction(labelWithEmoji, "data", "datetime") as { label: string };
-    const unavailable = datetimePickerAction("Pick", data, "datetime");
+    const exact = datetimePickerAction("Pick", exactData, "datetime") as { data: string };
+    const unavailable = datetimePickerAction("Pick", overlongData, "datetime");
 
+    expect(exactData).toHaveLength(300);
+    expect(overlongData).toHaveLength(301);
     expect(action.label).toBe("1234567890123456789");
     expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(exact.data).toBe(exactData);
     expect(unavailable).toEqual({
       type: "message",
       label: "Action unavailable",
@@ -491,14 +500,15 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("uriAction visibly disables overlong links instead of changing their destination", () => {
-    const validUri = `https://e.example/?q=${"u".repeat(978)}`;
+    const validUri = `https://e.example/?q=${"u".repeat(979)}`;
     const validAction = uriAction("Open", validUri) as { type: string; uri?: string };
-    const overlongAction = uriAction("Open", `${validUri}😀`) as {
+    const overlongAction = uriAction("Open", `${validUri}u`) as {
       type: string;
       label?: string;
       text?: string;
     };
 
+    expect(validUri).toHaveLength(1000);
     expect(validAction).toMatchObject({ type: "uri", uri: validUri });
     expect(overlongAction).toEqual({
       type: "message",
@@ -546,7 +556,6 @@ describe("action label/data surrogate-safe truncation", () => {
   });
 
   it("media control cards visibly disable overlong opaque callbacks", () => {
-    // 299 code units + 😀 = 301; the 300-unit slice cuts the emoji.
     const overlongData = `${"d".repeat(299)}😀`;
     const card = createMediaPlayerCard({
       title: "Track",
