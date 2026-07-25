@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   ChatSessionCompanionThreads,
@@ -85,7 +86,7 @@ describe("ChatSessionCompanionThreads", () => {
       }
       return { ok: true as const };
     });
-    const client = { request };
+    const client = { request: request as GatewayBrowserClient["request"] };
 
     await requestSessionCompanionAnswer(client, "one", "Question");
     await requestSessionCompanionState(client, "one");
