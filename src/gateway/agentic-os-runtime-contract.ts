@@ -361,6 +361,7 @@ export function releaseAgenticOsAllowLease(
       return rejectConflict(`allow lease owner mismatch: ${field}`);
     }
   }
+  const previousReleasedAtMs = record.released_at_ms;
   record.released_at_ms = record.released_at_ms ?? Date.now();
   leasesByGatewayId.delete(gatewayLeaseId);
   const response = releaseResponse(record, metadataEnvelope(normalized));
@@ -371,7 +372,20 @@ export function releaseAgenticOsAllowLease(
     createdAtMs: Date.now(),
     authenticatedPrincipalId,
   });
-  persistRuntimeState();
+  try {
+    persistRuntimeState();
+  } catch (error) {
+    if (previousReleasedAtMs === undefined) {
+      delete record.released_at_ms;
+    } else {
+      record.released_at_ms = previousReleasedAtMs;
+    }
+    if (!record.released_at_ms && !record.consumed_at_ms) {
+      leasesByGatewayId.set(gatewayLeaseId, record);
+    }
+    releaseByReleaseIdempotencyKey.delete(releaseScopedKey);
+    throw error;
+  }
   return response;
 }
 
