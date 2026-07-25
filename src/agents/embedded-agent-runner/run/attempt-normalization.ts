@@ -4,6 +4,7 @@ import {
 } from "../../../config/sessions/legacy-sqlite-marker.js";
 import { listSessionEntries, loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
@@ -78,14 +79,15 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
         readOnly: true,
         storePath: marker.storePath,
       }).filter(({ entry }) => entry.sessionId === marker.sessionId);
+      const preferredMarkerSessionKey = resolvePreferredSessionKeyForSessionIdMatches(
+        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        marker.sessionId,
+      );
       const successorSessionKey =
         retainedEntry?.sessionId === marker.sessionId
           ? retainedSessionKey
-          : markerMatches.length === 1
-            ? markerMatches[0]?.sessionKey
-            : markerMatches.length === 0 && !retainedEntry
-              ? retainedSessionKey
-              : undefined;
+          : (preferredMarkerSessionKey ??
+            (markerMatches.length === 0 && !retainedEntry ? retainedSessionKey : undefined));
       if (
         (marker.sessionId !== sessionIdUsed && sessionIdUsed !== previousSessionId) ||
         !successorSessionKey ||

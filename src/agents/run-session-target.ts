@@ -78,6 +78,16 @@ export async function resolveAgentRunSessionTarget(params: {
           legacyMarker.sessionId,
         )
       : undefined;
+  if (
+    legacyMarker &&
+    !hasCompleteTypedTarget &&
+    !targetSessionKey &&
+    !suppliedSessionKey &&
+    markerMatches.length > 0 &&
+    !markerSessionKey
+  ) {
+    throw new Error("Legacy SQLite transcript marker session key is ambiguous");
+  }
   const sessionKey =
     targetSessionKey ??
     suppliedSessionKey ??

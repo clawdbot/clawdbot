@@ -26,6 +26,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
@@ -735,14 +736,19 @@ async function compactResolvedContextEngine(
                 storePath: marker.storePath,
               }).filter(({ entry }) => entry.sessionId === marker.sessionId)
             : [];
+          const preferredMarkerSessionKey = marker
+            ? resolvePreferredSessionKeyForSessionIdMatches(
+                markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+                marker.sessionId,
+              )
+            : undefined;
           const markerSessionKey = marker
             ? retainedMarkerEntry?.sessionId === marker.sessionId
               ? runtimeTarget.sessionKey
-              : markerMatches.length === 1
-                ? markerMatches[0]?.sessionKey
-                : markerMatches.length === 0 && !retainedMarkerEntry
+              : (preferredMarkerSessionKey ??
+                (markerMatches.length === 0 && !retainedMarkerEntry
                   ? runtimeTarget.sessionKey
-                  : undefined
+                  : undefined))
             : undefined;
           const legacyTarget = marker
             ? markerSessionKey

@@ -10,7 +10,10 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import {
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import {
   resolveSessionKeyForRequest,
@@ -41,6 +44,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
   const marker = completeTarget ? undefined : parseSqliteSessionFileMarker(params.sessionFile);
   const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
   const candidateSessionKey = targetSessionKey ?? suppliedSessionKey;
+  const candidateKeyAgentId = parseAgentSessionKey(candidateSessionKey)?.agentId;
   const suppliedEntry =
     marker && candidateSessionKey
       ? loadSessionEntry({
@@ -76,6 +80,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
     marker &&
     ((targetAgentId && targetAgentId !== marker.agentId) ||
       (targetSessionId && targetSessionId !== marker.sessionId) ||
+      (candidateKeyAgentId && candidateKeyAgentId !== marker.agentId) ||
       (targetStorePath && path.resolve(targetStorePath) !== path.resolve(marker.storePath)) ||
       (candidateSessionKey && suppliedEntry && suppliedEntry.sessionId !== marker.sessionId))
   ) {

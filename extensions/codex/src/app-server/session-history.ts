@@ -29,6 +29,23 @@ type CodexMirroredSessionHistoryTarget = {
   sessionKey?: string;
 };
 
+function selectPreferredSessionKey(
+  matches: Array<{ entry: SessionEntry; sessionKey: string }>,
+  sessionId: string,
+): string | undefined {
+  const structural = matches.filter(
+    ({ sessionKey }) => sessionKey === sessionId || sessionKey.endsWith(`:${sessionId}`),
+  );
+  const candidates = structural.length > 0 ? structural : matches;
+  if (candidates.length === 1) {
+    return candidates[0]?.sessionKey;
+  }
+  const sorted = candidates.toSorted((left, right) => right.entry.updatedAt - left.entry.updatedAt);
+  return (sorted[0]?.entry.updatedAt ?? 0) > (sorted[1]?.entry.updatedAt ?? 0)
+    ? sorted[0]?.sessionKey
+    : undefined;
+}
+
 /** Returns sanitized session-context messages for a Codex mirrored session file. */
 export async function readCodexMirroredSessionHistoryMessages(
   target: CodexMirroredSessionHistoryTarget,
@@ -113,5 +130,5 @@ function resolveSqliteMarkerSessionKey(
     storePath: marker.storePath,
   });
   const matches = entries.filter(({ entry }) => entry.sessionId === marker.sessionId);
-  return matches.length === 1 ? matches[0]?.sessionKey : undefined;
+  return selectPreferredSessionKey(matches, marker.sessionId);
 }
