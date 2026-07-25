@@ -16,7 +16,7 @@ import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
-export type WindowsProcessSnapshotEntry = {
+type WindowsProcessSnapshotEntry = {
   ProcessId?: number;
   CommandLine?: string | null;
 };

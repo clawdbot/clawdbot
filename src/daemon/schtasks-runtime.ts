@@ -390,7 +390,7 @@ export async function waitForFallbackTakeoverRuntime(
   return runtime;
 }
 
-export async function resolveControllableFallbackRuntime(
+async function resolveControllableFallbackRuntime(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
   const runtime = await resolveFallbackRuntime(env, undefined, "control");
