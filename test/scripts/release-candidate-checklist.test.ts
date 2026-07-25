@@ -15,6 +15,7 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   preflightCorePackageTarballs,
+  preflightDependencyTarballs,
   reconcileReleaseCandidateState,
   releaseBranchForTag,
   resolveArtifactName,
@@ -617,6 +618,72 @@ describe("release candidate checklist", () => {
       preflightCorePackageTarballs({
         corePackageTarballs: null,
         dependencyTarballs: [legacyTarball],
+      }),
+    ).toThrow("missing dependency tarball metadata");
+  });
+
+  it("passes only root dependency tarballs to Parallels with legacy fallback", () => {
+    const aiTarball = {
+      packageName: "@openclaw/ai",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+      tarballSha256: "ai-sha",
+    };
+    const gatewayProtocolTarball = {
+      packageName: "@openclaw/gateway-protocol",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-protocol-2026.7.1-beta.3.tgz",
+      tarballSha256: "protocol-sha",
+    };
+    const gatewayClientTarball = {
+      packageName: "@openclaw/gateway-client",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-client-2026.7.1-beta.3.tgz",
+      tarballSha256: "client-sha",
+    };
+    const corePackageTarballs = [aiTarball, gatewayProtocolTarball, gatewayClientTarball];
+
+    expect(
+      preflightDependencyTarballs({
+        corePackageTarballs,
+        dependencyTarballs: [aiTarball],
+      }),
+    ).toEqual([aiTarball]);
+    expect(preflightDependencyTarballs({ corePackageTarballs })).toEqual(corePackageTarballs);
+    const manifest = {
+      releaseTag: "v2026.7.1-beta.3",
+      releaseSha: "candidate-sha",
+      npmDistTag: "beta",
+      tarballName: "openclaw-2026.7.1-beta.3.tgz",
+      tarballSha256: "root-sha",
+      corePackageTarballs,
+      dependencyTarballs: [aiTarball],
+    };
+    const params = {
+      tag: manifest.releaseTag,
+      targetSha: manifest.releaseSha,
+      npmDistTag: manifest.npmDistTag,
+    };
+    expect(() => validatePreflightManifest(manifest, params)).not.toThrow();
+    expect(() =>
+      validatePreflightManifest(
+        {
+          ...manifest,
+          dependencyTarballs: [
+            {
+              ...aiTarball,
+              tarballName: gatewayProtocolTarball.tarballName,
+              tarballSha256: gatewayProtocolTarball.tarballSha256,
+            },
+          ],
+        },
+        params,
+      ),
+    ).toThrow("does not match the core package manifest");
+    expect(() =>
+      preflightDependencyTarballs({
+        corePackageTarballs,
+        dependencyTarballs: null,
       }),
     ).toThrow("missing dependency tarball metadata");
   });

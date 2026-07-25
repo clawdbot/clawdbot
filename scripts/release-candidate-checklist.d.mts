@@ -194,6 +194,15 @@ export function preflightCorePackageTarballs(manifest: {
   tarballName: string;
   tarballSha256: string;
 }>;
+export function preflightDependencyTarballs(manifest: {
+  corePackageTarballs?: unknown;
+  dependencyTarballs?: unknown;
+}): Array<{
+  packageName: string;
+  packageVersion: string;
+  tarballName: string;
+  tarballSha256: string;
+}>;
 export function validateFullManifest(manifest: unknown, params: unknown): void;
 export function validateTrustedToolingPin({
   toolingSha,
