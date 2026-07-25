@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
 
@@ -22,6 +23,9 @@ const CONTROL_UI_ASSETS = [
 ] as const;
 const CONTROL_UI_FILES = [CONTROL_UI_INDEX, ...CONTROL_UI_ASSETS];
 const CHECK_SCRIPT = resolve("scripts/check-openclaw-package-tarball.mjs");
+const TYPESCRIPT_PACKAGE_ROOT = fileURLToPath(
+  new URL("../../node_modules/typescript", import.meta.url),
+);
 
 function writeFixtureFile(packageRoot: string, relativePath: string, content: string): void {
   const filePath = join(packageRoot, relativePath);
@@ -160,6 +164,7 @@ function installPackedPackage(root: string, tarball: string) {
       "--no-audit",
       "--no-fund",
       "--offline",
+      TYPESCRIPT_PACKAGE_ROOT,
       tarball,
     ],
     {
