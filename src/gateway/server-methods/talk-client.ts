@@ -14,7 +14,10 @@ import {
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   buildAgentMainSessionKey,
   resolveAgentIdFromSessionKey,
@@ -108,6 +111,13 @@ function pruneLegacyVoiceBindings(now = Date.now()): void {
       legacyVoiceSessionByClient.delete(key);
     }
   }
+}
+
+function resolveTalkClientAgentId(
+  config: Parameters<typeof resolveDefaultAgentId>[0],
+  key: string,
+) {
+  return resolveAgentIdFromSessionKey(key, resolveDefaultAgentId(config));
 }
 
 /**
@@ -400,7 +410,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+    const config = request.context.getRuntimeConfig();
+    const agentId = resolveTalkClientAgentId(config, params.sessionKey);
     const relaySessionId = normalizeOptionalString(params.relaySessionId);
     const connId = normalizeOptionalString(request.client?.connId);
     pruneLegacyVoiceBindings();
@@ -525,15 +536,16 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const config = context.getRuntimeConfig();
       await appendClientVoiceTranscript({
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        agentId: resolveTalkClientAgentId(config, params.sessionKey),
         sessionKey: params.sessionKey,
         voiceSessionId: params.voiceSessionId,
         entryId: params.entryId,
         role: params.role,
         text: params.text,
         ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
-        config: context.getRuntimeConfig(),
+        config,
       });
       respond(true, { ok: true }, undefined);
     } catch (err) {
@@ -553,7 +565,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+      const config = context.getRuntimeConfig();
+      const agentId = resolveTalkClientAgentId(config, params.sessionKey);
       const origin = resolveClientVoiceSessionOrigin({
         agentId,
         sessionKey: params.sessionKey,
@@ -566,7 +579,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         agentId,
         sessionKey: params.sessionKey,
         voiceSessionId: params.voiceSessionId,
-        config: context.getRuntimeConfig(),
+        config,
       });
       const connId = normalizeOptionalString(client?.connId);
       if (connId) {

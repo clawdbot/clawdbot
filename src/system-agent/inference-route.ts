@@ -1,7 +1,7 @@
 // Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -83,16 +83,12 @@ function projectSystemAgentExecutionConfig(
         ]
       : []),
   ];
+  const { list: _legacyList, ...agentsConfig } = config.agents ?? {};
   return {
     ...config,
     agents: {
-      ...config.agents,
-      ...(config.agents?.entries
-        ? {
-            entries: Object.fromEntries(projectedAgents.map(({ id, ...entry }) => [id, entry])),
-          }
-        : {}),
-      ...(config.agents?.list ? { list: projectedAgents } : {}),
+      ...agentsConfig,
+      entries: toAgentEntriesRecord(projectedAgents),
     },
   };
 }

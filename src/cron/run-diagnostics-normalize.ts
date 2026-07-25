@@ -113,7 +113,7 @@ function normalizeDiagnosticMessage(
   return { message: `${truncateUtf16Safe(redacted, MAX_ENTRY_CHARS - 1)}…`, truncated: true };
 }
 
-function trimSummary(value: string | undefined): string | undefined {
+export function normalizeCronRunDiagnosticSummary(value: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return undefined;
@@ -167,7 +167,7 @@ export function normalizeCronRunDiagnostics(
       entries.shift();
     }
   }
-  const summary = trimSummary(
+  const summary = normalizeCronRunDiagnosticSummary(
     typeof record.summary === "string" ? redactText(record.summary) : undefined,
   );
   if (entries.length === 0 && !summary) {

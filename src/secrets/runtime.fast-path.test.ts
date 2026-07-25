@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -26,6 +25,10 @@ const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() =
   })),
   runtimePrepareImportMock: vi.fn(),
 }));
+
+function explicitMainRoster() {
+  return { agents: { list: [{ id: "main", default: true }] } };
+}
 
 vi.mock("./runtime-prepare.runtime.js", () => {
   runtimePrepareImportMock();
@@ -101,6 +104,7 @@ describe("secrets runtime fast path", () => {
 
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         gateway: {
           auth: {
             mode: "token",
@@ -128,6 +132,7 @@ describe("secrets runtime fast path", () => {
 
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         tools: {
           web: {
             fetch: {
@@ -157,6 +162,7 @@ describe("secrets runtime fast path", () => {
 
     await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         tools: {
           web: {
             fetch: {
@@ -178,7 +184,7 @@ describe("secrets runtime fast path", () => {
     const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
 
     await prepareSecretsRuntimeSnapshot({
-      config: asConfig({}),
+      config: asConfig(explicitMainRoster()),
       env: {},
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({
@@ -201,6 +207,7 @@ describe("secrets runtime fast path", () => {
 
     await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         tools: {
           web: {
             fetch: {
@@ -248,7 +255,7 @@ describe("secrets runtime fast path", () => {
       HOME: root,
       OPENCLAW_STATE_DIR: root,
     };
-    const mainAgentDir = resolveDefaultAgentDir({}, env);
+    const mainAgentDir = path.join(root, "agents", "main", "agent");
     const agentDir = path.join(root, "custom-agent");
     mkdirSync(agentDir, { recursive: true });
     setup(env, mainAgentDir, agentDir);
@@ -257,7 +264,7 @@ describe("secrets runtime fast path", () => {
       const snapshot = prepareSecretsRuntimeFastPathSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "default", agentDir }],
+            list: [{ id: "default", agentDir, default: true }],
           },
         }),
         env,
@@ -286,7 +293,7 @@ describe("secrets runtime fast path", () => {
       const fastPath = prepareSecretsRuntimeFastPathSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "default", agentDir }],
+            list: [{ id: "default", agentDir, default: true }],
           },
         }),
         env,
@@ -332,7 +339,7 @@ describe("secrets runtime fast path", () => {
     };
     const config = (port: number) =>
       asConfig({
-        agents: { list: [{ id: "default", agentDir }] },
+        agents: { list: [{ id: "default", agentDir, default: true }] },
         gateway: { port },
       });
     const initialSnapshot = await prepareSecretsRuntimeSnapshot({
@@ -385,7 +392,9 @@ describe("secrets runtime fast path", () => {
       return getRuntimeAuthProfileStoreSnapshot(agentDir) ?? oldStore;
     };
     const initial = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({ agents: { list: [{ id: "default", agentDir }] } }),
+      config: asConfig({
+        agents: { list: [{ id: "default", agentDir, default: true }] },
+      }),
       agentDirs: [agentDir],
       loadAuthStore,
     });
@@ -419,7 +428,7 @@ describe("secrets runtime fast path", () => {
     });
     const config = (port: number) =>
       asConfig({
-        agents: { list: [{ id: "default", agentDir }] },
+        agents: { list: [{ id: "default", agentDir, default: true }] },
         gateway: { port },
       });
     const initial = await prepareSecretsRuntimeSnapshot({
@@ -469,7 +478,7 @@ describe("secrets runtime fast path", () => {
       const fastPath = prepareSecretsRuntimeFastPathSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "default", agentDir }],
+            list: [{ id: "default", agentDir, default: true }],
           },
         }),
         env,

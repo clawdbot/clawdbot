@@ -81,7 +81,6 @@ describe("anthropic-vertex provider plugin", () => {
     expect(result.provider.models.map((model) => model.id)).toEqual([
       "claude-fable-5",
       "claude-mythos-5",
-      "claude-opus-5",
       "claude-opus-4-8",
       "claude-opus-4-6",
       "claude-sonnet-4-6",
@@ -99,9 +98,20 @@ describe("anthropic-vertex provider plugin", () => {
       max: "max",
     });
     expect(result.provider.models[2]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
-    expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+    expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
     expect(result.provider.models[4]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
-    expect(result.provider.models[5]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
+  });
+
+  it.each(["global", "us", "eu"])("publishes Opus 5 for the %s endpoint", (region) => {
+    const provider = buildAnthropicVertexProvider({
+      env: { GOOGLE_CLOUD_LOCATION: region },
+    });
+
+    expect(provider.models.find((model) => model.id === "claude-opus-5")).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
   });
 
   it.each(["global", "us", "eu"])("publishes Sonnet 5 for the %s endpoint", (region) => {
@@ -111,6 +121,32 @@ describe("anthropic-vertex provider plugin", () => {
     });
 
     expect(provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
+  });
+
+  it.each([
+    {
+      region: "global",
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    },
+    {
+      region: "us",
+      cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
+    },
+    {
+      region: "eu",
+      cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
+    },
+  ])("uses the documented Opus 5 pricing for $region", ({ region, cost }) => {
+    const provider = buildAnthropicVertexProvider({
+      env: { GOOGLE_CLOUD_LOCATION: region },
+    });
+
+    expect(provider.models.find((model) => model.id === "claude-opus-5")).toMatchObject({
+      cost,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
   });
 
   it.each([
@@ -189,6 +225,38 @@ describe("anthropic-vertex provider plugin", () => {
     }
   });
 
+  it("restores missing or stale Opus 5 metadata during runtime normalization", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic-vertex",
+      modelId: "prod-opus",
+      model: {
+        id: "prod-opus",
+        name: "Claude Opus 5",
+        api: "anthropic-messages",
+        provider: "anthropic-vertex",
+        baseUrl: "https://us-aiplatform.googleapis.com",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        contextWindow: 200_000,
+        contextTokens: 200_000,
+        maxTokens: 64_000,
+        params: { canonicalModelId: "claude-opus-5" },
+      },
+    } as never);
+
+    expect(normalized).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+  });
+
   it("owns Anthropic-style replay policy", async () => {
     const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
 
@@ -219,6 +287,14 @@ describe("anthropic-vertex provider plugin", () => {
 
   it("owns Anthropic-style thinking policy", async () => {
     const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    const opus5Profile = provider.resolveThinkingProfile?.({
+      provider: "anthropic-vertex",
+      modelId: "claude-opus-5",
+    } as never);
+
+    expect(opus5Profile?.defaultLevel).toBe("high");
+    expect(opus5Profile?.levels.map((level) => level.id)).toContain("max");
 
     const opus48Profile = provider.resolveThinkingProfile?.({
       provider: "anthropic-vertex",

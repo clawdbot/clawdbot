@@ -45,6 +45,7 @@ export type ModelCatalogCompatConfig = {
   supportsTemperature?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
+  supportsJsonSchemaResponseFormat?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;

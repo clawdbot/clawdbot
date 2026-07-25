@@ -316,6 +316,21 @@ describe("resolveRequesterToolPolicies", () => {
     });
   });
 
+  it("fails closed when a trusted internal handoff has no configuration", () => {
+    expect(() =>
+      resolveRequesterToolPolicies({
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        trustedInternalHandoff: true,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:ops:subagent:child",
+          sourceTool: "subagent_announce",
+        },
+      }),
+    ).toThrow("Trusted internal handoff policy resolution requires configuration.");
+  });
+
   it("restores a verified completion handoff to a distinct immutable completion owner", async () => {
     const controllerSessionKey = "agent:main:discord:direct:alice";
     const completionOwnerSessionKey = "agent:main:main";

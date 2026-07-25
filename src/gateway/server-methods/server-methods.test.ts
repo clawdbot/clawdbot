@@ -2175,26 +2175,60 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
 
-  it("keeps media-only user messages while dropping empty text-only user messages", () => {
-    const mediaOnly = {
-      role: "user",
-      content: "",
-      MediaPath: "/tmp/openclaw/user-upload.png",
-      timestamp: 1,
-    };
-    const multiMediaOnly = {
-      role: "user",
-      content: "",
-      MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
-      timestamp: 2,
-    };
+  it.each([
+    {
+      name: "legacy-only",
+      message: { MediaPath: "/tmp/openclaw/legacy.png", MediaType: "image/png" },
+      expectedPath: "/tmp/openclaw/legacy.png",
+    },
+    {
+      name: "facts-only",
+      message: { __openclaw: { media: [{ path: "/tmp/openclaw/fact.png" }] } },
+      expectedPath: "/tmp/openclaw/fact.png",
+    },
+    {
+      name: "both-equal",
+      message: {
+        MediaPath: "/tmp/openclaw/equal.png",
+        __openclaw: { media: [{ path: "/tmp/openclaw/equal.png" }] },
+      },
+      expectedPath: "/tmp/openclaw/equal.png",
+    },
+    {
+      name: "both-conflict",
+      message: {
+        MediaPath: "/tmp/openclaw/legacy-conflict.png",
+        __openclaw: { media: [{ path: "/tmp/openclaw/canonical.png" }] },
+      },
+      expectedPath: "/tmp/openclaw/canonical.png",
+    },
+    {
+      name: "sparse",
+      message: { __openclaw: { media: [{}, { path: "/tmp/openclaw/sparse.png" }] } },
+      expectedPath: "/tmp/openclaw/sparse.png",
+      expectedIndex: 1,
+    },
+    {
+      name: "type-only",
+      message: { __openclaw: { media: [{ contentType: "image/png" }] } },
+      expectedPath: undefined,
+    },
+    {
+      name: "media-only",
+      message: { __openclaw: { media: [{ path: "/tmp/openclaw/media-only.png" }] } },
+      expectedPath: "/tmp/openclaw/media-only.png",
+    },
+  ])("keeps $name media-only users through facts-first display projection", (testCase) => {
     const result = projectRecentChatDisplayMessages([
-      mediaOnly,
-      multiMediaOnly,
-      { role: "user", content: "", timestamp: 3 },
+      { role: "user", content: "", timestamp: 1, ...testCase.message },
+      { role: "user", content: "", timestamp: 2 },
     ]);
 
-    expect(result).toEqual([mediaOnly, multiMediaOnly]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty("MediaPath");
+    const media = (result[0]?.["__openclaw"] as { media?: Array<{ path?: string }> })?.media;
+    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
+    expect(media?.[expectedIndex]?.path).toBe(testCase.expectedPath);
   });
 
   it("merges delayed TTS supplements into their original assistant message", () => {

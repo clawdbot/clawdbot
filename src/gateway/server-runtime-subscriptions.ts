@@ -76,6 +76,7 @@ export function startGatewayEventSubscriptions(params: {
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
     subscribers: params.sessionMessageSubscribers,
+    sessionEventSubscribers: params.sessionEventSubscribers,
     broadcastToConnIds: params.broadcastToConnIds,
   });
   const unsubscribePrivateAuditEvents = auditEnabled

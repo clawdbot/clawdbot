@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
@@ -133,11 +134,9 @@ export function isValidMatrixIdbSnapshotJson(data: string): boolean {
 function idbReq<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.addEventListener("success", () => resolve(req.result), { once: true });
-    req.addEventListener(
-      "error",
-      () => reject(toLintErrorObject(req.error, "Non-Error rejection")),
-      { once: true },
-    );
+    req.addEventListener("error", () => reject(toErrorObject(req.error, "Non-Error rejection")), {
+      once: true,
+    });
   });
 }
 
@@ -157,7 +156,7 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
     const db: IDBDatabase = await new Promise((resolve, reject) => {
       const r = idb.open(name, version);
       r.addEventListener("success", () => resolve(r.result), { once: true });
-      r.addEventListener("error", () => reject(toLintErrorObject(r.error, "Non-Error rejection")), {
+      r.addEventListener("error", () => reject(toErrorObject(r.error, "Non-Error rejection")), {
         once: true,
       });
     });
@@ -245,7 +244,7 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
         },
         { once: true },
       );
-      r.addEventListener("error", () => reject(toLintErrorObject(r.error, "Non-Error rejection")), {
+      r.addEventListener("error", () => reject(toErrorObject(r.error, "Non-Error rejection")), {
         once: true,
       });
     });
@@ -389,18 +388,4 @@ function throwIfLegacySnapshotNeedsDoctor(
 function throwLegacySnapshotMigrationRequired(): never {
   LogService.warn("IdbPersistence", LEGACY_SNAPSHOT_DIAGNOSTIC);
   throw new MatrixIdbSnapshotMigrationRequiredError();
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

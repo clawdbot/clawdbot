@@ -38,7 +38,7 @@ scenario:
     - extensions/active-memory/index.ts
     - extensions/active-memory/doctor-contract-api.ts
     - extensions/qa-lab/src/suite.ts
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
     summary: Verify Active Memory stays off when session-toggled off, runs memory search/get when enabled, and helps a live model answer with the recalled preference in the first visible reply.

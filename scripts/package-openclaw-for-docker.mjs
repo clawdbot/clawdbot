@@ -8,7 +8,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
+import { terminateManagedChild } from "./lib/managed-child-process.mjs";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
@@ -218,11 +221,21 @@ function run(command, args, cwd, options = {}) {
       DEFAULT_TIMEOUT_KILL_AFTER_MS,
     );
     const useProcessGroup = process.platform !== "win32";
-    const child = spawn(command, args, {
+    const env = options.env ?? process.env;
+    // Keep POSIX command selection stable; only Windows needs explicit npm/pnpm shim handling.
+    const invocation =
+      process.platform === "win32" && command === "pnpm"
+        ? resolvePnpmRunner({ cwd, env, npmExecPath: env.npm_execpath, pnpmArgs: args })
+        : process.platform === "win32" && command === "npm"
+          ? resolveNpmRunner({ env, npmArgs: args })
+          : { args, command, shell: false };
+    const child = spawn(invocation.command, invocation.args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: options.env ?? process.env,
+      env: invocation.env ?? env,
       detached: useProcessGroup,
+      shell: invocation.shell,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
     let timedOut = false;
     let outputLimitExceeded = false;
@@ -257,15 +270,7 @@ function run(command, args, cwd, options = {}) {
       resolve(value);
     };
     const killChild = (signal) => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The direct child may already have exited; fall back to child.kill.
-        }
-      }
-      child.kill(signal);
+      terminateManagedChild(child, signal);
     };
     const processGroupAlive = () => {
       if (!useProcessGroup || !child.pid) {

@@ -78,6 +78,20 @@ afterEach(() => {
 });
 
 describe("runDoctorSessionSqlite", () => {
+  it("uses the requested agent as the owner for explicit-store maintenance", async () => {
+    const stateDir = autoCleanupTempDirs.make("openclaw-doctor-explicit-ops-");
+    const storePath = path.join(stateDir, "shared", "sessions.json");
+    const report = await runDoctorSessionSqlite({
+      agent: "ops",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      mode: "inspect",
+      store: storePath,
+    });
+
+    expect(report.targets).toHaveLength(1);
+    expect(report.targets[0]).toMatchObject({ agentId: "ops", storePath });
+  });
+
   it("reads populated v13 session_entries before migration", () => {
     const stateDir = autoCleanupTempDirs.make("openclaw-doctor-v13-reader-");
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -2530,7 +2544,7 @@ describe("runDoctorSessionSqlite", () => {
     );
     fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
     fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
-    const requireSqlite = vi.spyOn(nodeSqlite, "requireNodeSqlite").mockImplementationOnce(() => {
+    const openSqlite = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce(() => {
       throw new Error("node:sqlite unavailable");
     });
 
@@ -2542,7 +2556,7 @@ describe("runDoctorSessionSqlite", () => {
         store: store.storePath,
       });
     } finally {
-      requireSqlite.mockRestore();
+      openSqlite.mockRestore();
     }
 
     expect(report?.totals.issues).toBe(1);

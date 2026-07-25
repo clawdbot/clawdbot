@@ -1,12 +1,22 @@
 // Covers model runtime policy precedence and private QA runtime overrides.
 import { afterEach, describe, expect, it } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
+import { resolveModelRuntimePolicy as resolveModelRuntimePolicyBase } from "./model-runtime-policy.js";
 
 const ORIGINAL_BUILD_PRIVATE_QA = process.env.OPENCLAW_BUILD_PRIVATE_QA;
 const ORIGINAL_QA_FORCE_RUNTIME = process.env.OPENCLAW_QA_FORCE_RUNTIME;
+
+function resolveModelRuntimePolicy(
+  params: Parameters<typeof resolveModelRuntimePolicyBase>[0],
+): ReturnType<typeof resolveModelRuntimePolicyBase> {
+  return resolveModelRuntimePolicyBase({
+    ...params,
+    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+  });
+}
 
 const createModelConfig = (
   agentRuntimeId: string,

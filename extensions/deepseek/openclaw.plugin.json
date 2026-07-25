@@ -70,6 +70,8 @@
           {
             "id": "deepseek-chat",
             "name": "DeepSeek Chat",
+            "status": "deprecated",
+            "replacedBy": "deepseek-v4-flash",
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -87,6 +89,8 @@
           {
             "id": "deepseek-reasoner",
             "name": "DeepSeek Reasoner",
+            "status": "deprecated",
+            "replacedBy": "deepseek-v4-flash",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 1000000,

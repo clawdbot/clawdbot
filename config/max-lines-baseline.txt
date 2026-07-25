@@ -20,7 +20,6 @@ extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
-extensions/browser/src/browser/pw-session.ts
 extensions/browser/src/browser/pw-tools-core.browser-ssrf-guard.test.ts
 extensions/browser/src/browser/pw-tools-core.interactions.navigation-guard.test.ts
 extensions/browser/src/browser/pw-tools-core.interactions.ts
@@ -39,7 +38,6 @@ extensions/codex/src/app-server/compact.ts
 extensions/codex/src/app-server/computer-use.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
-extensions/codex/src/app-server/config.ts
 extensions/codex/src/app-server/dynamic-tool-build.test.ts
 extensions/codex/src/app-server/dynamic-tool-build.ts
 extensions/codex/src/app-server/dynamic-tools.test.ts
@@ -157,7 +155,6 @@ extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/monitor.ts
 extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
-extensions/memory-core/doctor-contract-api.ts
 extensions/memory-core/src/cli.runtime.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-narrative.test.ts
@@ -269,7 +266,6 @@ extensions/slack/src/monitor/events/interactions.block-actions.ts
 extensions/slack/src/monitor/events/interactions.test.ts
 extensions/slack/src/monitor/media.test.ts
 extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts
-extensions/slack/src/monitor/message-handler/dispatch.ts
 extensions/slack/src/monitor/message-handler/prepare.test.ts
 extensions/slack/src/monitor/message-handler/prepare.ts
 extensions/slack/src/monitor/provider.ts
@@ -344,7 +340,6 @@ packages/ai/src/providers/openai-responses-shared.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/ai/src/transports/anthropic-transport-stream.ts
 packages/ai/src/transports/openai-completions-transport.ts
-packages/ai/src/transports/openai-responses-transport.ts
 packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/index.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
@@ -822,7 +817,6 @@ src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
 src/gateway/server-reload-handlers.test.ts
-src/gateway/server-reload-handlers.ts
 src/gateway/server-restart-sentinel.test.ts
 src/gateway/server-startup-config.secrets.test.ts
 src/gateway/server-startup-post-attach.test.ts
@@ -895,7 +889,6 @@ src/infra/restart.ts
 src/infra/run-node.test.ts
 src/infra/session-cost-usage.test.ts
 src/infra/session-cost-usage.ts
-src/infra/sqlite-snapshot.ts
 src/infra/state-migrations.doctor.ts
 src/infra/state-migrations.runtime-state.ts
 src/infra/state-migrations.session-store.ts

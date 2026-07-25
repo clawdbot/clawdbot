@@ -480,10 +480,11 @@ describe("AppSidebar session mutation feedback", () => {
 
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(setSessionKey).toHaveBeenLastCalledWith(archivedRow.key));
+    // Undo restores through the batch helper, which refreshes once at the end.
     expect(harness.patch).toHaveBeenLastCalledWith(
       archivedRow.key,
       { archived: false, pinned: true },
-      { agentId: "main" },
+      { agentId: "main", deferListRefresh: true },
     );
     expect(navigate).toHaveBeenLastCalledWith("chat", {
       search: "?session=agent%3Amain%3Aa",

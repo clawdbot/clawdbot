@@ -23,7 +23,10 @@ vi.mock("../plugins/bundled-plugin-metadata.js", () => ({
 }));
 
 function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
+  return {
+    agents: { list: [{ id: "main", default: true }] },
+    ...(value as OpenClawConfig),
+  };
 }
 
 function makeContext(sourceConfig: OpenClawConfig): ResolverContext {

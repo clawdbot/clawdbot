@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
-import type { BoardViewWidget } from "../../lib/board/view-types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
@@ -40,47 +39,6 @@ describe("openclaw-board-view", () => {
       expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
       expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     }
-  });
-
-  it("renders the native swarm card without a frame or persisted widget controls", async () => {
-    const swarm: BoardViewWidget = {
-      name: "builtin:swarm",
-      tabId: "builtin-swarm",
-      title: "Swarm progress",
-      contentKind: "builtin",
-      builtin: "swarm",
-      readOnly: true,
-      sizeW: 12,
-      sizeH: 4,
-      position: 0,
-      grantState: "granted",
-      revision: 1,
-    };
-    const source = snapshot({
-      sessionKey: "agent:main:parent",
-      tabs: [{ tabId: "builtin-swarm", title: "Swarm progress", position: 0, chatDock: "right" }],
-      widgets: [swarm],
-    });
-    const view = await mount({
-      snapshot: source,
-      activeTabId: "builtin-swarm",
-      sessions: [
-        {
-          key: "agent:main:child",
-          kind: "direct",
-          updatedAt: 1,
-          parentSessionKey: "agent:main:parent",
-          swarmGroupId: "swarm:agent:main:parent:turn-42",
-          label: "Worker A",
-          status: "running",
-        },
-      ],
-    });
-
-    expect(view.querySelector("[data-test-id=swarm-widget]")).not.toBeNull();
-    expect(view.querySelector("iframe")).toBeNull();
-    expect(view.querySelector(".board-widget__menu")).toBeNull();
-    expect(view.querySelector(".board-widget__resize-handle")).toBeNull();
   });
 
   it("renders the shared sandbox for an empty same-origin gateway URL", async () => {

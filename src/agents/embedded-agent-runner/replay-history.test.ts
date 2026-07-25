@@ -72,25 +72,30 @@ describe("normalizeAssistantReplayContent", () => {
     const blankString = {
       role: "user",
       content: "",
-      MediaPath: "/tmp/late.png",
-      __openclaw: { lateMedia: true },
+      __openclaw: { lateMedia: true, media: [{ path: "/tmp/late.png" }] },
     } as unknown as AgentMessage;
     const blankArray = {
       role: "user",
       content: [{ type: "text", text: "  " }],
-      MediaPaths: ["/tmp/late-array.png"],
-      __openclaw: { lateMedia: true },
+      __openclaw: { lateMedia: true, media: [{}, { path: "/tmp/late-array.png" }] },
     } as unknown as AgentMessage;
     const whitespaceOnlyPath = {
       role: "user",
       content: "",
-      MediaPath: "   ",
-      __openclaw: { lateMedia: true },
+      __openclaw: { lateMedia: true, media: [{ path: "   " }] },
     } as unknown as AgentMessage;
     const urlOnly = {
       role: "user",
       content: "",
-      MediaUrl: "https://example.test/late.png",
+      __openclaw: {
+        lateMedia: true,
+        media: [{ url: "https://example.test/late.png", kind: "image" }],
+      },
+    } as unknown as AgentMessage;
+    const legacyOnly = {
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/legacy-late.png",
       __openclaw: { lateMedia: true },
     } as unknown as AgentMessage;
 
@@ -99,9 +104,10 @@ describe("normalizeAssistantReplayContent", () => {
       blankArray,
       whitespaceOnlyPath,
       urlOnly,
+      legacyOnly,
     ]);
 
-    expect(out).toEqual([blankString, { ...blankArray, content: "" }, urlOnly]);
+    expect(out).toEqual([blankString, { ...blankArray, content: "" }, urlOnly, legacyOnly]);
   });
 
   it("converts mid-turn assistant content: [] to a non-empty sentinel text block when stopReason is error", () => {

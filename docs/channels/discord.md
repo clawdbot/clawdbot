@@ -810,6 +810,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
   agents: {
     entries: {
       codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: {

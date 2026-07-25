@@ -20,9 +20,10 @@ type ConfigFormProps = {
   activeSection?: string | null;
   activeSubsection?: string | null;
   showAdvanced?: boolean;
-  expandedAdvancedSections?: ReadonlySet<string>;
   forceAdvancedSection?: string | null;
-  onAdvancedSectionToggle?: (section: string, expanded: boolean) => void;
+  /** Required: the collapsed-advanced ghost row's only action. Optional would
+   *  permit an inert "Show advanced" control that strands hidden settings. */
+  onShowAdvanced: () => void;
   /** Inline actions rendered next to the active section heading (e.g. env peek). */
   sectionActions?: TemplateResult;
   /** Composite pages render custom rows above the form; an empty schema
@@ -141,13 +142,7 @@ export function renderConfigForm(props: ConfigFormProps) {
       path: params.path.map(String),
       hints: props.uiHints,
     });
-    const sectionKey = params.path.join(".");
-    const advancedOpen =
-      props.showAdvanced === true ||
-      props.forceAdvancedSection === params.path[0] ||
-      Boolean(searchQuery) ||
-      props.expandedAdvancedSections?.has(sectionKey) === true;
-    const advancedOpenControlled =
+    const revealAdvanced =
       props.showAdvanced === true ||
       props.forceAdvancedSection === params.path[0] ||
       Boolean(searchQuery);
@@ -182,27 +177,34 @@ export function renderConfigForm(props: ConfigFormProps) {
           ? html`<div class="settings-group">${renderTier(split.common)}</div>`
           : nothing}
         ${split.advanced && split.advancedLeafCount > 0
-          ? html`
-              <details
-                class="config-advanced-fields"
-                ?open=${advancedOpen}
-                @toggle=${(event: Event) => {
-                  if (advancedOpenControlled) {
-                    (event.currentTarget as HTMLDetailsElement).open = advancedOpen;
-                    return;
-                  }
-                  const details = event.currentTarget as HTMLDetailsElement;
-                  props.onAdvancedSectionToggle?.(sectionKey, details.open);
-                }}
-              >
-                <summary class="config-advanced-fields__summary">
-                  ${t("configForm.advancedCount", { count: String(split.advancedLeafCount) })}
-                </summary>
-                <div class="settings-group config-advanced-fields__content">
-                  ${renderTier(split.advanced)}
-                </div>
-              </details>
-            `
+          ? revealAdvanced
+            ? html`
+                ${split.common
+                  ? html`<div class="config-advanced-divider">
+                      ${t("configForm.advancedDivider")}
+                    </div>`
+                  : nothing}
+                <div class="settings-group">${renderTier(split.advanced)}</div>
+              `
+            : html`
+                <button
+                  type="button"
+                  class="config-advanced-ghost"
+                  @click=${() => props.onShowAdvanced()}
+                >
+                  <span class="config-advanced-ghost__count">
+                    ${t(
+                      split.advancedLeafCount === 1
+                        ? "configForm.advancedHidden"
+                        : "configForm.advancedHiddenPlural",
+                      { count: String(split.advancedLeafCount) },
+                    )}
+                  </span>
+                  <span class="config-advanced-ghost__action">
+                    ${t("configForm.showAdvanced")}
+                  </span>
+                </button>
+              `
           : nothing}
       </section>
     `;

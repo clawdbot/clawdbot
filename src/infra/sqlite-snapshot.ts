@@ -6,87 +6,18 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
-import { runExec } from "../process/exec.js";
+import { pinDirectory, requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
+  openNodeSqliteDatabase,
   requireNodeSqlite,
-  resolveNodeSqliteLocation,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
-import { resolveSystemBin } from "./resolve-system-bin.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
-import {
-  openSqliteDirectoryForDurability,
-  syncSqliteDirectoryForDurability,
-  type SqlitePathIdentityReceipt,
-} from "./sqlite-path-durability.js";
+import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { withSqliteSnapshotSource } from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-
-const SQLITE_DIRECTORY_MODE = 0o700;
-const WINDOWS_DIRECTORY_EXISTS_MARKER = "OPENCLAW_SQLITE_DIRECTORY_EXISTS";
-
-// Managed directory creation accepts existing paths. CreateDirectoryW applies the
-// protected DACL atomically while preserving fail-if-exists semantics.
-const WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE = `
-using System;
-using System.Runtime.InteropServices;
-
-public static class OpenClawPrivateDirectory
-{
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SecurityAttributes
-    {
-        public int Length;
-        public IntPtr SecurityDescriptor;
-        public int InheritHandle;
-    }
-
-    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        string securityDescriptor,
-        uint revision,
-        out IntPtr convertedSecurityDescriptor,
-        out uint convertedSecurityDescriptorSize);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool CreateDirectoryW(
-        string path,
-        ref SecurityAttributes securityAttributes);
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr LocalFree(IntPtr memory);
-
-    public static int Create(string path, string securityDescriptor)
-    {
-        IntPtr descriptor;
-        uint descriptorSize;
-        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                securityDescriptor,
-                1,
-                out descriptor,
-                out descriptorSize))
-        {
-            return Marshal.GetLastWin32Error();
-        }
-
-        try
-        {
-            var attributes = new SecurityAttributes
-            {
-                Length = Marshal.SizeOf(typeof(SecurityAttributes)),
-                SecurityDescriptor = descriptor,
-                InheritHandle = 0,
-            };
-            return CreateDirectoryW(path, ref attributes) ? 0 : Marshal.GetLastWin32Error();
-        }
-        finally
-        {
-            LocalFree(descriptor);
-        }
-    }
-}
-`;
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
 
@@ -127,73 +58,6 @@ type VerifiedSqliteSnapshot = {
   path: string;
   userVersion: number;
 };
-
-export async function createPrivateSqliteDirectory(directoryPath: string): Promise<void> {
-  if (process.platform !== "win32") {
-    await fs.mkdir(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
-    return;
-  }
-  // This raw Win32 call bypasses Node's automatic long-path normalization.
-  const nativeDirectoryPath = path.toNamespacedPath(path.resolve(directoryPath));
-  const encodedPath = Buffer.from(nativeDirectoryPath, "utf8").toString("base64");
-  const encodedNativeSource = Buffer.from(WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE, "utf8").toString(
-    "base64",
-  );
-  const command = [
-    "$ErrorActionPreference = 'Stop'",
-    `$path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
-    `$nativeSource = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedNativeSource}'))`,
-    "Add-Type -TypeDefinition $nativeSource -Language CSharp",
-    "$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User",
-    "$security = New-Object System.Security.AccessControl.DirectorySecurity",
-    "$security.SetAccessRuleProtection($true, $false)",
-    "$security.SetOwner($current)",
-    "$inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit",
-    "$propagation = [System.Security.AccessControl.PropagationFlags]::None",
-    "foreach ($sidValue in @($current.Value, 'S-1-5-18', 'S-1-5-32-544')) { $sid = New-Object System.Security.Principal.SecurityIdentifier($sidValue); $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, $inheritance, $propagation, [System.Security.AccessControl.AccessControlType]::Allow); [void]$security.AddAccessRule($rule) }",
-    "$sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Access",
-    "$sddl = $security.GetSecurityDescriptorSddlForm($sections)",
-    "$errorCode = [OpenClawPrivateDirectory]::Create($path, $sddl)",
-    `if ($errorCode -eq 80 -or $errorCode -eq 183) { throw '${WINDOWS_DIRECTORY_EXISTS_MARKER}' }`,
-    "if ($errorCode -ne 0) { $exception = New-Object System.ComponentModel.Win32Exception($errorCode); throw $exception }",
-  ].join("; ");
-  const powershell = resolveSystemBin("powershell");
-  if (!powershell) {
-    throw new Error("Unable to resolve PowerShell for private Windows SQLite staging.");
-  }
-  const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
-  try {
-    await runExec(
-      powershell,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
-      {
-        timeoutMs: 10_000,
-        maxBuffer: 64 * 1024,
-      },
-    );
-  } catch (error) {
-    if (String(error).includes(WINDOWS_DIRECTORY_EXISTS_MARKER)) {
-      const existsError = new Error(`Private SQLite directory already exists: ${directoryPath}`);
-      (existsError as NodeJS.ErrnoException).code = "EEXIST";
-      throw existsError;
-    }
-    throw new Error(`Unable to create private Windows SQLite directory: ${directoryPath}`, {
-      cause: error,
-    });
-  }
-}
-
-export async function createPrivateSqliteTempDirectory(
-  rootPath: string,
-  prefix: string,
-): Promise<string> {
-  if (process.platform !== "win32") {
-    return await fs.mkdtemp(path.join(rootPath, prefix));
-  }
-  const directoryPath = path.join(rootPath, `${prefix}${randomUUID()}`);
-  await createPrivateSqliteDirectory(directoryPath);
-  return directoryPath;
-}
 
 async function assertRegularSourceFile(
   sourcePath: string,
@@ -518,37 +382,6 @@ function assertSynchronousCallbackResult(result: unknown, label: string): void {
   }
 }
 
-function isUnsupportedDirectorySyncError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EINVAL" ||
-    code === "ENOTSUP" ||
-    code === "ENOSYS" ||
-    (process.platform === "win32" && (code === "EISDIR" || code === "EPERM" || code === "EACCES"))
-  );
-}
-
-export async function syncDirectoryBestEffort(directoryPath: string): Promise<void> {
-  const handle = await fs.open(directoryPath, "r").catch((error: unknown) => {
-    if (isUnsupportedDirectorySyncError(error)) {
-      return undefined;
-    }
-    throw error;
-  });
-  if (!handle) {
-    return;
-  }
-  try {
-    await handle.sync();
-  } catch (error) {
-    if (!isUnsupportedDirectorySyncError(error)) {
-      throw error;
-    }
-  } finally {
-    await handle.close();
-  }
-}
-
 function isLinkFallbackError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
   return (
@@ -569,14 +402,10 @@ export async function publishVerifiedSqliteFile(
 ): Promise<void> {
   await assertTargetAbsent(options.targetPath);
   const targetDirectory = path.resolve(path.dirname(options.targetPath));
-  const targetDirectoryReceipt: SqlitePathIdentityReceipt = {
-    path: targetDirectory,
-    identity: await fs.lstat(targetDirectory),
-  };
-  const targetDirectoryPin = await openSqliteDirectoryForDurability(
-    targetDirectoryReceipt,
-    "SQLite publication directory",
-  );
+  const targetDirectoryPin = await pinDirectory(targetDirectory, {
+    label: "SQLite publication directory",
+  });
+  const targetDirectoryReceipt = targetDirectoryPin.receipt;
   let stagingDir: string;
   try {
     stagingDir = await createPrivateSqliteTempDirectory(
@@ -670,12 +499,18 @@ export async function publishVerifiedSqliteFile(
     target ??= await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
     ownershipPinned = true;
-    await syncSqliteDirectoryForDurability(targetDirectoryReceipt);
+    requireDirectorySync(
+      await syncDirectory(targetDirectoryReceipt),
+      "SQLite publication directory",
+    );
     await fs.unlink(stagedPath);
     const expectedIdentity = await target.stat();
     publishedIdentity = expectedIdentity;
     await fs.rmdir(stagingDir);
-    await syncSqliteDirectoryForDurability(targetDirectoryReceipt);
+    requireDirectorySync(
+      await syncDirectory(targetDirectoryReceipt),
+      "SQLite publication directory",
+    );
     const linkedContent = await hashOpenPublishedFile(target, options.targetPath, expectedIdentity);
     assertExpectedContent(linkedContent, expectedContent, options.targetPath);
     await target.close();
@@ -752,7 +587,7 @@ export async function publishVerifiedSqliteFile(
         !ownershipPinned,
       );
       if (removed) {
-        await syncSqliteDirectoryForDurability(targetDirectoryReceipt).catch(() => undefined);
+        await syncDirectory(targetDirectoryReceipt).catch(() => undefined);
       }
     }
     if (stagingIdentity) {
@@ -821,24 +656,27 @@ export async function createVerifiedSqliteSnapshot(
   const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
-    const source = new sqlite.DatabaseSync(resolveNodeSqliteLocation(options.sourcePath), {
-      allowExtension: true,
-      readOnly: true,
+    await withSqliteSnapshotSource(options.sourcePath, async (snapshotSourcePath) => {
+      await fs.rm(stagedPath, { force: true });
+      const source = openNodeSqliteDatabase(snapshotSourcePath, {
+        allowExtension: true,
+        readOnly: true,
+      });
+      try {
+        source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
+        await loadSqliteVecExtension({ db: source });
+        assertSqliteIntegrity(source, options.sourcePath);
+        options.validate?.(source, options.sourcePath);
+        // Copy in incremental steps so concurrent writers are blocked only while
+        // each batch is read. Compaction happens after releasing the live source.
+        await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
+      } finally {
+        source.close();
+      }
     });
-    try {
-      source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
-      await loadSqliteVecExtension({ db: source });
-      assertSqliteIntegrity(source, options.sourcePath);
-      options.validate?.(source, options.sourcePath);
-      // Copy in incremental steps so concurrent writers are blocked only while
-      // each batch is read. Compaction happens after releasing the live source.
-      await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
-    } finally {
-      source.close();
-    }
 
     await fs.chmod(stagedPath, 0o600);
-    const snapshot = new sqlite.DatabaseSync(resolveNodeSqliteLocation(stagedPath), {
+    const snapshot = openNodeSqliteDatabase(stagedPath, {
       allowExtension: true,
     });
     try {
@@ -868,7 +706,7 @@ export async function createVerifiedSqliteSnapshot(
         beforePublish: options.beforePublish,
         afterPublish: options.afterPublish,
         validatePublished: async (publishedPath) => {
-          const published = new sqlite.DatabaseSync(resolveNodeSqliteLocation(publishedPath), {
+          const published = openNodeSqliteDatabase(publishedPath, {
             allowExtension: true,
             readOnly: true,
           });
@@ -903,4 +741,3 @@ export async function createVerifiedSqliteSnapshot(
     await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

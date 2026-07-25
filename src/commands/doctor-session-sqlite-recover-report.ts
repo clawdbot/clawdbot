@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { getCanonicalSqliteNamedIndexContracts } from "../infra/sqlite-schema-contract.js";
@@ -180,7 +180,6 @@ function inspectSqliteForRecovery(
   let database: DatabaseSync | undefined;
   let inspectionError: unknown;
   try {
-    const sqlite = requireNodeSqlite();
     inspectionDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-recovery-"));
     const inspectionPath = path.join(inspectionDir, path.basename(sqlitePath));
     for (const sourcePath of sourcePaths) {
@@ -191,7 +190,7 @@ function inspectSqliteForRecovery(
     }
     // Writable inspection of the disposable copy lets SQLite roll back a hot
     // journal without changing the original forensic file set.
-    database = new sqlite.DatabaseSync(resolveNodeSqliteLocation(inspectionPath));
+    database = openNodeSqliteDatabase(inspectionPath);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     database.exec("PRAGMA trusted_schema = OFF;");
     assertSqliteIntegrity(database, inspectionPath);

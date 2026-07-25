@@ -1,9 +1,8 @@
 // Covers the SQLite WAL-reset corruption safety floor.
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveNodeSqliteLocation, resolveNodeSqliteReadOnlyLocation } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveNodeSqliteLocation } from "./node-sqlite.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
@@ -73,6 +72,15 @@ describe("node SQLite locations", () => {
     expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe("relative/openclaw.sqlite");
   });
 
+  it("opens special locations through the shared connection boundary", () => {
+    const database = openNodeSqliteDatabase(":memory:");
+    try {
+      expect(database.prepare("SELECT 1 AS ok").get()).toEqual({ ok: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
   it("normalizes ordinary filesystem paths through the Windows VFS boundary", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const resolveSpy = vi.spyOn(path, "resolve").mockReturnValue("resolved-openclaw.sqlite");
@@ -87,21 +95,7 @@ describe("node SQLite locations", () => {
     expect(namespacedSpy).toHaveBeenCalledWith("resolved-openclaw.sqlite");
   });
 
-  it("uses immutable URIs for local databases without WAL sidecars", () => {
-    const pathname =
-      process.platform === "win32"
-        ? String.raw`C:\Users\OpenClaw\.openclaw\state\openclaw.sqlite`
-        : "/var/lib/openclaw/state/openclaw.sqlite";
-
-    expect(resolveNodeSqliteReadOnlyLocation(pathname, false)).toBe(
-      `${pathToFileURL(pathname).href}?mode=ro&immutable=1`,
-    );
-    expect(resolveNodeSqliteReadOnlyLocation(pathname, true)).toBe(
-      resolveNodeSqliteLocation(pathname),
-    );
-  });
-
-  it("keeps UNC and namespaced Windows paths out of SQLite URI authority parsing", () => {
+  it("keeps UNC and namespaced Windows paths on the Windows VFS path boundary", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const resolvedPaths = new Map([
       [
@@ -127,7 +121,7 @@ describe("node SQLite locations", () => {
       .mockImplementation((pathname) => pathname);
 
     for (const [pathname, resolvedPath] of resolvedPaths) {
-      expect(resolveNodeSqliteReadOnlyLocation(pathname, false)).toBe(resolvedPath);
+      expect(resolveNodeSqliteLocation(pathname)).toBe(resolvedPath);
     }
     expect(resolveSpy).toHaveBeenCalledTimes(resolvedPaths.size);
     expect(namespacedSpy).toHaveBeenCalledTimes(resolvedPaths.size);

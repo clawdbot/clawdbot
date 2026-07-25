@@ -734,6 +734,71 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  // Batch archiving used to force one canonical sessions.list per row, which is
+  // what made a multi-select stall. The whole selection must archive on one
+  // refresh and leave the sidebar settled with the rows gone.
+  it("archives a sidebar multi-select with one canonical list refresh", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", baseTime),
+          sessionRow(batchKeys[0], "Batch A", baseTime - 1_000),
+          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000),
+          sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const rowFor = (key: string) =>
+        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await rowFor(batchKeys[0]).waitFor({ state: "visible", timeout: 10_000 });
+      for (const key of batchKeys.slice(1)) {
+        await rowFor(key).waitFor({ state: "visible" });
+      }
+      const listCountBeforeBatch = (await gateway.getRequests("sessions.list")).length;
+
+      for (const key of batchKeys) {
+        await rowFor(key).click({ modifiers: ["Meta"] });
+      }
+      await rowFor(batchKeys[0]).click({ button: "right" });
+      const batchMenu = page.locator("openclaw-session-menu");
+      const archiveItem = batchMenu.getByRole("menuitem", { name: `Archive ${batchKeys.length}` });
+      await archiveItem.waitFor({ state: "visible", timeout: 10_000 });
+      await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
+      await activateMenuItem(archiveItem);
+
+      for (const key of batchKeys) {
+        await waitForPatch(gateway, (params) => params.key === key && params.archived === true);
+      }
+
+      const patches = await gateway.getRequests("sessions.patch");
+      expect(patches.map((request) => requireRecord(request.params).key)).toEqual([...batchKeys]);
+      // The whole selection costs one canonical refresh, not one per archived row.
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
+        .toBe(listCountBeforeBatch + 1);
+      await captureUiProof(page, "sidebar-multi-select-archive-settled.png");
+      // Hold past the batch so a late per-row refresh would still be caught.
+      await page.waitForTimeout(500);
+      expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps a session row when the Gateway reports no deletion", async () => {
     const context = await browser.newContext({
       locale: "en-US",

@@ -640,7 +640,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     const historicalContent = (asHistorical[0] as { content?: unknown } | undefined)?.content;
     expect(JSON.stringify(currentContent)).toBe(JSON.stringify(historicalContent));
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain('"name": "Alice"');
+    expect(currentContent).toContain('"name":"Alice"');
     expect(
       normalizeMessagesForLlmBoundary(asCurrent, {
         timezone: TZ,

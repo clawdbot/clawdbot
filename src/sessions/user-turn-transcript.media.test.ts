@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import {
+  buildLateMediaAttachedProjection,
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
 } from "./user-turn-transcript.js";
@@ -123,6 +124,67 @@ describe("buildPersistedUserTurnMediaInputsFromFields", () => {
         MediaTypes: ["", "image/png"],
       }),
     ).toEqual([{}, { path: "/media/b.png", contentType: "image/png" }]);
+  });
+});
+
+describe("buildLateMediaAttachedProjection facts-first compatibility", () => {
+  it.each([
+    {
+      name: "legacy-only",
+      message: { MediaPath: "/media/legacy.png", MediaType: "image/png" },
+      expectedPath: "/media/legacy.png",
+    },
+    {
+      name: "facts-only",
+      message: { __openclaw: { media: [{ path: "/media/fact.png" }] } },
+      expectedPath: "/media/fact.png",
+    },
+    {
+      name: "both-equal",
+      message: {
+        MediaPath: "/media/equal.png",
+        __openclaw: { media: [{ path: "/media/equal.png" }] },
+      },
+      expectedPath: "/media/equal.png",
+    },
+    {
+      name: "both-conflict",
+      message: {
+        MediaPath: "/media/legacy-conflict.png",
+        __openclaw: { media: [{ path: "/media/canonical.png" }] },
+      },
+      expectedPath: "/media/canonical.png",
+    },
+    {
+      name: "sparse",
+      message: { __openclaw: { media: [{}, { path: "/media/sparse.png" }] } },
+      expectedPath: "/media/sparse.png",
+      expectedIndex: 1,
+    },
+    {
+      name: "type-only",
+      message: { __openclaw: { media: [{ contentType: "image/png" }] } },
+      expectedPath: undefined,
+    },
+    {
+      name: "media-only",
+      message: { content: "", __openclaw: { media: [{ path: "/media/media-only.png" }] } },
+      expectedPath: "/media/media-only.png",
+    },
+  ])("reconstructs $name rows from canonical facts first", (testCase) => {
+    const metadata = (testCase.message as { __openclaw?: Record<string, unknown> })["__openclaw"];
+    const projection = buildLateMediaAttachedProjection({
+      role: "user",
+      content: "",
+      ...testCase.message,
+      __openclaw: { ...metadata, lateMedia: true },
+    } as never);
+    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
+
+    expect(projection.media[expectedIndex]?.path).toBe(testCase.expectedPath);
+    expect(projection.text).toBe(
+      testCase.expectedPath ? `[media attached: ${testCase.expectedPath}]` : undefined,
+    );
   });
 });
 

@@ -49,6 +49,9 @@ const readConfigFileSnapshot = vi.hoisted(() =>
 const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
+vi.mock("./onboard-agent.js", () => ({
+  ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({ config }),
+}));
 
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",

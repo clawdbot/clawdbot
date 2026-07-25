@@ -2,9 +2,10 @@
 // Registered size_bytes existed for a while with no reader; production bloat
 // (multi-hundred-MB stores, blocking vacuums) surfaced only after user harm.
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { formatBytes } from "./doctor-disk-space.js";
@@ -34,10 +35,9 @@ function readSqliteBloatStats(pathname: string): SqliteBloatStats | null {
   if (fileBytes <= 0) {
     return null;
   }
-  const sqlite = requireNodeSqlite();
-  let db: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  let db: DatabaseSync | undefined;
   try {
-    db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname), { readOnly: true });
+    db = openNodeSqliteDatabase(pathname, { readOnly: true });
     const pageSize = readPragmaNumber(db, "page_size") ?? 4096;
     const freelistCount = readPragmaNumber(db, "freelist_count") ?? 0;
     const autoVacuum = readPragmaNumber(db, "auto_vacuum") ?? 0;

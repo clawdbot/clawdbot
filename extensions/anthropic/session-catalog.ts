@@ -26,6 +26,7 @@ import {
   currentClaudeSessionCatalogConfig,
   listBoundClaudeSessions,
   resolveClaudeCatalogCreateSession,
+  resolveClaudeCliRoutedModelId,
 } from "./session-catalog-runtime.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
@@ -1455,7 +1456,12 @@ async function continueClaudeSession(
     }
     const history = await readBoundedClaudeHistory({ runtime: api.runtime, hostId, threadId });
     const config = currentClaudeSessionCatalogConfig(api);
-    const model = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
+    const adoptingAgentId = resolveDefaultAgentId(config);
+    // Adopt onto the model this agent actually routes to the CLI backend; the
+    // packaged default may not be routed or allowed in an existing config.
+    const model =
+      resolveClaudeCliRoutedModelId(config, adoptingAgentId) ??
+      CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
     const marker = {
       sourceThreadId: threadId,
       ...(hostId !== CLAUDE_LOCAL_SESSION_HOST_ID ? { sourceHostId: hostId } : {}),

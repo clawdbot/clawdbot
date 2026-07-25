@@ -4,7 +4,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { inspectChannelAccount } from "../channels/account-inspection.js";
 import { redactChannelStatusSummaryBaseUrl } from "../channels/account-snapshot-fields.js";
 import {
@@ -335,7 +335,7 @@ const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
 
 const resolveAgentOrder = (cfg: OpenClawConfig) => {
   const defaultAgentId = resolveDefaultAgentId(cfg);
-  const entries = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const entries = listAgentEntries(cfg);
   const seen = new Set<string>();
   const ordered: Array<{ id: string; name?: string }> = [];
 

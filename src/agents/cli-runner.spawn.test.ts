@@ -2227,7 +2227,10 @@ describe("runCliAgent spawn path", () => {
         timeoutMs: 3_600_000,
       }),
     );
-    const rejection = expect(run).rejects.toThrow(/produced no output for 900s/);
+    const rejection = run.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
     await vi.waitFor(() => {
       expect(stdin.write).toHaveBeenCalledOnce();
     });
@@ -2243,14 +2246,16 @@ describe("runCliAgent spawn path", () => {
     );
 
     // Base watchdog (600s cap for a 1h budget) must not kill the quiet tool.
-    await vi.advanceTimersByTimeAsync(650_000);
+    vi.advanceTimersByTime(650_000);
     expect(cancel).not.toHaveBeenCalled();
 
     // The blocked-tool floor (15min of quiet) still terminates a wedged tool.
     try {
-      await vi.advanceTimersByTimeAsync(300_000);
+      vi.advanceTimersByTime(300_000);
       expect(cancel).toHaveBeenCalledWith("manual-cancel");
-      await rejection;
+      const error = await rejection;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/produced no output for 900s/);
       // Watchdog-killed turns must keep timeout provenance for active tools.
       expect(toolErrorEvents).toContainEqual(
         expect.objectContaining({

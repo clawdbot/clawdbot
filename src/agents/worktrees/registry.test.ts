@@ -130,7 +130,11 @@ describe("managed worktree registry", () => {
     closeOpenClawStateDatabaseForTest();
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
-    legacy.exec("ALTER TABLE worktrees DROP COLUMN provisioned_paths_json");
+    legacy.exec(`
+      ALTER TABLE worktrees DROP COLUMN provisioned_paths_json;
+      PRAGMA user_version = 5;
+      UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
+    `);
     legacy.close();
 
     expect(getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();

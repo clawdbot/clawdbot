@@ -100,7 +100,7 @@ export {
   type BoardFace,
   type BoardSessionView,
 } from "../../lib/board/settings.ts";
-export type { SwarmRosterHydrator } from "../../lib/board/swarm-dashboard.ts";
+export type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 export type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 export type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 export {

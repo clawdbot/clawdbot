@@ -529,12 +529,11 @@ async function resolveExecRefs(params: {
     });
   }
 
-  const requestPayload = {
+  const input = JSON.stringify({
     protocolVersion: 1,
     provider: params.providerName,
     ids,
-  };
-  const input = JSON.stringify(requestPayload);
+  });
   if (Buffer.byteLength(input, "utf8") > params.limits.maxBatchBytes) {
     throw providerResolutionError({
       code: "SECRET_PROVIDER_INVALID",

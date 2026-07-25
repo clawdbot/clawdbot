@@ -44,6 +44,16 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
     });
   });
 
+  it("honors OPENCLAW_AGENT_DIR in both no-argument auth path implementations", () => {
+    const relocatedAgentDir = path.join(stateDir, "relocated-main-agent");
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: relocatedAgentDir }, () => {
+      expect(path.dirname(resolveAuthStorePath())).toBe(relocatedAgentDir);
+      expect(resolveAuthStorePathForDisplay()).toBe(
+        path.join(relocatedAgentDir, "openclaw-agent.sqlite"),
+      );
+    });
+  });
+
   it("resolveLegacyAuthStorePath joins agentDir with the legacy auth filename", () => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const resolved = resolveLegacyAuthStorePath(agentDir);
