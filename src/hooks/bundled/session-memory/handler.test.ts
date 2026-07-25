@@ -14,7 +14,7 @@ import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
+import { getRecentSessionContentFromEvents } from "./transcript.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -31,6 +31,71 @@ const loggerMocks = vi.hoisted(() => ({
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
 }));
+
+async function readFileTranscript(filePath: string, messageCount = 15): Promise<string | null> {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    return getRecentSessionContentFromEvents(
+      content
+        .trim()
+        .split("\n")
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as unknown];
+          } catch {
+            return [];
+          }
+        }),
+      messageCount,
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function getRecentSessionContentWithResetFallback(
+  filePath: string,
+  messageCount = 15,
+): Promise<string | null> {
+  const active = await readFileTranscript(filePath, messageCount);
+  if (active) {
+    return active;
+  }
+  const candidates = (await fs.readdir(path.dirname(filePath)))
+    .filter((name) => name.startsWith(`${path.basename(filePath)}.reset.`))
+    .toSorted();
+  const latest = candidates.at(-1);
+  return latest
+    ? await readFileTranscript(path.join(path.dirname(filePath), latest), messageCount)
+    : active;
+}
+
+async function findPreviousSessionFile(params: {
+  sessionsDir: string;
+  currentSessionFile?: string;
+  sessionId?: string;
+}): Promise<string | undefined> {
+  const files = await fs.readdir(params.sessionsDir);
+  const currentName = params.currentSessionFile
+    ? path.basename(params.currentSessionFile)
+    : undefined;
+  if (currentName?.includes(".reset.") && files.includes(currentName)) {
+    return path.join(params.sessionsDir, currentName);
+  }
+  const sessionId = params.sessionId?.trim();
+  if (!sessionId) {
+    return undefined;
+  }
+  const activeName = `${sessionId}.jsonl`;
+  if (files.includes(activeName)) {
+    return path.join(params.sessionsDir, activeName);
+  }
+  const reset = files
+    .filter((name) => name.startsWith(`${activeName}.reset.`))
+    .toSorted()
+    .at(-1);
+  return reset ? path.join(params.sessionsDir, reset) : undefined;
+}
 
 let handler: typeof import("./handler.js").default;
 let flushSessionMemoryWritesForTest: typeof import("./handler.js").flushSessionMemoryWritesForTest;
@@ -210,28 +275,23 @@ async function createSessionMemoryWorkspace(params?: {
   return { tempDir, sessionsDir, activeSessionFile };
 }
 
-async function writeSessionTranscript(params: {
-  name: string;
-  content: string;
-}): Promise<{ tempDir: string; sessionsDir: string; sessionFile: string }> {
-  const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
-  const sessionFile = await writeWorkspaceFile({
-    dir: sessionsDir,
-    name: params.name,
-    content: params.content,
-  });
-  return { tempDir, sessionsDir, sessionFile };
-}
-
 async function readSessionTranscript(params: {
   sessionContent: string;
   messageCount?: number;
 }): Promise<string | null> {
-  const { sessionFile } = await writeSessionTranscript({
-    name: "test-session.jsonl",
-    content: params.sessionContent,
-  });
-  return getRecentSessionContentWithResetFallback(sessionFile, params.messageCount);
+  return getRecentSessionContentFromEvents(
+    params.sessionContent
+      .trim()
+      .split("\n")
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line) as unknown];
+        } catch {
+          return [];
+        }
+      }),
+    params.messageCount,
+  );
 }
 
 function expectMemoryConversation(params: {

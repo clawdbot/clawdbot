@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import "../../../../test/helpers/session-manager-file-compat.js";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
@@ -10,6 +9,7 @@ import {
   supportsModelTools,
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { installSessionManagerFileCompat } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   initializeGlobalHookRunner,
@@ -38,6 +38,8 @@ import {
 } from "./test-support.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
+
+installSessionManagerFileCompat();
 
 let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;

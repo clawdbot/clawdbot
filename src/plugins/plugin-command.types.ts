@@ -9,7 +9,7 @@ import type {
 
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 
-export type PluginCommandSessionTarget = {
+type PluginCommandSessionTarget = {
   agentId: string;
   sessionId: string;
   sessionKey: string;

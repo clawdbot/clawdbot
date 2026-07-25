@@ -7,8 +7,8 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
-  loadSessionEntry,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
+  loadSessionEntryReadOnly as loadAccessorSessionEntryReadOnly,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
 import { hasPluginSessionsChangedSubscribers } from "../plugins/gateway-events.js";
@@ -173,14 +173,14 @@ async function handleTranscriptUpdateBroadcast(
       : undefined;
   const markerMatches =
     legacyMarker && !completeTarget
-      ? listSessionEntries({
+      ? listAccessorSessionEntriesReadOnly({
           agentId: legacyMarker.agentId,
           storePath: legacyMarker.storePath,
         }).filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)
       : [];
   const candidateKeyEntry =
     candidateSessionKey && legacyMarker && !completeTarget
-      ? loadSessionEntry({
+      ? loadAccessorSessionEntryReadOnly({
           agentId: legacyMarker.agentId,
           sessionKey: candidateSessionKey,
           storePath: legacyMarker.storePath,
@@ -220,14 +220,13 @@ async function handleTranscriptUpdateBroadcast(
     sessionKey === "global"
       ? normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()))
       : undefined;
-  const visibleAgentId =
-    effectiveAgentId ??
-    (effectiveAgentId && effectiveAgentId !== defaultGlobalAgentId ? effectiveAgentId : undefined);
+  const visibleAgentId = effectiveAgentId;
+  const routingAgentId = effectiveAgentId ?? defaultGlobalAgentId;
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
   }
-  for (const broadcastKey of resolveSessionMessageBroadcastKeys(sessionKey, effectiveAgentId)) {
+  for (const broadcastKey of resolveSessionMessageBroadcastKeys(sessionKey, routingAgentId)) {
     for (const connId of params.sessionMessageSubscribers.get(broadcastKey)) {
       connIds.add(connId);
     }
@@ -244,7 +243,7 @@ async function handleTranscriptUpdateBroadcast(
     const updateStorePath = targetStorePath ?? compatibleLegacyMarker?.storePath;
     const fallbackTarget = updateStorePath
       ? undefined
-      : loadSessionEntryReadOnly(sessionKey, { agentId: visibleAgentId });
+      : loadSessionEntryReadOnly(sessionKey, { agentId: routingAgentId });
     const entry = fallbackTarget?.entry;
     const messageSessionId =
       compatibleLegacyMarker?.sessionId ??
@@ -254,7 +253,7 @@ async function handleTranscriptUpdateBroadcast(
     messageSeq = messageSessionId
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync({
-            agentId: update.target?.agentId ?? storageAgentId ?? visibleAgentId,
+            agentId: update.target?.agentId ?? storageAgentId ?? routingAgentId,
             sessionEntry: entry,
             sessionId: messageSessionId,
             sessionKey,
@@ -264,7 +263,7 @@ async function handleTranscriptUpdateBroadcast(
       : undefined;
   }
   const sessionRow = loadGatewaySessionRow(sessionKey, {
-    agentId: visibleAgentId,
+    agentId: routingAgentId,
     transcriptUsageMaxBytes: 64 * 1024,
   });
   const activeRunState = sessionRow
@@ -273,13 +272,13 @@ async function handleTranscriptUpdateBroadcast(
         requestedKey: sessionKey,
         canonicalKey: sessionRow.key,
         sessionId: sessionRow.sessionId,
-        ...(sessionRow.key === "global" && visibleAgentId ? { agentId: visibleAgentId } : {}),
+        ...(sessionRow.key === "global" && routingAgentId ? { agentId: routingAgentId } : {}),
         defaultAgentId: normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig())),
       })
     : null;
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow,
-    agentId: visibleAgentId,
+    agentId: routingAgentId,
     includeSession: true,
     hasActiveRun: activeRunState?.active,
     activeRunIds: activeRunState?.runIds,

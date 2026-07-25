@@ -1,10 +1,3 @@
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../../../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
-import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
@@ -15,6 +8,7 @@ import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-s
 import type { EmbeddedAgentRunResult } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
@@ -48,100 +42,6 @@ import {
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
 
-export function applyEmbeddedAttemptSessionIdentity(params: {
-  sessionPromptState: Pick<
-    SessionPromptState,
-    "adoptSessionId" | "sessionFile" | "sessionId" | "sessionTarget"
-  >;
-  sessionFileUsed?: string;
-  sessionIdUsed: string;
-}): void {
-  const { sessionPromptState, sessionFileUsed, sessionIdUsed } = params;
-  const previousSessionId = sessionPromptState.sessionId;
-  let adoptedSessionId = sessionIdUsed;
-  const sessionFileChanged = Boolean(
-    sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile,
-  );
-  let nextSessionTarget = sessionPromptState.sessionTarget;
-  if (sessionFileUsed && sessionFileChanged) {
-    const marker = parseSqliteSessionFileMarker(sessionFileUsed);
-    if (marker) {
-      const retainedSessionKey = sessionPromptState.sessionTarget?.sessionKey;
-      const retainedEntry = retainedSessionKey
-        ? loadSessionEntry({
-            agentId: marker.agentId,
-            sessionKey: retainedSessionKey,
-            storePath: marker.storePath,
-          })
-        : undefined;
-      const markerMatches = listSessionEntries({
-        agentId: marker.agentId,
-        storePath: marker.storePath,
-      }).filter(({ entry }) => entry.sessionId === marker.sessionId);
-      const preferredMarkerSessionKey = resolvePreferredSessionKeyForSessionIdMatches(
-        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
-        marker.sessionId,
-      );
-      const successorSessionKey =
-        retainedEntry?.sessionId === marker.sessionId
-          ? retainedSessionKey
-          : (preferredMarkerSessionKey ??
-            (markerMatches.length === 0 && !retainedEntry ? retainedSessionKey : undefined));
-      if (
-        (marker.sessionId !== sessionIdUsed && sessionIdUsed !== previousSessionId) ||
-        !successorSessionKey ||
-        marker.agentId !== sessionPromptState.sessionTarget?.agentId
-      ) {
-        throw new Error("Legacy context-engine successor identity is inconsistent");
-      }
-      adoptedSessionId = marker.sessionId;
-      nextSessionTarget = {
-        ...marker,
-        sessionKey: successorSessionKey,
-      };
-    } else if (
-      sessionFileUsed.startsWith("agent:") &&
-      sessionPromptState.sessionTarget &&
-      resolveAgentIdFromSessionKey(sessionFileUsed) === sessionPromptState.sessionTarget.agentId
-    ) {
-      const keyedEntry = loadSessionEntry({
-        agentId: sessionPromptState.sessionTarget.agentId,
-        sessionKey: sessionFileUsed,
-        storePath: sessionPromptState.sessionTarget.storePath,
-      });
-      if (!keyedEntry?.sessionId || keyedEntry.sessionId !== sessionIdUsed) {
-        throw new Error("Legacy context-engine successor identity is inconsistent");
-      }
-      nextSessionTarget = {
-        ...sessionPromptState.sessionTarget,
-        sessionId: sessionIdUsed,
-        sessionKey: sessionFileUsed,
-      };
-    } else {
-      throw new Error(
-        "Legacy context-engine successor files are unsupported; return a structured sessionTarget",
-      );
-    }
-  } else if (sessionIdUsed && sessionIdUsed !== previousSessionId) {
-    nextSessionTarget = sessionPromptState.sessionTarget
-      ? { ...sessionPromptState.sessionTarget, sessionId: sessionIdUsed }
-      : undefined;
-  }
-  sessionPromptState.adoptSessionId(adoptedSessionId);
-  if (sessionFileUsed && sessionFileChanged) {
-    sessionPromptState.sessionFile = sessionFileUsed;
-  } else if (adoptedSessionId !== previousSessionId && nextSessionTarget) {
-    const marker = parseSqliteSessionFileMarker(sessionPromptState.sessionFile);
-    if (marker) {
-      sessionPromptState.sessionFile = formatSqliteSessionFileMarker({
-        agentId: nextSessionTarget.agentId ?? marker.agentId,
-        sessionId: nextSessionTarget.sessionId ?? marker.sessionId,
-        storePath: nextSessionTarget.storePath ?? marker.storePath,
-      });
-    }
-  }
-  sessionPromptState.sessionTarget = nextSessionTarget;
-}
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
 
 export async function normalizeEmbeddedRunAttempt(input: {

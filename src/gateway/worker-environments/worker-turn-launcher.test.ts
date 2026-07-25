@@ -31,10 +31,8 @@ import {
 } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import {
-  createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider,
-  resolveWorkerTurnTranscriptTarget,
-} from "./worker-turn-launcher.js";
+import { createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider } from "./worker-turn-launcher.js";
+import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 type WorkerTurnLauncherOptions = Parameters<typeof createRawWorkerSessionTurnPlacementProvider>[0];
 type WorkerTurnEnvironmentService = WorkerTurnLauncherOptions["environments"];

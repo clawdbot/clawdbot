@@ -37,7 +37,7 @@ type SqliteCheckpointTranscriptForkSource = {
   totalTokens?: number;
 };
 
-export type SqliteCompactionCheckpointLegacySource = {
+type SqliteCompactionCheckpointLegacySource = {
   checkpointId: string;
   events: TranscriptEvent[];
   sessionFile: string;

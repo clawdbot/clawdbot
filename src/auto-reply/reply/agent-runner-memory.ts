@@ -530,7 +530,8 @@ async function readSessionLogSnapshot(params: {
   if (logPath && !sqliteMarker) {
     return await readFileSessionLogSnapshot(logPath, params);
   }
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId =
+    params.agentId ?? params.opts?.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   if (params.sessionId && params.opts?.storePath && agentId) {
     return readSqliteSessionLogSnapshot(
       {
@@ -986,7 +987,10 @@ export async function runPreflightCompactionIfNeeded(params: {
       await notifyTerminalCompaction("skipped");
       return entry ?? params.sessionEntry;
     }
-    const keyAgentId = resolveAgentIdFromSessionKey(compactionSessionKey);
+    const keyAgentId = resolveAgentIdFromSessionKey(
+      compactionSessionKey,
+      params.followupRun.run.agentId,
+    );
     const compactionAgentId = isUnscopedSessionKeySentinel(compactionSessionKey)
       ? (params.followupRun.run.agentId ?? keyAgentId ?? "main")
       : (keyAgentId ?? params.followupRun.run.agentId ?? "main");

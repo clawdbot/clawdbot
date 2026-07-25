@@ -1,12 +1,12 @@
 // Codex tests cover run attempt.hooks plugin behavior.
 import path from "node:path";
-import "../../../../test/helpers/session-manager-file-compat.js";
 import {
   abortAgentHarnessRun,
   onAgentEvent,
   resolveActiveEmbeddedRunSessionId,
   type AgentEventPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { installSessionManagerFileCompat } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
@@ -40,6 +40,8 @@ import {
   readCodexAppServerBinding,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
+
+installSessionManagerFileCompat();
 
 type ReplyBackend = Parameters<
   NonNullable<ReturnType<typeof createParams>["replyOperation"]>["attachBackend"]

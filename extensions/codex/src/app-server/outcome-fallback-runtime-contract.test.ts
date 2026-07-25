@@ -2,12 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import "../../../../test/helpers/session-manager-file-compat.js";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createContractRunResult,
+  installSessionManagerFileCompat,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -20,6 +20,8 @@ import { createCodexTestModel } from "./test-support.js";
 const THREAD_ID = "thread-outcome-contract";
 const TURN_ID = "turn-outcome-contract";
 const tempDirs = new Set<string>();
+
+installSessionManagerFileCompat();
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 type ProjectedAttemptResult = ReturnType<CodexAppServerEventProjector["buildResult"]>;

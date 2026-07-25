@@ -35,6 +35,7 @@ import {
   parseRuntimeResult,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   formatWorkspaceConflictSummary,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
@@ -103,33 +104,6 @@ function recoveryError(error: unknown): string {
     .replace(/\s+/gu, " ")
     .trim();
   return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
-}
-
-export function resolveWorkerTurnTranscriptTarget(
-  turn: Pick<SessionPlacementTurnParams, "agentId" | "sessionId" | "sessionKey" | "sessionTarget">,
-): { agentId: string; sessionId: string; sessionKey: string; storePath: string } {
-  if (
-    !turn.sessionTarget?.agentId ||
-    !turn.sessionTarget.sessionKey ||
-    !turn.sessionTarget.storePath
-  ) {
-    throw new Error("Cloud worker turn is missing its transcript identity");
-  }
-  if (turn.sessionTarget.sessionId && turn.sessionTarget.sessionId !== turn.sessionId) {
-    throw new Error("Cloud worker transcript identity does not match the active turn");
-  }
-  if (
-    (turn.agentId && turn.sessionTarget.agentId !== turn.agentId) ||
-    (turn.sessionKey && turn.sessionTarget.sessionKey !== turn.sessionKey)
-  ) {
-    throw new Error("Cloud worker transcript identity does not match the active turn");
-  }
-  return {
-    agentId: turn.sessionTarget.agentId,
-    sessionId: turn.sessionId,
-    sessionKey: turn.sessionTarget.sessionKey,
-    storePath: turn.sessionTarget.storePath,
-  };
 }
 
 async function failHandedOffTurn(params: {

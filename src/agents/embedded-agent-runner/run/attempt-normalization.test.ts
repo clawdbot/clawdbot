@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyEmbeddedAttemptSessionIdentity } from "./attempt-normalization.js";
+import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 
 function promptState() {
   return {

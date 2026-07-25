@@ -267,7 +267,10 @@ describe("forkSessionEntryFromParent", () => {
         updatedAt: expect.any(Number),
       },
     });
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      forkedFromParent: true,
+      sessionId: "",
+    });
   });
 
   it("skips stale-token SQLite parents using transcript usage estimates", async () => {
