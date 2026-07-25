@@ -72,7 +72,7 @@ export interface SidebarMenusControllerHost
   ) => void;
   readonly onPairMobile?: () => void;
   readonly onRetryConnect?: () => void;
-  readonly onUpdateSidebarEntries?: (entries: readonly string[]) => void;
+  readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
   readonly pinnedAgentIds: readonly string[];
   readonly selectedSessionKeys: ReadonlySet<string>;
