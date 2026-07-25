@@ -107,7 +107,9 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
         return { exchanges: [] };
       }
       thread.lastUsedAt = now();
-      return { exchanges: thread.exchanges.map((exchange) => ({ ...exchange })) };
+      return {
+        exchanges: thread.exchanges.map(({ question, answer, ts }) => ({ question, answer, ts })),
+      };
     },
     reset,
     dispose() {

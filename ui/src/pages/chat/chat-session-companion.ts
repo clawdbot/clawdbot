@@ -84,7 +84,11 @@ export class ChatSessionCompanionThreads {
       if (this.hydrationTokens.get(key) !== token || thread.revision !== revision) {
         return;
       }
-      thread.exchanges = result.exchanges.map((exchange) => ({ ...exchange }));
+      thread.exchanges = result.exchanges.map(({ question, answer, ts }) => ({
+        question,
+        answer,
+        ts,
+      }));
       thread.failedQuestion = null;
       thread.hint = null;
       thread.revision += 1;

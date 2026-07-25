@@ -139,11 +139,13 @@ function extractUserText(message: unknown): string | undefined {
     return undefined;
   }
   const text = content
-    .flatMap((block) =>
-      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
-        ? [String((block as { text?: unknown }).text ?? "")]
-        : [],
-    )
+    .flatMap((block) => {
+      if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") {
+        return [];
+      }
+      const blockText = (block as { text?: unknown }).text;
+      return typeof blockText === "string" ? [blockText] : [];
+    })
     .join("\n");
   return normalizeSeedText(text) || undefined;
 }
