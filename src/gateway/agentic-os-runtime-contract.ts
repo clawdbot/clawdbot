@@ -1,6 +1,12 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { spawnSubagentDirect } from "../agents/subagent-spawn.js";
-import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
+import {
+  leaseResponse,
+  metadataEnvelope,
+  releaseResponse,
+  sessionProjection,
+  spawnProjectionPayload,
+} from "./agentic-os-runtime-contract-projections.js";
 import {
   AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS,
   AGENTIC_OS_RUNTIME_MAX_RECORDS,
@@ -8,7 +14,6 @@ import {
   AGENTIC_OS_RUNTIME_SESSION_RETENTION_MS,
   ALLOW_LEASE_IDENTITY_FIELDS,
   ALLOW_LEASE_OWNER_FIELDS,
-  CONTRACT_VERSION,
   ContractInputError,
   FORBIDDEN_HISTORY_CAMEL_ALIASES,
   FORBIDDEN_LEASE_CAMEL_ALIASES,
@@ -24,7 +29,6 @@ import {
   stableJson,
   type LeaseRecord,
   type ReleaseReplay,
-  type RuntimeMetadata,
   type SessionRecord,
   type SpawnPending,
 } from "./agentic-os-runtime-contract-shared.js";
@@ -33,8 +37,10 @@ import {
   runtimeSnapshotPath,
   saveAgenticOsRuntimeSnapshot,
 } from "./agentic-os-runtime-contract-store.js";
-
-/* oxlint-disable max-lines -- Runtime contract v1 remains centralized for the durable lease/session invariants. */
+import {
+  sessionRecordHasActiveChildRun,
+  taskDigest,
+} from "./agentic-os-runtime-contract-task-state.js";
 
 const leasesByGatewayId = new Map<string, LeaseRecord>();
 const acquireByIdempotencyKey = new Map<string, LeaseRecord>();
@@ -126,61 +132,6 @@ function persistRuntimeState(): void {
   loadedSnapshotPath = runtimeSnapshotPath();
 }
 
-function metadataEnvelope(normalized: Record<string, unknown>): RuntimeMetadata {
-  return {
-    metadata_contract_version: CONTRACT_VERSION,
-    normalized,
-    raw_json: stableJson(normalized),
-  };
-}
-
-function leaseResponse(record: LeaseRecord): Record<string, unknown> {
-  const status = record.released_at_ms
-    ? "released"
-    : record.consumed_at_ms
-      ? "consumed"
-      : record.spawn_reservation_fingerprint
-        ? "reserved"
-        : "active";
-  return {
-    status,
-    gateway_lease_id: record.gatewayLeaseId,
-    external_id: record.gatewayLeaseId,
-    lease: {
-      status,
-      lease_id: record.gatewayLeaseId,
-      gateway_lease_id: record.gatewayLeaseId,
-      client_lease_id: record.clientLeaseId,
-      expires_at_ms: record.expires_at_ms,
-      consumed_at_ms: record.consumed_at_ms,
-      released_at_ms: record.released_at_ms,
-      metadata: record.acquireMetadata,
-    },
-    metadata: record.acquireMetadata,
-  };
-}
-
-function releaseResponse(
-  record: LeaseRecord,
-  releaseMetadata: RuntimeMetadata,
-): Record<string, unknown> {
-  return {
-    status: "released",
-    released: true,
-    gateway_lease_id: record.gatewayLeaseId,
-    external_id: record.gatewayLeaseId,
-    lease: {
-      status: "released",
-      lease_id: record.gatewayLeaseId,
-      gateway_lease_id: record.gatewayLeaseId,
-      client_lease_id: record.clientLeaseId,
-      released_at_ms: record.released_at_ms,
-      metadata: releaseMetadata,
-    },
-    metadata: releaseMetadata,
-  };
-}
-
 function rejectConflict(message: string): never {
   throw new ContractInputError(message);
 }
@@ -235,14 +186,6 @@ function pruneExpiredLeases(now = Date.now()) {
   if (changed) {
     persistRuntimeState();
   }
-}
-
-function sessionRecordHasActiveChildRun(record: SessionRecord): boolean {
-  if (!record.runId) {
-    return false;
-  }
-  const runtimeTask = findTaskByRunIdForStatus(record.runId);
-  return runtimeTask?.status === "queued" || runtimeTask?.status === "running";
 }
 
 function assertRecordCapacity(map: ReadonlyMap<unknown, unknown>, label: string) {
@@ -422,24 +365,6 @@ function readSessionMetadata(params: Record<string, unknown>): Record<string, un
   return normalized;
 }
 
-function sessionProjection(record: SessionRecord): Record<string, unknown> {
-  return {
-    key: record.sessionKey,
-    session_key: record.sessionKey,
-    sessionKey: record.sessionKey,
-    external_id: record.sessionKey,
-    spawn_request_session_key: record.sessionKey,
-    gateway_lease_id: record.gatewayLeaseId,
-    client_request_id: record.clientRequestId,
-    idempotency_key: record.idempotencyKey,
-    agent_id: record.agentId,
-    taskName: record.taskName,
-    runId: record.runId,
-    created_at_ms: record.created_at_ms,
-    metadata: record.metadata,
-  };
-}
-
 function requireLeaseAuthorizesSpawn(params: {
   lease: LeaseRecord;
   metadata: Record<string, unknown>;
@@ -474,21 +399,6 @@ function spawnResultSessionKey(result: Record<string, unknown>): string | undefi
 function spawnResultRunId(result: Record<string, unknown>): string | undefined {
   const value = result.runId;
   return typeof value === "string" && value ? value : undefined;
-}
-
-function taskDigest(task: string): string {
-  return createHash("sha256").update(task).digest("hex");
-}
-
-function spawnProjectionPayload(record: SessionRecord): Record<string, unknown> {
-  const projection = sessionProjection(record);
-  return {
-    status: "accepted",
-    ...projection,
-    childSessionKey: record.sessionKey,
-    runId: record.runId,
-    session: projection,
-  };
 }
 
 export async function spawnAgenticOsSession(

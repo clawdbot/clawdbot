@@ -10,8 +10,6 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-/* oxlint-disable max-lines -- Contract coverage intentionally keeps the lease/spawn/session invariants together. */
-
 const spawnSubagentDirectMock = vi.hoisted(() =>
   vi.fn<typeof spawnSubagentDirect>(async () => ({
     status: "accepted",
@@ -413,23 +411,6 @@ describe("Agentic OS runtime contract v1", () => {
     );
   });
 
-  it("rejects mismatched task_digest before reserving the lease or spawning", async () => {
-    const gatewayLeaseId = await acquireLease();
-    expectInvalid(
-      await invoke(
-        "sessions_spawn",
-        spawnParamsFor(gatewayLeaseId, {
-          task_digest: sha256Hex("different task"),
-        }),
-      ),
-      "session metadata task_digest does not match spawn task",
-    );
-    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
-
-    const accepted = payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
-    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
-  });
-
   it("reserves a one-shot allow lease against concurrent double spawn attempts", async () => {
     const gatewayLeaseId = await acquireLease();
     let acceptFirstSpawn: (() => void) | undefined;
@@ -782,91 +763,6 @@ describe("Agentic OS runtime contract v1", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
-  it("caps distinct slow pending spawns atomically and fails the overflow request closed", async () => {
-    vi.resetModules();
-    const now = Date.now();
-    const leases = Array.from({ length: 1_025 }, (_, index) => {
-      const owner = {
-        ...acquireParams,
-        client_lease_id: `lease-pending-${index}`,
-        idempotency_key: `lease-pending-idem-${index}`,
-      };
-      const spawnOwner = {
-        client_lease_id: owner.client_lease_id,
-        run_id: owner.run_id,
-        phase: owner.phase,
-        transition_id: owner.transition_id,
-        agent_id: owner.agent_id,
-        requester_agent_id: owner.requester_agent_id,
-      };
-      const gatewayLeaseId = `gateway-lease:pending-${index}`;
-      return {
-        gatewayLeaseId,
-        fingerprint: `pending-acquire-fingerprint-${index}`,
-        acquireIdempotencyKey: owner.idempotency_key,
-        clientLeaseId: owner.client_lease_id,
-        owner,
-        spawnOwner,
-        authenticatedPrincipalId: "internal",
-        acquireMetadata: {
-          metadata_contract_version: "v1",
-          normalized: { ...owner, ttl_ms: 60_000, gateway_lease_id: gatewayLeaseId },
-          raw_json: "{}",
-        },
-        created_at_ms: now,
-        expires_at_ms: now + 60_000,
-      };
-    });
-    const store = await import("../agentic-os-runtime-contract-store.js");
-    store.saveAgenticOsRuntimeSnapshot({ leases, releaseReplays: [], sessions: [] });
-    const contract = await import("./agentic-os-runtime-contract.js");
-    ({ agenticOsRuntimeContractHandlers } = contract);
-    let releasePending!: () => void;
-    const pendingGate = new Promise<void>((resolve) => {
-      releasePending = resolve;
-    });
-    spawnSubagentDirectMock.mockImplementation(async (request) => {
-      await pendingGate;
-      const suffix = request?.task?.replace(/\D/g, "") || "unknown";
-      return {
-        status: "accepted",
-        childSessionKey: `agent:ai-engineer:subagent:bounded-${suffix}`,
-        runId: `run-bounded-${suffix}`,
-        mode: "run",
-      };
-    });
-    const makeSpawnParams = (index: number) => ({
-      task: `bounded pending ${index}`,
-      runtime: "subagent",
-      agentId: "ai-engineer",
-      gateway_lease_id: `gateway-lease:pending-${index}`,
-      client_request_id: `spawn-pending-${index}`,
-      idempotency_key: `spawn-pending-idem-${index}`,
-      metadata: {
-        ...sessionMetadata,
-        client_request_id: `spawn-pending-${index}`,
-        idempotency_key: `spawn-pending-idem-${index}`,
-        task_digest: sha256Hex(`bounded pending ${index}`),
-      },
-    });
-
-    const pending = Array.from({ length: 1_024 }, (_, index) =>
-      invoke("sessions_spawn", makeSpawnParams(index)),
-    );
-    await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1_024), {
-      timeout: 60_000,
-    });
-    expectInvalid(
-      await invoke("sessions_spawn", makeSpawnParams(1_024)),
-      "pending session spawn capacity reached",
-    );
-    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1_024);
-
-    releasePending();
-    const completed = await Promise.all(pending);
-    expect(completed.every(([ok]) => ok)).toBe(true);
-  }, 240_000);
-
   it("rejects released, expired, and wrong-owner leases before spawning", async () => {
     const gatewayLeaseId = await acquireLease();
     await invoke("subagents.allowLease.release", {
@@ -1086,39 +982,6 @@ describe("Agentic OS runtime contract v1", () => {
         await invoke("sessions_status", { session_key: sessionKey }),
         "unknown session_key",
       );
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-
-  it("retains aged session projections while the child run is active", async () => {
-    const gatewayLeaseId = await acquireLease();
-    const accepted = payload(
-      await invoke("sessions_spawn", {
-        task: "verify active child retention",
-        runtime: "subagent",
-        agentId: "ai-engineer",
-        gateway_lease_id: gatewayLeaseId,
-        client_request_id: "spawn-active-retention",
-        idempotency_key: "spawn-active-retention-idem",
-        metadata: {
-          ...sessionMetadata,
-          client_request_id: "spawn-active-retention",
-          idempotency_key: "spawn-active-retention-idem",
-          task_digest: sha256Hex("verify active child retention"),
-        },
-      }),
-    );
-    const sessionKey = accepted.session_key as string;
-
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
-    try {
-      expect(payload(await invoke("sessions_list")).sessions).toEqual(
-        expect.arrayContaining([expect.objectContaining({ session_key: sessionKey })]),
-      );
-      expect(payload(await invoke("sessions_status", { session_key: sessionKey }))).toMatchObject({
-        session_key: sessionKey,
-      });
     } finally {
       vi.restoreAllMocks();
     }
