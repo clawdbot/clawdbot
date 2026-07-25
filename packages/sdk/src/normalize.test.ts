@@ -8,21 +8,24 @@ function agentItemEvent(data: Record<string, unknown>) {
 }
 
 describe("normalizeGatewayEvent IDs", () => {
-  it("preserves zero sequence and timestamp values", () => {
+  it.each([
+    { field: "sequence", seq: 0, ts: 123, expectedId: "0:agent:r1:main:123" },
+    { field: "timestamp", seq: 1, ts: 0, expectedId: "1:agent:r1:main:0" },
+  ])("preserves zero $field values", ({ seq, ts, expectedId }) => {
     const event = normalizeGatewayEvent({
       event: "agent",
-      seq: 0,
+      seq,
       payload: {
         runId: "r1",
         sessionKey: "main",
-        ts: 0,
+        ts,
         stream: "lifecycle",
         data: { phase: "start" },
       },
     });
 
-    expect(event.id).toBe("0:agent:r1:main:0");
-    expect(event.ts).toBe(0);
+    expect(event.id).toBe(expectedId);
+    expect(event.ts).toBe(ts);
   });
 });
 
