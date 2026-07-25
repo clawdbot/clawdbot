@@ -18,19 +18,20 @@ function normalizePolicyHostnames(values?: string[]): string[] {
   return normalizeUniqueStringEntries(values?.map((value) => normalizeHostname(value)));
 }
 
-export function resolvePinnedNetworkGuardRouteV1(
-  dispatcherPolicy?: Pick<PinnedDispatcherPolicy, "mode">,
+export function resolveNetworkGuardRouteV1(
+  dispatcherPolicy: Pick<PinnedDispatcherPolicy, "mode"> | undefined,
+  resolutionMode: NetworkGuardResolutionMode,
 ): {
   routeMode: NetworkGuardRouteMode;
   resolutionMode: NetworkGuardResolutionMode;
 } {
   if (dispatcherPolicy?.mode === "env-proxy") {
-    return { routeMode: "environment-proxy", resolutionMode: "pinned" };
+    return { routeMode: "environment-proxy", resolutionMode };
   }
   if (dispatcherPolicy?.mode === "explicit-proxy") {
-    return { routeMode: "explicit-proxy", resolutionMode: "pinned" };
+    return { routeMode: "explicit-proxy", resolutionMode };
   }
-  return { routeMode: "direct", resolutionMode: "pinned" };
+  return { routeMode: "direct", resolutionMode };
 }
 
 export function buildNetworkGuardProfileV1(params: {

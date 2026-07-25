@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildNetworkGuardProfileV1,
-  resolvePinnedNetworkGuardRouteV1,
+  resolveNetworkGuardRouteV1,
 } from "./network-guard-profile-builder.js";
 import {
   assertLocalNetworkGuardPrepared,
@@ -130,23 +130,30 @@ describe("network guard profile", () => {
   it.each([
     {
       dispatcherPolicy: undefined,
+      resolutionMode: "pinned" as const,
       expected: { routeMode: "direct", resolutionMode: "pinned" },
     },
     {
       dispatcherPolicy: { mode: "direct" as const },
-      expected: { routeMode: "direct", resolutionMode: "pinned" },
+      resolutionMode: "caller" as const,
+      expected: { routeMode: "direct", resolutionMode: "caller" },
     },
     {
       dispatcherPolicy: { mode: "env-proxy" as const },
+      resolutionMode: "pinned" as const,
       expected: { routeMode: "environment-proxy", resolutionMode: "pinned" },
     },
     {
       dispatcherPolicy: { mode: "explicit-proxy" as const },
-      expected: { routeMode: "explicit-proxy", resolutionMode: "pinned" },
+      resolutionMode: "caller" as const,
+      expected: { routeMode: "explicit-proxy", resolutionMode: "caller" },
     },
-  ])("derives pinned route ownership for $expected.routeMode", ({ dispatcherPolicy, expected }) => {
-    expect(resolvePinnedNetworkGuardRouteV1(dispatcherPolicy)).toEqual(expected);
-  });
+  ])(
+    "derives independent route and resolution ownership for $expected.routeMode",
+    ({ dispatcherPolicy, resolutionMode, expected }) => {
+      expect(resolveNetworkGuardRouteV1(dispatcherPolicy, resolutionMode)).toEqual(expected);
+    },
+  );
 
   it("accepts proxy routing with locally pinned target resolution", () => {
     const profile = buildNetworkGuardProfileV1({
@@ -163,6 +170,16 @@ describe("network guard profile", () => {
         hasDispatcher: true,
       }),
     ).not.toThrow();
+  });
+
+  it("accepts proxy routing with caller-owned target resolution", () => {
+    const profile = buildNetworkGuardProfileV1({
+      url: new URL("https://api.example.com/v1"),
+      routeMode: "explicit-proxy",
+      resolutionMode: "caller",
+    });
+
+    expect(() => assertNetworkGuardProfileV1(profile)).not.toThrow();
   });
 
   it("binds the profile to the exact request origin and normalized hostname", () => {

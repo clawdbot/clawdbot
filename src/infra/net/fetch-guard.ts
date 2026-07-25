@@ -16,7 +16,7 @@ import {
 } from "./configured-local-origin-bypass.js";
 import {
   buildNetworkGuardProfileV1,
-  resolvePinnedNetworkGuardRouteV1,
+  resolveNetworkGuardRouteV1,
 } from "./network-guard-profile-builder.js";
 import {
   createLocalOneHopFetchDispatcher,
@@ -636,12 +636,11 @@ async function fetchWithSsrFGuardInternal(
         // real fetches continue through pinned DNS below.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
       } else if (params.pinDns === false) {
-        routeMode = "direct";
-        resolutionMode = "caller";
+        ({ routeMode, resolutionMode } = resolveNetworkGuardRouteV1(dispatcherPolicy, "caller"));
         await resolvePinnedHostname();
         dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
       } else {
-        ({ routeMode, resolutionMode } = resolvePinnedNetworkGuardRouteV1(dispatcherPolicy));
+        ({ routeMode, resolutionMode } = resolveNetworkGuardRouteV1(dispatcherPolicy, "pinned"));
         const pinned = await resolvePinnedHostname();
         dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
       }
