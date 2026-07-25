@@ -375,6 +375,8 @@ export function releaseAgenticOsAllowLease(
   try {
     persistRuntimeState();
   } catch (error) {
+    // A failed snapshot must leave neither half of the release authoritative.
+    // Otherwise an in-memory replay can report success while restart restores an active lease.
     if (previousReleasedAtMs === undefined) {
       delete record.released_at_ms;
     } else {

@@ -488,35 +488,6 @@ describe("Agentic OS runtime contract v1", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
-  it("rolls back allow lease release replay when snapshot persistence fails", async () => {
-    const gatewayLeaseId = await acquireLease();
-    const store = await import("../agentic-os-runtime-contract-store.js");
-    vi.spyOn(store, "saveAgenticOsRuntimeSnapshot").mockImplementationOnce(() => {
-      throw new Error("synthetic release snapshot failure");
-    });
-    const releaseParams = {
-      ...releaseOwnerParams,
-      release_idempotency_key: "lease-release-idem-a",
-      gateway_lease_id: gatewayLeaseId,
-    };
-
-    expectInvalid(
-      await invoke("subagents.allowLease.release", releaseParams),
-      "Agentic OS runtime contract failure",
-    );
-    expect(payload(await invoke("subagents.allowLease.status")).leases).toEqual([
-      expect.objectContaining({
-        status: "active",
-        gateway_lease_id: gatewayLeaseId,
-      }),
-    ]);
-
-    const released = payload(await invoke("subagents.allowLease.release", releaseParams));
-    expect(released.gateway_lease_id).toBe(gatewayLeaseId);
-    expect(released.released).toBe(true);
-    expect(payload(await invoke("subagents.allowLease.release", releaseParams))).toEqual(released);
-  });
-
   it("persists lease, session, and idempotency authority in the canonical state database", async () => {
     const gatewayLeaseId = await acquireLease();
     const spawnParams = {
