@@ -390,6 +390,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       this.resetProviderInitializationForRetry();
       throw err;
     }
+    if (!fallbackResult.provider) {
+      this.resetProviderInitializationForRetry();
+      return false;
+    }
 
     const fallbackState = applyMemoryFallbackProviderState({
       current: currentState,

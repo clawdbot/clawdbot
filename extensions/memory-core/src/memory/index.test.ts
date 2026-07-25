@@ -49,6 +49,7 @@ let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
 let providerCloseFailure: unknown = new Error("provider close failed");
 let providerCreationFailure: string | null = null;
+let providerNullResult: string | null = null;
 let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
@@ -140,6 +141,13 @@ vi.mock("./embeddings.js", () => {
       await providerInitGate;
       if (options.provider === providerCreationFailure) {
         throw new Error(`provider creation failed: ${options.provider}`);
+      }
+      if (options.provider === providerNullResult) {
+        return {
+          provider: null,
+          requestedProvider: options.provider,
+          providerUnavailableReason: `provider unavailable: ${options.provider}`,
+        };
       }
       if (forceNoProvider) {
         return {
@@ -323,6 +331,7 @@ describe("memory index", () => {
     providerCloseFailuresRemaining = 0;
     providerCloseFailure = new Error("provider close failed");
     providerCreationFailure = null;
+    providerNullResult = null;
     providerCloseGate = null;
     providerInitGate = null;
     providerCalls = [];
@@ -2547,6 +2556,58 @@ describe("memory index", () => {
       "fallback-provider",
       "openai",
     ]);
+    expect(fields.provider?.id).toBe("mock");
+  });
+
+  it("fails closed and retries a required primary after a null fallback result", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: { embedQuery: (text: string) => Promise<number[]> } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerNullResult = "fallback-provider";
+
+    await expect(manager.search("alpha")).rejects.toThrow(
+      /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+    );
+
+    providerNullResult = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+  });
+
+  it("retries an optional primary after a null fallback result", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: { id: string; embedQuery: (text: string) => Promise<number[]> } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerNullResult = "fallback-provider";
+
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+
+    providerNullResult = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
     expect(fields.provider?.id).toBe("mock");
   });
 
