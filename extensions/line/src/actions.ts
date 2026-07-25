@@ -72,17 +72,33 @@ function normalizeNestedActions(value: unknown, labelLimit: number): unknown {
     return value;
   }
 
+  if (value.type === "video" && isLineAction(value.action)) {
+    const action = normalizeLineAction(value.action, labelLimit);
+    if (action.type !== "uri") {
+      // Flex video accepts only URI actions. Replace the video with its visual
+      // fallback and an explicit warning instead of dropping the tap target.
+      const contents: unknown[] = [];
+      if (isRecord(value.altContent)) {
+        contents.push(normalizeNestedActions(value.altContent, labelLimit));
+      }
+      contents.push({
+        type: "text",
+        text:
+          action.type === "message" && action.text
+            ? action.text
+            : "Action unavailable in this video.",
+        wrap: true,
+        size: "sm",
+        color: "#666666",
+      });
+      return { type: "box", layout: "vertical", contents };
+    }
+  }
+
   const normalized: Record<string, unknown> = { ...value };
   for (const [key, nested] of Object.entries(value)) {
     if ((key === "action" || key === "defaultAction") && isLineAction(nested)) {
-      const action = normalizeLineAction(nested, labelLimit);
-      if (value.type === "video" && action.type !== "uri") {
-        // LINE accepts only URI actions on Flex video components. Dropping an
-        // unusable optional tap target keeps the video itself deliverable.
-        delete normalized[key];
-      } else {
-        normalized[key] = action;
-      }
+      normalized[key] = normalizeLineAction(nested, labelLimit);
     } else if (key === "actions" && Array.isArray(nested)) {
       normalized[key] = nested.map((action) =>
         isLineAction(action) ? normalizeLineAction(action, labelLimit) : action,

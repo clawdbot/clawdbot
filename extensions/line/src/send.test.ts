@@ -188,7 +188,17 @@ describe("LINE send helpers", () => {
       contents: {
         type: "bubble",
         action: oversizedPostback,
-        hero: { type: "video", url: "https://e.example/video.mp4", action: oversizedUri },
+        hero: {
+          type: "video",
+          url: "https://e.example/video.mp4",
+          previewUrl: "https://e.example/preview.jpg",
+          altContent: {
+            type: "image",
+            url: "https://e.example/preview.jpg",
+            size: "full",
+          },
+          action: oversizedUri,
+        },
         body: {
           type: "box",
           layout: "vertical",
@@ -214,7 +224,7 @@ describe("LINE send helpers", () => {
 
     const contents = pushed.messages[0]?.contents as {
       action: unknown;
-      hero: { action: unknown };
+      hero: { type: string; contents: Array<{ type: string; text?: string }> };
       body: { action: unknown; contents: Array<{ action: unknown }> };
     };
     const unavailableAction = {
@@ -228,7 +238,24 @@ describe("LINE send helpers", () => {
       text: "Link unavailable: URL exceeds LINE's limit.",
     };
     expect(contents.action).toEqual(unavailableAction);
-    expect(contents.hero.action).toBeUndefined();
+    expect(contents.hero).toEqual({
+      type: "box",
+      layout: "vertical",
+      contents: [
+        {
+          type: "image",
+          url: "https://e.example/preview.jpg",
+          size: "full",
+        },
+        {
+          type: "text",
+          text: "Link unavailable: URL exceeds LINE's limit.",
+          wrap: true,
+          size: "sm",
+          color: "#666666",
+        },
+      ],
+    });
     expect(contents.body.action).toEqual(unavailableAction);
     expect(contents.body.contents[0]?.action).toEqual(unavailableLink);
     expect(contents.body.contents[1]?.action).toEqual(unavailableAction);
