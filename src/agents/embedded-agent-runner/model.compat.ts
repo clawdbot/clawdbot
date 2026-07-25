@@ -1,5 +1,12 @@
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import { normalizeProviderId } from "../model-selection.js";
+import { isQwenThinkingCapableModelId } from "../qwen-thinking-compat.js";
+
+export {
+  applyInferredQwenThinkingCompat,
+  isQwenThinkingCapableModelId,
+  resolveQwenThinkingFormatForRoute,
+} from "../qwen-thinking-compat.js";
 
 export function mergeModelMediaInput(
   base: ModelMediaInputConfig | undefined,
@@ -26,6 +33,7 @@ export function mergeModelMediaInput(
 
 export function resolveConfiguredFallbackReasoning(params: {
   provider: string;
+  modelId?: string;
   compat?: unknown;
   reasoning?: boolean;
 }): boolean {
@@ -34,17 +42,22 @@ export function resolveConfiguredFallbackReasoning(params: {
 
 export function resolveConfiguredModelReasoning(params: {
   provider: string;
+  modelId?: string;
   compat?: unknown;
   reasoning?: boolean;
 }): boolean | undefined {
   if (params.reasoning !== undefined) {
     return params.reasoning;
   }
-  return isVllmQwenThinkingCompat(params) ? true : undefined;
+  if (isVllmQwenThinkingCompat(params)) {
+    return true;
+  }
+  return params.modelId && isQwenThinkingCapableModelId(params.modelId) ? true : undefined;
 }
 
 export function resolveMergedConfiguredModelReasoning(params: {
   provider: string;
+  modelId?: string;
   configuredCompat?: unknown;
   resolvedCompat?: unknown;
   configuredReasoning?: boolean;
@@ -56,9 +69,13 @@ export function resolveMergedConfiguredModelReasoning(params: {
   if (isVllmQwenThinkingCompat({ provider: params.provider, compat: params.configuredCompat })) {
     return true;
   }
+  if (params.modelId && isQwenThinkingCapableModelId(params.modelId)) {
+    return true;
+  }
   return (
     resolveConfiguredModelReasoning({
       provider: params.provider,
+      modelId: params.modelId,
       compat: params.resolvedCompat,
       reasoning: params.discoveredReasoning,
     }) ?? false

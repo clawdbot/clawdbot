@@ -52,6 +52,7 @@ import {
   type ModelRegistry,
 } from "../sessions/index.js";
 import {
+  applyInferredQwenThinkingCompat,
   mergeModelCompat,
   mergeModelMediaInput,
   resolveConfiguredFallbackReasoning,
@@ -850,6 +851,7 @@ function applyConfiguredProviderOverrides(params: {
   });
   const resolvedReasoning = resolveMergedConfiguredModelReasoning({
     provider: params.provider,
+    modelId: discoveredModel.id,
     configuredCompat: resolvedCompat,
     resolvedCompat,
     configuredReasoning: metadataOverrideModel?.reasoning,
@@ -873,6 +875,13 @@ function applyConfiguredProviderOverrides(params: {
     capability: "llm",
     transport: "stream",
   });
+  const inferredQwen = applyInferredQwenThinkingCompat({
+    provider: params.provider,
+    modelId: discoveredModel.id,
+    baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
+    reasoning: resolvedReasoning,
+    compat: resolvedCompat,
+  });
   return attachModelProviderLocalService(
     attachModelProviderRequestTransport(
       {
@@ -880,7 +889,7 @@ function applyConfiguredProviderOverrides(params: {
         provider: params.provider,
         api: requestConfig.api ?? "openai-responses",
         baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-        reasoning: resolvedReasoning,
+        reasoning: inferredQwen.reasoning ?? resolvedReasoning,
         input: normalizedInput,
         cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
         contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
@@ -903,7 +912,7 @@ function applyConfiguredProviderOverrides(params: {
         ...(providerConfig.authHeader !== undefined
           ? { authHeader: providerConfig.authHeader }
           : {}),
-        compat: resolvedCompat,
+        compat: inferredQwen.compat ?? resolvedCompat,
         mediaInput: mergeModelMediaInput(
           mergeModelMediaInput(
             configuredStaticCatalogModel?.mediaInput,
@@ -1095,6 +1104,13 @@ function resolveExplicitModelWithRegistry(params: {
       providerParams: providerConfig?.params,
       configuredParams: fallbackInlineMatch.params,
     });
+    const inferredInline = applyInferredQwenThinkingCompat({
+      provider,
+      modelId,
+      baseUrl: fallbackInlineMatch.baseUrl ?? providerConfig?.baseUrl,
+      reasoning: fallbackInlineMatch.reasoning,
+      compat: fallbackInlineMatch.compat,
+    });
     return {
       kind: "resolved",
       source: "configured",
@@ -1110,9 +1126,11 @@ function resolveExplicitModelWithRegistry(params: {
             : {}),
           reasoning: resolveConfiguredModelReasoning({
             provider,
-            compat: fallbackInlineMatch.compat,
-            reasoning: fallbackInlineMatch.reasoning,
+            modelId,
+            compat: inferredInline.compat ?? fallbackInlineMatch.compat,
+            reasoning: inferredInline.reasoning ?? fallbackInlineMatch.reasoning,
           }),
+          ...(inferredInline.compat ? { compat: inferredInline.compat } : {}),
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         } as Model,

@@ -2991,6 +2991,58 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("infers reasoning and thinkingFormat for custom Qwen3.6 model ids", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "Qwen3.6-27B",
+                name: "Qwen3.6-27B",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "Qwen3.6-27B", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.reasoning).toBe(true);
+    expect(result.model?.compat).toEqual(
+      expect.objectContaining({ thinkingFormat: "qwen-chat-template" }),
+    );
+  });
+
+  it("preserves explicit reasoning false for custom Qwen3.6 model ids", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "qwen3.6-27b",
+                name: "qwen3.6-27b",
+                reasoning: false,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "qwen3.6-27b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.reasoning).toBe(false);
+  });
+
   it("propagates image input capability from matching configured fallback model", () => {
     const cfg = {
       models: {

@@ -36,6 +36,7 @@ import {
   normalizeProviderId,
 } from "./model-ref-shared.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import { applyInferredQwenThinkingCompat } from "./qwen-thinking-compat.js";
 
 // Shared model-selection helpers for config aliases, allowlists, provider
 // inference, and configured catalog rows used by CLI and runtime selectors.
@@ -1402,27 +1403,33 @@ export function buildConfiguredModelCatalog(params: {
       const input = Array.isArray(model?.input) ? model.input : undefined;
       const modelParams =
         model?.params && typeof model.params === "object" ? model.params : undefined;
-      const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
-      const reasoning =
-        typeof model?.reasoning === "boolean"
-          ? model.reasoning
-          : isVllmQwenThinkingCompat(providerId, compat)
-            ? true
-            : undefined;
+      const configuredCompat =
+        model?.compat && typeof model.compat === "object" ? model.compat : undefined;
+      const baseUrl = model?.baseUrl ?? provider.baseUrl;
+      const inferred = applyInferredQwenThinkingCompat({
+        provider: providerId,
+        modelId: id,
+        baseUrl,
+        reasoning:
+          typeof model?.reasoning === "boolean"
+            ? model.reasoning
+            : isVllmQwenThinkingCompat(providerId, configuredCompat)
+              ? true
+              : undefined,
+        compat: configuredCompat,
+      });
       catalog.push({
         provider: providerId,
         id,
         name,
         api: model.api ?? provider.api,
-        ...((model.baseUrl ?? provider.baseUrl)
-          ? { baseUrl: model.baseUrl ?? provider.baseUrl }
-          : {}),
+        ...(baseUrl ? { baseUrl } : {}),
         contextWindow,
         contextTokens,
-        reasoning,
+        reasoning: inferred.reasoning,
         input,
         ...(modelParams ? { params: modelParams } : {}),
-        compat,
+        ...(inferred.compat ? { compat: inferred.compat } : {}),
       });
     }
   }

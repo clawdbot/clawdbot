@@ -27,6 +27,7 @@ import {
   listPluginModelCatalogFiles,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
+import { applyInferredQwenThinkingCompat } from "../qwen-thinking-compat.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import {
@@ -634,7 +635,14 @@ export class ModelRegistry {
           continue;
         }
 
-        const compat = mergeCompat(providerConfig.compat, modelDef.compat);
+        const mergedCompat = mergeCompat(providerConfig.compat, modelDef.compat);
+        const inferred = applyInferredQwenThinkingCompat({
+          provider: providerName,
+          modelId: modelDef.id,
+          baseUrl,
+          reasoning: modelDef.reasoning,
+          compat: mergedCompat,
+        });
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
         const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
         models.push({
@@ -643,7 +651,7 @@ export class ModelRegistry {
           api: api as Api,
           provider: providerName,
           baseUrl,
-          reasoning: modelDef.reasoning ?? false,
+          reasoning: inferred.reasoning ?? false,
           thinkingLevelMap: modelDef.thinkingLevelMap,
           input: runtimeInput,
           cost: modelDef.cost ?? defaultCost,
@@ -652,7 +660,7 @@ export class ModelRegistry {
           ...(modelDef.maxTokens !== undefined ? { maxTokensSource } : {}),
           params: modelDef.params,
           headers: undefined,
-          compat,
+          compat: inferred.compat ?? mergedCompat,
         } as Model);
       }
     }
