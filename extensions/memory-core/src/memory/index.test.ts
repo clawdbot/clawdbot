@@ -2277,6 +2277,73 @@ describe("memory index", () => {
     expect(fields.provider?.id).toBe("mock");
   });
 
+  it("keeps concurrent optional searches in FTS mode when shared fallback fails", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+      ensureProviderInitialized: () => Promise<void>;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    const ensureProviderInitialized = fields.ensureProviderInitialized.bind(manager);
+    let providerInitializationCalls = 0;
+    fields.ensureProviderInitialized = async () => {
+      providerInitializationCalls += 1;
+      await ensureProviderInitialized();
+    };
+    providerCreationFailure = "fallback-provider";
+    let releaseProviderInit: () => void = () => {};
+    providerInitGate = new Promise<void>((resolve) => {
+      releaseProviderInit = resolve;
+    });
+
+    const callsBeforeSearch = providerCalls.length;
+    const firstSearch = manager.search("alpha");
+    await vi.waitFor(() =>
+      expect(providerCalls.some((call) => call.provider === "fallback-provider")).toBe(true),
+    );
+    const initializationCallsBeforeSecondSearch = providerInitializationCalls;
+    const secondSearch = manager.search("zebra");
+    let secondSettled = false;
+    void secondSearch.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() =>
+        expect(providerInitializationCalls).toBeGreaterThan(initializationCallsBeforeSecondSearch),
+      );
+      expect(secondSettled).toBe(false);
+      releaseProviderInit();
+      const results = await Promise.all([firstSearch, secondSearch]);
+      expect(results.every((result) => result.length > 0)).toBe(true);
+      expect(
+        providerCalls
+          .slice(callsBeforeSearch)
+          .filter((call) => call.provider === "fallback-provider"),
+      ).toHaveLength(1);
+    } finally {
+      providerInitGate = null;
+      releaseProviderInit();
+      await Promise.allSettled([firstSearch, secondSearch]);
+    }
+  });
+
   it("does not activate fallback during search when index identity is already mismatched", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
