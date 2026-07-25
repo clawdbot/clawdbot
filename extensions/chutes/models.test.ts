@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CHUTES_DEFAULT_MODEL_ID } from "./api.js";
 import {
   buildChutesModelDefinition,
   CHUTES_MODEL_CATALOG,
@@ -134,6 +135,7 @@ describe("chutes-models", () => {
     const runtimeIds = CHUTES_MODEL_CATALOG.map((model) => model.id);
     expect(manifestIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
     expect(runtimeIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
+    expect(CHUTES_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.chutes.defaultModel);
     expect(manifest.modelCatalog.providers.chutes.defaultModel).toBe("zai-org/GLM-5.2-TEE");
     expect(
       manifest.modelCatalog.providers.chutes.models
