@@ -14,7 +14,10 @@ import {
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
-import { buildNetworkGuardProfileV1 } from "./network-guard-profile-builder.js";
+import {
+  buildNetworkGuardProfileV1,
+  resolvePinnedNetworkGuardRouteV1,
+} from "./network-guard-profile-builder.js";
 import {
   createLocalOneHopFetchDispatcher,
   type FetchLike,
@@ -638,8 +641,7 @@ async function fetchWithSsrFGuardInternal(
         await resolvePinnedHostname();
         dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
       } else {
-        routeMode = "direct";
-        resolutionMode = "pinned";
+        ({ routeMode, resolutionMode } = resolvePinnedNetworkGuardRouteV1(dispatcherPolicy));
         const pinned = await resolvePinnedHostname();
         dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
       }

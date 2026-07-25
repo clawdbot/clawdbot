@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildNetworkGuardProfileV1 } from "./network-guard-profile-builder.js";
+import {
+  buildNetworkGuardProfileV1,
+  resolvePinnedNetworkGuardRouteV1,
+} from "./network-guard-profile-builder.js";
 import {
   assertLocalNetworkGuardPrepared,
   assertNetworkGuardProfileV1,
@@ -124,6 +127,27 @@ describe("network guard profile", () => {
       },
     });
   });
+  it.each([
+    {
+      dispatcherPolicy: undefined,
+      expected: { routeMode: "direct", resolutionMode: "pinned" },
+    },
+    {
+      dispatcherPolicy: { mode: "direct" as const },
+      expected: { routeMode: "direct", resolutionMode: "pinned" },
+    },
+    {
+      dispatcherPolicy: { mode: "env-proxy" as const },
+      expected: { routeMode: "environment-proxy", resolutionMode: "proxy" },
+    },
+    {
+      dispatcherPolicy: { mode: "explicit-proxy" as const },
+      expected: { routeMode: "explicit-proxy", resolutionMode: "proxy" },
+    },
+  ])("derives pinned route ownership for $expected.routeMode", ({ dispatcherPolicy, expected }) => {
+    expect(resolvePinnedNetworkGuardRouteV1(dispatcherPolicy)).toEqual(expected);
+  });
+
   it("binds the profile to the exact request origin and normalized hostname", () => {
     const profile = createProfile();
     expect(() =>

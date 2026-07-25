@@ -10,11 +10,27 @@ import {
 import {
   isPrivateNetworkAllowedByPolicy,
   normalizeHostnameAllowlist,
+  type PinnedDispatcherPolicy,
   type SsrFPolicy,
 } from "./ssrf.js";
 
 function normalizePolicyHostnames(values?: string[]): string[] {
   return normalizeUniqueStringEntries(values?.map((value) => normalizeHostname(value)));
+}
+
+export function resolvePinnedNetworkGuardRouteV1(
+  dispatcherPolicy?: Pick<PinnedDispatcherPolicy, "mode">,
+): {
+  routeMode: NetworkGuardRouteMode;
+  resolutionMode: NetworkGuardResolutionMode;
+} {
+  if (dispatcherPolicy?.mode === "env-proxy") {
+    return { routeMode: "environment-proxy", resolutionMode: "proxy" };
+  }
+  if (dispatcherPolicy?.mode === "explicit-proxy") {
+    return { routeMode: "explicit-proxy", resolutionMode: "proxy" };
+  }
+  return { routeMode: "direct", resolutionMode: "pinned" };
 }
 
 export function buildNetworkGuardProfileV1(params: {
