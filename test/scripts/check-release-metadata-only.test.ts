@@ -10,6 +10,7 @@ const scriptPath = path.resolve(
   "../../scripts/check-release-metadata-only.mjs",
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const itUnix = process.platform === "win32" ? it.skip : it;
 
 describe("check-release-metadata-only", () => {
   it("parses refs and explicit paths", () => {
@@ -51,7 +52,7 @@ describe("check-release-metadata-only", () => {
     });
   });
 
-  it("fails with an actionable timeout when git diff hangs", () => {
+  itUnix("fails with an actionable timeout when git diff hangs", () => {
     const tempDir = tempDirs.make("openclaw-release-metadata-git-");
     const gitPath = path.join(tempDir, "git");
     writeFileSync(
