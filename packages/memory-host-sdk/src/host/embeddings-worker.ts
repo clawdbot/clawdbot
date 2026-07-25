@@ -283,6 +283,10 @@ class LocalEmbeddingWorkerClient {
     if (!child) {
       return;
     }
+    if (!child.connected) {
+      await this.shutdownChild();
+      return;
+    }
     let timeout: NodeJS.Timeout | undefined;
     const closeRequest = this.send({ type: "close" }, undefined, true).then(
       () => "closed" as const,
@@ -315,8 +319,15 @@ class LocalEmbeddingWorkerClient {
 
   /** Ensure the child process exists and has lifecycle failure handlers installed. */
   private ensureChild(): ChildProcess {
-    if (this.child?.connected) {
-      return this.child;
+    const current = this.child;
+    if (current) {
+      if (current.connected) {
+        return current;
+      }
+      if (current.exitCode === null && current.signalCode === null) {
+        throw new Error("Local embedding worker IPC disconnected before process termination");
+      }
+      this.child = null;
     }
 
     const child = fork(this.scriptPath, [], {
@@ -362,6 +373,9 @@ class LocalEmbeddingWorkerClient {
   ): Promise<number[] | number[][] | undefined> {
     while (this.shutdownPromise) {
       await this.shutdownPromise;
+    }
+    if (this.child && !this.child.connected) {
+      await this.shutdownChild();
     }
     if (this.closed && !allowClosed) {
       throw new Error("Local embedding worker client has been closed");
