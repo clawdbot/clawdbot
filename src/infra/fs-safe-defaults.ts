@@ -3,12 +3,9 @@ import { configureFsSafeNative } from "@openclaw/fs-safe/config";
 
 // OpenClaw does not rely on native helpers for normal filesystem safety. Tests
 // and operators can still opt in with fs-safe's documented env override.
-const hasModeOverride = [
-  "FS_SAFE_NATIVE_MODE",
-  "OPENCLAW_FS_SAFE_NATIVE_MODE",
-  "FS_SAFE_PYTHON_MODE",
-  "OPENCLAW_FS_SAFE_PYTHON_MODE",
-].some((key) => process.env[key] != null);
+const hasModeOverride = Object.keys(process.env).some((key) =>
+  /^(?:OPENCLAW_)?FS_SAFE_(?:NATIVE|PYTHON)_MODE$/u.test(key),
+);
 
 if (!hasModeOverride) {
   configureFsSafeNative({ mode: "off" });

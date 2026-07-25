@@ -16,6 +16,8 @@ import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
 import { createFileLockManager } from "./file-lock-manager.js";
 import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { isSqliteLockError } from "./sqlite-transaction.js";
 import {
   readWindowsProcessArgsSync,
   readWindowsProcessStartTimeSync,
@@ -105,6 +107,28 @@ export class GatewayLockError extends Error {
     super(message);
     this.name = "GatewayLockError";
   }
+}
+
+function tryAcquireLegacyCoordinator(lockPath: string): { release: () => void } | null {
+  const database = openNodeSqliteDatabase(`${lockPath}.sqlite`);
+  try {
+    database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+  } catch (error) {
+    database.close();
+    if (isSqliteLockError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  return {
+    release: () => {
+      try {
+        database.exec("ROLLBACK");
+      } finally {
+        database.close();
+      }
+    },
+  };
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
@@ -250,14 +274,8 @@ async function shouldReclaimGatewayLock(params: {
         params.readProcessStartTime,
       )
     : "unknown";
-  if (ownerStatus === "dead" && ownerPid) {
-    return true;
-  }
-  if (ownerStatus === "alive") {
-    return false;
-  }
-  if (ownerStatus === "unknown" && ownerPid) {
-    return false;
+  if (ownerPid) {
+    return ownerStatus === "dead";
   }
   if (params.payload?.createdAt) {
     const createdAt = Date.parse(params.payload.createdAt);
@@ -491,35 +509,56 @@ async function acquireLockFile(
     });
 
   while (now() - startedAt < timeoutMs) {
+    let coordinator: ReturnType<typeof tryAcquireLegacyCoordinator>;
     try {
-      const lock = await GATEWAY_LOCKS.acquire(lockPath, {
-        lockPath,
-        staleMs,
-        timeoutMs: 0,
-        retry: { retries: 0 },
-        staleRecovery: "remove-if-unchanged",
-        payload: buildPayload,
-        parsePayload: parseGatewayLockPayload,
-        shouldReclaim: ({ payload }) => shouldReclaim(payload as LockPayload | null),
-        shouldRemoveStaleLock: ({ payload }) => shouldReclaim(payload as LockPayload | null),
-      });
-      return {
-        lockPath,
-        configPath,
-        release: async () => {
-          try {
-            await lock.release();
-          } catch (error) {
-            throw new GatewayLockError(`failed to release gateway lock at ${lockPath}`, error);
-          }
-        },
-      };
+      coordinator = tryAcquireLegacyCoordinator(lockPath);
     } catch (error) {
-      const code = (error as { code?: unknown }).code;
-      if (code !== "file_lock_timeout" && code !== "file_lock_stale") {
-        throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, error);
-      }
+      throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, error);
+    }
+    if (!coordinator) {
       lastPayload = await readLockPayload(lockPath);
+    } else {
+      try {
+        const lock = await GATEWAY_LOCKS.acquire(lockPath, {
+          lockPath,
+          staleMs,
+          timeoutMs: 0,
+          retry: { retries: 0 },
+          staleRecovery: "remove-if-unchanged",
+          payload: buildPayload,
+          parsePayload: parseGatewayLockPayload,
+          shouldReclaim: ({ payload }) => shouldReclaim(payload as LockPayload | null),
+          shouldRemoveStaleLock: ({ payload }) => shouldReclaim(payload as LockPayload | null),
+        });
+        return {
+          lockPath,
+          configPath,
+          release: async () => {
+            let releaseError: unknown;
+            await lock.release().catch((error: unknown) => {
+              releaseError = error;
+            });
+            try {
+              coordinator.release();
+            } catch (error) {
+              releaseError ??= error;
+            }
+            if (releaseError) {
+              throw new GatewayLockError(
+                `failed to release gateway lock at ${lockPath}`,
+                releaseError,
+              );
+            }
+          },
+        };
+      } catch (error) {
+        coordinator.release();
+        const code = (error as { code?: unknown }).code;
+        if (code !== "file_lock_timeout" && code !== "file_lock_stale") {
+          throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, error);
+        }
+        lastPayload = await readLockPayload(lockPath);
+      }
     }
 
     const remainingMs = timeoutMs - (now() - startedAt);

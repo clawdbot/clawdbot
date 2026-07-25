@@ -15,6 +15,7 @@ import {
   readActiveGatewayLockIdentity,
   readActiveGatewayLockPort,
 } from "./gateway-lock.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 type GatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
@@ -541,6 +542,22 @@ describe("gateway lock", () => {
     await acquiredResult.value.release();
     const nextLock = expectGatewayLock(await acquireForTest(env));
     await nextLock.release();
+  });
+
+  it("continues honoring the legacy lifetime coordinator", async () => {
+    const env = await makeEnv();
+    const { stateLockPath } = resolveLockPath(env);
+    await fs.mkdir(path.dirname(stateLockPath), { recursive: true });
+    const coordinator = openNodeSqliteDatabase(`${stateLockPath}.sqlite`);
+    coordinator.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+    try {
+      await expect(acquireForTest(env, { timeoutMs: 15 })).rejects.toBeInstanceOf(GatewayLockError);
+    } finally {
+      coordinator.exec("ROLLBACK");
+      coordinator.close();
+    }
+
+    await expectGatewayLock(await acquireForTest(env)).release();
   });
 
   it("preserves a fresh gateway lock that replaces the stale reclaim candidate", async () => {

@@ -9,8 +9,4 @@ export {
   sameFileIdentity,
   sanitizeUntrustedFileName,
 } from "@openclaw/fs-safe/advanced";
-export {
-  createSecretFileAtomic,
-  readSecretFile,
-  tryReadSecretFile,
-} from "@openclaw/fs-safe/secret";
+export { readSecretFile } from "@openclaw/fs-safe/secret";
