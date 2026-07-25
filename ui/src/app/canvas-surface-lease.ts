@@ -14,7 +14,7 @@ type CanvasSurfaceRefresh = {
   expiresAtMs?: number;
 };
 
-export type CanvasSurfaceLease = {
+type CanvasSurfaceLease = {
   start: (helloUrl: string | undefined) => void;
   stop: () => void;
 };
