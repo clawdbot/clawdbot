@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildNetworkGuardProfileV1 } from "./network-guard-profile-builder.js";
 import {
   assertLocalNetworkGuardPrepared,
   assertNetworkGuardProfileV1,
@@ -6,7 +7,7 @@ import {
   NETWORK_GUARD_PROFILE_VERSION,
   type NetworkGuardProfileV1,
 } from "./network-guard-profile.js";
-import { buildNetworkGuardProfileV1, resolveSsrFPolicyForUrl } from "./ssrf.js";
+import { resolveSsrFPolicyForUrl } from "./ssrf.js";
 
 function createProfile(): NetworkGuardProfileV1 {
   return {

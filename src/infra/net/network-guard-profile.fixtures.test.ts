@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import networkGuardFixtures from "../../../test/fixtures/network-guard-profile-v1.json" with { type: "json" };
+import { buildNetworkGuardProfileV1 } from "./network-guard-profile-builder.js";
 import {
   assertNetworkGuardProfileV1,
   NETWORK_GUARD_PROFILE_VERSION,
 } from "./network-guard-profile.js";
 import {
-  buildNetworkGuardProfileV1,
   resolvePinnedHostnameWithPolicy,
   resolveSsrFPolicyForUrl,
   type LookupFn,

@@ -14,6 +14,7 @@ import {
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
+import { buildNetworkGuardProfileV1 } from "./network-guard-profile-builder.js";
 import {
   createLocalOneHopFetchDispatcher,
   type FetchLike,
@@ -29,7 +30,6 @@ import {
 } from "./runtime-fetch.js";
 import {
   assertHostnameAllowedWithPolicy,
-  buildNetworkGuardProfileV1,
   closeDispatcher,
   createPinnedDispatcher,
   matchesHostnameAllowlist,
