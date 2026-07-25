@@ -55,11 +55,12 @@ import {
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
-  renderExpandedToolCardContent,
+  isRunningToolCard,
   renderRawOutputToggle,
   renderToolCard,
   renderToolPreview,
   resolveCollapsedToolDetail,
+  resolveToolRowText,
   shouldToggleSelectableDisclosure,
 } from "./chat-tool-cards.ts";
 
@@ -256,6 +257,7 @@ export function renderGroupedMessage(
     !hasPairingQrExpiryNotices &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
+    !reasoningMarkdown &&
     !normalizedMessage.replyTarget
   ) {
     return nothing;
@@ -273,6 +275,11 @@ export function renderGroupedMessage(
         detailMode: "explain",
       })
     : null;
+  const singleToolRunning =
+    singleToolCard !== null && isRunningToolCard(singleToolCard, opts.runActive);
+  const singleToolRowText = singleToolRunning
+    ? resolveToolRowText(singleToolCard, opts.runActive)
+    : undefined;
   const singleToolDisplayDetail =
     !toolMessageHasError && singleToolCard && singleToolDisplay
       ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)
@@ -283,21 +290,25 @@ export function renderGroupedMessage(
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`
-    : singleToolDisplayDetail
-      ? !markdown && !hasImages
-        ? singleToolDisplayDetail
-        : singleToolCard?.outputText?.trim()
-          ? "output"
-          : undefined
-      : toolNames.length <= 3
-        ? toolNames.join(", ")
-        : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
+    : singleToolRowText
+      ? undefined
+      : singleToolDisplayDetail
+        ? !markdown && !hasImages
+          ? singleToolDisplayDetail
+          : singleToolCard?.outputText?.trim()
+            ? "output"
+            : undefined
+        : toolNames.length <= 3
+          ? toolNames.join(", ")
+          : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
     ? t("chat.toolCards.toolError")
-    : singleToolDisplay && !markdown && !hasImages
-      ? singleToolDisplay.label
-      : t("chat.toolCards.toolOutput");
+    : singleToolRowText
+      ? singleToolRowText
+      : singleToolDisplay && !markdown && !hasImages
+        ? singleToolDisplay.label
+        : t("chat.toolCards.toolOutput");
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
   const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
@@ -441,30 +452,19 @@ export function renderGroupedMessage(
                           ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                           : nothing}
                       ${hasToolCards
-                        ? singleToolCard && !markdown && !hasImages
-                          ? renderExpandedToolCardContent(
-                              singleToolCard,
-                              opts.sessionKey,
-                              onOpenSidebar,
-                              opts.canvasPluginSurfaceUrl,
-                              opts.embedSandboxMode ?? "scripts",
-                              opts.allowExternalEmbedUrls ?? false,
-                              opts.runActive,
-                              opts.onOpenWorkspaceFile,
-                            )
-                          : renderInlineToolCards(toolCards, {
-                              messageKey,
-                              sessionKey: opts.sessionKey,
-                              agentId: opts.agentId,
-                              onOpenSidebar,
-                              onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
-                              isToolExpanded: opts.isToolExpanded,
-                              onToggleToolExpanded: opts.onToggleToolExpanded,
-                              runActive: opts.runActive,
-                              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-                              embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                              allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-                            })
+                        ? renderInlineToolCards(toolCards, {
+                            messageKey,
+                            sessionKey: opts.sessionKey,
+                            agentId: opts.agentId,
+                            onOpenSidebar,
+                            onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
+                            isToolExpanded: opts.isToolExpanded,
+                            onToggleToolExpanded: opts.onToggleToolExpanded,
+                            runActive: opts.runActive,
+                            canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+                            embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                            allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                          })
                         : nothing}
                     </div>
                   `

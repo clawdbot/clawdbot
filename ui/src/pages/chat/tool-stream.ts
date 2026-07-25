@@ -59,6 +59,9 @@ type ToolStreamHost = {
   chatRunUsageById?: Map<string, number>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  /** Live agent `stream: "thinking"` text for the active chat run. */
+  chatThinkingStream?: string | null;
+  chatThinkingStartedAt?: number | null;
   chatRunStartup?: ChatRunStartupState | null;
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
@@ -70,6 +73,7 @@ type ToolStreamHost = {
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
   sessions: Pick<SessionCapability, "setModelOverride">;
+  requestUpdate?: () => void;
 };
 
 function toTrimmedString(value: unknown): string | null {
@@ -888,6 +892,49 @@ function handlePlanEvent(host: PlanHost, payload: AgentEventPayload) {
   host.requestUpdate?.();
 }
 
+function clearThinkingStream(host: ToolStreamHost, runId?: string | null) {
+  if (runId && host.chatRunId && host.chatRunId !== runId) {
+    return;
+  }
+  if (host.chatThinkingStream != null || host.chatThinkingStartedAt != null) {
+    host.chatThinkingStream = null;
+    host.chatThinkingStartedAt = null;
+  }
+}
+
+function handleThinkingEvent(host: ToolStreamHost, payload: AgentEventPayload) {
+  // Prefer the active chat run when known; otherwise accept session-scoped
+  // thinking so early deltas before chatRunId adoption still paint.
+  if (host.chatRunId && payload.runId && payload.runId !== host.chatRunId) {
+    return;
+  }
+  const data = payload.data ?? {};
+  const text =
+    typeof data.text === "string"
+      ? data.text
+      : typeof data.delta === "string"
+        ? `${host.chatThinkingStream ?? ""}${data.delta}`
+        : null;
+  if (text == null) {
+    return;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return;
+  }
+  if (host.chatThinkingStream === trimmed) {
+    return;
+  }
+  if (host.chatThinkingStartedAt == null) {
+    host.chatThinkingStartedAt = typeof payload.ts === "number" ? payload.ts : Date.now();
+  }
+  host.chatThinkingStream = trimmed;
+  if (payload.runId === host.chatRunId) {
+    host.chatRunStartup = { state: "activity", runId: payload.runId };
+  }
+  host.requestUpdate?.();
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -927,6 +974,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       usageByRun.delete(payload.runId);
       host.chatRunUsageById = usageByRun;
     }
+    if (phase === "end" || phase === "error") {
+      clearThinkingStream(host, payload.runId);
+    }
     if (handleLifecycleApprovalEvent(host, payload)) {
       return;
     }
@@ -949,6 +999,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  if (payload.stream === "thinking") {
+    handleThinkingEvent(host, payload);
+    return;
+  }
+
   if (payload.stream !== "tool") {
     return;
   }
@@ -963,7 +1018,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (phase === "start" && payload.runId === host.chatRunId) {
     host.chatRunStartup = { state: "activity", runId: payload.runId };
   }
-  const args = phase === "start" ? data.args : undefined;
+  // Start always replaces args. Update may carry provisional streaming args
+  // (path + content preview) before tool_execution_start; merge those in.
+  const incomingArgs = phase === "start" || phase === "update" ? data.args : undefined;
   const output =
     phase === "update"
       ? formatToolOutput(data.partialResult)
@@ -1000,7 +1057,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       runId: payload.runId,
       sessionKey,
       name,
-      args,
+      args: incomingArgs,
       output: output || undefined,
       ...(resultDetails !== undefined ? { details: resultDetails } : {}),
       ...(resultIsError !== undefined ? { isError: resultIsError } : {}),
@@ -1013,8 +1070,22 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     host.toolStreamOrder.push(toolCallId);
   } else {
     entry.name = name;
-    if (args !== undefined) {
-      entry.args = args;
+    if (incomingArgs !== undefined) {
+      if (
+        phase === "update" &&
+        entry.args &&
+        typeof entry.args === "object" &&
+        !Array.isArray(entry.args) &&
+        typeof incomingArgs === "object" &&
+        !Array.isArray(incomingArgs)
+      ) {
+        entry.args = {
+          ...(entry.args as Record<string, unknown>),
+          ...(incomingArgs as Record<string, unknown>),
+        };
+      } else {
+        entry.args = incomingArgs;
+      }
     }
     if (output !== undefined) {
       entry.output = output || undefined;

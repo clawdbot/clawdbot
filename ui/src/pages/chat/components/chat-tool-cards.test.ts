@@ -243,7 +243,7 @@ describe("tool-cards", () => {
         runActive: true,
         verb: "running",
         label: "Attempted changes",
-        hasStat: false,
+        hasStat: true,
         failed: false,
       },
       {
@@ -317,6 +317,140 @@ describe("tool-cards", () => {
         );
       }
     }
+  });
+
+  it("shows live write row with +lines chip and diff viewport while streaming", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "write-preview",
+          name: "write",
+          args: {
+            path: "/repo/docs/foo.md",
+            content: "line 1\nline 2\nline 3\n",
+          },
+          live: true,
+        },
+        {
+          expanded: false,
+          onToggleExpanded: vi.fn(),
+          runActive: true,
+        },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Writing");
+    expect(container.querySelector(".chat-tool-row__target")?.textContent).toBe("foo.md");
+    expect(container.querySelector(".chat-diffstat__add")?.textContent).toBe("+3");
+    expect(container.querySelector(".chat-diff")).not.toBeNull();
+    expect(container.querySelector(".chat-diff__row--add")?.textContent).toContain("line 1");
+  });
+
+  it("keeps write kind and live diff when content streams before path", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "write-no-path",
+          name: "write",
+          args: {
+            content: "hello world",
+          },
+          live: true,
+        },
+        {
+          expanded: false,
+          onToggleExpanded: vi.fn(),
+          runActive: true,
+        },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Writing");
+    expect(container.querySelector(".chat-tool-kv")).toBeNull();
+    expect(container.querySelector(".chat-diff")).not.toBeNull();
+    expect(container.textContent).not.toContain("contentLength");
+  });
+
+  it("shows path-less write viewport even when runActive is false", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "write-no-path-no-run",
+          name: "write",
+          args: {
+            content: "# title\nline 2\n",
+          },
+          live: true,
+        },
+        {
+          expanded: false,
+          onToggleExpanded: vi.fn(),
+          runActive: false,
+        },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Writing");
+    expect(container.querySelector(".chat-diff")).not.toBeNull();
+    expect(container.querySelector(".chat-diff__row--add")?.textContent).toContain("# title");
+    expect(container.querySelector(".chat-tool-kv")).toBeNull();
+  });
+
+  it("pins the live write diff viewport to the newest lines as content grows", async () => {
+    const container = document.createElement("div");
+    const card = {
+      id: "write-autoscroll",
+      name: "write",
+      args: { content: "line 1\n" },
+      live: true,
+    };
+    render(
+      renderToolCard(card, {
+        expanded: false,
+        onToggleExpanded: vi.fn(),
+        runActive: true,
+      }),
+      container,
+    );
+
+    const diff = container.querySelector(".chat-diff");
+    expect(diff).toBeInstanceOf(HTMLElement);
+    Object.defineProperty(diff, "clientHeight", { configurable: true, value: 100 });
+    Object.defineProperty(diff, "scrollHeight", { configurable: true, value: 400 });
+    let scrollTop = 0;
+    Object.defineProperty(diff, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+
+    render(
+      renderToolCard(
+        {
+          ...card,
+          args: { content: "line 1\nline 2\nline 3\nline 4\nline 5\n" },
+        },
+        {
+          expanded: false,
+          onToggleExpanded: vi.fn(),
+          runActive: true,
+        },
+      ),
+      container,
+    );
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    expect(scrollTop).toBe(400);
   });
 
   it.each([

@@ -262,6 +262,8 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
+      thinkingStream: catalogKey ? null : state.chatThinkingStream,
+      thinkingStartedAt: catalogKey ? null : state.chatThinkingStartedAt,
       runOutputTokens: catalogKey ? null : runOutputTokens,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,

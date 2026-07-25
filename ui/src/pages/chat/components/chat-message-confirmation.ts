@@ -13,6 +13,12 @@ type DeleteConfirmDismissOptions = { restoreFocus?: boolean };
 type DeleteConfirmDismisser = (options?: DeleteConfirmDismissOptions) => void;
 
 const deleteConfirmDismissers = new WeakMap<Element, DeleteConfirmDismisser>();
+// Confirm popovers are body-portaled. Virtual rows use `transform: translateY(...)`,
+// which makes in-tree `position: fixed` children resolve against the row instead of
+// the viewport — the dialog opens off-screen and looks like a dead click.
+const confirmPopoverByWrap = new WeakMap<HTMLElement, HTMLElement>();
+const confirmWrapByPopover = new WeakMap<HTMLElement, HTMLElement>();
+const activeConfirmPopovers = new Set<HTMLElement>();
 
 function shouldSkipActionConfirm(preferenceName: string): boolean {
   try {
@@ -32,6 +38,17 @@ function dismissDeleteConfirm(element: Element, options?: DeleteConfirmDismissOp
 }
 
 export function dismissConfirmedActionPopovers(owner: ParentNode): void {
+  for (const popover of [...activeConfirmPopovers]) {
+    const wrap = confirmWrapByPopover.get(popover);
+    if (wrap && owner.contains(wrap)) {
+      dismissDeleteConfirm(popover);
+      continue;
+    }
+    if (owner.contains(popover)) {
+      dismissDeleteConfirm(popover);
+    }
+  }
+  // In-tree leftovers (tests / pre-portal callers).
   owner.querySelectorAll(".chat-delete-confirm").forEach((popover) => {
     dismissDeleteConfirm(popover);
   });
@@ -179,8 +196,8 @@ function openConfirmedActionPopover(
   if (!wrap) {
     return;
   }
-  const existing = wrap.querySelector(".chat-delete-confirm");
-  if (existing) {
+  const existing = confirmPopoverByWrap.get(wrap);
+  if (existing?.isConnected) {
     dismissDeleteConfirm(existing, { restoreFocus: true });
     return;
   }
@@ -208,7 +225,11 @@ function openConfirmedActionPopover(
   if (confirmButton) {
     confirmButton.textContent = params.confirmLabel;
   }
-  wrap.appendChild(popover);
+  // Portal to body so viewport `fixed` placement survives virtual-row transforms.
+  document.body.appendChild(popover);
+  confirmPopoverByWrap.set(wrap, popover);
+  confirmWrapByPopover.set(popover, wrap);
+  activeConfirmPopovers.add(popover);
   placeDeleteConfirmPopover(btn, popover, params.side);
 
   const cancel = popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel")!;
@@ -224,6 +245,9 @@ function openConfirmedActionPopover(
     document.removeEventListener("contextmenu", closeOnContextMenu, true);
     window.removeEventListener("keydown", closeOnEscape, true);
     deleteConfirmDismissers.delete(popover);
+    activeConfirmPopovers.delete(popover);
+    confirmPopoverByWrap.delete(wrap);
+    confirmWrapByPopover.delete(popover);
     popover.remove();
     if (options?.restoreFocus && btn.isConnected) {
       btn.focus({ preventScroll: true });

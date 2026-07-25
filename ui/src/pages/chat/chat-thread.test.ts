@@ -706,6 +706,78 @@ describe("buildCachedChatItems working spark", () => {
     expect(hasReadingIndicator({ runWorking: true })).toBe(true);
   });
 
+  it("shows live thinking instead of the spark when View → Reasoning is on", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runWorking: true,
+        showThinking: true,
+        thinkingStream: "Checking the workspace",
+        thinkingStartedAt: 99,
+      }),
+    );
+    expect(items.some((item) => item.kind === "reading-indicator")).toBe(false);
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        kind: "stream",
+        text: "",
+        thinking: "Checking the workspace",
+        isStreaming: true,
+      }),
+    );
+  });
+
+  it("keeps pre-tool live Reasoning above a later Writing card while the run is live", () => {
+    // Regression: live thinking used to append after every tool card with a
+    // bumped timestamp, so Reasoning rendered under Writing until history
+    // materialization fixed the order at end-of-turn.
+    const items = buildCachedChatItems(
+      createProps({
+        runWorking: true,
+        showThinking: true,
+        showToolCalls: true,
+        thinkingStream: "Plan the sales tagging guide, then write the file.",
+        thinkingStartedAt: 100,
+        toolMessages: [
+          {
+            role: "assistant",
+            toolCallId: "call-write-1",
+            timestamp: 200,
+            content: [
+              {
+                type: "toolcall",
+                name: "write",
+                arguments: { path: "/tmp/guide.md", content: "# guide\n" },
+              },
+            ],
+            __openclawToolStreamLive: true,
+            __openclawToolStreamResultReceived: false,
+            __openclawToolStreamReceivedAt: 200,
+          },
+        ],
+      }),
+    );
+
+    const kinds = items.map((item) => item.kind);
+    const thinkingIndex = items.findIndex(
+      (item) => item.kind === "stream" && item.thinking?.includes("Plan the sales"),
+    );
+    const toolIndex = items.findIndex((item) => item.kind === "group" || item.kind === "message");
+    expect(thinkingIndex).toBeGreaterThanOrEqual(0);
+    expect(toolIndex).toBeGreaterThanOrEqual(0);
+    expect(thinkingIndex).toBeLessThan(toolIndex);
+    expect(kinds[thinkingIndex]).toBe("stream");
+  });
+
+  it("keeps the spark when thinking exists but View → Reasoning is off", () => {
+    expect(
+      hasReadingIndicator({
+        runWorking: true,
+        showThinking: false,
+        thinkingStream: "hidden thoughts",
+      }),
+    ).toBe(true);
+  });
+
   it("adds the plan to the active stream run and removes it when the run stops", () => {
     const planStatus = {
       steps: [{ step: "Inspect the route", status: "in_progress" as const }],

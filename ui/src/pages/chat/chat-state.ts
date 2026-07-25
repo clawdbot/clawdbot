@@ -561,6 +561,8 @@ export function resetChatStateForRouteSession(
   state.chatQueueModeOverride = undefined;
   state.chatEffectiveQueueMode = undefined;
   state.chatStream = null;
+  state.chatThinkingStream = null;
+  state.chatThinkingStartedAt = null;
   state.observerDigest = null;
   state.chatRunUsageById = new Map();
   state.chatSending = false;
@@ -1299,6 +1301,8 @@ export function createPageState(
     chatRunUsageById: new Map<string, number>(),
     chatStream: null,
     chatStreamStartedAt: null,
+    chatThinkingStream: null,
+    chatThinkingStartedAt: null,
     chatRunStartup: null,
     lastError: null,
     chatError: null,

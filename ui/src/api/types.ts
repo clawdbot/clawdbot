@@ -594,6 +594,13 @@ export type GatewaySessionRow = {
   effectiveQueueMode?: "steer" | "followup" | "collect" | "interrupt";
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
+  contextUsageBreakdown?: {
+    categories: Array<{ id: string; tokens: number }>;
+    totalTokens: number;
+    estimatedAt: number;
+    approximate: boolean;
+    encoding: string;
+  };
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   goal?: SessionGoal;

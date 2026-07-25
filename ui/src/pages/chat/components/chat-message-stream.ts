@@ -31,7 +31,11 @@ type StreamGroupOptions = {
   planActive?: boolean;
   startupPhase?: ChatRunStartupPhase;
   waitingApproval?: boolean;
+  /** True while context compaction is actively rewriting the transcript. */
+  compacting?: boolean;
   runOutputTokens?: number | null;
+  /** View → Reasoning: show live thinking blocks on the stream group. */
+  showReasoning?: boolean;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
 
@@ -73,6 +77,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
                 opts.waitingApproval === true,
                 opts.startupPhase,
                 opts.runOutputTokens,
+                opts.compacting === true,
               )
             : part.kind === "question"
               ? renderQuestionStreamPart(part, opts)
@@ -84,11 +89,17 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
                 : renderGroupedMessage(
                     {
                       role: "assistant",
-                      content: [{ type: "text", text: part.text }],
+                      content: [
+                        ...(part.thinking ? [{ type: "thinking", thinking: part.thinking }] : []),
+                        ...(part.text ? [{ type: "text", text: part.text }] : []),
+                      ],
                       timestamp: part.startedAt,
                     },
                     part.key,
-                    { isStreaming: part.isStreaming, showReasoning: false },
+                    {
+                      isStreaming: part.isStreaming,
+                      showReasoning: opts.showReasoning === true,
+                    },
                     onOpenSidebar,
                   ),
         )}

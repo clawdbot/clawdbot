@@ -303,6 +303,15 @@
   color: var(--destructive, #ef4444);
 }
 
+/* ── Live write/edit diff viewport (streaming args) ── */
+.chat-tool-msg-body--live {
+  margin-top: 6px;
+}
+
+.chat-tool-stream-diff .chat-diff {
+  max-height: min(420px, 50vh);
+}
+
 /* ── Inline diff ── */
 .chat-diff {
   margin-top: 6px;

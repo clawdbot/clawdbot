@@ -50,7 +50,7 @@ export function renderCompactionIndicator(status: CompactionStatus | null | unde
         role="status"
         aria-live="polite"
       >
-        ${icons.loader} Compacting context...
+        ${icons.loader} ${t("chat.compaction.active")}
       </div>
     `;
   }

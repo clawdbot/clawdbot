@@ -61,7 +61,10 @@ type BuildChatItemsProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  thinkingStream?: string | null;
+  thinkingStartedAt?: number | null;
   queue?: ChatQueueItem[];
+  showThinking?: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
@@ -1561,15 +1564,26 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   // The initial-load skeleton owns the empty thread; a background reload with
   // content still visible keeps the spark (it is the only working signal).
   const initialHistoryLoad = props.loading === true && items.length === 0;
+  const liveThinking =
+    props.showThinking === true && typeof props.thinkingStream === "string"
+      ? props.thinkingStream.trim()
+      : "";
+  const hasLiveThinking = liveThinking.length > 0;
   const hasPendingResponse =
     props.stream === null &&
+    !hasLiveThinking &&
     ((props.runWorking === true &&
       (props.waitingApproval === true || !hasVisibleRunningTool) &&
       !initialHistoryLoad) ||
       queuedSends.some(
         (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
       ));
-  if (props.runWorking !== true && props.stream === null && !hasPendingResponse) {
+  if (
+    props.runWorking !== true &&
+    props.stream === null &&
+    !hasLiveThinking &&
+    !hasPendingResponse
+  ) {
     clearWorkingProgress(props.sessionKey);
   }
   if (hasPendingResponse) {
@@ -1582,28 +1596,54 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       tools,
     );
     items.push({ kind: "reading-indicator", ...progress });
-  } else if (props.stream !== null) {
-    const text = sanitizeStreamText(props.stream);
+  } else if (props.stream !== null || hasLiveThinking) {
+    const text = props.stream !== null ? sanitizeStreamText(props.stream) : "";
     const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
-    if (visibleText.length > 0) {
-      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
-        const progress = resolveWorkingProgress(
-          props.sessionKey,
-          props.runId ?? null,
-          props.streamStartedAt,
-          queuedSends,
-          segments,
-          tools,
-        );
-        items.push({
-          kind: "stream",
-          key: progress.key,
-          text: visibleText,
-          startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
-          isStreaming: true,
+    const skipHeartbeat =
+      visibleText.length > 0 && stripHeartbeatTokenForDisplay(visibleText).shouldSkip;
+    if ((visibleText.length > 0 && !skipHeartbeat) || hasLiveThinking) {
+      const progress = resolveWorkingProgress(
+        props.sessionKey,
+        props.runId ?? null,
+        props.streamStartedAt ?? props.thinkingStartedAt ?? null,
+        queuedSends,
+        segments,
+        tools,
+      );
+      // Thinking usually starts before the first tool. Do not bump its
+      // timestamp past already-visible tool cards (that flips Reasoning below
+      // Writing while the run is live). Assistant text still pins to the end.
+      const hasVisibleAssistantText = visibleText.length > 0 && !skipHeartbeat;
+      const desiredStartedAt = hasVisibleAssistantText
+        ? timestampAfterVisibleItems(
+            items,
+            props.streamStartedAt ?? props.thinkingStartedAt ?? Date.now(),
+          )
+        : (props.thinkingStartedAt ?? props.streamStartedAt ?? Date.now());
+      const streamItem: ChatItem = {
+        kind: "stream",
+        key: progress.key,
+        text: skipHeartbeat ? "" : visibleText,
+        startedAt: desiredStartedAt,
+        isStreaming: true,
+        ...(hasLiveThinking ? { thinking: liveThinking } : {}),
+      };
+      if (hasVisibleAssistantText) {
+        items.push(streamItem);
+      } else {
+        // Same timestamp-merge path as keyed preambles: insert before the first
+        // later tool so pre-tool Reasoning stays above Writing during the run.
+        const insertionIndex = items.findIndex((existing) => {
+          const existingTimestamp = chatItemTimestamp(existing);
+          return existingTimestamp != null && existingTimestamp > desiredStartedAt;
         });
+        if (insertionIndex === -1) {
+          items.push(streamItem);
+        } else {
+          items.splice(insertionIndex, 0, streamItem);
+        }
       }
-    } else if (props.stream.trim().length === 0) {
+    } else if (props.stream !== null && props.stream.trim().length === 0) {
       const progress = resolveWorkingProgress(
         props.sessionKey,
         props.runId ?? null,
@@ -1811,7 +1851,10 @@ function sameChatItemsStructuralInput(
     previous.toolMessages === next.toolMessages &&
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
+    previous.thinkingStream === next.thinkingStream &&
+    previous.thinkingStartedAt === next.thinkingStartedAt &&
     previous.queue === next.queue &&
+    previous.showThinking === next.showThinking &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&

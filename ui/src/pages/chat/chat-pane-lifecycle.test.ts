@@ -634,8 +634,8 @@ describe("chat pane presentation teardown", () => {
     pane.appendChild(paneConfirmation);
     pane.disconnectedCallback();
 
-    expect(pane.querySelector(".chat-delete-confirm")).toBeNull();
-    expect(siblingConfirmation.querySelector(".chat-delete-confirm")).not.toBeNull();
+    // Confirms are body-portaled; ownership is tracked via the trigger wrap.
+    expect(document.body.querySelectorAll(".chat-delete-confirm")).toHaveLength(1);
     expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListeners[0], true);
     expect(removeDocumentListener).not.toHaveBeenCalledWith(
       "click",
@@ -690,7 +690,7 @@ describe("chat pane presentation teardown", () => {
       });
 
       expect(() => pane.switchPaneSession("agent:main:next")).toThrow(stopAfterReset);
-      expect(owner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(document.body.querySelector(".chat-delete-confirm")).toBeNull();
       expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListener, true);
       expect(removeWindowListener).toHaveBeenCalledWith("keydown", captureKeydownListener, true);
     } finally {

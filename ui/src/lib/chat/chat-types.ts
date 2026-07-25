@@ -61,7 +61,15 @@ export type ChatItem =
       action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
-  | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
+  | {
+      kind: "stream";
+      key: string;
+      text: string;
+      startedAt: number;
+      isStreaming: boolean;
+      /** Live agent `stream: "thinking"` text shown under View → Reasoning. */
+      thinking?: string;
+    }
   | { kind: "reading-indicator"; key: string; startedAt: number }
   | { kind: "question"; key: string; questionId: string; startedAt: number }
   | { kind: "plan"; key: string };

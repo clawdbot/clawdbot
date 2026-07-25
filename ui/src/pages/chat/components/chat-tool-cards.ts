@@ -1,11 +1,13 @@
 // Control UI chat module implements tool cards behavior.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
+import { countTextLines } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
@@ -271,6 +273,97 @@ function firstCommandLine(command: string): string {
   return truncateUtf16Safe(line, 120);
 }
 
+function readStreamingContentPreview(args: unknown): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  const record = args as Record<string, unknown>;
+  for (const key of ["content", "newText", "new_string", "file_text", "patch", "input"] as const) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function isLiveMutationCard(card: ToolCard): boolean {
+  // Tool-stream cards stay "live" until the result event; do not require
+  // runActive — provisional write rows must keep the +diff viewport open.
+  return card.live === true && card.completed !== true;
+}
+
+/** Live write/edit rows act as running even when runActive flickers. */
+function resolveMutationOutcome(card: ToolCard, runActive?: boolean): ToolCardOutcome {
+  const outcome = resolveToolCardOutcome(card, runActive);
+  if (outcome === "failed" || outcome === "succeeded") {
+    return outcome;
+  }
+  if (isLiveMutationCard(card)) {
+    return "running";
+  }
+  return outcome;
+}
+
+function resolveMutationStat(
+  card: ToolCard,
+  view: ToolCallView,
+  outcome: ToolCardOutcome,
+): { added: number; removed: number } | undefined {
+  // Failed rows stay quiet; live/completed rows show +N from streamed content.
+  if (outcome === "failed") {
+    return undefined;
+  }
+  if (outcome !== "running" && outcome !== "succeeded") {
+    return undefined;
+  }
+  if (view.stat && (view.stat.added > 0 || view.stat.removed > 0)) {
+    return view.stat;
+  }
+  const content = readStreamingContentPreview(card.args);
+  if (!content) {
+    return undefined;
+  }
+  const added = countTextLines(content);
+  return added > 0 ? { added, removed: 0 } : undefined;
+}
+
+function scrollDiffViewportToBottom(el?: Element | undefined) {
+  if (!(el instanceof HTMLElement)) {
+    return;
+  }
+  // Overflow lives on `.chat-diff`, not the stream wrapper.
+  const viewport = el.classList.contains("chat-diff") ? el : el.querySelector(".chat-diff");
+  if (!(viewport instanceof HTMLElement)) {
+    return;
+  }
+  const pin = () => {
+    viewport.scrollTop = viewport.scrollHeight;
+  };
+  pin();
+  // Second frame covers layout after newly streamed lines paint.
+  requestAnimationFrame(() => {
+    pin();
+    requestAnimationFrame(pin);
+  });
+}
+
+function renderLiveMutationDiff(
+  lines: NonNullable<ToolCallView["diff"]>,
+  outcome: ToolCardOutcome,
+) {
+  // New callback identity each render so Lit's ref directive re-invokes and
+  // keeps the viewport pinned to the newest streamed lines.
+  return html`<div
+    class="chat-tool-stream-diff"
+    ${ref((el) => {
+      scrollDiffViewportToBottom(el);
+    })}
+  >
+    ${renderDiffBlock(lines, outcome)}
+  </div>`;
+}
+
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
   if (view.kind === "command" && view.command) {
     const commandPreview = firstCommandLine(view.command);
@@ -288,11 +381,14 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
   }
 
   const verb = resolveToolRowVerb(view.kind, outcome);
-  if (verb && view.target) {
+  // Match completed write cards: "Writing filename +N path" while streaming,
+  // including path-less provisional rows (Image-2 viewport style).
+  if (verb && (view.target || outcome === "running")) {
+    const stat = resolveMutationStat(card, view, outcome);
     return html`
       <span class="chat-tool-row__verb">${verb}</span>
-      <span class="chat-tool-row__target">${view.target}</span>
-      ${outcome === "succeeded" && view.stat ? renderDiffStatChips(view.stat) : nothing}
+      ${view.target ? html`<span class="chat-tool-row__target">${view.target}</span>` : nothing}
+      ${stat ? renderDiffStatChips(stat) : nothing}
       ${view.targetDetail
         ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
         : nothing}
@@ -455,6 +551,34 @@ const ROW_SUMMARIZED_ARG_KEYS: Partial<Record<ToolCallView["kind"], ReadonlySet<
   read: new Set(["path", "file_path", "filePath", "notebook_path"]),
   search: new Set(["pattern", "query", "glob", "path"]),
   fetch: new Set(["url"]),
+  // Streaming write/edit progress uses these; show a live preview instead of KV noise.
+  write: new Set([
+    "path",
+    "file_path",
+    "filePath",
+    "file",
+    "filepath",
+    "filename",
+    "content",
+    "contentLength",
+    "file_text",
+  ]),
+  edit: new Set([
+    "path",
+    "file_path",
+    "filePath",
+    "file",
+    "filepath",
+    "filename",
+    "content",
+    "contentLength",
+    "newText",
+    "new_string",
+    "oldText",
+    "old_string",
+    "patch",
+    "input",
+  ]),
 };
 
 function extraArgsBeyondRowTarget(
@@ -568,9 +692,13 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
   if (view.kind === "command" && view.command) {
     return `$ ${firstCommandLine(view.command)}`;
   }
-  const verb = resolveToolRowVerb(view.kind, resolveToolCardOutcome(card, runActive));
-  if (verb && view.target) {
-    return `${verb} ${view.target}`;
+  const outcome = resolveMutationOutcome(card, runActive);
+  const verb = resolveToolRowVerb(view.kind, outcome);
+  // Keep this string short for activity-group summaries; chips/path detail
+  // already render separately in the tool row chrome.
+  if (verb && (view.target || outcome === "running")) {
+    const target = view.target?.trim();
+    return target ? `${verb} ${target}` : verb;
   }
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
@@ -593,14 +721,23 @@ export function renderToolCard(
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const outcome = resolveToolCardOutcome(card, opts.runActive);
+  const outcome = resolveMutationOutcome(card, opts.runActive);
   const isError = outcome === "failed";
   const isRunning = outcome === "running";
+  const streamingMutation = (view.kind === "write" || view.kind === "edit") && isRunning;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
+  const liveDiff =
+    (view.kind === "write" || view.kind === "edit") && view.diff && view.diff.length > 0
+      ? view.diff
+      : undefined;
+  // Keep the Image-2 write viewport open while streaming (path or path-less)
+  // so content pops in live without requiring a manual expand click.
+  const showLiveDiff = Boolean(streamingMutation || (liveDiff && opts.expanded));
+  const liveDiffLines = liveDiff ?? (streamingMutation ? [] : undefined);
 
   return html`
     <div
-      class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${opts.expanded
+      class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${opts.expanded || showLiveDiff
         ? "is-open"
         : ""}"
     >
@@ -609,7 +746,7 @@ export function renderToolCard(
           ? "chat-tool-msg-summary--error"
           : ""} ${isRunning ? "chat-tool-row--running" : ""}"
         type="button"
-        aria-expanded=${String(opts.expanded)}
+        aria-expanded=${String(opts.expanded || showLiveDiff)}
         @click=${(event: MouseEvent) => {
           if (shouldToggleSelectableDisclosure(event)) {
             opts.onToggleExpanded(card.id);
@@ -628,6 +765,11 @@ export function renderToolCard(
             ></span>`
           : nothing}
       </button>
+      ${showLiveDiff && !opts.expanded && liveDiffLines
+        ? html`<div class="chat-tool-msg-body chat-tool-msg-body--live">
+            ${renderLiveMutationDiff(liveDiffLines, outcome)}
+          </div>`
+        : nothing}
       ${opts.expanded
         ? html`
             <div class="chat-tool-msg-body">
@@ -750,7 +892,7 @@ export function renderExpandedToolCardContent(
           )}
           ${sidebarAction}
         </div>
-        ${renderDiffBlock(view.diff, outcome)}
+        ${renderLiveMutationDiff(view.diff, outcome)}
         ${isError && hasOutput
           ? renderToolDataBlock({ label: t("chat.toolCards.toolError"), text: card.outputText! })
           : hasOutput
@@ -762,8 +904,15 @@ export function renderExpandedToolCardContent(
 
   // File reads and searches summarize their primary target in the row, so the
   // full args JSON is noise — but any remaining args (filters, limits, request
-  // options…) stay visible as key-value rows for auditability.
-  const summarizedKind = view.kind === "read" || view.kind === "search" || view.kind === "fetch";
+  // options…) stay visible as key-value rows for auditability. Write/edit
+  // streaming meta (contentLength/content) is also suppressed in favor of the
+  // live diff viewport on the row.
+  const summarizedKind =
+    view.kind === "read" ||
+    view.kind === "search" ||
+    view.kind === "fetch" ||
+    view.kind === "write" ||
+    view.kind === "edit";
   const inputBlockArgs = summarizedKind
     ? extraArgsBeyondRowTarget(card.args, view.kind)
     : card.args;

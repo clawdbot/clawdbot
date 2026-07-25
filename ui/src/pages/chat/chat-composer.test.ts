@@ -906,12 +906,105 @@ describe("renderChatComposer status", () => {
       },
     });
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Thread context usage: 46k of 200k (23%)",
+      "Thread context usage: 44.9k of 195.3k (23%)",
     );
     expect(container.querySelector(".context-usage__plan-header")?.textContent).toContain(
       "Plan usage",
     );
     expect(container.querySelector(".context-usage__limit")?.textContent).toContain("72%");
+  });
+
+  it("shows a 0% context ring when only the context limit is known", () => {
+    const { container } = renderComposer({
+      sessions: {
+        defaults: { modelProvider: "custom", model: "qwen", contextTokens: 262_144 },
+        sessions: [
+          {
+            key: "agent:main:main",
+            sessionId: "s1",
+            updatedAt: Date.now(),
+            contextTokens: 262_144,
+          },
+        ],
+      } as never,
+    });
+    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
+      "Thread context usage: ~0 of 256k (~0%)",
+    );
+    expect(container.querySelector(".context-ring__pct")?.textContent?.trim()).toBe("~0%");
+  });
+
+  it("falls back to local contextUsageBreakdown when session total is omitted", () => {
+    const { container } = renderComposer({
+      sessions: {
+        defaults: { modelProvider: "custom", model: "qwen", contextTokens: 262_144 },
+        sessions: [
+          {
+            key: "main",
+            sessionId: "s1",
+            updatedAt: Date.now(),
+            contextTokens: 262_144,
+            contextUsageBreakdown: {
+              approximate: true,
+              totalTokens: 20_989,
+              estimatedAt: Date.now(),
+              encoding: "local",
+              categories: [
+                { id: "system", tokens: 2_355 },
+                { id: "tools", tokens: 11_382 },
+                { id: "rules", tokens: 2_993 },
+                { id: "skills", tokens: 4_259 },
+              ],
+            },
+          },
+        ],
+      } as never,
+    });
+    // ~20989 / 262144 ≈ 8%; compact format may show ~20.5k/~21k depending on rounding.
+    expect(container.querySelector(".context-ring__pct")?.textContent?.trim()).toBe("~8%");
+    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toMatch(
+      /~20\.\dk of 256k \(~8%\)/,
+    );
+  });
+
+  it("attributes leftover session tokens to conversation in the context legend", () => {
+    const { container } = renderComposer({
+      sessions: {
+        defaults: { modelProvider: "custom", model: "qwen", contextTokens: 262_144 },
+        sessions: [
+          {
+            key: "main",
+            sessionId: "s1",
+            updatedAt: Date.now(),
+            totalTokens: 91_800,
+            totalTokensFresh: true,
+            contextTokens: 262_144,
+            contextUsageBreakdown: {
+              approximate: true,
+              totalTokens: 20_989,
+              estimatedAt: Date.now(),
+              encoding: "local",
+              categories: [
+                { id: "system", tokens: 2_355 },
+                { id: "tools", tokens: 11_382 },
+                { id: "rules", tokens: 2_993 },
+                { id: "skills", tokens: 4_259 },
+              ],
+            },
+          },
+        ],
+      } as never,
+    });
+    const legend = Array.from(container.querySelectorAll(".context-usage__legend li")).map(
+      (row) => ({
+        label: row.querySelector(".context-usage__legend-label")?.textContent?.trim(),
+        value: row.querySelector(".context-usage__legend-value")?.textContent?.trim(),
+      }),
+    );
+    expect(legend.some((row) => row.label === "Conversation")).toBe(true);
+    const conversation = legend.find((row) => row.label === "Conversation");
+    // 91800 - 20989 = 70811
+    expect(conversation?.value).toMatch(/~70,?811|~70811/);
   });
 
   it("renders plan usage before session metrics arrive", () => {

@@ -67,6 +67,7 @@ export function renderChatWorkingIndicator(
   waitingApproval = false,
   startupPhase?: ChatRunStartupPhase,
   outputTokens?: number | null,
+  compacting = false,
 ) {
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
@@ -78,28 +79,37 @@ export function renderChatWorkingIndicator(
       <span class="chat-working-indicator__status">
         ${waitingApproval
           ? html`<span>${t("chat.waitingForApproval")}</span>`
-          : startupPhase
+          : compacting
             ? html`
-                <span>${startupStatusLabel(startupPhase)}</span>
+                <span>${t("chat.compaction.active")}</span>
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}
                 ></openclaw-elapsed-time>
                 ${renderLiveOutputTokens(outputTokens)}
               `
-            : html`
-                <span class="agent-chat__sr-only">${t("common.working")}</span>
-                <openclaw-elapsed-time
-                  class="chat-working-indicator__elapsed"
-                  .startMs=${part.startedAt}
-                ></openclaw-elapsed-time>
-                <openclaw-working-phrase
-                  aria-hidden="true"
-                  .startMs=${part.startedAt}
-                  .seed=${part.key}
-                ></openclaw-working-phrase>
-                ${renderLiveOutputTokens(outputTokens)}
-              `}
+            : startupPhase
+              ? html`
+                  <span>${startupStatusLabel(startupPhase)}</span>
+                  <openclaw-elapsed-time
+                    class="chat-working-indicator__elapsed"
+                    .startMs=${part.startedAt}
+                  ></openclaw-elapsed-time>
+                  ${renderLiveOutputTokens(outputTokens)}
+                `
+              : html`
+                  <span class="agent-chat__sr-only">${t("common.working")}</span>
+                  <openclaw-elapsed-time
+                    class="chat-working-indicator__elapsed"
+                    .startMs=${part.startedAt}
+                  ></openclaw-elapsed-time>
+                  <openclaw-working-phrase
+                    aria-hidden="true"
+                    .startMs=${part.startedAt}
+                    .seed=${part.key}
+                  ></openclaw-working-phrase>
+                  ${renderLiveOutputTokens(outputTokens)}
+                `}
       </span>
     </div>
   `;

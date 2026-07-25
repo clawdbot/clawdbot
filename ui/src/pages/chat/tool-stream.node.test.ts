@@ -1123,3 +1123,58 @@ describe("app-tool-stream result blocks", () => {
     expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
   });
 });
+
+describe("app-tool-stream provisional write args", () => {
+  it("merges update args so streaming content grows before execution start", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "write",
+        toolCallId: "call-write",
+        args: { path: "/repo/notes.md" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "update",
+        name: "write",
+        toolCallId: "call-write",
+        args: { path: "/repo/notes.md", content: "hello" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "tool", {
+        phase: "update",
+        name: "write",
+        toolCallId: "call-write",
+        args: { path: "/repo/notes.md", content: "hello world" },
+      }),
+    );
+
+    expect(host.toolStreamById.get("call-write")?.args).toEqual({
+      path: "/repo/notes.md",
+      content: "hello world",
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 4, "tool", {
+        phase: "start",
+        name: "write",
+        toolCallId: "call-write",
+        args: { path: "/repo/notes.md", content: "full file body" },
+      }),
+    );
+
+    expect(host.toolStreamById.get("call-write")?.args).toEqual({
+      path: "/repo/notes.md",
+      content: "full file body",
+    });
+  });
+});

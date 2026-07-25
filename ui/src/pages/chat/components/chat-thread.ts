@@ -109,6 +109,8 @@ type ChatThreadProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  thinkingStream?: string | null;
+  thinkingStartedAt?: number | null;
   runOutputTokens?: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
@@ -122,6 +124,8 @@ type ChatThreadProps = {
   startupStatus?: ChatRunStartupStatus | null;
   /** Re-labels the working spark while the active run is parked on an approval. */
   waitingApproval?: boolean;
+  /** Re-labels the working spark while context compaction is in flight. */
+  compacting?: boolean;
   planStatus?: PlanStatus | null;
   questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
@@ -578,8 +582,9 @@ export function resetChatThreadPresentationState(paneId?: string, owner?: Parent
   if (owner) {
     dismissConfirmedActionPopovers(owner);
   }
-  // The selection popup is body-portaled; pane teardown/route changes must
-  // drop it so it cannot outlive the render that owns its callbacks.
+  // Confirm dialogs and the selection popup are body-portaled; pane
+  // teardown/route changes must drop them so they cannot outlive the render
+  // that owns their callbacks.
   removeChatSelectionPopup();
   if (paneId) {
     threadStates.delete(paneId);
@@ -1170,8 +1175,9 @@ function renderChatThreadContents(
     (sessionHost !== null &&
       isUiGlobalScopeConfigured(sessionHost) &&
       resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = props.showThinking && reasoningLevel !== "off";
+  // View → Reasoning owns Control UI visibility. Session reasoningLevel gates
+  // channel/TUI delivery only and must not hide live thinking here.
+  const showReasoning = props.showThinking;
   const assistantIdentity = {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
@@ -1190,7 +1196,10 @@ function renderChatThreadContents(
     streamSegments: props.streamSegments,
     stream: displayStream,
     streamStartedAt: props.streamStartedAt,
+    thinkingStream: props.thinkingStream,
+    thinkingStartedAt: props.thinkingStartedAt,
     queue: props.queue,
+    showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
@@ -1318,7 +1327,9 @@ function renderChatThreadContents(
         planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
+        compacting: props.compacting,
         runOutputTokens: props.runOutputTokens,
+        showReasoning,
         onOpenSidebar: props.onOpenSidebar,
         assistant: assistantIdentity,
         basePath: props.basePath,

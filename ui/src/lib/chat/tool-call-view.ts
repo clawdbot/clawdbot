@@ -323,20 +323,39 @@ export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind 
 // Cache entries remember which details object they were built from: live tool
 // rows first render with args only and gain result `details` (e.g. the edit
 // diff) later on the same args identity, which must invalidate the cache.
-const toolCallViewCache = new WeakMap<object, { details: unknown; view: ToolCallView }>();
+// Also fingerprint streamed content length — provisional writes mutate/grow
+// `content` on the same args object and must not keep a stale empty view.
+const toolCallViewCache = new WeakMap<
+  object,
+  { details: unknown; contentLen: number; view: ToolCallView }
+>();
+
+function streamingContentFingerprint(args: Record<string, unknown> | null): number {
+  if (!args) {
+    return 0;
+  }
+  for (const key of ["content", "newText", "new_string", "file_text", "patch", "input"] as const) {
+    const value = args[key];
+    if (typeof value === "string") {
+      return value.length;
+    }
+  }
+  return 0;
+}
 
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
   const args = asRecord(source.args);
   const cacheKey = args ?? asRecord(source.details);
+  const contentLen = streamingContentFingerprint(args);
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
-    if (cached && cached.details === source.details) {
+    if (cached && cached.details === source.details && cached.contentLen === contentLen) {
       return cached.view;
     }
   }
   const view = buildToolCallView(source, args);
   if (cacheKey) {
-    toolCallViewCache.set(cacheKey, { details: source.details, view });
+    toolCallViewCache.set(cacheKey, { details: source.details, contentLen, view });
   }
   return view;
 }
@@ -401,40 +420,45 @@ function buildToolCallView(
 
   if (kind === "write") {
     const path = resolvePathArg(args);
-    if (!path) {
-      return { kind: "generic" };
+    // Streaming args often grow content before path is parsed; keep kind=write
+    // so the row stays "Writing …" with a live all-added diff instead of falling
+    // through to a generic key/value dump of contentLength/content.
+    const content = args
+      ? editorCommand === "create"
+        ? readString(args.file_text)
+        : readString(args.content)
+      : undefined;
+    if (!path && !content) {
+      return { kind };
     }
-    const { base, dir } = splitPathForDisplay(path);
+    const pathParts = path ? splitPathForDisplay(path) : null;
     const authoritativeDiff = readDetailsDiff(source.details);
     if (authoritativeDiff) {
       return {
         kind,
-        target: base,
-        targetDetail: dir,
+        target: pathParts?.base,
+        targetDetail: pathParts?.dir,
         diff: authoritativeDiff.lines,
         ...(authoritativeDiff.stat ? { stat: authoritativeDiff.stat } : {}),
       };
     }
     const details = asRecord(source.details);
     if (details?.changed === false) {
-      return { kind, target: base, targetDetail: dir };
+      return { kind, target: pathParts?.base, targetDetail: pathParts?.dir };
     }
-    const content = args
-      ? editorCommand === "create"
-        ? readString(args.file_text)
-        : readString(args.content)
-      : undefined;
     if (!content) {
-      return { kind, target: base, targetDetail: dir };
+      return { kind, target: pathParts?.base, targetDetail: pathParts?.dir };
     }
-    const diff = buildWriteDiffLines(content);
+    // Prefer a tall live preview while writing so the viewport tracks the stream.
+    const diff = buildWriteDiffLines(content, MAX_DIFF_RENDER_LINES);
     return {
       kind,
-      target: base,
-      targetDetail: dir,
+      target: pathParts?.base,
+      targetDetail: pathParts?.dir,
       diff,
       // Present details need created=true before zero removals are authoritative.
-      ...(details && details.created !== true
+      // Path-less streaming previews still expose a growing +N line chip.
+      ...(details && details.created !== true && path
         ? {}
         : { stat: { added: countTextLines(content), removed: 0 } }),
     };

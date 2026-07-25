@@ -517,13 +517,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer-status.ts",
-      "text": "Compacting context..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
       "text": "Context compacted"
     },
     {

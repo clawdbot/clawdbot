@@ -558,18 +558,126 @@ openclaw-chat-page {
 
 .context-usage__header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+}
+
+.context-usage__header-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 10px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .context-usage__title,
 .context-usage__section-label {
   color: var(--muted);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+
+.context-usage__context-value {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.context-usage__bar {
+  display: flex;
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+}
+
+.context-usage__bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ctx-color, var(--accent));
+}
+
+.context-usage__bar--segments {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+}
+
+.context-usage__bar-used {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+}
+
+.context-usage__segment {
+  display: block;
+  height: 100%;
+  min-width: 1px;
+}
+
+.context-usage__segment--system {
+  background: #8b949e;
+}
+.context-usage__segment--tools {
+  background: #a371f7;
+}
+.context-usage__segment--rules {
+  background: #3fb950;
+}
+.context-usage__segment--skills {
+  background: #d29922;
+}
+.context-usage__segment--mcpTools {
+  background: #79c0ff;
+}
+.context-usage__segment--summaries {
+  background: #f778ba;
+}
+.context-usage__segment--conversation {
+  background: #ff7b72;
+}
+
+.context-usage__legend {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.context-usage__legend li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.context-usage__legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.context-usage__legend-label {
+  color: var(--muted);
+}
+
+.context-usage__legend-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.context-usage__estimate-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .context-usage__context-value {
@@ -581,17 +689,6 @@ openclaw-chat-page {
 .context-usage__bar {
   height: 5px;
   margin: 12px 0 15px;
-  overflow: hidden;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 22%, transparent);
-}
-
-.context-usage__bar span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--ctx-color, var(--accent));
-  box-shadow: 0 0 12px color-mix(in srgb, var(--ctx-color, var(--accent)) 46%, transparent);
 }
 
 .context-usage__section-label {

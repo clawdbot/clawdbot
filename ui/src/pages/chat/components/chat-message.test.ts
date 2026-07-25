@@ -11,6 +11,7 @@ import * as chatAvatar from "../chat-avatar.ts";
 import { renderChatNotice } from "./chat-divider.ts";
 import {
   dismissConfirmedActionPopovers,
+  openChatHideConfirmation,
   renderMessageGroup,
   renderStreamGroup,
 } from "./chat-message.ts";
@@ -450,6 +451,14 @@ function renderDeleteConfirmFixture() {
   return { container, deleteButton: deleteButton!, onDelete };
 }
 
+function queryDeleteConfirms(): HTMLElement[] {
+  return [...document.body.querySelectorAll<HTMLElement>(".chat-delete-confirm")];
+}
+
+function queryDeleteConfirm(): HTMLElement | null {
+  return queryDeleteConfirms()[0] ?? null;
+}
+
 function openDeleteConfirm(deleteButton: HTMLButtonElement) {
   deleteButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
@@ -528,7 +537,8 @@ function setupArmedDeleteConfirm() {
   const escapeListener = getLastCaptureKeydownListener(addKeyListenerSpy.mock.calls);
   expect(typeof outsideContextMenuListener).toBe("function");
   expect(typeof escapeListener).toBe("function");
-  expect(fixture.container.querySelectorAll(".chat-delete-confirm")).toHaveLength(1);
+  expect(fixture.container.querySelectorAll(".chat-delete-confirm")).toHaveLength(0);
+  expect(queryDeleteConfirms()).toHaveLength(1);
 
   return {
     ...fixture,
@@ -548,6 +558,7 @@ function expectDeleteConfirmDismissed(params: {
   removeKeyListenerSpy: ReturnType<typeof vi.spyOn>;
   removeListenerSpy: ReturnType<typeof vi.spyOn>;
 }) {
+  expect(queryDeleteConfirm()).toBeNull();
   expect(params.container.querySelector(".chat-delete-confirm")).toBeNull();
   expect(
     countCaptureClickListenerRemovals(
@@ -995,11 +1006,8 @@ describe("grouped chat rendering", () => {
       expect(userDeleteButton).toBeInstanceOf(HTMLButtonElement);
       userDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      const userConfirm = container.querySelector<HTMLElement>(
-        ".chat-group.user .chat-delete-confirm",
-      );
-      expect(userConfirm).toBeInstanceOf(HTMLElement);
-      expect([...userConfirm!.classList]).toEqual([
+      const userConfirm = expectElement(document.body, ".chat-delete-confirm--left", HTMLElement);
+      expect([...userConfirm.classList]).toEqual([
         "chat-delete-confirm",
         "chat-delete-confirm--left",
       ]);
@@ -1010,11 +1018,12 @@ describe("grouped chat rendering", () => {
       expect(assistantDeleteButton).toBeInstanceOf(HTMLButtonElement);
       assistantDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      const assistantConfirm = container.querySelector<HTMLElement>(
-        ".chat-group.assistant .chat-delete-confirm",
+      const assistantConfirm = expectElement(
+        document.body,
+        ".chat-delete-confirm--right",
+        HTMLElement,
       );
-      expect(assistantConfirm).toBeInstanceOf(HTMLElement);
-      expect([...assistantConfirm!.classList]).toEqual([
+      expect([...assistantConfirm.classList]).toEqual([
         "chat-delete-confirm",
         "chat-delete-confirm--right",
       ]);
@@ -1036,14 +1045,44 @@ describe("grouped chat rendering", () => {
       { onRewind },
     );
 
-    const rewindButtons = container.querySelectorAll<HTMLButtonElement>(".chat-group-rewind");
-    expect(rewindButtons).toHaveLength(1);
-    rewindButtons[0]!.click();
-    expect(container.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
-      "Rewind to before this message?",
-    );
-    container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
-    expect(onRewind).toHaveBeenCalledTimes(1);
+    try {
+      const rewindButtons = container.querySelectorAll<HTMLButtonElement>(".chat-group-rewind");
+      expect(rewindButtons).toHaveLength(1);
+      rewindButtons[0]!.click();
+      expect(queryDeleteConfirm()?.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
+        "Rewind to before this message?",
+      );
+      queryDeleteConfirm()?.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+      expect(onRewind).toHaveBeenCalledTimes(1);
+    } finally {
+      dismissConfirmedActionPopovers(container);
+    }
+  });
+
+  it("portals confirm popovers to document.body so virtual-row transforms cannot hide them", () => {
+    stubDeleteConfirmGeometry({
+      trigger: { left: 40, top: 80, width: 24, height: 24 },
+      popover: { width: 200, height: 80 },
+      viewport: { width: 320, height: 240 },
+    });
+    const virtualRow = document.createElement("div");
+    virtualRow.className = "chat-virtual-row";
+    virtualRow.style.transform = "translateY(4000px)";
+    document.body.appendChild(virtualRow);
+    const fixture = renderDeleteConfirmFixture();
+    virtualRow.appendChild(fixture.container);
+
+    try {
+      openDeleteConfirm(fixture.deleteButton);
+      const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
+      expect(popover.parentElement).toBe(document.body);
+      expect(fixture.container.contains(popover)).toBe(false);
+      expect(popover.style.top).toBe("110px");
+      expect(popover.style.left).toBe("40px");
+    } finally {
+      dismissConfirmedActionPopovers(fixture.container);
+      virtualRow.remove();
+    }
   });
 
   it("disables rewind while the agent is working", () => {
@@ -1070,7 +1109,7 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
     expect(popover.dataset.placement).toBe("below");
     expect(popover.style.top).toBe("34px");
     expect(popover.style.left).toBe("20px");
@@ -1086,7 +1125,7 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
     expect(popover.dataset.placement).toBe("above");
     expect(popover.style.top).toBe("104px");
     expect(popover.style.left).toBe("20px");
@@ -1102,7 +1141,7 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
     expect(popover.style.left).toBe("112px");
   });
 
@@ -1116,7 +1155,7 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
     expect(popover.dataset.placement).toBe("above");
     expect(popover.style.left).toBe("432px");
     expect(popover.style.top).toBe("452px");
@@ -1127,7 +1166,7 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
     const check = expectElement(popover, ".chat-delete-confirm__check", HTMLInputElement);
     const cancel = expectElement(popover, ".chat-delete-confirm__cancel", HTMLButtonElement);
     const confirm = expectElement(popover, ".chat-delete-confirm__yes", HTMLButtonElement);
@@ -1161,11 +1200,7 @@ describe("grouped chat rendering", () => {
 
   it("dismisses the confirmation with Escape before underlying keyboard handlers run", () => {
     const fixture = setupArmedDeleteConfirm();
-    const cancel = expectElement(
-      fixture.container,
-      ".chat-delete-confirm__cancel",
-      HTMLButtonElement,
-    );
+    const cancel = expectElement(document.body, ".chat-delete-confirm__cancel", HTMLButtonElement);
     const leakedKeydown = vi.fn();
     document.addEventListener("keydown", leakedKeydown);
 
@@ -1190,13 +1225,34 @@ describe("grouped chat rendering", () => {
   it("dismisses only confirmations contained by the requested owner", () => {
     const fixture = setupArmedDeleteConfirm();
     const sibling = renderDeleteConfirmFixture();
-    openDeleteConfirm(sibling.deleteButton);
+    // Open without a document click so the first confirm's outside listener
+    // cannot dismiss it before we assert scoped ownership cleanup.
+    openChatHideConfirmation(sibling.deleteButton, sibling.onDelete);
+    expect(queryDeleteConfirms()).toHaveLength(2);
 
     dismissConfirmedActionPopovers(fixture.container);
 
-    expectDeleteConfirmDismissed(fixture);
-    expect(sibling.container.querySelector(".chat-delete-confirm")).not.toBeNull();
+    expect(
+      countCaptureClickListenerRemovals(
+        fixture.removeListenerSpy.mock.calls,
+        fixture.outsideClickListener,
+      ),
+    ).toBe(1);
+    expect(
+      countCaptureContextMenuListenerRemovals(
+        fixture.removeListenerSpy.mock.calls,
+        fixture.outsideContextMenuListener,
+      ),
+    ).toBe(1);
+    expect(
+      countCaptureKeydownListenerRemovals(
+        fixture.removeKeyListenerSpy.mock.calls,
+        fixture.escapeListener,
+      ),
+    ).toBe(1);
+    expect(queryDeleteConfirms()).toHaveLength(1);
     dismissConfirmedActionPopovers(sibling.container);
+    expect(queryDeleteConfirm()).toBeNull();
   });
 
   it("does not attach an outside-click listener after owner cleanup before the next frame", () => {
@@ -1215,6 +1271,7 @@ describe("grouped chat rendering", () => {
     dismissConfirmedActionPopovers(fixture.container);
     flushAnimationFrames();
 
+    expect(queryDeleteConfirm()).toBeNull();
     expect(fixture.container.querySelector(".chat-delete-confirm")).toBeNull();
     expect(getLastCaptureClickListener(addListenerSpy.mock.calls)).toBeNull();
     expect(
@@ -1227,7 +1284,7 @@ describe("grouped chat rendering", () => {
 
   it("removes the delete confirm outside-click listener when Cancel dismisses it", () => {
     const fixture = setupArmedDeleteConfirm();
-    const cancel = fixture.container.querySelector<HTMLButtonElement>(
+    const cancel = queryDeleteConfirm()?.querySelector<HTMLButtonElement>(
       ".chat-delete-confirm__cancel",
     );
 
@@ -1241,7 +1298,9 @@ describe("grouped chat rendering", () => {
 
   it("removes the delete confirm outside-click listener when Delete dismisses it", () => {
     const fixture = setupArmedDeleteConfirm();
-    const confirm = fixture.container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes");
+    const confirm = queryDeleteConfirm()?.querySelector<HTMLButtonElement>(
+      ".chat-delete-confirm__yes",
+    );
 
     expect(confirm).toBeInstanceOf(HTMLButtonElement);
     confirm!.focus();
@@ -1296,6 +1355,7 @@ describe("grouped chat rendering", () => {
     openDeleteConfirm(fixture.deleteButton);
     flushAnimationFrames();
 
+    expect(queryDeleteConfirm()).toBeNull();
     expect(fixture.container.querySelector(".chat-delete-confirm")).toBeNull();
     expect(getLastCaptureClickListener(addListenerSpy.mock.calls)).toBeNull();
     expect(fixture.onDelete).not.toHaveBeenCalled();
@@ -1644,6 +1704,27 @@ describe("grouped chat rendering", () => {
     );
     expect(container.querySelector(".chat-working-indicator__elapsed")).toBeNull();
     expect(container.querySelector(".chat-working-indicator__tokens")).toBeNull();
+  });
+
+  it("relabels the working indicator while context compaction is active", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
+        compacting: true,
+        runOutputTokens: 5_500,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
+      "Compacting context...",
+    );
+    expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__tokens")?.textContent?.trim()).toBe(
+      "5.5k output tokens",
+    );
+    expect(container.querySelector("openclaw-working-phrase")).toBeNull();
   });
 
   it("renders the active plan card inside the working stream group", () => {

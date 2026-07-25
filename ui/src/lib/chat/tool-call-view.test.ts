@@ -514,6 +514,21 @@ describe("resolveToolCallView", () => {
     });
   });
 
+  it("keeps write kind and builds a live diff when content arrives before path", () => {
+    const view = resolveToolCallView({
+      name: "write",
+      args: { content: "alpha\nbeta\n" },
+    });
+
+    expect(view.kind).toBe("write");
+    expect(view.target).toBeUndefined();
+    expect(view.diff).toEqual([
+      { kind: "add", lineNo: 1, text: "alpha" },
+      { kind: "add", lineNo: 2, text: "beta" },
+    ]);
+    expect(view.stat).toEqual({ added: 2, removed: 0 });
+  });
+
   it("uses authoritative write details for diff and created-flag stats", () => {
     const args = { path: "/repo/file.ts", content: "line 1\nline 2\n" };
 

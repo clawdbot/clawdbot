@@ -128,6 +128,8 @@ export type ChatProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  thinkingStream?: string | null;
+  thinkingStartedAt?: number | null;
   runOutputTokens?: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -335,6 +337,8 @@ export function renderChat(props: ChatProps) {
       streamSegments: props.streamSegments,
       stream: props.stream,
       streamStartedAt: props.streamStartedAt,
+      thinkingStream: props.thinkingStream,
+      thinkingStartedAt: props.thinkingStartedAt,
       runOutputTokens: props.runOutputTokens,
       queue: props.queue,
       showThinking: props.showThinking,
@@ -344,6 +348,8 @@ export function renderChat(props: ChatProps) {
       runWorking: isChatRunWorking(props),
       startupStatus: props.startupStatus,
       waitingApproval: props.waitingApproval,
+      compacting:
+        props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying",
       planStatus: props.planStatus,
       questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,

@@ -20,6 +20,9 @@ export type ChatHost = ChatInputHistoryState &
     sessions: SessionCapability;
     client: GatewayBrowserClient | null;
     chatStream: string | null;
+    /** Live agent thinking text for View → Reasoning while a run is active. */
+    chatThinkingStream?: string | null;
+    chatThinkingStartedAt?: number | null;
     connected: boolean;
     connectionEpoch?: number;
     chatAttachments: ChatAttachment[];

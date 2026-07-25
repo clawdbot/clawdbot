@@ -348,6 +348,8 @@ export type ChatState = {
   chatRunUsageById?: Map<string, number>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatThinkingStream?: string | null;
+  chatThinkingStartedAt?: number | null;
   chatRunStartup?: ChatRunStartupState | null;
   planStatus?: PlanStatus | null;
   lastError: string | null;
@@ -1313,6 +1315,8 @@ async function loadChatHistoryUncached(
         }
         state.chatStream = null;
         state.chatStreamStartedAt = null;
+        state.chatThinkingStream = null;
+        state.chatThinkingStartedAt = null;
         recordChatHistoryTiming(state, "stream-reset", startedAtMs, {
           requestSessionKey: sessionKey,
           requestAgentId,
@@ -1325,6 +1329,8 @@ async function loadChatHistoryUncached(
         maybeResetToolStream(state);
         state.chatStream = null;
         state.chatStreamStartedAt = null;
+        state.chatThinkingStream = null;
+        state.chatThinkingStartedAt = null;
       } else if (historyReplacedToolStream) {
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
           includeCurrent: false,
@@ -1336,6 +1342,8 @@ async function loadChatHistoryUncached(
         );
         if (state.chatStream === null) {
           state.chatStreamStartedAt = null;
+          state.chatThinkingStream = null;
+          state.chatThinkingStartedAt = null;
         }
         maybeResetToolStream(state);
       } else if (historyReplacedSomeToolStream) {
@@ -1351,6 +1359,8 @@ async function loadChatHistoryUncached(
         state.chatStream = visibleCurrentTail;
         if (state.chatStream === null) {
           state.chatStreamStartedAt = null;
+          state.chatThinkingStream = null;
+          state.chatThinkingStartedAt = null;
         }
         prunePersistedToolStreamMessages(state, persistedToolStreamIds);
       }

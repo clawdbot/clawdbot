@@ -3,6 +3,10 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import {
+  formatContextTokenCount,
+  formatContextTokenExact,
+} from "../../../lib/format-context-tokens.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -130,23 +134,41 @@ function getContextNoticeViewModel(
   provider: string | null;
   model: string | null;
   detail: string;
+  exactDetail: string;
   color: string;
   bg: string;
   warning: boolean;
   compactRecommended: boolean;
   approximate: boolean;
+  breakdown: GatewaySessionRow["contextUsageBreakdown"] | null;
 } | null {
-  const used = session?.totalTokens;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
-  if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
+  if (!limit || !Number.isFinite(limit) || limit <= 0) {
     return null;
   }
-  const approximate = session?.totalTokensFresh === false;
+  const rawUsed = session?.totalTokens;
+  const breakdownTotal = session?.contextUsageBreakdown?.totalTokens;
+  // Gateway omits non-fresh session totals (local tokenizer estimates), but still
+  // ships contextUsageBreakdown. Prefer that over painting a misleading ~0% ring.
+  const usedFromSession =
+    typeof rawUsed === "number" && Number.isFinite(rawUsed) && rawUsed >= 0 ? rawUsed : undefined;
+  const usedFromBreakdown =
+    typeof breakdownTotal === "number" && Number.isFinite(breakdownTotal) && breakdownTotal > 0
+      ? breakdownTotal
+      : undefined;
+  const used = usedFromSession ?? usedFromBreakdown ?? 0;
+  const approximate =
+    session?.totalTokensFresh === false ||
+    usedFromSession === undefined ||
+    session?.contextUsageBreakdown?.approximate === true;
   const ratio = used / limit;
   const pct = Math.min(Math.round(ratio * 100), 100);
-  // A stale total is still useful orientation, but must not drive warning or
-  // compaction decisions because the session may already have compacted.
-  const warning = !approximate && ratio >= CONTEXT_NOTICE_RATIO;
+  // A stale/estimated total is still useful orientation, but must not drive
+  // warning or compaction decisions — only fresh (or unset-fresh) session totals may.
+  const warning =
+    usedFromSession !== undefined &&
+    session?.totalTokensFresh !== false &&
+    ratio >= CONTEXT_NOTICE_RATIO;
   // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
   const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
   const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
@@ -164,12 +186,16 @@ function getContextNoticeViewModel(
     cost,
     provider: session?.modelProvider?.trim() || null,
     model: session?.model?.trim() || null,
+    breakdown: session?.contextUsageBreakdown ?? null,
   };
+  const compactDetail = `${approximate ? "~" : ""}${formatContextTokenCount(used)} / ${formatContextTokenCount(limit)}`;
+  const exactDetail = `${approximate ? "~" : ""}${formatContextTokenExact(used)} / ${formatContextTokenExact(limit)}`;
   if (!warning) {
     return {
       pct,
       ...usage,
-      detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
+      detail: compactDetail,
+      exactDetail,
       color: "var(--muted)",
       bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
       warning,
@@ -190,7 +216,8 @@ function getContextNoticeViewModel(
   return {
     pct,
     ...usage,
-    detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
+    detail: compactDetail,
+    exactDetail,
     color,
     bg,
     warning,
@@ -326,6 +353,104 @@ function renderQuotaGroup(
   `;
 }
 
+const CONTEXT_CATEGORY_I18N: Record<string, string> = {
+  system: "chat.composer.contextUsage.categorySystem",
+  tools: "chat.composer.contextUsage.categoryTools",
+  rules: "chat.composer.contextUsage.categoryRules",
+  skills: "chat.composer.contextUsage.categorySkills",
+  mcpTools: "chat.composer.contextUsage.categoryMcpTools",
+  summaries: "chat.composer.contextUsage.categorySummaries",
+  conversation: "chat.composer.contextUsage.categoryConversation",
+};
+
+function contextCategoryLabel(id: string): string {
+  const key = CONTEXT_CATEGORY_I18N[id];
+  return key ? t(key as never) : id;
+}
+
+function renderContextBreakdownBar(
+  model: NonNullable<ReturnType<typeof getContextNoticeViewModel>>,
+) {
+  const rawCategories = model.breakdown?.categories ?? [];
+  // When the session total (often provider usage) is larger than the local
+  // category sum, attribute the residual to conversation so the legend adds up.
+  const segmentSum = rawCategories.reduce((sum, category) => sum + category.tokens, 0);
+  const residual = Math.max(0, Math.round(model.used - segmentSum));
+  const categories =
+    residual > 0
+      ? (() => {
+          const next = rawCategories.map((category) => ({ ...category }));
+          const conversation = next.find((category) => category.id === "conversation");
+          if (conversation) {
+            conversation.tokens += residual;
+          } else {
+            next.push({ id: "conversation", tokens: residual });
+          }
+          return next;
+        })()
+      : rawCategories;
+  const segmentTotal = categories.reduce((sum, category) => sum + category.tokens, 0);
+  if (categories.length === 0 || segmentTotal <= 0) {
+    return html`
+      <div
+        class="context-usage__bar"
+        role="progressbar"
+        aria-label=${t("chat.composer.contextUsage.summary", {
+          used: `${model.approximate ? "~" : ""}${formatContextTokenCount(model.used)}`,
+          limit: formatContextTokenCount(model.limit),
+          pct: `${model.approximate ? "~" : ""}${model.pct}`,
+        })}
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow=${model.pct}
+      >
+        <span style="width: ${model.pct}%"></span>
+      </div>
+    `;
+  }
+  // Segments fill the used portion of the window; remainder stays empty track.
+  const usedPct = Math.min(100, (model.used / model.limit) * 100);
+  return html`
+    <div
+      class="context-usage__bar context-usage__bar--segments"
+      role="progressbar"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow=${model.pct}
+    >
+      <div class="context-usage__bar-used" style="width: ${usedPct}%">
+        ${categories.map((category) => {
+          const width = (category.tokens / segmentTotal) * 100;
+          return html`<span
+            class="context-usage__segment context-usage__segment--${category.id}"
+            style="width: ${width}%"
+            title="${contextCategoryLabel(category.id)}: ${formatContextTokenExact(
+              category.tokens,
+            )}"
+          ></span>`;
+        })}
+      </div>
+    </div>
+    <ul class="context-usage__legend">
+      ${categories.map(
+        (category) => html`<li>
+          <span class="context-usage__legend-swatch context-usage__segment--${category.id}"></span>
+          <span class="context-usage__legend-label">${contextCategoryLabel(category.id)}</span>
+          <span class="context-usage__legend-value"
+            >${model.breakdown?.approximate ? "~" : ""}${formatContextTokenExact(
+              category.tokens,
+            )}</span
+          >
+        </li>`,
+      )}
+    </ul>
+    ${model.breakdown?.approximate
+      ? html`<p class="context-usage__estimate-note">
+          ${t("chat.composer.contextUsage.localEstimateNote")}
+        </p>`
+      : nothing}
+  `;
+}
 export function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
@@ -345,8 +470,8 @@ export function renderContextNotice(
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
   const summary = model
     ? t("chat.composer.contextUsage.summary", {
-        used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
-        limit: formatCompactTokenCount(model.limit),
+        used: `${model.approximate ? "~" : ""}${formatContextTokenCount(model.used)}`,
+        limit: formatContextTokenCount(model.limit),
         pct: `${model.approximate ? "~" : ""}${model.pct}`,
       })
     : t("chat.usageRemaining");
@@ -423,19 +548,15 @@ export function renderContextNotice(
                     >${t("chat.composer.contextUsage.contextWindow")}</span
                   >
                   <strong class="context-usage__context-value"
-                    >${model.detail} · ${percentage}</strong
+                    >${model.approximate ? "~" : ""}${model.pct}%
+                    ${t("chat.composer.contextUsage.full")}</strong
                   >
                 </div>
-                <div
-                  class="context-usage__bar"
-                  role="progressbar"
-                  aria-label=${summary}
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow=${model.pct}
-                >
-                  <span style="width: ${model.pct}%"></span>
+                <div class="context-usage__header-meta">
+                  <span>${model.exactDetail}</span>
+                  <span>${model.detail}</span>
                 </div>
+                ${renderContextBreakdownBar(model)}
               `
             : nothing}
           ${model
@@ -524,3 +645,47 @@ export function renderContextNotice(
     </div>
   `;
 }
+
+type ChatRunControlsProps = {
+  canAbort: boolean;
+  canSend: boolean;
+  connected: boolean;
+  draft: string;
+  hasAttachments?: boolean;
+  hasMessages: boolean;
+  isBusy: boolean;
+  followUpMode?: ControlUiFollowUpMode;
+  suggestionComposer?: boolean;
+  sending: boolean;
+  voiceActive?: boolean;
+  voiceStatus?: RealtimeTalkStatus;
+  voiceDetail?: string | null;
+  voiceInputLevel?: RealtimeTalkLevelSignal;
+  voiceVideoCapable?: boolean;
+  voiceVideoEnabled?: boolean;
+  voiceVideoPending?: boolean;
+  dictation?: ComposerDictationController;
+  onDictationPointerDown?: (event: PointerEvent) => void;
+  onAbort?: () => void;
+  onExport: () => void;
+  onNewSession: () => void;
+  onSend: () => void;
+  onStoreDraft: (draft: string) => void;
+  onToggleVoice?: () => void;
+  onToggleCamera?: () => void;
+  microphonePicker?: TemplateResult | typeof nothing;
+  showPrimary?: boolean;
+  showSecondary?: boolean;
+};
+
+type MicrophonePickerProps = {
+  devices: RealtimeTalkInputDevice[];
+  loading: boolean;
+  open: boolean;
+  selectedDeviceId: string;
+  voiceActive: boolean;
+  warning: string | null;
+  onOpen: () => void;
+  onClose: () => void;
+  onSelect: (deviceId: string) => void;
+};
