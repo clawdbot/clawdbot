@@ -296,6 +296,11 @@ keep it.
 sees. Pick the smallest mode that still answers follow-ups well; grow
 `timeoutMs` as context size grows, from `message` to `recent` to `full`.
 
+In every mode the complete recall context is capped at 25,000 characters.
+When a runtime hands Active Memory an oversized assembled prompt envelope,
+the current user request is preserved, tool-call/tool-result traces are
+dropped, and only the newest conversation tail that fits the cap is kept.
+
 <Tabs>
   <Tab title="message">
     Only the latest user message is sent.

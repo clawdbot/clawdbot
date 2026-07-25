@@ -100,6 +100,7 @@ async function maybeResolveActiveRecall(params: {
   messageProvider?: string;
   channelId?: string;
   query: string;
+  queryDiagnostics?: { rawChars: number; bounded: boolean };
   searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
@@ -210,10 +211,15 @@ async function maybeResolveActiveRecall(params: {
   logPrefix = buildLogPrefix(runContext.fastMode);
 
   if (params.config.logging) {
+    // raw size + flag only when bounding engaged; unbounded turns keep the
+    // existing compact line (raw == effective modulo whitespace trim)
+    const boundingInfo = params.queryDiagnostics?.bounded
+      ? ` queryCharsRaw=${String(params.queryDiagnostics.rawChars)} queryBounded=true`
+      : "";
     params.api.logger.info?.(
       `${logPrefix} start timeoutMs=${String(params.config.timeoutMs)} queryChars=${String(
         params.query.length,
-      )} searchQueryChars=${String(params.searchQuery.length)}`,
+      )}${boundingInfo} searchQueryChars=${String(params.searchQuery.length)}`,
     );
   }
 

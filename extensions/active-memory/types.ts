@@ -93,6 +93,11 @@ const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
 const TIMEOUT_PARTIAL_DATA_GRACE_MS = 500;
 const HOOK_TIMEOUT_RECOVERY_GRACE_MS = TIMEOUT_PARTIAL_DATA_GRACE_MS + 1_000;
 const MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS = 480;
+// Upper bound for the complete model-facing recall conversation context.
+// Production `event.prompt` envelopes reached 609K-693K UTF-16 chars and drove
+// blocking-hook timeouts (openclaw/openclaw#88077, #92013); the recall
+// subagent never needs more than a bounded recent tail plus the request.
+const MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS = 25_000;
 const TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS = 25;
 
 const NO_RECALL_VALUES = new Set([
@@ -375,6 +380,7 @@ export {
   DEFAULT_TRANSCRIPT_READ_MAX_LINES,
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
   LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
+  MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS,
   MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS,
   MAX_ACTIVE_MEMORY_TOOLS_ALLOW,
   MAX_LOG_VALUE_CHARS,

@@ -390,13 +390,19 @@ export default definePluginEntry({
                 ? { ...invocationConfig, toolsAllow: ["memory_search"] }
                 : invocationConfig;
             const recentTurns = extractRecentTurns(event.messages);
-            const query = buildQuery({
+            // event.prompt stays the current-turn source (event.messages is
+            // historical); buildQuery bounds the model-facing recall context.
+            const builtQuery = buildQuery({
               latestUserMessage: event.prompt,
               recentTurns,
               config: recallConfig,
             });
+            const query = builtQuery.query;
+            // Seed the memory-tool query from the bounded current request so
+            // its 480-char clamp (kept as defense in depth) captures user
+            // intent instead of the head of a runtime envelope.
             const searchQuery = buildSearchQuery({
-              latestUserMessage: event.prompt,
+              latestUserMessage: builtQuery.request,
               recentTurns,
             });
             // Start recall with its full configured budget. The preceding
@@ -412,6 +418,7 @@ export default definePluginEntry({
               messageProvider: ctx.messageProvider,
               channelId: ctx.channelId,
               query,
+              queryDiagnostics: { rawChars: builtQuery.rawChars, bounded: builtQuery.bounded },
               searchQuery,
               currentModelProviderId: ctx.modelProviderId,
               currentModelId: ctx.modelId,
