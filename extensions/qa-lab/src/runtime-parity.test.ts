@@ -31,6 +31,7 @@ afterEach(async () => {
 async function seedRuntimeParityTranscript(params: {
   heartbeatIsolatedBaseSessionKey?: string;
   messages: Array<Record<string, unknown>>;
+  parentSessionKey?: string;
   sessionId: string;
   sessionKey: string;
   tempRoot?: string;
@@ -59,6 +60,7 @@ async function seedRuntimeParityTranscript(params: {
       ...(params.heartbeatIsolatedBaseSessionKey
         ? { heartbeatIsolatedBaseSessionKey: params.heartbeatIsolatedBaseSessionKey }
         : {}),
+      ...(params.parentSessionKey ? { parentSessionKey: params.parentSessionKey } : {}),
     },
   });
   for (const [index, message] of params.messages.entries()) {
@@ -513,6 +515,53 @@ describe("runtime parity", () => {
     expect(cell.transcriptBytes).toContain("target=session_status");
     expect(cell.transcriptBytes).toContain("failure target=session_status");
     expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "session_status" })]);
+  });
+
+  it("keeps fixture-owned tool sessions when Codex attaches parent metadata", async () => {
+    const now = Date.now();
+    const tempRoot = await seedRuntimeParityTranscript({
+      sessionId: "unrelated-root",
+      sessionKey: "agent:qa:unrelated-root",
+      messages: [{ role: "assistant", content: "Setup complete." }],
+      updatedAt: now,
+    });
+    await seedRuntimeParityTranscript({
+      tempRoot,
+      sessionId: "web-fetch-fixture",
+      sessionKey: "agent:qa:runtime-tool:web_fetch:failure",
+      parentSessionKey: "agent:qa:unrelated-root",
+      messages: [{ role: "user", content: "failure target=web_fetch" }],
+      updatedAt: now - 1_000,
+      trajectoryEvents: [
+        {
+          type: "tool.call",
+          data: {
+            toolCallId: "web-fetch-1",
+            name: "web_fetch",
+            arguments: { __qaFailureMode: "denied-input" },
+          },
+        },
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "web-fetch-1",
+            name: "web_fetch",
+            status: "failed",
+            success: false,
+            result: { error: "url required" },
+          },
+        },
+      ],
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "web_fetch" })]);
   });
 
   it("keeps an explicitly identified orphan result separate", async () => {

@@ -1201,6 +1201,10 @@ function runtimeParitySessionEnv(stateDir: string): NodeJS.ProcessEnv {
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
 
+function isRuntimeToolFixtureSessionKey(sessionKey: string, agentId: string) {
+  return sessionKey.startsWith(`agent:${agentId}:runtime-tool:`);
+}
+
 async function readRuntimeParitySessionEntries(params: {
   gateway: QaGatewayLike;
   agentId: string;
@@ -1219,7 +1223,19 @@ async function readRuntimeParitySessionEntries(params: {
     }))
     .filter(({ entry }) => !readNonEmptyString(entry.heartbeatIsolatedBaseSessionKey));
   const rootEntries = entries.filter(({ entry }) => isRuntimeParityRootSession(entry));
-  const candidates = rootEntries.length > 0 ? rootEntries : entries;
+  const candidates = rootEntries.length > 0 ? [...rootEntries] : [...entries];
+  // Runtime-tool fixtures own these dedicated sessions even when Codex attaches
+  // parent metadata. Keep them beside roots without admitting arbitrary children.
+  const candidateKeys = new Set(candidates.map(({ sessionKey }) => sessionKey));
+  for (const entry of entries) {
+    if (
+      !candidateKeys.has(entry.sessionKey) &&
+      isRuntimeToolFixtureSessionKey(entry.sessionKey, params.agentId)
+    ) {
+      candidates.push(entry);
+      candidateKeys.add(entry.sessionKey);
+    }
+  }
   return candidates.toSorted((left, right) => {
     const leftCreatedAt = left.entry.createdAt ?? left.entry.updatedAt ?? 0;
     const rightCreatedAt = right.entry.createdAt ?? right.entry.updatedAt ?? 0;
