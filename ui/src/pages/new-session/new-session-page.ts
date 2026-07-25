@@ -519,6 +519,8 @@ class NewSessionPage extends OpenClawLightDomElement {
           }
           this.folder = this.workspacePath();
           this.worktree = false;
+          this.preferredWorktreeRestore = false;
+          this.persistPreference({ folder: this.folder, worktree: false });
           this.maybeLoadBranches();
           return;
         }

@@ -919,6 +919,30 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
         .toBe("openclaw");
+
+      const pickedListRequests = (await gateway.getRequests("fs.listDir")).filter(
+        (request) => request.params?.path === PICKED,
+      ).length;
+      await navigateInApp(page, "chat");
+      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await navigateInApp(page, "new-session");
+      await expect
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect
+        .poll(
+          async () =>
+            (await gateway.getRequests("fs.listDir")).filter(
+              (request) => request.params?.path === PICKED,
+            ).length,
+        )
+        .toBe(pickedListRequests);
+
+      await message.fill("use the repaired preference");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .toBe(false);
       await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).not.toHaveProperty("cwd");
