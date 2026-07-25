@@ -64,6 +64,131 @@ struct ChatTranscriptExporterTests {
         """)
     }
 
+    @Test(arguments: ["file", "attachment", "image", "audio", "FILE", "ATTACHMENT", "IMAGE", "AuDiO"])
+    func `classifies gateway media and historical file attachments consistently`(type: String) {
+        let content = OpenClawChatMessageContent(
+            type: type,
+            text: nil,
+            mimeType: nil,
+            fileName: nil,
+            content: nil)
+
+        #expect(content.isInlineAttachment)
+    }
+
+    @Test(arguments: ["text", "canvas", "toolCall", "tool_result"])
+    func `does not classify unrelated content as an attachment`(type: String) {
+        let content = OpenClawChatMessageContent(
+            type: type,
+            text: nil,
+            mimeType: "image/png",
+            fileName: "not-an-attachment.png",
+            content: nil)
+
+        #expect(!content.isInlineAttachment)
+    }
+
+    @Test func `does not classify content without a type as an attachment`() {
+        let content = OpenClawChatMessageContent(
+            type: nil,
+            text: nil,
+            mimeType: "image/png",
+            fileName: "not-an-attachment.png",
+            content: nil)
+
+        #expect(!content.isInlineAttachment)
+    }
+
+    @Test(arguments: ["user", "assistant"], ["image", "audio", "IMAGE", "AuDiO"])
+    func `exports canonical media-only messages`(role: String, type: String) {
+        let isAudio = type.lowercased() == "audio"
+        let filename = isAudio ? "voice-note.m4a" : "photo.png"
+        let message = OpenClawChatMessage(
+            role: role,
+            content: [
+                OpenClawChatMessageContent(
+                    type: type,
+                    text: nil,
+                    mimeType: isAudio ? "audio/mp4" : "image/png",
+                    fileName: filename,
+                    content: nil),
+            ],
+            timestamp: 0)
+
+        let markdown = ChatTranscriptExporter.markdown(
+            sessionTitle: "Media chat",
+            sessionKey: "agent:main",
+            messages: [message])
+
+        #expect(markdown == """
+        # Media chat
+
+        ### \(role == "user" ? "User" : "Assistant") — 1970-01-01T00:00:00Z
+
+        _[attachment: \(filename)]_
+
+        """)
+    }
+
+    @Test(arguments: ["image", "audio", "IMAGE", "AuDiO"])
+    func `preserves canonical media alongside message text`(type: String) {
+        let isAudio = type.lowercased() == "audio"
+        let filename = isAudio ? "voice-note.m4a" : "photo.png"
+        let message = OpenClawChatMessage(
+            role: "user",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "text",
+                    text: "Here is the attachment.",
+                    mimeType: nil,
+                    fileName: nil,
+                    content: nil),
+                OpenClawChatMessageContent(
+                    type: type,
+                    text: nil,
+                    mimeType: isAudio ? "audio/mp4" : "image/png",
+                    fileName: filename,
+                    content: nil),
+            ],
+            timestamp: 0)
+
+        let markdown = ChatTranscriptExporter.markdown(
+            sessionTitle: "Media chat",
+            sessionKey: "agent:main",
+            messages: [message])
+
+        #expect(markdown == """
+        # Media chat
+
+        ### User — 1970-01-01T00:00:00Z
+
+        Here is the attachment.
+
+        _[attachment: \(filename)]_
+
+        """)
+    }
+
+    @Test(arguments: ["canvas", "toolCall", "tool_result"])
+    func `does not export non-attachment content as media`(type: String) {
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: type,
+                    text: nil,
+                    mimeType: "image/png",
+                    fileName: "not-an-attachment.png",
+                    content: nil),
+            ],
+            timestamp: 0)
+
+        #expect(ChatTranscriptExporter.markdown(
+            sessionTitle: "Media chat",
+            sessionKey: "agent:main",
+            messages: [message]) == "# Media chat\n")
+    }
+
     @Test func `sanitizes filename`() {
         #expect(
             ChatTranscriptExporter.filename(
