@@ -21,7 +21,7 @@ function truncateLineActionText(text: string, limit: number): string {
   let result = "";
   let count = 0;
   for (const { segment } of graphemeSegmenter.segment(text)) {
-    const codePointCount = [...segment].length;
+    const codePointCount = Array.from(segment).length;
     if (count + codePointCount > limit) {
       break;
     }
