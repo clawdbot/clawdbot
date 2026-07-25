@@ -37,14 +37,14 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
   parseJsonPreservingUnsafeIntegers,
 } from "./ollama-json.js";
-import { buildOllamaBaseUrlSsrFPolicy } from "./provider-models.js";
+import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
@@ -520,6 +520,38 @@ export function buildOllamaChatRequest(params: {
   };
 }
 
+function resolveOllamaResponseFormat(
+  responseFormat: Record<string, unknown> | undefined,
+  params: { baseUrl: string; modelId: string },
+): "json" | Record<string, unknown> | undefined {
+  if (
+    !responseFormat ||
+    isOllamaCloudModel(params.modelId) ||
+    isOllamaCloudBaseUrl(params.baseUrl)
+  ) {
+    return undefined;
+  }
+  if (responseFormat.type === "json_object") {
+    return "json";
+  }
+  if (responseFormat.type === "text") {
+    return undefined;
+  }
+  if (responseFormat.type === "json_schema" && isRecord(responseFormat.json_schema)) {
+    const schema = responseFormat.json_schema.schema;
+    return isRecord(schema) ? schema : undefined;
+  }
+  return responseFormat;
+}
+
+function isOllamaCloudBaseUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).origin === OLLAMA_CLOUD_BASE_URL;
+  } catch {
+    return false;
+  }
+}
+
 type StreamModelDescriptor = {
   api: string;
   provider: string;
@@ -603,6 +635,7 @@ interface OllamaChatRequest {
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
   think?: OllamaThinkValue;
+  format?: "json" | Record<string, unknown>;
 }
 
 interface OllamaChatMessage {
@@ -1156,6 +1189,20 @@ function createRawOllamaStreamFn(
         }
         normalizeOllamaGreedySamplingOptions(ollamaOptions);
 
+        // Structured-output grammars constrain the same token stream as tool
+        // calls. Keep tool-enabled turns capable by letting tools win.
+        const responseFormat =
+          ollamaTools.length > 0
+            ? undefined
+            : resolveOllamaResponseFormat(options?.responseFormat, {
+                baseUrl,
+                modelId: model.id,
+              });
+        const requestParams = {
+          ...resolveOllamaTopLevelParams(model),
+          ...(responseFormat !== undefined ? { format: responseFormat } : {}),
+        };
+
         const body = buildOllamaChatRequest({
           modelId: model.id,
           providerId: model.provider,
@@ -1163,7 +1210,7 @@ function createRawOllamaStreamFn(
           stream: true,
           tools: ollamaTools,
           options: ollamaOptions,
-          requestParams: resolveOllamaTopLevelParams(model),
+          requestParams,
         });
         options?.onPayload?.(body, model);
         const headers: Record<string, string> = {

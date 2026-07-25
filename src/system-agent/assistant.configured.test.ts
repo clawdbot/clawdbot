@@ -155,6 +155,17 @@ describe("OpenClaw configured-model planner", () => {
         authProfileId: "openai:p2",
         authProfileIdSource: "user",
         config: binding.execution.runConfig,
+        streamParams: {
+          responseFormat: {
+            type: "object",
+            properties: {
+              reply: { type: "string" },
+              command: { type: "string" },
+            },
+            required: ["reply"],
+            additionalProperties: false,
+          },
+        },
       }),
     );
   });

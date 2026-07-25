@@ -812,6 +812,7 @@ describe("runSystemAgentTurn", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(runCliAgent).not.toHaveBeenCalled();
     const call = requireValue(runEmbeddedAgent.mock.calls[0]?.[0], "missing embedded runner call");
+    expect(call).not.toHaveProperty("streamParams");
     expect(call).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",

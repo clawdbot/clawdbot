@@ -63,6 +63,10 @@ import {
   type ResolvedOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import {
+  resolveOpenAICompletionsResponseFormat,
+  shouldOmitOllamaCompatResponseFormat,
+} from "./openai-response-format.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import {
   projectOpenAITools,
@@ -782,6 +786,20 @@ function buildParams(
 
   if (options?.stop !== undefined && options.stop.length > 0) {
     params.stop = options.stop;
+  }
+
+  const responseFormat = resolveOpenAICompletionsResponseFormat(
+    shouldOmitOllamaCompatResponseFormat({
+      provider: model.provider,
+      baseUrl: model.baseUrl,
+      hasTools: Boolean(context.tools?.length),
+    })
+      ? undefined
+      : options?.responseFormat,
+    compat.supportsJsonSchemaResponseFormat,
+  );
+  if (responseFormat !== undefined) {
+    params.response_format = responseFormat;
   }
 
   let toolProjection: OpenAIToolProjection | undefined;
