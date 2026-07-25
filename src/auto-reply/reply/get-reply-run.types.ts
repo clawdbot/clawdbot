@@ -4,7 +4,6 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import type { MediaFact } from "../../media/media-facts.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { buildCommandContext } from "./commands.js";
@@ -35,7 +34,7 @@ export type InternalGetReplyOptions = BaseInternalGetReplyOptions & {
   extractedFileImages?: ExtractedFileImage[];
 };
 
-export type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 export type ExecOverrides = Pick<
   ExecToolDefaults,
   "host" | "security" | "ask" | "node" | "nodeCwd"
@@ -100,5 +99,3 @@ export type RunPreparedReplyParams = {
   abortedLastRun: boolean;
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
 };
-
-export type PromptMedia = MediaFact[] | undefined;
