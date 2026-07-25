@@ -5,6 +5,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import {
+  assertCanonicalAgentMediaPersistenceVersion,
   assertExistingAgentSchemaOwner,
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
@@ -56,6 +57,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);
+    assertCanonicalAgentMediaPersistenceVersion(db, pathname);
     const schemaMeta = readExistingAgentSchemaMeta(db);
     if (!schemaMeta) {
       return { found: false, reason: "schema-missing" };

@@ -79,7 +79,7 @@
   padding: 0 3px;
   border-radius: var(--radius-full);
   background: var(--primary);
-  color: var(--primary-foreground, #fff);
+  color: var(--primary-foreground);
   font-size: 9px;
   font-weight: 650;
   line-height: 14px;
@@ -162,7 +162,7 @@
 }
 
 .chat-main {
-  /* Positioning context for floating overlays (scroll-to-bottom, side chat). */
+  /* Positioning context for floating overlays and the optional session rail. */
   position: relative;
   min-width: 312px;
   display: flex;
@@ -170,6 +170,28 @@
   overflow: hidden;
   /* Smooth transition when sidebar opens/closes */
   transition: flex 250ms ease-out;
+}
+
+.chat-main__conversation {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-main--rail-docked {
+  flex-direction: row;
+}
+
+.chat-main--rail-docked > openclaw-chat-session-rail {
+  display: block;
+  width: 400px;
+  min-width: 400px;
+  min-height: 0;
+  flex: 0 0 400px;
 }
 
 /* No border-left: the resizable divider rendered next to this panel draws
@@ -321,7 +343,7 @@
 }
 
 .chat-workspace-rail__state--error {
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .chat-workspace-rail__scroll {
@@ -447,7 +469,7 @@
 }
 
 .chat-workspace-rail__file-open:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent, #7dd3fc) 65%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
   outline-offset: -2px;
 }
 
@@ -484,8 +506,8 @@
 .chat-workspace-rail__file-badge {
   padding: 2px 6px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
-  color: var(--danger, #ef4444);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
   font-size: 12px; /* was 10px */
   line-height: 1.2;
 }
@@ -681,7 +703,7 @@
 }
 
 .chat-tasks-rail__state--error {
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .chat-tasks-rail__scroll {
@@ -819,7 +841,7 @@
   width: 7px;
   height: 7px;
   border-radius: var(--radius-full);
-  background: var(--warn, #f59e0b);
+  background: var(--warn);
   animation: chat-tasks-pulse 1.6s ease-in-out infinite;
 }
 
@@ -855,7 +877,7 @@
 .chat-tasks-rail__task-stop:focus-visible {
   border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .chat-tasks-rail__task-stop svg {
@@ -883,15 +905,15 @@
 }
 
 .chat-tasks-rail__task-status--ok {
-  color: var(--ok, #22c55e);
+  color: var(--ok);
 }
 
 .chat-tasks-rail__task-status--warn {
-  color: var(--warn, #f59e0b);
+  color: var(--warn);
 }
 
 .chat-tasks-rail__task-status--danger {
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .chat-tasks-rail__task-status--muted {
@@ -956,7 +978,7 @@
   height: 28px;
   padding: 0;
   place-items: center;
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .chat-tasks-rail__detail-stop svg {
@@ -972,13 +994,13 @@
   flex-direction: column;
   gap: 3px;
   padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--warn, #f59e0b) 24%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--warn) 24%, var(--border));
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--warn, #f59e0b) 6%, transparent);
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
 }
 
 .chat-tasks-rail__detail-activity span {
-  color: var(--warn, #f59e0b);
+  color: var(--warn);
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
   font-weight: 650;
@@ -1038,8 +1060,8 @@
 }
 
 .chat-tasks-rail__task-inspector-state--error {
-  border-color: color-mix(in srgb, var(--danger, #ef4444) 30%, var(--border));
-  color: var(--danger, #ef4444);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+  color: var(--danger);
 }
 
 /* Quiet by default so a column of rows is not a column of accent links;
@@ -1381,6 +1403,9 @@ openclaw-session-discussion {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+/* Code syntax palette (dark below, light overrides further down): deliberate
+   literal hexes tuned for code legibility, not theme tokens — the UI palette
+   has no per-token-kind roles and retinting per theme family is not wanted. */
 .file-view .tok-comment {
   color: var(--muted);
   font-style: italic;
@@ -1481,8 +1506,8 @@ openclaw-session-discussion {
   justify-content: space-between;
   gap: 10px;
   padding: 8px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
-  background: color-mix(in srgb, var(--warning) 10%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
   color: var(--text);
   font-size: 12px;
 }
@@ -1806,19 +1831,19 @@ openclaw-session-discussion {
 }
 
 .session-diff__status--added {
-  background: var(--ok, #22c55e);
+  background: var(--ok);
 }
 
 .session-diff__status--deleted {
-  background: var(--destructive, #ef4444);
+  background: var(--destructive);
 }
 
 .session-diff__status--renamed {
-  background: var(--accent, #a855f7);
+  background: var(--accent);
 }
 
 .session-diff__status--modified {
-  background: var(--warning, #eab308);
+  background: var(--warn);
 }
 
 .session-diff__path {

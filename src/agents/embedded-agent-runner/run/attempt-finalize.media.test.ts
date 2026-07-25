@@ -3,7 +3,7 @@ import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 describe("finalizeEmbeddedAttempt media trajectory capture", () => {
-  it("records facts-only message snapshots with canonical conflict precedence", () => {
+  it("records canonical message snapshots without reprojecting them", () => {
     const recordEvent = vi.fn();
     const result = {
       terminal: { kind: "ok" },
@@ -20,8 +20,6 @@ describe("finalizeEmbeddedAttempt media trajectory capture", () => {
         {
           role: "user",
           content: "inspect",
-          MediaPath: "/media/legacy.png",
-          MediaType: "image/png",
           __openclaw: {
             media: [{ path: "/media/canonical.png", contentType: "image/png" }],
           },

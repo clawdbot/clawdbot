@@ -66,11 +66,13 @@ describe("collectMcpAppStyleVariables", () => {
     );
 
     // Font requests are limited to resource domains the app declares, so a
-    // host-led webfont resolves to an arbitrary system face rather than
-    // failing visibly. Apps own their sans stack until Control UI can supply
-    // a sandbox-safe one.
-    expect(variables).not.toHaveProperty("--font-sans");
-    expect(variables?.["--font-mono"]).toContain("monospace");
+    // host-led brand face resolves to an arbitrary system face rather than
+    // failing visibly. The published stacks are the carapace embed stacks:
+    // system resolvable, independent of the host's own font tokens.
+    expect(variables?.["--font-sans"]).toMatch(/^system-ui,/);
+    expect(variables?.["--font-sans"]).not.toContain("Inter");
+    expect(variables?.["--font-mono"]).toMatch(/^ui-monospace,/);
+    expect(variables?.["--font-mono"]).not.toContain("JetBrains");
   });
 
   it("publishes trimmed, non-empty values", () => {

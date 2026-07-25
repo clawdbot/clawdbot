@@ -80,6 +80,7 @@ import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
 } from "./state-migrations.mcp-oauth.js";
+import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import {
   detectLegacyMeetingTranscripts,
   migrateLegacyMeetingTranscripts,
@@ -1288,6 +1289,22 @@ export async function autoMigrateLegacyState(params: {
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
+  const mediaPersistence =
+    params.doctorOnlyStateMigrations === true
+      ? migrateLegacyMediaPersistence({ env: { ...env, OPENCLAW_STATE_DIR: stateDir } })
+      : { changes: [], warnings: [] };
+  if (mediaPersistence.warnings.length > 0) {
+    return {
+      migrated:
+        stateDirResult.migrated ||
+        stateSchema.changes.length > 0 ||
+        mediaPersistence.changes.length > 0,
+      skipped: false,
+      changes: [...stateDirResult.changes, ...stateSchema.changes, ...mediaPersistence.changes],
+      warnings: [...stateDirResult.warnings, ...stateSchema.warnings, ...mediaPersistence.warnings],
+      ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
+    };
+  }
   const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
   const configMachineState = migrateLegacyConfigMachineState({
     config: pluginDoctorConfig,
@@ -1425,6 +1442,7 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...stateSchema.changes,
+      ...mediaPersistence.changes,
       ...configMachineState.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
@@ -1448,6 +1466,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...mediaPersistence.warnings,
       ...configMachineState.warnings,
       ...detected.warnings,
       ...orphanKeys.warnings,
@@ -1486,6 +1505,7 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        mediaPersistence.changes.length > 0 ||
         configMachineState.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
@@ -1536,6 +1556,7 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...stateSchema.changes,
+      ...mediaPersistence.changes,
       ...configMachineState.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
@@ -1546,6 +1567,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...mediaPersistence.warnings,
       ...configMachineState.warnings,
       ...detected.warnings,
       ...orphanKeys.warnings,
@@ -1565,6 +1587,7 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        mediaPersistence.changes.length > 0 ||
         configMachineState.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
@@ -1648,6 +1671,7 @@ export async function autoMigrateLegacyState(params: {
   const changes = [
     ...stateDirResult.changes,
     ...stateSchema.changes,
+    ...mediaPersistence.changes,
     ...configMachineState.changes,
     ...orphanKeys.changes,
     ...acpSessionMetadata.changes,
@@ -1676,6 +1700,7 @@ export async function autoMigrateLegacyState(params: {
   const warnings = [
     ...stateDirResult.warnings,
     ...stateSchema.warnings,
+    ...mediaPersistence.warnings,
     ...configMachineState.warnings,
     ...detected.warnings,
     ...orphanKeys.warnings,

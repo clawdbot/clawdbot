@@ -106,8 +106,8 @@ describe("zai provider plugin", () => {
           baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text"],
           reasoning: true,
-          contextWindow: 202800,
-          maxTokens: 131100,
+          contextWindow: 200_000,
+          maxTokens: 131_072,
         },
       },
       {
@@ -117,8 +117,8 @@ describe("zai provider plugin", () => {
           baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text", "image"],
           reasoning: true,
-          contextWindow: 202800,
-          maxTokens: 131100,
+          contextWindow: 200_000,
+          maxTokens: 131_072,
         },
       },
     ] as const;

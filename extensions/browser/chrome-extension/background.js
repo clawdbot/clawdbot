@@ -629,6 +629,10 @@ function scheduleReconnect() {
 // Popup messaging + lifecycle
 // ---------------------------------------------------------------------------
 
+function sendErrorResponse(sendResponse, error) {
+  sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   void (async () => {
     switch (msg?.type) {
@@ -705,16 +709,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           await sendPageToOpenClaw(msg.tabId, msg.note);
           sendResponse({ ok: true });
         } catch (error) {
-          sendResponse({
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          sendErrorResponse(sendResponse, error);
         }
         return;
       }
       case "prepareCopilotPanel": {
-        const options = await copilot.preparePanel(msg.tabId);
-        sendResponse({ ok: true, ...options });
+        try {
+          const options = await copilot.preparePanel(msg.tabId);
+          sendResponse({ ok: true, ...options });
+        } catch (error) {
+          sendErrorResponse(sendResponse, error);
+        }
         return;
       }
       default:

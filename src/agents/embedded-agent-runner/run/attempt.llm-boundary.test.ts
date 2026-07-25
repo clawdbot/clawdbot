@@ -278,17 +278,17 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(normalizedArray?.content).toEqual([{ type: "text", text: expectedText }, image]);
   });
 
-  it("synthesizes marked late-media path lines with legacy-identical string bytes", () => {
+  it("synthesizes marked late-media path lines with reference-identical string bytes", () => {
     const timestamp = 1717570800000;
     const mediaText = "[media attached: /tmp/a.png]\n[media attached: media://inbound/b.jpg]";
     const marked = {
       role: "user",
       content: "",
       timestamp,
-      MediaPath: "/tmp/a.png",
-      MediaPaths: ["/tmp/a.png", ""],
-      MediaUrls: ["", "media://inbound/b.jpg"],
-      __openclaw: { lateMedia: true },
+      __openclaw: {
+        lateMedia: true,
+        media: [{ path: "/tmp/a.png" }, { url: "media://inbound/b.jpg" }],
+      },
     };
     const legacy = { ...marked, content: mediaText, __openclaw: undefined };
     const [normalizedMarked] = normalizeMessagesForLlmBoundary(
@@ -311,8 +311,10 @@ describe("normalizeMessagesForLlmBoundary", () => {
           role: "user",
           content: "",
           timestamp,
-          MediaUrl: "https://example.test/late.png",
-          __openclaw: { lateMedia: true },
+          __openclaw: {
+            lateMedia: true,
+            media: [{ url: "https://example.test/late.png" }],
+          },
         },
       ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
@@ -326,18 +328,13 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const timestamp = 1717570800000;
     const mediaText = "[media attached: /tmp/input.png]";
     const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
-    const fields = {
-      role: "user",
-      timestamp,
-      MediaPath: "/tmp/input.png",
-      MediaPaths: ["/tmp/input.png"],
-    };
+    const fields = { role: "user", timestamp };
     const [normalizedMarked] = normalizeMessagesForLlmBoundary(
       [
         {
           ...fields,
           content: [image],
-          __openclaw: { lateMedia: true },
+          __openclaw: { lateMedia: true, media: [{ path: "/tmp/input.png" }] },
         },
       ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },

@@ -49,7 +49,7 @@ const FINAL_DIGEST_MIN_RUN_MS = 30_000;
 const MAX_CONCURRENT_MODEL_SESSIONS = 6;
 
 type SessionObserver = SessionObserverService &
-  Pick<ReturnType<typeof createSessionObserverAskRuntime>, "getSnapshot">;
+  Pick<ReturnType<typeof createSessionObserverAskRuntime>, "getSnapshot" | "getCompanionSnapshot">;
 
 export function createSessionObserver(deps: SessionObserverDeps): SessionObserver {
   const now = deps.now ?? Date.now;
@@ -669,6 +669,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
     },
     getSnapshot: askRuntime.getSnapshot,
+    getCompanionSnapshot: askRuntime.getCompanionSnapshot,
     ask: askRuntime.ask,
     dispose() {
       disposed = true;

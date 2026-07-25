@@ -49,13 +49,13 @@ describe("moonshot provider catalog", () => {
       thinkingLevelMap: {
         off: null,
         minimal: null,
-        low: null,
+        low: "low",
         medium: null,
-        high: null,
+        high: "high",
         xhigh: "max",
         max: "max",
       },
-      input: ["text", "image"],
+      input: ["text", "image", "video"],
       contextWindow: 1_048_576,
       maxTokens: 1_048_576,
       cost: {
@@ -66,12 +66,12 @@ describe("moonshot provider catalog", () => {
       },
       compat: {
         supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["max"],
+        supportedReasoningEfforts: ["low", "high", "max"],
       },
     });
     expect(requireMoonshotModel(provider, "kimi-k2.7-code")).toMatchObject({
       reasoning: true,
-      input: ["text", "image"],
+      input: ["text", "image", "video"],
       contextWindow: 262144,
       maxTokens: 262144,
       cost: {
@@ -83,7 +83,7 @@ describe("moonshot provider catalog", () => {
     });
     expect(requireMoonshotModel(provider, "kimi-k2.7-code-highspeed")).toMatchObject({
       reasoning: true,
-      input: ["text", "image"],
+      input: ["text", "image", "video"],
       contextWindow: 262144,
       maxTokens: 262144,
       cost: {

@@ -1000,12 +1000,12 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .sidebar-attention__item--warning {
-  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.25));
+  border-color: var(--warn-subtle);
   background: rgba(234, 179, 8, 0.06);
 }
 
 .sidebar-attention__item--error {
-  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.25));
+  border-color: var(--danger-subtle);
   background: rgba(239, 68, 68, 0.06);
 }
 
@@ -1346,7 +1346,7 @@ html.openclaw-native-macos
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--warning);
+  color: var(--warn);
 }
 
 .sidebar-session-group-count--error svg {
@@ -1612,7 +1612,7 @@ html.openclaw-native-macos
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--warning);
+  color: var(--warn);
 }
 
 .sidebar-session-catalog-host__count--error svg {
@@ -2001,7 +2001,7 @@ html.openclaw-native-macos
 
 .viewer-facepile-trigger:hover,
 .viewer-facepile-trigger:focus-visible {
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .sidebar-recent-session__name {
@@ -2948,8 +2948,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   justify-content: center;
   padding: 0 5px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--warning) 18%, transparent);
-  color: var(--warning);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
   font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;

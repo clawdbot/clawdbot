@@ -394,7 +394,6 @@ src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner.ts
 src/agents/cli-runner/claude-live-session.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
-src/agents/cli-runner/execute.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
 src/agents/code-mode-namespaces.ts
@@ -507,7 +506,6 @@ src/agents/subagent-announce.format.e2e.test.ts
 src/agents/subagent-control.test.ts
 src/agents/subagent-control.ts
 src/agents/subagent-registry-lifecycle.test.ts
-src/agents/subagent-registry-lifecycle.ts
 src/agents/subagent-registry-run-manager.ts
 src/agents/subagent-registry.steer-restart.test.ts
 src/agents/subagent-registry.test.ts
@@ -662,7 +660,6 @@ src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-core-normalizers.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
-src/commands/doctor/shared/legacy-config-migrations.runtime.models.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/doctor/shared/missing-configured-plugin-install.ts
 src/commands/doctor/shared/preview-warnings.test.ts
@@ -705,7 +702,6 @@ src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
 src/config/sessions/transcript.ts
-src/config/validation.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.core.ts
 src/context-engine/context-engine.test.ts
@@ -821,7 +817,6 @@ src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts
 src/gateway/server.cron.test.ts
-src/gateway/server.impl.ts
 src/gateway/server.sessions.compaction.test.ts
 src/gateway/server.sessions.create.test.ts
 src/gateway/server.sessions.list-changed.test.ts
@@ -954,7 +949,6 @@ src/plugins/loader.test-harness.ts
 src/plugins/management-service.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/manifest-registry.ts
-src/plugins/manifest.ts
 src/plugins/marketplace.test.ts
 src/plugins/marketplace.ts
 src/plugins/official-external-plugin-catalog.test.ts
@@ -1062,7 +1056,6 @@ ui/src/pages/chat/chat-send.test.ts
 ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-state.ts
 ui/src/pages/chat/chat-thread.test.ts
-ui/src/pages/chat/chat-thread.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/components/chat-model-controls.ts
@@ -1076,7 +1069,6 @@ ui/src/pages/chat/realtime-talk-gateway-relay.test.ts
 ui/src/pages/chat/tool-stream.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
-ui/src/pages/config/view.ts
 ui/src/pages/cron/view.ts
 ui/src/pages/new-session/new-session-page.ts
 ui/src/pages/plugins/plugins-page.ts
@@ -1091,5 +1083,4 @@ ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts
 ui/src/pages/workboard/view.test.ts
-ui/src/pages/workboard/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

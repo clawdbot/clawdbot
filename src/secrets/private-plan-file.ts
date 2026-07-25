@@ -1,19 +1,19 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { resolveSystemBin } from "../infra/resolve-system-bin.js";
+import { runExec } from "../process/exec.js";
 import {
-  resolveTrustedExecutablePath,
-  resolveTrustedOnePasswordDirectoryPath,
+  resolveTrustedPlanDirectoryPath,
   resolveTrustedWindowsSystemExecutablePath,
-} from "../onepassword-op-path.js";
+} from "./trusted-plan-path.js";
 
 type WindowsPrivatePlanFileDependencies = {
   resolveCompilerTempDir?: (env: NodeJS.ProcessEnv) => Promise<string>;
-  resolveTrustedExecutable?: typeof resolveTrustedExecutablePath;
+  resolveTrustedExecutable?: (targetPath: string) => Promise<string>;
   run?: typeof runExec;
 };
 
-const WINDOWS_PLAN_FILE_EXISTS_MARKER = "ONEPASSWORD_PRIVATE_PLAN_FILE_EXISTS";
+const WINDOWS_PLAN_FILE_EXISTS_MARKER = "PRIVATE_PLAN_FILE_EXISTS";
 const WINDOWS_PRIVATE_PLAN_FILE_NATIVE_SOURCE = `
 using System;
 using System.Runtime.InteropServices;
@@ -230,7 +230,15 @@ async function resolvePrivateWindowsCompilerTempDir(env: NodeJS.ProcessEnv): Pro
       "Unable to resolve an absolute Windows temp directory for private plan creation.",
     );
   }
-  return await resolveTrustedOnePasswordDirectoryPath(candidate);
+  return await resolveTrustedPlanDirectoryPath(candidate);
+}
+
+async function resolveTrustedPowerShell(targetPath: string): Promise<string> {
+  const powershell = resolveSystemBin("powershell");
+  if (!powershell || powershell.toLowerCase() !== targetPath.toLowerCase()) {
+    throw new Error("Unable to resolve trusted Windows PowerShell for private plan creation.");
+  }
+  return await resolveTrustedWindowsSystemExecutablePath(targetPath);
 }
 
 export async function createPrivateWindowsPlanFile(
@@ -240,7 +248,7 @@ export async function createPrivateWindowsPlanFile(
   dependencies: WindowsPrivatePlanFileDependencies = {},
 ): Promise<void> {
   const resolveTrustedExecutable =
-    dependencies.resolveTrustedExecutable ?? resolveTrustedWindowsSystemExecutablePath;
+    dependencies.resolveTrustedExecutable ?? resolveTrustedPowerShell;
   const resolveCompilerTempDir =
     dependencies.resolveCompilerTempDir ?? resolvePrivateWindowsCompilerTempDir;
   const run = dependencies.run ?? runExec;

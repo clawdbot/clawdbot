@@ -165,10 +165,12 @@ openclaw models list --all --provider zai
 
 The manifest-backed catalog currently includes:
 
-| Model ref     | Notes                                             |
-| ------------- | ------------------------------------------------- |
-| `zai/glm-5.2` | Coding Plan default; 1M context                   |
-| `zai/glm-5.1` | Deprecated; hidden unless configured; use GLM-5.2 |
+| Model ref          | Notes                                             |
+| ------------------ | ------------------------------------------------- |
+| `zai/glm-5.2`      | Coding Plan default; 1M context                   |
+| `zai/glm-5-turbo`  | OpenClaw-optimized text model; 200K context       |
+| `zai/glm-5v-turbo` | Multimodal coding model; 200K context             |
+| `zai/glm-5.1`      | Deprecated; hidden unless configured; use GLM-5.2 |
 
 Catalog token-cost metadata follows Z.AI's current
 [pay-as-you-go pricing](https://docs.z.ai/guides/overview/pricing). Coding Plan

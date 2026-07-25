@@ -108,6 +108,8 @@ describe("Cohere provider plugin", () => {
         }),
         expect.objectContaining({
           id: "command-a-03-2025",
+          status: "deprecated",
+          replacedBy: COHERE_COMMAND_A_PLUS_MODEL_ID,
           compat: {
             supportsStore: false,
             supportsUsageInStreaming: false,
@@ -116,6 +118,8 @@ describe("Cohere provider plugin", () => {
         }),
         expect.objectContaining({
           id: COHERE_COMMAND_A_REASONING_MODEL_ID,
+          status: "deprecated",
+          replacedBy: COHERE_COMMAND_A_PLUS_MODEL_ID,
           reasoning: true,
           input: ["text"],
           contextWindow: 256000,
@@ -123,6 +127,8 @@ describe("Cohere provider plugin", () => {
         }),
         expect.objectContaining({
           id: COHERE_COMMAND_A_VISION_MODEL_ID,
+          status: "deprecated",
+          replacedBy: COHERE_COMMAND_A_PLUS_MODEL_ID,
           reasoning: false,
           input: ["text", "image"],
           contextWindow: 128000,
