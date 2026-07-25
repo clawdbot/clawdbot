@@ -109,6 +109,19 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
   addCandidate(trimmed);
   addCandidate(normalizeToolName(trimmed));
 
+  const xmlFragmentOffset = ['"', "'", "<"]
+    .map((separator) => trimmed.indexOf(separator))
+    .filter((offset) => offset > 0)
+    .reduce<number | undefined>(
+      (earliest, offset) => (earliest === undefined || offset < earliest ? offset : earliest),
+      undefined,
+    );
+  if (xmlFragmentOffset !== undefined) {
+    const prefix = trimmed.slice(0, xmlFragmentOffset);
+    addCandidate(prefix);
+    addCandidate(normalizeToolName(prefix));
+  }
+
   const normalizedDelimiter = trimmed.replace(/\//g, ".");
   addCandidate(normalizedDelimiter);
   addCandidate(normalizeToolName(normalizedDelimiter));

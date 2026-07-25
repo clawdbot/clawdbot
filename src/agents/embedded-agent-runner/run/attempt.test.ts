@@ -776,6 +776,68 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("exec");
   });
 
+  it("strips only supported provider-leaked XML fragments from allowed tool names", async () => {
+    const cases = [
+      {
+        label: "partial double-quote fragment",
+        toolCall: { type: "toolCall", name: 'read" parameter="path" string="true' },
+        expectedName: "read",
+      },
+      {
+        label: "message single-quote fragment",
+        toolCall: { type: "toolCall", name: "exec' parameter='command' string='true" },
+        expectedName: "exec",
+      },
+      {
+        label: "final opening-angle fragment",
+        toolCall: { type: "toolCall", name: "write<parameter=path" },
+        expectedName: "write",
+      },
+      {
+        label: "unknown quoted prefix",
+        toolCall: { type: "toolCall", name: 'unknown" parameter="value" string="true' },
+        expectedName: 'unknown" parameter="value" string="true',
+      },
+      {
+        label: "allowed prefix with bare closing angle",
+        toolCall: { type: "toolCall", name: "allowedTool>suffix" },
+        expectedName: "allowedTool>suffix",
+      },
+    ] as const;
+    const [partialCase, messageCase, finalCase, unknownCase, bareClosingAngleCase] = cases;
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialCase.toolCall] },
+      message: { role: "assistant", content: [messageCase.toolCall] },
+    };
+    const finalMessage = {
+      role: "assistant",
+      content: [finalCase.toolCall, unknownCase.toolCall, bareClosingAngleCase.toolCall],
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(
+      baseFn,
+      new Set(["read", "write", "exec", "allowedTool"]),
+    );
+
+    for await (const item of stream) {
+      void item;
+      // drain
+    }
+    const result = await stream.result();
+
+    for (const testCase of cases) {
+      expect(testCase.toolCall.name, testCase.label).toBe(testCase.expectedName);
+    }
+    expect(result).toBe(finalMessage);
+  });
+
   it("normalizes toolUse and functionCall names before dispatch", async () => {
     const partialToolCall = { type: "toolUse", name: " functions.read " };
     const messageToolCall = { type: "functionCall", name: " functions.exec " };
