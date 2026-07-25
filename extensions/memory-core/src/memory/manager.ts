@@ -1,4 +1,5 @@
 // Memory Core plugin module implements manager behavior.
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
@@ -16,6 +17,8 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
+  buildFileEntry,
+  normalizeExtraMemoryPaths,
   readMemoryFile,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
@@ -64,7 +67,7 @@ import {
   resolveMemoryProviderState,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
-import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
+import type { MemoryIndexIdentityState, MemoryIndexMeta } from "./manager-reindex-state.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import {
   resolveExactPathSpecificity,
@@ -106,8 +109,10 @@ const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
   "openclaw.memoryIndexManagerGlobalLifecycle.v3",
 );
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
+const OPTIONAL_PROVIDER_INIT_RETRY_DELAY_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
+const READ_ONLY_FALLBACK_MAX_CANDIDATES = 1000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
 type MemoryEmbeddingProviderRequirement = {
@@ -426,6 +431,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private closing = false;
   private activeManagerOperations = 0;
   private managerIdleWaiters = new Set<() => void>();
+  private optionalProviderInitRetryAfterMs = 0;
+  private retryingOptionalProviderFromFtsOnly = false;
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
   protected providerUnavailableReason?: string;
@@ -702,12 +709,34 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerLifecycle = providerState.lifecycle;
     this.providerRuntime = providerState.providerRuntime;
     this.providerInitialized = true;
+    this.optionalProviderInitRetryAfterMs =
+      !providerState.provider &&
+      this.providerRequirement.mode === "optional" &&
+      this.settings.provider !== "none"
+        ? Date.now() + OPTIONAL_PROVIDER_INIT_RETRY_DELAY_MS
+        : 0;
+  }
+
+  private shouldRetryOptionalProviderInitialization(): boolean {
+    return (
+      this.providerInitialized &&
+      !this.provider &&
+      this.providerRequirement.mode === "optional" &&
+      this.providerLifecycle.mode === "fts-only" &&
+      this.optionalProviderInitRetryAfterMs > 0 &&
+      Date.now() >= this.optionalProviderInitRetryAfterMs
+    );
   }
 
   private async ensureProviderInitialized(): Promise<void> {
     if (this.providerInitialized) {
       await this.getPendingFallbackProviderInitialization()?.catch(() => undefined);
-      return;
+      if (this.providerInitialized) {
+        if (!this.shouldRetryOptionalProviderInitialization()) {
+          return;
+        }
+        this.resetProviderInitializationForRetry();
+      }
     }
     if (this.settings.provider === "none") {
       this.applyProviderResult({
@@ -726,15 +755,36 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         if (this.closed) {
           return;
         }
-        const providerResult = await MemoryIndexManager.loadProviderResult({
-          cfg: this.cfg,
-          agentId: this.agentId,
-          settings: this.settings,
-          acquireLocalService: this.acquireLocalService,
-        });
+        let providerResult: EmbeddingProviderResult;
+        try {
+          providerResult = await MemoryIndexManager.loadProviderResult({
+            cfg: this.cfg,
+            agentId: this.agentId,
+            settings: this.settings,
+            acquireLocalService: this.acquireLocalService,
+          });
+        } catch (err) {
+          if (this.providerRequirement.mode !== "optional") {
+            throw err;
+          }
+          const reason = formatErrorMessage(err);
+          providerResult = {
+            provider: null,
+            requestedProvider: this.providerRequirement.provider,
+            providerUnavailableReason: reason,
+          };
+          log.warn(`memory embeddings unavailable; using FTS-only search: ${reason}`);
+        }
+        const recoveredFromOptionalFtsOnly =
+          this.retryingOptionalProviderFromFtsOnly && Boolean(providerResult.provider);
         this.applyProviderResult(providerResult);
+        this.retryingOptionalProviderFromFtsOnly = false;
         this.providerKey = this.computeProviderKey();
         this.batch = this.resolveBatchConfig();
+        if (recoveredFromOptionalFtsOnly) {
+          this.clearCachedEmbeddingAvailability();
+          this.markRecoveredOptionalProviderFtsOnlyIndexDirtyIfNeeded();
+        }
       })();
     }
     try {
@@ -752,11 +802,32 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   protected resetProviderInitializationForRetry(): void {
+    if (
+      this.providerInitialized &&
+      !this.provider &&
+      this.providerRequirement.mode === "optional" &&
+      this.providerLifecycle.mode === "fts-only" &&
+      this.settings.provider !== "none" &&
+      this.optionalProviderInitRetryAfterMs > Date.now()
+    ) {
+      return;
+    }
+    this.retryingOptionalProviderFromFtsOnly =
+      this.providerInitialized &&
+      !this.provider &&
+      this.providerRequirement.mode === "optional" &&
+      this.providerLifecycle.mode === "fts-only" &&
+      this.settings.provider !== "none";
     void this.retireCurrentProvider();
     this.providerInitialized = false;
     this.providerInitPromise = null;
     this.providerUnavailableReason = undefined;
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
+    this.optionalProviderInitRetryAfterMs = 0;
+  }
+
+  private clearCachedEmbeddingAvailability(): void {
+    EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
   }
 
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {
@@ -780,7 +851,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       reason: message,
       code: workerFailure.code,
     });
-    EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+    this.clearCachedEmbeddingAvailability();
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
@@ -893,7 +964,41 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  private shouldUseOptionalProviderFtsReadOnlyIndex(meta: MemoryIndexMeta | null): boolean {
+    return Boolean(
+      meta &&
+      this.providerRequirement.mode === "optional" &&
+      this.providerInitialized &&
+      !this.provider &&
+      this.providerLifecycle.mode === "fts-only" &&
+      this.settings.provider !== "none" &&
+      meta.provider !== "none" &&
+      meta.model.trim() !== "fts-only",
+    );
+  }
+
+  private shouldSearchRecoveredOptionalProviderFtsOnlyIndex(meta: MemoryIndexMeta | null): boolean {
+    // Only FTS-only fallback indexes are readable after optional provider recovery.
+    // Existing semantic indexes stay fail-closed until explicit identity repair.
+    return Boolean(
+      meta &&
+      this.providerRequirement.mode === "optional" &&
+      this.providerInitialized &&
+      this.provider &&
+      this.settings.provider !== "none" &&
+      meta.provider === "none" &&
+      meta.model.trim() === "fts-only",
+    );
+  }
+
+  private markRecoveredOptionalProviderFtsOnlyIndexDirtyIfNeeded(): void {
+    if (this.shouldSearchRecoveredOptionalProviderFtsOnlyIndex(this.readMeta())) {
+      this.markConfiguredSourcesForFullReindex();
+    }
+  }
+
   private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+    const meta = this.readMeta();
     const provider =
       this.settings.provider === "none"
         ? null
@@ -902,10 +1007,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             ? { id: this.provider.id, model: this.provider.model }
             : null
           : undefined;
-    const state = this.resolveCurrentIndexIdentityState({
+    let state = this.resolveCurrentIndexIdentityState({
+      meta,
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
     });
+    if (state.status !== "valid" && this.shouldUseOptionalProviderFtsReadOnlyIndex(meta)) {
+      // Sync still guards semantic indexes in assertFtsOnlySyncAllowed(); this
+      // relaxation only prevents read-only FTS recall from looking paused.
+      state = this.resolveCurrentIndexIdentityState({ meta, lexicalOnly: true });
+    }
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||
@@ -1024,12 +1135,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           });
         }
       }
-      const indexIdentity = this.refreshIndexIdentityDirty({
-        providerKeyKnown: this.providerInitialized,
-      });
-      if (indexIdentity.status !== "valid") {
-        return [];
-      }
       const minScore = opts?.minScore ?? this.settings.query.minScore;
       const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
       const searchSources =
@@ -1052,6 +1157,46 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         200,
         Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
       );
+      const indexIdentity = this.refreshIndexIdentityDirty({
+        providerKeyKnown: this.providerInitialized,
+      });
+      if (indexIdentity.status !== "valid") {
+        const meta = this.readMeta();
+        const readOnlyRecoveredFtsOnlyIndex =
+          this.shouldSearchRecoveredOptionalProviderFtsOnlyIndex(meta);
+        const lexicalIdentity = readOnlyRecoveredFtsOnlyIndex
+          ? this.resolveCurrentIndexIdentityState({ meta, lexicalOnly: true })
+          : indexIdentity;
+        if (lexicalIdentity.status === "valid" && this.fts.enabled && this.fts.available) {
+          const keywordOptions = { boostFallbackRanking: true };
+          const keywordResults = readOnlyRecoveredFtsOnlyIndex
+            ? await this.searchReadOnlyFallbackKeywordResults(
+                cleaned,
+                candidates,
+                keywordOptions,
+                sourceFilterList,
+              )
+            : await this.searchKeywordWithFallback(
+                cleaned,
+                candidates,
+                keywordOptions,
+                sourceFilterList,
+              ).catch((err: unknown) => {
+                log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
+                return [];
+              });
+          if (readOnlyRecoveredFtsOnlyIndex) {
+            this.markConfiguredSourcesForFullReindex();
+          }
+          return await this.finalizeKeywordOnlyResults({
+            results: keywordResults,
+            temporalDecay: hybrid.temporalDecay,
+            maxResults,
+            minScore,
+          });
+        }
+        return [];
+      }
 
       // FTS-only mode: no embedding provider available
       if (!this.provider) {
@@ -1061,17 +1206,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           return [];
         }
 
-        const keywordResults = await this.searchKeywordWithFallback(
-          cleaned,
-          candidates,
-          {
-            boostFallbackRanking: true,
-          },
-          sourceFilterList,
-        ).catch((err: unknown) => {
-          log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
-          return [];
-        });
+        const readOnlyOptionalProviderIndex = this.shouldUseOptionalProviderFtsReadOnlyIndex(
+          this.readMeta(),
+        );
+        const keywordOptions = { boostFallbackRanking: true };
+        const keywordResults = readOnlyOptionalProviderIndex
+          ? await this.searchReadOnlyFallbackKeywordResults(
+              cleaned,
+              candidates,
+              keywordOptions,
+              sourceFilterList,
+            )
+          : await this.searchKeywordWithFallback(
+              cleaned,
+              candidates,
+              keywordOptions,
+              sourceFilterList,
+            ).catch((err: unknown) => {
+              log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
+              return [];
+            });
 
         return await this.finalizeKeywordOnlyResults({
           results: keywordResults,
@@ -1288,6 +1442,167 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return this.toMemorySearchResults(
       this.selectScoredResults(ranked, params.maxResults, params.minScore, 0),
     );
+  }
+
+  private isPathInConfiguredMemoryScope(pathname: string): boolean {
+    const normalized = pathname.replace(/\\/g, "/");
+    if (
+      normalized === "MEMORY.md" ||
+      normalized.toLowerCase() === "dreams.md" ||
+      normalized.startsWith("memory/")
+    ) {
+      return true;
+    }
+    const absPath = path.resolve(this.workspaceDir, pathname);
+    return normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths).some(
+      (extraPath) => {
+        const relative = path.relative(extraPath, absPath);
+        return (
+          relative === "" ||
+          (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
+        );
+      },
+    );
+  }
+
+  private readMemorySourceHash(pathname: string): string | null {
+    const row = this.db
+      .prepare(`SELECT hash FROM memory_index_sources WHERE path = ? AND source = 'memory'`)
+      .get(pathname) as { hash?: string } | undefined;
+    return row?.hash ?? null;
+  }
+
+  private async isReadOnlyFallbackMemoryHitCurrent(hit: KeywordSearchHit): Promise<boolean> {
+    if (hit.source !== "memory") {
+      // Session rows need session-sync ownership to prove deletion/redaction state.
+      // This providerless read-only fallback serves verified memory files only.
+      return false;
+    }
+    if (!this.isPathInConfiguredMemoryScope(hit.path)) {
+      return false;
+    }
+    const indexedHash = this.readMemorySourceHash(hit.path);
+    if (!indexedHash) {
+      // Read-only fallback can safely use only rows tied to current source hashes.
+      // Source-rowless legacy rows may contain deleted or redacted text.
+      return false;
+    }
+    try {
+      const currentEntry = await buildFileEntry(
+        path.resolve(this.workspaceDir, hit.path),
+        this.workspaceDir,
+        this.settings.multimodal,
+      );
+      return currentEntry?.path === hit.path && currentEntry.hash === indexedHash;
+    } catch (err) {
+      log.debug(
+        `memory search: dropping unverified read-only fallback hit ${hit.path}: ${formatErrorMessage(err)}`,
+      );
+      return false;
+    }
+  }
+
+  private async filterReadOnlyFallbackKeywordResults(
+    results: KeywordSearchHit[],
+  ): Promise<KeywordSearchHit[]> {
+    const currentByPath = new Map<string, Promise<boolean>>();
+    const keep = await Promise.all(
+      results.map((result) => {
+        const key = `${result.source}:${result.path}`;
+        let current = currentByPath.get(key);
+        if (!current) {
+          current = this.isReadOnlyFallbackMemoryHitCurrent(result);
+          currentByPath.set(key, current);
+        }
+        return current;
+      }),
+    );
+    return results.filter((_, index) => keep[index]);
+  }
+
+  private async searchReadOnlyFallbackKeywordResults(
+    query: string,
+    candidates: number,
+    options: { boostFallbackRanking?: boolean } | undefined,
+    sourceFilterList: MemorySource[],
+  ): Promise<KeywordSearchHit[]> {
+    let limit = candidates;
+    while (true) {
+      const fullQueryResults = await this.searchKeyword(
+        query,
+        limit,
+        options,
+        sourceFilterList,
+      ).catch((err: unknown) => {
+        log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
+        return [];
+      });
+      const filteredFullQueryResults =
+        await this.filterReadOnlyFallbackKeywordResults(fullQueryResults);
+      if (filteredFullQueryResults.length >= candidates) {
+        return this.limitKeywordSearchHits(filteredFullQueryResults, candidates);
+      }
+      if (fullQueryResults.length >= limit && limit < READ_ONLY_FALLBACK_MAX_CANDIDATES) {
+        limit = Math.min(READ_ONLY_FALLBACK_MAX_CANDIDATES, limit * 2);
+        continue;
+      }
+      return await this.searchReadOnlyFallbackKeywordTerms(
+        query,
+        candidates,
+        options,
+        sourceFilterList,
+        filteredFullQueryResults,
+      );
+    }
+  }
+
+  private async searchReadOnlyFallbackKeywordTerms(
+    query: string,
+    candidates: number,
+    options: { boostFallbackRanking?: boolean } | undefined,
+    sourceFilterList: MemorySource[],
+    fullQueryResults: KeywordSearchHit[],
+  ): Promise<KeywordSearchHit[]> {
+    const fallbackTerms = this.resolveKeywordFallbackTerms(query);
+    if (fallbackTerms.length === 0) {
+      return this.limitKeywordSearchHits(fullQueryResults, candidates);
+    }
+    let limit = candidates;
+    while (true) {
+      const resultSets = await Promise.all(
+        fallbackTerms.map((term) =>
+          this.searchKeyword(
+            term,
+            limit,
+            { ...options, exactPathQuery: query },
+            sourceFilterList,
+          ).catch((err: unknown) => {
+            log.warn(
+              `memory search: FTS keyword fallback query failed: ${formatErrorMessage(err)}`,
+            );
+            return [];
+          }),
+        ),
+      );
+      const fallbackResults = this.limitKeywordSearchHits(
+        this.mergeKeywordSearchHits(resultSets, query),
+        limit,
+      );
+      const filteredFallbackResults =
+        await this.filterReadOnlyFallbackKeywordResults(fallbackResults);
+      const merged = this.limitKeywordSearchHits(
+        this.mergeKeywordSearchHits([fullQueryResults, filteredFallbackResults], query),
+        candidates,
+      );
+      if (
+        merged.length >= candidates ||
+        fallbackResults.length < limit ||
+        limit >= READ_ONLY_FALLBACK_MAX_CANDIDATES
+      ) {
+        return merged;
+      }
+      limit = Math.min(READ_ONLY_FALLBACK_MAX_CANDIDATES, limit * 2);
+    }
   }
 
   private hasIndexedContent(): boolean {
@@ -1589,7 +1904,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       try {
         await this.runSyncWithReadonlyRecovery(params);
       } finally {
+        const completedProviderlessSync = this.syncProviderGeneration?.kind === "fts-only";
         this.endSyncProviderGeneration();
+        if (completedProviderlessSync) {
+          this.markRecoveredOptionalProviderFtsOnlyIndexDirtyIfNeeded();
+        }
       }
     })().finally(() => {
       this.syncing = null;

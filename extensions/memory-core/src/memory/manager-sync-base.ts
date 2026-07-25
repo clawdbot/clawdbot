@@ -366,6 +366,7 @@ export abstract class MemoryManagerSyncBase {
     providerKeyKnown?: boolean;
     vectorReady?: boolean;
     hasIndexedChunks?: boolean;
+    lexicalOnly?: boolean;
   }): MemoryIndexIdentityState {
     const hasProviderOverride = params && "provider" in params;
     const configuredIndexIdentity =
@@ -445,6 +446,7 @@ export abstract class MemoryManagerSyncBase {
           ? Boolean(params.hasIndexedChunks)
           : this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
+      lexicalOnly: params?.lexicalOnly,
     });
   }
 
@@ -570,7 +572,7 @@ export abstract class MemoryManagerSyncBase {
     });
   }
 
-  private markConfiguredSourcesForFullReindex(): void {
+  protected markConfiguredSourcesForFullReindex(): void {
     // This flag selects the shadow-reindex path even for a sessions-only index;
     // the rebuild itself still filters work through the configured sources.
     this.memoryFullRetryDirty = true;

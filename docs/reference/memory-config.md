@@ -108,10 +108,11 @@ reply.
 | `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                                                                                        |
 | `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                                                                                  |
 
-When `provider` is not set, OpenClaw uses OpenAI embeddings. Set `provider`
-explicitly to use Bedrock, DeepInfra, Gemini, GitHub Copilot, Mistral, Ollama,
-Voyage, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
-Legacy configs that still say `provider: "auto"` resolve to `openai`.
+When `provider` is not set, OpenClaw uses OpenAI embeddings when OpenAI API key
+auth is available. Set `provider` explicitly to use Bedrock, DeepInfra, Gemini,
+GitHub Copilot, Mistral, Ollama, Voyage, a local GGUF model, or an
+OpenAI-compatible `/v1/embeddings` endpoint. Legacy configs that still say
+`provider: "auto"` resolve to `openai`.
 
 <Warning>
 Changing the embedding provider, model, provider settings, sources, scope,
@@ -124,7 +125,9 @@ automatically re-embedding everything. Rebuild when you are ready with
 
 When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
-use lexical FTS ranking when embeddings are unavailable.
+use lexical FTS ranking when embeddings are unavailable. Implicit OpenAI
+embeddings do not use Codex OAuth; without API key auth, OpenClaw keeps recall
+available as FTS-only.
 
 Explicit non-local providers fail closed. If you set `memory.search.provider` to
 a concrete remote-backed provider such as Bedrock, DeepInfra, Gemini, GitHub

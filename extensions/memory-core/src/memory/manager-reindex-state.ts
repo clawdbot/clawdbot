@@ -100,6 +100,50 @@ function configuredMetaSourcesDiffer(params: {
   return metaSources.some((source, index) => source !== params.configuredSources[index]);
 }
 
+function resolveMemoryLexicalIndexIdentityState(params: {
+  meta: MemoryIndexMeta | null;
+  configuredSources: MemorySource[];
+  configuredScopeHash: string;
+  chunkTokens: number;
+  chunkOverlap: number;
+  ftsTokenizer: string;
+}): MemoryIndexIdentityState {
+  const { meta } = params;
+  if (!meta) {
+    return { status: "missing", reason: "index metadata is missing" };
+  }
+  if (
+    configuredMetaSourcesDiffer({
+      meta,
+      configuredSources: params.configuredSources,
+    })
+  ) {
+    return {
+      status: "mismatched",
+      reason: "index sources changed",
+    };
+  }
+  if (meta.scopeHash !== params.configuredScopeHash) {
+    return {
+      status: "mismatched",
+      reason: "index scope changed",
+    };
+  }
+  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
+    return {
+      status: "mismatched",
+      reason: "index chunking changed",
+    };
+  }
+  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
+    return {
+      status: "mismatched",
+      reason: "index FTS tokenizer changed",
+    };
+  }
+  return { status: "valid" };
+}
+
 export function resolveConfiguredScopeHash(params: {
   workspaceDir: string;
   extraPaths?: string[];
@@ -137,10 +181,22 @@ export function resolveMemoryIndexIdentityState(params: {
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
+  lexicalOnly?: boolean;
 }): MemoryIndexIdentityState {
   const { meta } = params;
   if (!meta) {
     return { status: "missing", reason: "index metadata is missing" };
+  }
+  const lexicalParams = {
+    meta,
+    configuredSources: params.configuredSources,
+    configuredScopeHash: params.configuredScopeHash,
+    chunkTokens: params.chunkTokens,
+    chunkOverlap: params.chunkOverlap,
+    ftsTokenizer: params.ftsTokenizer,
+  };
+  if (params.lexicalOnly) {
+    return resolveMemoryLexicalIndexIdentityState(lexicalParams);
   }
   const expectedModel = params.provider?.model?.trim() || "fts-only";
   const matchingModelIdentities = [
@@ -169,39 +225,14 @@ export function resolveMemoryIndexIdentityState(params: {
       reason: "index provider settings changed",
     };
   }
-  if (
-    configuredMetaSourcesDiffer({
-      meta,
-      configuredSources: params.configuredSources,
-    })
-  ) {
-    return {
-      status: "mismatched",
-      reason: "index sources changed",
-    };
-  }
-  if (meta.scopeHash !== params.configuredScopeHash) {
-    return {
-      status: "mismatched",
-      reason: "index scope changed",
-    };
-  }
-  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
-    return {
-      status: "mismatched",
-      reason: "index chunking changed",
-    };
+  const lexicalState = resolveMemoryLexicalIndexIdentityState(lexicalParams);
+  if (lexicalState.status !== "valid") {
+    return lexicalState;
   }
   if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
     return {
       status: "mismatched",
       reason: "index vector dimensions are missing",
-    };
-  }
-  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
-    return {
-      status: "mismatched",
-      reason: "index FTS tokenizer changed",
     };
   }
   return { status: "valid" };

@@ -157,14 +157,24 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     this.assertFtsOnlySyncAllowed();
 
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
-    if (progress) {
+    const syncProvider = this.syncProviderGeneration
+      ? this.syncProviderGeneration.provider
+      : this.provider;
+    const syncProviderKey = this.syncProviderGeneration
+      ? this.syncProviderGeneration.providerKey
+      : this.providerKey;
+    const syncProviderIdentities =
+      this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
+    if (syncProvider && progress) {
       progress.report({
         completed: progress.completed,
         total: progress.total,
         label: "Loading vector extension…",
       });
     }
-    const vectorReady = await this.ensureVectorReady();
+    // Providerless FTS-only sync cannot write semantic rows, so vector-store
+    // probing is pure delay and can strand lexical-only recall behind sqlite-vec.
+    const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
     const meta = this.readMeta();
     const targetArchiveFiles = await this.combineTargetArchiveFiles({
       sessions: params?.sessions,
@@ -177,14 +187,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
-    const syncProvider = this.syncProviderGeneration
-      ? this.syncProviderGeneration.provider
-      : this.provider;
-    const syncProviderKey = this.syncProviderGeneration
-      ? this.syncProviderGeneration.providerKey
-      : this.providerKey;
-    const syncProviderIdentities =
-      this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
     const indexIdentity = resolveMemoryIndexIdentityState({
       meta,
       // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.

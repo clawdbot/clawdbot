@@ -1216,7 +1216,7 @@ describe("memory index", () => {
     }
   });
 
-  it("does not search stale provider rows after embeddings become unavailable", async () => {
+  it("uses read-only FTS recall from implicit provider rows after embeddings become unavailable", async () => {
     const oldCfg = createCfg({
       model: "semantic-embed",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -1230,11 +1230,33 @@ describe("memory index", () => {
     try {
       const results = await nextManager.search("alpha");
 
-      expect(results).toStrictEqual([]);
+      expect(results.map((result) => result.path)).toContain("memory/2026-01-12.md");
       expect(nextManager.status().dirty).toBe(true);
-      expect(nextManager.status().custom?.indexIdentity).toMatchObject({
-        status: "mismatched",
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(nextManager.status().custom?.providerState).toMatchObject({
+        mode: "fts-only",
       });
+    } finally {
+      await nextManager.close?.();
+    }
+  });
+
+  it("does not search stale explicit provider rows after embeddings become unavailable", async () => {
+    const oldCfg = createCfg({
+      provider: "openai",
+      model: "semantic-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    forceNoProvider = true;
+    const nextManager = await getFreshManager(oldCfg);
+    try {
+      await expect(nextManager.search("alpha")).rejects.toThrow(
+        /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+      );
     } finally {
       await nextManager.close?.();
     }

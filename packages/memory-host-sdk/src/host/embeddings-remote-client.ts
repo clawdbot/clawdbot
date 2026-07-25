@@ -10,6 +10,9 @@ import type { SsrFPolicy } from "./ssrf-policy.js";
 
 /** Provider id used for remote embedding auth and config lookup. */
 export type RemoteEmbeddingProviderId = string;
+// Model-auth treats any direct OpenAI platform API as API-key-only; only the
+// Codex/ChatGPT transport may use OAuth. Embeddings are direct platform calls.
+const OPENAI_PLATFORM_EMBEDDINGS_AUTH_API = "openai-responses";
 
 /** Attribution headers for native OpenAI embedding calls. */
 function resolveOpenClawAttributionHeaders(): Record<string, string> {
@@ -53,6 +56,10 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
           provider: params.provider,
           cfg: params.options.config,
           agentDir: params.options.agentDir,
+          modelId: params.options.model,
+          ...(params.provider === "openai"
+            ? { modelApi: OPENAI_PLATFORM_EMBEDDINGS_AUTH_API }
+            : {}),
         }),
         params.provider,
       );

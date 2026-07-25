@@ -1,8 +1,27 @@
 // Memory Host SDK tests cover embeddings remote client behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 
+const authMocks = vi.hoisted(() => ({
+  resolveApiKeyForProvider: vi.fn(),
+}));
+
+vi.mock("./openclaw-runtime-auth.js", () => ({
+  requireApiKey: (auth: { apiKey?: string }, provider: string) => {
+    const apiKey = auth.apiKey?.trim();
+    if (!apiKey) {
+      throw new Error(`No API key resolved for provider "${provider}".`);
+    }
+    return apiKey;
+  },
+  resolveApiKeyForProvider: authMocks.resolveApiKeyForProvider,
+}));
+
 describe("resolveRemoteEmbeddingBearerClient", () => {
+  beforeEach(() => {
+    authMocks.resolveApiKeyForProvider.mockReset();
+  });
+
   it("uses configured OpenAI provider baseUrl for memory embeddings", async () => {
     const client = await resolveRemoteEmbeddingBearerClient({
       provider: "openai",
@@ -26,6 +45,33 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
     });
 
     expect(client.baseUrl).toBe("https://proxy.example.test/openai/v1");
+  });
+
+  it("resolves native OpenAI embeddings with direct platform auth", async () => {
+    authMocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "sk-resolved",
+      source: "profile:openai",
+      mode: "api-key",
+    });
+
+    const client = await resolveRemoteEmbeddingBearerClient({
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      options: {
+        agentDir: "/tmp/openclaw-agent",
+        config: { models: {} } as never,
+        model: "text-embedding-3-small",
+      },
+    });
+
+    expect(authMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
+      provider: "openai",
+      cfg: { models: {} },
+      agentDir: "/tmp/openclaw-agent",
+      modelId: "text-embedding-3-small",
+      modelApi: "openai-responses",
+    });
+    expect(client.headers.Authorization).toBe("Bearer sk-resolved");
   });
 
   it("adds OpenClaw attribution to native OpenAI embedding requests", async () => {
