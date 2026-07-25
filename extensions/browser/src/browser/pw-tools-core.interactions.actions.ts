@@ -29,8 +29,6 @@ import {
 } from "./pw-tools-core.interactions.navigation.js";
 import { normalizeTimeoutMs, requireRef, requireRefOrSelector } from "./pw-tools-core.shared.js";
 
-const resolveInteractionTimeoutMs = resolveActInteractionTimeoutMs;
-
 export async function highlightViaPlaywright(
   opts: InteractionTargetOptions & {
     ref: string;
@@ -64,7 +62,7 @@ export async function clickViaPlaywright(
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
-  const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
+  const timeout = resolveActInteractionTimeoutMs(opts.timeoutMs);
   const signal = opts.signal;
   const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, (reason) => {
     if (isBrowserObservedDialogBlockedError(reason)) {
@@ -175,7 +173,7 @@ export async function hoverViaPlaywright(opts: ElementInteractionOptions): Promi
       {
         action: async () =>
           await locator.hover({
-            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+            timeout: resolveActInteractionTimeoutMs(opts.timeoutMs),
           }),
         cdpUrl: opts.cdpUrl,
         page,
@@ -220,7 +218,7 @@ export async function dragViaPlaywright(
       {
         action: async () =>
           await startLocator.dragTo(endLocator, {
-            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+            timeout: resolveActInteractionTimeoutMs(opts.timeoutMs),
           }),
         cdpUrl: opts.cdpUrl,
         page,
@@ -259,7 +257,7 @@ export async function selectOptionViaPlaywright(
       {
         action: async () => {
           await locator.selectOption(opts.values, {
-            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+            timeout: resolveActInteractionTimeoutMs(opts.timeoutMs),
           });
         },
         cdpUrl: opts.cdpUrl,
@@ -328,7 +326,7 @@ export async function typeViaPlaywright(
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
-  const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
+  const timeout = resolveActInteractionTimeoutMs(opts.timeoutMs);
   const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
@@ -370,7 +368,7 @@ export async function fillFormViaPlaywright(
   },
 ): Promise<void> {
   const page = await getRestoredPageForTarget(opts);
-  const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
+  const timeout = resolveActInteractionTimeoutMs(opts.timeoutMs);
   const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
