@@ -685,7 +685,7 @@ export default {
       direct: {
         // Owner/admin chats can start immediately.
         "+15551234567": { debounceMs: 0 },
-        // Other direct chats wait up to three minutes for a message burst.
+        // Other direct chats wait until three minutes of inactivity.
         "*": { debounceMs: 180000 },
       },
       groups: {
