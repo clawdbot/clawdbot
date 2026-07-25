@@ -1,7 +1,8 @@
-import type {
-  SessionCatalogContinueProviderResult,
-  SessionUpstreamActivity,
-  SessionUpstreamProbe,
+import {
+  isExternalUserText,
+  type SessionCatalogContinueProviderResult,
+  type SessionUpstreamActivity,
+  type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENCODE_SESSION_ID_PATTERN } from "./session-catalog-shared.js";
@@ -69,10 +70,6 @@ function sqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function normalizeUserText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map(stableJson).join(",")}]`;
@@ -102,11 +99,6 @@ function replayPartFingerprint(part: Record<string, unknown>): string {
           ),
         );
   return stableJson(normalized);
-}
-
-function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
-  const normalized = text === undefined ? "" : normalizeUserText(text);
-  return !probe.ownRecentUserTexts.includes(normalized);
 }
 
 function readProbeThreadId(probe: SessionUpstreamProbe): string | undefined {

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import process from "node:process";
-import type {
-  SessionCatalogContinueProviderResult,
-  SessionUpstreamActivity,
-  SessionUpstreamProbe,
+import {
+  isExternalUserText,
+  type SessionCatalogContinueProviderResult,
+  type SessionUpstreamActivity,
+  type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readPiSessionFileBaseline } from "./pi-session-store.js";
@@ -37,10 +38,6 @@ function parseCompletePiRows(tail: Buffer): {
     lineStart = index + 1;
   }
   return { entries, classifiedBytes };
-}
-
-function normalizeUserText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
 }
 
 function textFromContent(content: unknown): string | undefined {
@@ -81,11 +78,6 @@ function readMarkerOffset(probe: SessionUpstreamProbe): number | undefined {
     Number(probe.marker.offset) >= 0
     ? Number(probe.marker.offset)
     : undefined;
-}
-
-function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
-  const normalized = text === undefined ? "" : normalizeUserText(text);
-  return !probe.ownRecentUserTexts.includes(normalized);
 }
 
 export async function linkContinuedPiSession(

@@ -74,6 +74,15 @@ export type SessionUpstreamProbe = {
   ownRecentUserTexts: string[];
 };
 
+export function normalizeUserText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+export function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
+  const normalized = text === undefined ? "" : normalizeUserText(text);
+  return !probe.ownRecentUserTexts.includes(normalized);
+}
+
 export type SessionUpstreamActivity =
   | {
       kind: "activity";
