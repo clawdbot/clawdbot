@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
-import { clearOperationalReplyPolicyStateForTest } from "../auto-reply/reply/operational-reply-policy.js";
+import { clearOperationalReplyPolicyStateForTest } from "../auto-reply/reply/operational-reply-policy.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";

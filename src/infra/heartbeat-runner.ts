@@ -2239,6 +2239,7 @@ export async function runHeartbeatOnce(opts: {
       await settleOperationalPolicyResultsForSend(send);
       throw send.error;
     }
+    const suppressedSendReason = send.status === "suppressed" ? send.reason : undefined;
     const visibleSendSucceeded = send.status === "sent";
     await settleOperationalPolicyResultsForSend(send);
     const visibleMainSendSucceeded =
@@ -2288,7 +2289,9 @@ export async function runHeartbeatOnce(opts: {
       status: eventStatus,
       to: delivery.to,
       ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
-      ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
+      ...(!deliveredAgentRunFailure && suppressedSendReason
+        ? { reason: suppressedSendReason }
+        : {}),
       preview: truncateHeartbeatPreview(previewText),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
