@@ -237,10 +237,12 @@ function selectStartableCards(
   const runningByOwner = new Map<string, number>();
   for (const card of cards) {
     const claim = card.metadata?.claim;
+    const claimIsReclaimable = isWorkboardClaimReclaimable(claim, now);
+    // Cleanup is board-scoped, but owner capacity is global. Ignore the same
+    // reclaimable running state here before its board gets a cleanup pass.
     const consumesOwnerSlot =
-      card.status === "running" ||
-      Boolean(claim && !isWorkboardClaimReclaimable(claim, now)) ||
-      card.execution?.status === "running";
+      !claimIsReclaimable &&
+      (card.status === "running" || Boolean(claim) || card.execution?.status === "running");
     if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
     }

@@ -23,7 +23,7 @@ export const DEFAULT_CLAIM_TTL_MS = 30 * 60 * 1000;
 export const READY_STRANDED_MS = 60 * 60 * 1000;
 export const RUNNING_HEARTBEAT_STALE_MS = 20 * 60 * 1000;
 export const BLOCKED_TOO_LONG_MS = 24 * 60 * 60 * 1000;
-export const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
+const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
 
 // Dispatch gives late heartbeats a fixed grace window before reclaiming.
 // Capacity checks must reuse this rule or stale cross-board claims can starve an owner.

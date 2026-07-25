@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { cleanupWorkboardRunWorktree } from "./dispatcher-workspace.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { CLAIM_RECLAIM_MS } from "./store-constants.js";
 import { WorkboardStore } from "./store.js";
+
+const CLAIM_RECLAIM_GRACE_MS = 5 * 60 * 1000;
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -944,7 +945,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       store,
       subagent: { run },
       options: {
-        now: expiresAt! + CLAIM_RECLAIM_MS + 1,
+        now: expiresAt! + CLAIM_RECLAIM_GRACE_MS + 1,
         maxStarts: 1,
         boardId: "ops",
       },
@@ -953,6 +954,103 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(result.started).toEqual([expect.objectContaining({ cardId: ready.id })]);
     expect(run).toHaveBeenCalledOnce();
     expect((await store.get(expired.id))?.metadata?.claim).toBeDefined();
+  });
+
+  it("ignores a reclaimable running card on another board for owner capacity", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const stale = await store.create({
+      title: "Abandoned product run",
+      status: "running",
+      agentId: "codex-main",
+      boardId: "product",
+      execution: {
+        id: "stale-execution",
+        kind: "agent-session",
+        mode: "autonomous",
+        status: "running",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const claimed = await store.claim(stale.id, {
+      ownerId: "codex-main",
+      token: "stale-token",
+      ttlSeconds: 1,
+    });
+    const ready = await store.create({
+      title: "Ready ops recovery",
+      status: "ready",
+      agentId: "codex-main",
+      boardId: "ops",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-recovery" });
+    const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+    expect(expiresAt).toBeDefined();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        now: expiresAt! + CLAIM_RECLAIM_GRACE_MS + 1,
+        maxStarts: 1,
+        boardId: "ops",
+      },
+    });
+
+    expect(result.started).toEqual([expect.objectContaining({ cardId: ready.id })]);
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(stale.id)).resolves.toMatchObject({
+      status: "running",
+      execution: { status: "running" },
+      metadata: { claim: { ownerId: "codex-main" } },
+    });
+  });
+
+  it("keeps a live running card in the owner capacity slot", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const active = await store.create({
+      title: "Active product run",
+      status: "running",
+      agentId: "codex-main",
+      boardId: "product",
+      execution: {
+        id: "active-execution",
+        kind: "agent-session",
+        mode: "autonomous",
+        status: "running",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const claimed = await store.claim(active.id, {
+      ownerId: "codex-main",
+      token: "active-token",
+      ttlSeconds: 60,
+    });
+    await store.create({
+      title: "Ready ops work",
+      status: "ready",
+      agentId: "codex-main",
+      boardId: "ops",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-ops" });
+    const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+    expect(expiresAt).toBeDefined();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        now: expiresAt! + CLAIM_RECLAIM_GRACE_MS,
+        maxStarts: 1,
+        boardId: "ops",
+      },
+    });
+
+    expect(result.started).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("keeps claimed review cards in the owner running slot", async () => {
