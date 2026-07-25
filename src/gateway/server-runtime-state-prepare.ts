@@ -5,7 +5,6 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { createNodeModeReadinessEvidenceResolver } from "../hosting/node-mode.js";
 import {
   advisoryCriteriaForHostingProfile,
@@ -14,6 +13,7 @@ import {
   requiredCriteriaForHostingProfile,
   resolveHostingProfile,
 } from "../hosting/profiles.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import {
@@ -152,10 +152,7 @@ export async function prepareGatewayRuntimeState(params: {
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
   } = bootstrap;
-  const makeState = (
-    config: OpenClawConfig,
-    registry: typeof pluginBootstrap.pluginRegistry,
-  ) => {
+  const makeState = (config: OpenClawConfig, registry: typeof pluginBootstrap.pluginRegistry) => {
     const profile = resolveHostingProfileSelection({
       config,
       env: process.env,
@@ -190,10 +187,7 @@ export async function prepareGatewayRuntimeState(params: {
       })?.profile;
       return isReadinessCriterionSelected(config, MODEL_ROUTE_READY_CRITERION_ID) ||
         (profile &&
-          isReadinessCriterionSelectedByHostingProfile(
-            profile,
-            MODEL_ROUTE_READY_CRITERION_ID,
-          ))
+          isReadinessCriterionSelectedByHostingProfile(profile, MODEL_ROUTE_READY_CRITERION_ID))
         ? { enabled: true as const }
         : {};
     },
