@@ -866,7 +866,6 @@ src/infra/exec-approvals-allowlist.ts
 src/infra/exec-approvals-store.test.ts
 src/infra/exec-authorization-plan.ts
 src/infra/heartbeat-runner.returns-default-unset.test.ts
-src/infra/heartbeat-runner.ts
 src/infra/host-env-security.test.ts
 src/infra/infra-runtime.test.ts
 src/infra/net/fetch-guard.ssrf.test.ts
