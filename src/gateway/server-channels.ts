@@ -951,7 +951,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       knownIds.add(accountId);
     }
 
-    let stopFailure: { error: unknown } | undefined;
     await Promise.all(
       Array.from(knownIds.values()).map(async (id) => {
         const abort = store.aborts.get(id);
@@ -981,9 +980,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               setStatus: (next) => setRuntime(channelId, id, next),
             });
           } catch (error) {
-            // A plugin hook failure belongs to this account. Preserve its
-            // diagnostic, but always finish manager-owned lifecycle cleanup.
-            stopFailure ??= { error };
+            // Task settlement below is the canonical lifetime boundary. Keep
+            // hook failure diagnostic-only so reload can restart clean siblings.
             stopError = formatErrorMessage(error);
             log.warn?.(`[${id}] stopAccount failed: ${stopError}`);
           }
@@ -1025,11 +1023,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         });
       }),
     );
-    // Lifecycle owners still need the failure signal, but only after every
-    // account has completed its independent manager-owned cleanup.
-    if (stopFailure) {
-      throw stopFailure.error;
-    }
   };
 
   const startChannels = async () => {

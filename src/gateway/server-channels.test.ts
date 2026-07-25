@@ -517,7 +517,7 @@ describe("server-channels auto restart", () => {
     expect(stopSettled).toBe(false);
 
     releaseStop.resolve();
-    await expect(stopTask).rejects.toThrow("stop hook failed");
+    await expect(stopTask).resolves.toBeUndefined();
 
     const accounts = manager.getRuntimeSnapshot().channelAccounts.discord;
     expect(stopAccount.mock.calls.map(([context]) => context.accountId)).toEqual(accountIds);
