@@ -122,8 +122,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       .find((panel) => panel.slot === "chat");
     if (chatPanel) {
       layout = activatePanel(layout, chatPanel.id);
-      state.sidebarFocusPanelId = chatPanel.id;
-      state.sidebarFocusVersion += 1;
     }
     const newColumn = layout.columns.find(
       (column) => !beforeOpen.columns.some((current) => current.id === column.id),
@@ -133,6 +131,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         ? (fitSidebarLayout(layout, this.paneWidth, newColumn?.id) ?? layout)
         : layout;
     state.updateSidebarLayout(fitted);
+    if (chatPanel) {
+      state.updateSidebarActivePanel(chatPanel.id);
+    }
     return true;
   }
 

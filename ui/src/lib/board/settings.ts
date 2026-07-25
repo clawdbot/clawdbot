@@ -13,6 +13,7 @@ export type BoardSessionView = {
 export type BoardSessionViews = Record<string, BoardSessionView>;
 
 export type SidebarSessionLayouts = Record<string, SidebarLayout>;
+export type SidebarSessionActivePanels = Record<string, string>;
 
 const MAX_BOARD_SESSION_VIEWS = 50;
 const MAX_SIDEBAR_SESSION_LAYOUTS = 50;
@@ -100,4 +101,37 @@ export function updateSidebarSessionLayout(
   delete layouts[key];
   layouts[key] = normalizeSidebarLayout(layout);
   return Object.fromEntries(Object.entries(layouts).slice(-MAX_SIDEBAR_SESSION_LAYOUTS));
+}
+
+export function normalizeSidebarSessionActivePanels(
+  value: unknown,
+): SidebarSessionActivePanels {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const selections: SidebarSessionActivePanels = {};
+  for (const [sessionKey, panelId] of Object.entries(value).slice(-MAX_SIDEBAR_SESSION_LAYOUTS)) {
+    const key = sessionKey.trim();
+    const id = typeof panelId === "string" ? panelId.trim() : "";
+    if (key && id) {
+      selections[key] = id;
+    }
+  }
+  return selections;
+}
+
+export function updateSidebarSessionActivePanel(
+  current: SidebarSessionActivePanels | undefined,
+  sessionKey: string,
+  panelId: string,
+): SidebarSessionActivePanels {
+  const key = sessionKey.trim();
+  const id = panelId.trim();
+  const selections = normalizeSidebarSessionActivePanels(current);
+  if (!key || !id) {
+    return selections;
+  }
+  delete selections[key];
+  selections[key] = id;
+  return Object.fromEntries(Object.entries(selections).slice(-MAX_SIDEBAR_SESSION_LAYOUTS));
 }

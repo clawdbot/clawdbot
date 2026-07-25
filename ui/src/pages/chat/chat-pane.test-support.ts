@@ -183,6 +183,10 @@ export function createTestChatPane(params: {
   state.updateSidebarLayout = (layout) => {
     state.sidebarLayout = layout;
   };
+  state.updateSidebarActivePanel = (panelId) => {
+    state.sidebarFocusPanelId = panelId;
+    state.sidebarFocusVersion += 1;
+  };
   pane.context = createSessionContext(params.client, params.sessions);
   pane.state = state;
   pane.connectedClient = params.client;

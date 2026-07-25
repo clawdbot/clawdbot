@@ -96,6 +96,10 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   pane.state.updateSidebarLayout = (layout) => {
     pane.state.sidebarLayout = layout;
   };
+  pane.state.updateSidebarActivePanel = (panelId) => {
+    pane.state.sidebarFocusPanelId = panelId;
+    pane.state.sidebarFocusVersion += 1;
+  };
   pane.connectedClient = client;
   pane.connectionGeneration = 1;
   return pane;

@@ -56,39 +56,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ type: Boolean }) narrow = false;
   @property({ type: Number }) availableWidth = 0;
 
-  @state() private narrowActivePanelId = "";
   @state() private draggedPanelId = "";
-
-  protected override willUpdate(changed: Map<string, unknown>) {
-    if (changed.has("focusVersion")) {
-      const requested = panelsOf(this.layout).find((panel) => panel.id === this.focusPanelId);
-      if (requested) {
-        this.narrowActivePanelId = requested.id;
-        return;
-      }
-    }
-    if (!changed.has("layout") && !changed.has("sessionKey")) {
-      return;
-    }
-    const currentPanels = panelsOf(this.layout);
-    const previous = changed.get("layout") as SidebarLayout | undefined;
-    const previousPanels = previous ? panelsOf(previous) : [];
-    if (changed.has("sessionKey") || previousPanels.length === 0) {
-      this.narrowActivePanelId =
-        this.layout.columns.at(-1)?.activePanelId ?? currentPanels[0]?.id ?? "";
-      return;
-    }
-    const previousIds = new Set(previousPanels.map((panel) => panel.id));
-    const addedPanel = currentPanels.find((panel) => !previousIds.has(panel.id));
-    if (addedPanel) {
-      this.narrowActivePanelId = addedPanel.id;
-      return;
-    }
-    if (!currentPanels.some((panel) => panel.id === this.narrowActivePanelId)) {
-      this.narrowActivePanelId =
-        this.layout.columns.at(-1)?.activePanelId ?? currentPanels[0]?.id ?? "";
-    }
-  }
 
   private startDrag(event: DragEvent, panelId: string) {
     this.draggedPanelId = panelId;
@@ -160,10 +128,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.endDrag();
   }
 
-  private activate(panelId: string, narrow: boolean) {
-    if (narrow) {
-      this.narrowActivePanelId = panelId;
-    }
+  private activate(panelId: string) {
     this.callbacks?.activatePanel(panelId);
   }
 
@@ -185,7 +150,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           activation="auto"
           without-scroll-controls
           @wa-tab-show=${(event: CustomEvent<{ name: string }>) =>
-            this.activate(event.detail.name, narrow)}
+            this.activate(event.detail.name)}
         >
           ${column.panels.map(
             (panel) => html`
@@ -357,7 +322,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     const collapsed = this.narrow || isSidebarRegionCollapsed(this.layout, width);
     const panels = panelsOf(this.layout);
     const activePanelId =
-      panels.find((panel) => panel.id === this.narrowActivePanelId)?.id ??
+      panels.find((panel) => panel.id === this.focusPanelId)?.id ??
       this.layout.columns.at(-1)?.activePanelId ??
       panels[0]?.id ??
       "";

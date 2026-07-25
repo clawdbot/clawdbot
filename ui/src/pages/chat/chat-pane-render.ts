@@ -611,6 +611,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
             discussion: html`<openclaw-session-discussion
               .sessionKey=${discussion.sessionKey}
               .canOpen=${discussion.canOpen}
+              .sourceGeneration=${this.connectionGeneration}
               .loadInfo=${discussion.loadInfo}
               .openDiscussion=${discussion.openDiscussion}
               .onStateChange=${discussion.onStateChange}
@@ -621,6 +622,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
     const sidebarCallbacks = {
       activatePanel: (panelId: string) => {
         state.updateSidebarLayout(activatePanel(state.sidebarLayout, panelId));
+        state.updateSidebarActivePanel(panelId);
       },
       closeSlot: (slot: SidebarSlotId) => {
         if (slot === "chat") {
@@ -633,23 +635,17 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
         state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
       },
       detachPanel: (panelId: string, side: SidebarSide, columnIndex: number) => {
-        const storedHasPanel = state.sidebarLayout.columns.some((column) =>
-          column.panels.some((panel) => panel.id === panelId),
-        );
-        const base = storedHasPanel ? state.sidebarLayout : sidebarLayout;
-        const moved = detachPanelToColumn(base, panelId, side, columnIndex);
+        const moved = detachPanelToColumn(sidebarLayout, panelId, side, columnIndex);
         this.commitSidebarPanelMove(moved, panelId, side, board);
       },
       mergePanel: (panelId: string, targetColumnId: string, panelIndex: number) => {
         const target = sidebarLayout.columns.find((column) => column.id === targetColumnId);
-        const storedHasPanel = state.sidebarLayout.columns.some((column) =>
-          column.panels.some((panel) => panel.id === panelId),
+        const merged = mergePanelIntoColumn(
+          sidebarLayout,
+          panelId,
+          targetColumnId,
+          panelIndex,
         );
-        const storedHasTarget = state.sidebarLayout.columns.some(
-          (column) => column.id === targetColumnId,
-        );
-        const base = storedHasPanel && storedHasTarget ? state.sidebarLayout : sidebarLayout;
-        const merged = mergePanelIntoColumn(base, panelId, targetColumnId, panelIndex);
         if (target) {
           this.commitSidebarPanelMove(merged, panelId, target.side, board);
         }

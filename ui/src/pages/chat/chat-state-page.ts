@@ -3,7 +3,10 @@ import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
-import { updateSidebarSessionLayout } from "../../lib/board/settings.ts";
+import {
+  updateSidebarSessionActivePanel,
+  updateSidebarSessionLayout,
+} from "../../lib/board/settings.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -92,6 +95,10 @@ export function createPageState(
   chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
   const settings = loadSettings();
+  const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
+    { agentsList: context.agents.state.agentsList, hello: context.gateway?.snapshot.hello },
+    settings.sessionKey,
+  );
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
   const state = {
@@ -207,16 +214,9 @@ export function createPageState(
     chatFollowLocked: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
-    sidebarLayout: normalizeSidebarLayout(
-      settings.sidebarSessionLayouts?.[
-        canonicalUiSessionKeyForPersistence(
-          { agentsList: context.agents.state.agentsList, hello: context.gateway.snapshot.hello },
-          settings.sessionKey,
-        )
-      ],
-    ),
+    sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
     sidebarContent: null,
-    sidebarFocusPanelId: "",
+    sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
     sidebarFocusVersion: 0,
     imageLightbox: null,
     imageLightboxRequestVersion: 0,
@@ -305,6 +305,22 @@ export function createPageState(
     });
     renderLifecycle.invalidate();
   };
+  state.updateSidebarActivePanel = (panelId) => {
+    const normalizedPanelId = panelId.trim();
+    if (!normalizedPanelId) {
+      return;
+    }
+    state.sidebarFocusPanelId = normalizedPanelId;
+    state.sidebarFocusVersion += 1;
+    state.settings = patchSettings({
+      sidebarSessionActivePanels: updateSidebarSessionActivePanel(
+        loadSettings().sidebarSessionActivePanels,
+        canonicalUiSessionKeyForPersistence(state, state.sessionKey),
+        normalizedPanelId,
+      ),
+    });
+    renderLifecycle.invalidate();
+  };
   state.handleOpenSidebar = (content) => {
     let opened = openSlot(state.sidebarLayout, "detail", "right");
     const detailPanel = opened.columns
@@ -312,8 +328,6 @@ export function createPageState(
       .find((panel) => panel.slot === "detail");
     if (detailPanel) {
       opened = activatePanel(opened, detailPanel.id);
-      state.sidebarFocusPanelId = detailPanel.id;
-      state.sidebarFocusVersion += 1;
     }
     const newColumn = opened.columns.find(
       (column) => !state.sidebarLayout.columns.some((current) => current.id === column.id),
@@ -325,6 +339,9 @@ export function createPageState(
         : opened;
     state.sidebarContent = content;
     state.updateSidebarLayout(fitted);
+    if (detailPanel) {
+      state.updateSidebarActivePanel(detailPanel.id);
+    }
   };
   state.handleCloseSidebar = () => {
     state.updateSidebarLayout(closeSlot(state.sidebarLayout, "detail"));

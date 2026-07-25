@@ -245,9 +245,12 @@ export function resetChatStateForRouteSession(
   state.sessionKey = sessionKey;
   state.sidebarContent = null;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, sessionKey);
+  const sidebarSettings = loadSettings();
   state.sidebarLayout = normalizeSidebarLayout(
-    loadSettings().sidebarSessionLayouts?.[sidebarSessionKey],
+    sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey],
   );
+  state.sidebarFocusPanelId = sidebarSettings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "";
+  state.sidebarFocusVersion += 1;
   invalidateImageLightbox(state);
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(

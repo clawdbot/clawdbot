@@ -120,6 +120,7 @@ export type ChatPageHost = ChatHost &
     sidebarContent: SidebarContent | null;
     sidebarFocusPanelId: string;
     sidebarFocusVersion: number;
+    updateSidebarActivePanel: (panelId: string) => void;
     imageLightbox: ImageLightboxItem | null;
     imageLightboxRequestVersion: number;
     querySelector: (selectors: string) => Element | null;

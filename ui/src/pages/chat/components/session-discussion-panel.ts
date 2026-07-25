@@ -54,6 +54,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) openDiscussion: SessionDiscussionOpener | null = null;
   @property({ attribute: false }) onStateChange: SessionDiscussionStateListener | null = null;
   @property({ type: Boolean }) canOpen = true;
+  @property({ type: Number }) sourceGeneration = 0;
 
   @state() private info: SessionDiscussionInfo | null = null;
   @state() private loading = false;
@@ -67,7 +68,11 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   }
 
   protected override updated(changed: Map<string, unknown>) {
-    if (changed.has("sessionKey") || changed.has("loadInfo")) {
+    if (
+      changed.has("sessionKey") ||
+      changed.has("loadInfo") ||
+      changed.has("sourceGeneration")
+    ) {
       void this.refresh();
       return;
     }

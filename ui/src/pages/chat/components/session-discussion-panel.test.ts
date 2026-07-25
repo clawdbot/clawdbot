@@ -11,6 +11,7 @@ type SessionDiscussionStateListener = SessionDiscussionPanelConfig["onStateChang
 type DiscussionPanelElement = HTMLElement & {
   sessionKey: string;
   canOpen: boolean;
+  sourceGeneration: number;
   loadInfo: SessionDiscussionInfoLoader;
   openDiscussion: SessionDiscussionOpener;
   onStateChange: SessionDiscussionStateListener;
@@ -163,6 +164,34 @@ describe("session discussion panel", () => {
     });
     expect(panel.querySelector("button")).toBeNull();
     expect(panel.querySelector("iframe")).toBeNull();
+  });
+
+  it("replaces source-owned content when the gateway generation changes", async () => {
+    const loadInfo = vi
+      .fn<SessionDiscussionInfoLoader>()
+      .mockResolvedValueOnce({
+        state: "open",
+        embedUrl: "https://old.example/embed/thread",
+      })
+      .mockResolvedValueOnce({
+        state: "open",
+        embedUrl: "https://new.example/embed/thread",
+      });
+    const panel = mount({ loadInfo, openDiscussion: vi.fn() });
+    await vi.waitFor(() => {
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+        "https://old.example/embed/thread",
+      );
+    });
+
+    panel.sourceGeneration += 1;
+
+    await vi.waitFor(() => {
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+        "https://new.example/embed/thread",
+      );
+    });
+    expect(loadInfo).toHaveBeenCalledTimes(2);
   });
 
   it("ignores an in-flight open result after the session changes", async () => {

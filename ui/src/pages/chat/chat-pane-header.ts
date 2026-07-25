@@ -375,8 +375,6 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       .find((panel) => panel.slot === "discussion");
     if (discussionPanel) {
       opened = activatePanel(opened, discussionPanel.id);
-      state.sidebarFocusPanelId = discussionPanel.id;
-      state.sidebarFocusVersion += 1;
     }
     const newColumn = opened.columns.find(
       (column) => !state.sidebarLayout.columns.some((current) => current.id === column.id),
@@ -386,6 +384,9 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         ? (fitSidebarLayout(opened, this.paneWidth, newColumn?.id) ?? opened)
         : opened;
     state.updateSidebarLayout(fitted);
+    if (discussionPanel) {
+      state.updateSidebarActivePanel(discussionPanel.id);
+    }
     return true;
   }
 

@@ -188,7 +188,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;
     if (sidebarSessionKey && (clientChanged || sidebarKeyChanged)) {
-      const persistedLayout = loadSettings().sidebarSessionLayouts?.[sidebarSessionKey];
+      const sidebarSettings = loadSettings();
+      const persistedLayout = sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey];
       if (persistedLayout !== undefined) {
         state.sidebarLayout = normalizeSidebarLayout(persistedLayout);
       } else if (clientChanged) {
@@ -196,6 +197,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       } else if (state.sidebarLayout.columns.length > 0) {
         state.updateSidebarLayout(state.sidebarLayout);
       }
+      state.sidebarFocusPanelId =
+        sidebarSettings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "";
+      state.sidebarFocusVersion += 1;
     }
     if (state.connected && state.pendingAbort) {
       void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());

@@ -39,8 +39,10 @@ import {
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
   normalizeBoardSessionViews,
+  normalizeSidebarSessionActivePanels,
   normalizeSidebarSessionLayouts,
   type BoardSessionViews,
+  type SidebarSessionActivePanels,
   type SidebarSessionLayouts,
 } from "../lib/board/settings.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
@@ -188,6 +190,7 @@ export type UiSettings = {
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Last face and active dashboard tab per session
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
+  sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
@@ -507,6 +510,9 @@ export function loadSettings(): UiSettings {
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
       sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
+      sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
+        parsed.sidebarSessionActivePanels,
+      ),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -648,6 +654,13 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
       : {}),
     ...(next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
       ? { sidebarSessionLayouts: normalizeSidebarSessionLayouts(next.sidebarSessionLayouts) }
+      : {}),
+    ...(next.sidebarSessionActivePanels && Object.keys(next.sidebarSessionActivePanels).length > 0
+      ? {
+          sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
+            next.sidebarSessionActivePanels,
+          ),
+        }
       : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
