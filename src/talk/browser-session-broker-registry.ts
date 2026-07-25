@@ -18,16 +18,3 @@ export function listRealtimeVoiceBrowserSessionBrokers(
       (broker) => normalizeOptionalLowercaseString(broker.providerId) === normalizedProviderId,
     );
 }
-
-export function getRealtimeVoiceBrowserSessionBroker(
-  providerId: string,
-  brokerId: string,
-): RealtimeVoiceBrowserSessionBroker | undefined {
-  const normalizedBrokerId = normalizeOptionalLowercaseString(brokerId);
-  if (!normalizedBrokerId) {
-    return undefined;
-  }
-  return listRealtimeVoiceBrowserSessionBrokers(providerId).find(
-    (broker) => normalizeOptionalLowercaseString(broker.id) === normalizedBrokerId,
-  );
-}

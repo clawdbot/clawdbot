@@ -6,10 +6,7 @@ import {
   releasePinnedPluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import {
-  getRealtimeVoiceBrowserSessionBroker,
-  listRealtimeVoiceBrowserSessionBrokers,
-} from "./browser-session-broker-registry.js";
+import { listRealtimeVoiceBrowserSessionBrokers } from "./browser-session-broker-registry.js";
 import type { RealtimeVoiceBrowserSessionBroker } from "./provider-types.js";
 
 function createBroker(params: {
@@ -66,10 +63,6 @@ describe("realtime browser session broker registry", () => {
     );
 
     expect(listRealtimeVoiceBrowserSessionBrokers(" OPENAI ")).toHaveLength(1);
-    expect(getRealtimeVoiceBrowserSessionBroker("OPENAI", "CODEX-OAUTH")).toMatchObject({
-      id: "codex-oauth",
-      providerId: "openai",
-    });
   });
 
   it("keeps session creation aligned with the pinned route after the active registry changes", () => {

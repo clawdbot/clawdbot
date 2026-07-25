@@ -1624,7 +1624,12 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
-    resolveCapabilities: ({ cfg, providerConfig, surface, browserSessionBrokers }) => {
+    resolveCapabilities: ({
+      cfg,
+      providerConfig,
+      surface,
+      browserSessionBrokers: sessionBrokers,
+    }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (
         config.azureEndpoint ||
@@ -1642,7 +1647,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       const broker = resolveConfiguredCodexRealtimeBroker({
         cfg,
         providerConfig,
-        browserSessionBrokers,
+        browserSessionBrokers: sessionBrokers,
       });
       if (!broker) {
         return OPENAI_REALTIME_CAPABILITIES;
@@ -1656,7 +1661,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       };
     },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ cfg, providerConfig, surface, browserSessionBrokers }) => {
+    isConfigured: ({ cfg, providerConfig, surface, browserSessionBrokers: sessionBrokers }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
@@ -1674,7 +1679,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         resolveConfiguredCodexRealtimeBroker({
           cfg,
           providerConfig,
-          browserSessionBrokers,
+          browserSessionBrokers: sessionBrokers,
         }) !== undefined
       );
     },
