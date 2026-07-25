@@ -6,13 +6,7 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
-import {
-  isHardlinkFallbackError,
-  pinDirectory,
-  publishFileNoClobber,
-  requireDirectorySync,
-  syncDirectory,
-} from "./directory-durability.js";
+import { pinDirectory, requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
@@ -388,6 +382,17 @@ function assertSynchronousCallbackResult(result: unknown, label: string): void {
   }
 }
 
+function isLinkFallbackError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return (
+    code === "EPERM" ||
+    code === "EXDEV" ||
+    code === "ENOTSUP" ||
+    code === "EOPNOTSUPP" ||
+    code === "ENOSYS"
+  );
+}
+
 /**
  * Publish the exact bytes of one already-verified SQLite file without reopening
  * its pathname during the copy. The target is always created exclusively.
@@ -420,6 +425,7 @@ export async function publishVerifiedSqliteFile(
   let linkedCandidateIdentity: Stats | undefined;
   let publishedIdentity: Stats | undefined;
   let ownershipPinned = false;
+  let hardLinkCreated = false;
   try {
     stagingIdentity = await fs.lstat(stagingDir);
     await fs.chmod(stagingDir, 0o700);
@@ -437,35 +443,31 @@ export async function publishVerifiedSqliteFile(
     assertExpectedContent(validatedContent, expectedContent, options.targetPath);
     await options.beforePublish?.();
     await assertTargetAbsent(options.targetPath);
-    let publication: Awaited<ReturnType<typeof publishFileNoClobber>>;
+    let usedHardLink = false;
     try {
-      publication = await publishFileNoClobber(stagedPath, options.targetPath, {
-        strategy: options.requireAtomicPublication ? "link-required" : "link-or-copy",
-        durability: "fail-closed",
-      });
+      await fs.link(stagedPath, options.targetPath);
+      usedHardLink = true;
+      hardLinkCreated = true;
     } catch (error) {
-      if (options.requireAtomicPublication && isHardlinkFallbackError(error)) {
+      if (!isLinkFallbackError(error)) {
+        throw error;
+      }
+      if (options.requireAtomicPublication) {
         throw new Error(
           `Atomic SQLite publication requires hard-link support in ${targetDirectory}.`,
           { cause: error },
         );
       }
-      if ((error as { code?: unknown }).code === "path-mismatch") {
-        throw new Error(
-          `SQLite snapshot target changed during publication; staging file changed during publication: ${options.targetPath}`,
-          { cause: error },
-        );
+      const stagedSource = await fs.open(stagedPath, "r");
+      try {
+        const copied = await copyFileExclusive(stagedSource, options.targetPath);
+        publishedIdentity = copied.identity;
+        assertExpectedContent(copied.content, expectedContent, options.targetPath);
+      } finally {
+        await stagedSource.close();
       }
-      if (
-        error instanceof Error &&
-        error.message.startsWith("File publication directory does not support")
-      ) {
-        throw new Error(error.message.replace(/^File/u, "SQLite"), { cause: error });
-      }
-      throw error;
     }
-    publishedIdentity = publication.identity;
-    if (publication.method === "hardlink") {
+    if (usedHardLink) {
       target = await fs.open(options.targetPath, "r");
       const linkedIdentity = await target.stat();
       linkedCandidateIdentity = linkedIdentity;
@@ -540,7 +542,7 @@ export async function publishVerifiedSqliteFile(
     targetPinFileDescriptor = undefined;
     ownershipPinned = false;
   } catch (error) {
-    if (!publishedIdentity && verifiedStagedIdentity) {
+    if (!publishedIdentity && hardLinkCreated && verifiedStagedIdentity) {
       const currentTargetIdentity = await fs.lstat(options.targetPath).catch(() => undefined);
       const currentStagedIdentity = await fs.lstat(stagedPath).catch(() => undefined);
       const targetMatchesStaging =

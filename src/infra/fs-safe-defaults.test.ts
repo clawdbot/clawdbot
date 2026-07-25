@@ -19,6 +19,12 @@ describe("fs-safe defaults", () => {
     configureFsSafeNative.mockReset();
     delete process.env.FS_SAFE_NATIVE_MODE;
     delete process.env.OPENCLAW_FS_SAFE_NATIVE_MODE;
+    delete process.env.FS_SAFE_PYTHON_MODE;
+    delete process.env.OPENCLAW_FS_SAFE_PYTHON_MODE;
+    delete process.env.FS_SAFE_PYTHON;
+    delete process.env.OPENCLAW_FS_SAFE_PYTHON;
+    delete process.env.OPENCLAW_PINNED_PYTHON;
+    delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
   });
 
   it("disables the native helper by default in OpenClaw", async () => {
@@ -37,6 +43,14 @@ describe("fs-safe defaults", () => {
 
   it("honors the OpenClaw-specific env mode override", async () => {
     process.env.OPENCLAW_FS_SAFE_NATIVE_MODE = "auto";
+
+    await importDefaults();
+
+    expect(configureFsSafeNative).not.toHaveBeenCalled();
+  });
+
+  it("lets fs-safe migrate legacy require mode without overriding it", async () => {
+    process.env.OPENCLAW_FS_SAFE_PYTHON_MODE = "require";
 
     await importDefaults();
 

@@ -11,10 +11,18 @@ export {
 } from "@openclaw/fs-safe/advanced";
 export { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
 
-const hasNativeModeOverride =
-  process.env.FS_SAFE_NATIVE_MODE != null || process.env.OPENCLAW_FS_SAFE_NATIVE_MODE != null;
+const hasModeOverride = [
+  "FS_SAFE_NATIVE_MODE",
+  "OPENCLAW_FS_SAFE_NATIVE_MODE",
+  "FS_SAFE_PYTHON_MODE",
+  "OPENCLAW_FS_SAFE_PYTHON_MODE",
+  "FS_SAFE_PYTHON",
+  "OPENCLAW_FS_SAFE_PYTHON",
+  "OPENCLAW_PINNED_PYTHON",
+  "OPENCLAW_PINNED_WRITE_PYTHON",
+].some((key) => process.env[key] != null);
 
-if (!hasNativeModeOverride) {
+if (!hasModeOverride) {
   configureFsSafeNative({ mode: "off" });
 }
 
