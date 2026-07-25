@@ -660,7 +660,9 @@ process.on("message", (message) => {
       { workerScriptPath: workerScript },
     );
 
-    await expect(provider.close?.()).resolves.toBeUndefined();
+    const firstClose = provider.close?.() ?? Promise.resolve();
+    const secondClose = provider.close?.() ?? Promise.resolve();
+    await expect(Promise.all([firstClose, secondClose])).resolves.toEqual([undefined, undefined]);
 
     await expect(fs.readFile(exitMarker, "utf8")).resolves.toBe("exited");
   });

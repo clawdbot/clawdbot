@@ -448,6 +448,7 @@ export async function createLocalEmbeddingWorkerProvider(
     throw err;
   }
   let closed = false;
+  let closePromise: Promise<void> | null = null;
 
   const throwIfClosed = () => {
     if (closed) {
@@ -467,11 +468,11 @@ export async function createLocalEmbeddingWorkerProvider(
       return await client.embedBatch(workerOptions, texts, callOptions);
     },
     close: async () => {
-      if (closed) {
-        return;
+      if (!closePromise) {
+        closed = true;
+        closePromise = client.close();
       }
-      closed = true;
-      await client.close();
+      await closePromise;
     },
   };
   attachLocalEmbeddingRuntimeFacts(provider, () => client.getRuntimeFacts());
