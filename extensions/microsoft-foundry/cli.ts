@@ -168,7 +168,13 @@ export async function azLoginDeviceCodeWithOptions(params: {
     let timedOut = false;
     const loginTimer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      try {
+        child.kill();
+      } catch (error) {
+        reject(new Error("az login timed out after 5 minutes", { cause: error }));
+        return;
+      }
+      reject(new Error("az login timed out after 5 minutes"));
     }, AZ_LOGIN_TIMEOUT_MS);
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
@@ -203,7 +209,6 @@ export async function azLoginDeviceCodeWithOptions(params: {
     child.on("close", (code) => {
       clearTimeout(loginTimer);
       if (timedOut) {
-        reject(new Error("az login timed out after 5 minutes"));
         return;
       }
       if (code === 0) {
@@ -221,6 +226,9 @@ export async function azLoginDeviceCodeWithOptions(params: {
     });
     child.on("error", (err) => {
       clearTimeout(loginTimer);
+      if (timedOut) {
+        return;
+      }
       reject(err);
     });
   });

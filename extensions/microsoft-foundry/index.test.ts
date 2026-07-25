@@ -2110,7 +2110,7 @@ describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
     expect(stderrWriteSpy).toHaveBeenCalledWith("😊");
   });
 
-  it("kills the child and rejects when az login exceeds 5 minutes", async () => {
+  it("kills the child and rejects without waiting for close when az login exceeds 5 minutes", async () => {
     vi.useFakeTimers();
     try {
       const { EventEmitter } = await import("node:events");
@@ -2125,14 +2125,13 @@ describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
       spawnMock.mockReturnValue(child);
 
       const loginPromise = azLoginDeviceCodeWithOptions({});
+      const loginResult = loginPromise.catch((e: unknown) => e);
 
       // Advance past the 5-minute timeout
       await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
 
       expect(child.kill).toHaveBeenCalledOnce();
-
-      child.emit("close", null);
-      const err = await loginPromise.catch((e: unknown) => e);
+      const err = await loginResult;
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).message).toBe("az login timed out after 5 minutes");
     } finally {
