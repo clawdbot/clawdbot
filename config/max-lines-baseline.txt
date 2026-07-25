@@ -818,7 +818,6 @@ src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts
 src/gateway/server.cron.test.ts
-src/gateway/server.impl.ts
 src/gateway/server.sessions.compaction.test.ts
 src/gateway/server.sessions.create.test.ts
 src/gateway/server.sessions.list-changed.test.ts
