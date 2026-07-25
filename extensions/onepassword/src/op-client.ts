@@ -226,9 +226,17 @@ export class OpClient {
     }
     let trustedOpBin: string;
     try {
-      trustedOpBin =
-        (await resolveTrustedOnePasswordCli({ configuredPath: this.opBin })) ?? this.opBin;
+      // Config rejects relative opBin overrides, and resolveOpBinary expands PATH discovery to
+      // an absolute candidate, so every value reaching this boundary is an explicit path.
+      const resolved = await resolveTrustedOnePasswordCli({ configuredPath: this.opBin });
+      if (!resolved) {
+        throw new OnePasswordError("OP_NOT_FOUND", "1Password CLI executable was not found");
+      }
+      trustedOpBin = resolved;
     } catch (error) {
+      if (error instanceof OnePasswordError) {
+        throw error;
+      }
       throw new OnePasswordError("OP_NOT_FOUND", "1Password CLI executable is not trusted", {
         cause: error,
       });
