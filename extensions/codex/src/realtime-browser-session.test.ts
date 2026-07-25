@@ -21,12 +21,25 @@ vi.mock("./app-server/shared-client.js", () => ({
   releaseLeasedSharedCodexAppServerClient: sharedClientMocks.releaseClient,
 }));
 
-function createSdpRequest(token: string): IncomingMessage {
+function createSdpRequest(token: string, origin?: string): IncomingMessage {
   return Object.assign(Readable.from(["v=offer\r\n"]), {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
       "content-type": "application/sdp",
+      ...(origin ? { origin } : {}),
+    },
+  }) as unknown as IncomingMessage;
+}
+
+function createPreflightRequest(origin: string): IncomingMessage {
+  return Object.assign(Readable.from([]), {
+    method: "OPTIONS",
+    headers: {
+      origin,
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "authorization,content-type",
+      "access-control-request-private-network": "true",
     },
   }) as unknown as IncomingMessage;
 }
@@ -34,6 +47,7 @@ function createSdpRequest(token: string): IncomingMessage {
 function createResponseHarness(options: { autoFinish?: boolean } = {}): {
   res: ServerResponse;
   end: ReturnType<typeof vi.fn>;
+  setHeader: ReturnType<typeof vi.fn>;
   readBody: () => string;
   close: () => void;
 } {
@@ -44,14 +58,16 @@ function createResponseHarness(options: { autoFinish?: boolean } = {}): {
       queueMicrotask(() => res.emit("finish"));
     }
   });
+  const setHeader = vi.fn();
   const res = Object.assign(new EventEmitter(), {
     statusCode: 200,
-    setHeader: vi.fn(),
+    setHeader,
     end,
   }) as unknown as ServerResponse;
   return {
     res,
     end,
+    setHeader,
     readBody: () => body,
     close: () => {
       res.emit("close");
@@ -191,6 +207,56 @@ describe("Codex OAuth realtime browser session", () => {
     await realtime.cleanup();
   });
 
+  it("handles offer preflights only for configured Control UI origins", async () => {
+    const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({
+        gateway: {
+          controlUi: {
+            allowedOrigins: ["https://Control.Example"],
+          },
+        },
+      }),
+      getPluginConfig: () => ({}),
+    });
+
+    try {
+      const accepted = createResponseHarness();
+      await expect(
+        realtime.handler(createPreflightRequest("https://control.example"), accepted.res),
+      ).resolves.toBe(true);
+      expect(accepted.res.statusCode).toBe(204);
+      expect(accepted.setHeader).toHaveBeenCalledWith(
+        "Access-Control-Allow-Origin",
+        "https://control.example",
+      );
+      expect(accepted.setHeader).toHaveBeenCalledWith(
+        "Access-Control-Allow-Methods",
+        "POST, OPTIONS",
+      );
+      expect(accepted.setHeader).toHaveBeenCalledWith(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type",
+      );
+      expect(accepted.setHeader).toHaveBeenCalledWith(
+        "Access-Control-Allow-Private-Network",
+        "true",
+      );
+
+      const rejected = createResponseHarness();
+      await expect(
+        realtime.handler(createPreflightRequest("https://untrusted.example"), rejected.res),
+      ).resolves.toBe(true);
+      expect(rejected.res.statusCode).toBe(403);
+      expect(rejected.setHeader).not.toHaveBeenCalledWith(
+        "Access-Control-Allow-Origin",
+        expect.anything(),
+      );
+      expect(sharedClientMocks.getClient).not.toHaveBeenCalled();
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
   it("probes again after failed warmup without advertising or reserving the failure", async () => {
     const fake = createFakeClient();
     const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
@@ -263,7 +329,13 @@ describe("Codex OAuth realtime browser session", () => {
     const fake = createFakeClient();
     useFakeClient(fake);
     const realtime = createCodexRealtimeBrowserSessionBroker({
-      getConfig: () => ({}),
+      getConfig: () => ({
+        gateway: {
+          controlUi: {
+            allowedOrigins: ["https://Control.Example"],
+          },
+        },
+      }),
       getPluginConfig: () => ({}),
     });
     expect(realtime.broker.capabilities).toEqual({
@@ -303,10 +375,17 @@ describe("Codex OAuth realtime browser session", () => {
     try {
       const accepted = createResponseHarness();
       await expect(
-        realtime.handler(createSdpRequest(first.clientSecret), accepted.res),
+        realtime.handler(
+          createSdpRequest(first.clientSecret, "https://control.example"),
+          accepted.res,
+        ),
       ).resolves.toBe(true);
       expect(accepted.res.statusCode).toBe(200);
       expect(accepted.readBody()).toBe("v=answer\r\n");
+      expect(accepted.setHeader).toHaveBeenCalledWith(
+        "Access-Control-Allow-Origin",
+        "https://control.example",
+      );
       const threadStartParams = (fake.client.request as ReturnType<typeof vi.fn>).mock.calls.find(
         ([method]) => method === "thread/start",
       )?.[1];

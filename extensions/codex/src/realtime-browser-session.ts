@@ -96,6 +96,50 @@ function respondText(res: ServerResponse, statusCode: number, body: string): voi
   res.end(body);
 }
 
+function resolveConfiguredControlUiOrigin(
+  req: IncomingMessage,
+  cfg: OpenClawConfig | undefined,
+): string | undefined {
+  const rawOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
+  if (!rawOrigin) {
+    return undefined;
+  }
+  let origin: string;
+  try {
+    const parsed = new URL(rawOrigin);
+    if (parsed.origin !== rawOrigin || parsed.username || parsed.password) {
+      return undefined;
+    }
+    origin = parsed.origin;
+  } catch {
+    return undefined;
+  }
+  const allowed = cfg?.gateway?.controlUi?.allowedOrigins ?? [];
+  return allowed.some((candidate) => {
+    const normalized = candidate.trim().toLowerCase();
+    return normalized === "*" || normalized === origin;
+  })
+    ? origin
+    : undefined;
+}
+
+function applyRealtimeOfferCorsHeaders(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: OpenClawConfig | undefined,
+): boolean {
+  if (!req.headers.origin) {
+    return true;
+  }
+  const origin = resolveConfiguredControlUiOrigin(req, cfg);
+  if (!origin) {
+    return false;
+  }
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  return true;
+}
+
 function readBearerToken(req: IncomingMessage): string | undefined {
   const authorization = req.headers.authorization?.trim();
   const match = authorization?.match(/^Bearer\s+([^\s]+)$/i);
@@ -369,6 +413,27 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
   };
 
   const handleOffer = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+    const corsAllowed = applyRealtimeOfferCorsHeaders(req, res, params.getConfig());
+    if (req.method === "OPTIONS") {
+      if (!corsAllowed) {
+        respondText(res, 403, "Origin not allowed");
+        return true;
+      }
+      res.statusCode = 204;
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+      res.setHeader(
+        "Vary",
+        "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",
+      );
+      if (req.headers["access-control-request-private-network"] === "true") {
+        res.setHeader("Access-Control-Allow-Private-Network", "true");
+      }
+      res.setHeader("Access-Control-Max-Age", "600");
+      res.end();
+      return true;
+    }
     if (req.method !== "POST") {
       respondText(res, 405, "Method not allowed");
       return true;
