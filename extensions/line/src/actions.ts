@@ -3,6 +3,7 @@ import type { messagingApi } from "@line/bot-sdk";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export type Action = messagingApi.Action;
+type Message = messagingApi.Message;
 const LINE_ACTION_LABEL_LIMIT = 20;
 const LINE_ACTION_DATA_LIMIT = 300;
 const LINE_ACTION_URI_LIMIT = 1000;
@@ -37,6 +38,87 @@ function unavailableAction(kind: "Action" | "Link", reason: string): Action {
     label: "Unavailable",
     text: `${kind} unavailable: ${reason}`,
   };
+}
+
+const actionTypes = new Set([
+  "camera",
+  "cameraRoll",
+  "clipboard",
+  "datetimepicker",
+  "location",
+  "message",
+  "postback",
+  "richmenuswitch",
+  "uri",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isLineAction(value: unknown): value is Action {
+  return isRecord(value) && typeof value.type === "string" && actionTypes.has(value.type);
+}
+
+function normalizeNestedActions(value: unknown, labelLimit: number): unknown {
+  if (Array.isArray(value)) {
+    const normalized: unknown[] = [];
+    for (const item of value) {
+      normalized.push(normalizeNestedActions(item, labelLimit));
+    }
+    return normalized;
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const normalized: Record<string, unknown> = { ...value };
+  for (const [key, nested] of Object.entries(value)) {
+    if ((key === "action" || key === "defaultAction") && isLineAction(nested)) {
+      const action = normalizeLineAction(nested, labelLimit);
+      if (value.type === "video" && action.type !== "uri") {
+        // LINE accepts only URI actions on Flex video components. Dropping an
+        // unusable optional tap target keeps the video itself deliverable.
+        delete normalized[key];
+      } else {
+        normalized[key] = action;
+      }
+    } else if (key === "actions" && Array.isArray(nested)) {
+      normalized[key] = nested.map((action) =>
+        isLineAction(action) ? normalizeLineAction(action, labelLimit) : action,
+      );
+    } else {
+      normalized[key] = normalizeNestedActions(nested, labelLimit);
+    }
+  }
+  return normalized;
+}
+
+export function normalizeLineMessageActions(message: Message): Message {
+  let normalized: Message;
+  if (message.type === "flex") {
+    normalized = {
+      ...message,
+      contents: normalizeNestedActions(message.contents, 40) as messagingApi.FlexContainer,
+    };
+  } else if (message.type === "template") {
+    const labelLimit = message.template.type === "image_carousel" ? 12 : 20;
+    normalized = {
+      ...message,
+      template: normalizeNestedActions(message.template, labelLimit) as messagingApi.Template,
+    };
+  } else {
+    normalized = { ...message };
+  }
+
+  if (message.quickReply) {
+    normalized = {
+      ...normalized,
+      quickReply: normalizeNestedActions(message.quickReply, 20) as messagingApi.QuickReply,
+    };
+  }
+
+  return normalized;
 }
 
 export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LABEL_LIMIT): Action {

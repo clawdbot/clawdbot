@@ -86,6 +86,22 @@ function formatProductCarouselText(description: string, price?: string): string 
   return descriptionText ? `${descriptionText}\n${priceText}` : priceText;
 }
 
+function normalizeCarouselColumnActions(column: CarouselColumn): CarouselColumn {
+  return {
+    ...column,
+    actions: column.actions.map((action) => normalizeLineAction(action)),
+    defaultAction:
+      column.defaultAction === undefined ? undefined : normalizeLineAction(column.defaultAction),
+  };
+}
+
+function normalizeImageCarouselColumnAction(column: ImageCarouselColumn): ImageCarouselColumn {
+  return {
+    ...column,
+    action: normalizeLineAction(column.action, 12),
+  };
+}
+
 /**
  * Create a confirm template (yes/no style dialog)
  */
@@ -165,12 +181,7 @@ export function createTemplateCarousel(
 ): TemplateMessage {
   const template: CarouselTemplate = {
     type: "carousel",
-    columns: columns.slice(0, 10).map((column) => ({
-      ...column,
-      actions: column.actions.map((action) => normalizeLineAction(action)),
-      defaultAction:
-        column.defaultAction === undefined ? undefined : normalizeLineAction(column.defaultAction),
-    })), // LINE limit: max 10 columns
+    columns: columns.slice(0, 10).map(normalizeCarouselColumnActions), // LINE limit: max 10 columns
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
     imageSize: options?.imageSize ?? "cover",
   };
@@ -218,10 +229,7 @@ export function createImageCarousel(
 ): TemplateMessage {
   const template: ImageCarouselTemplate = {
     type: "image_carousel",
-    columns: columns.slice(0, 10).map((column) => ({
-      ...column,
-      action: normalizeLineAction(column.action, 12),
-    })), // LINE limit: max 10 columns
+    columns: columns.slice(0, 10).map(normalizeImageCarouselColumnAction), // LINE limit: max 10 columns
   };
 
   return {

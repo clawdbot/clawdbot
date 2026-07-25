@@ -175,6 +175,66 @@ describe("LINE send helpers", () => {
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
   });
 
+  it("normalizes raw Flex actions at both outbound API boundaries", async () => {
+    const oversizedPostback = { type: "postback", label: "Open", data: "x".repeat(301) };
+    const oversizedUri = {
+      type: "uri",
+      label: "Open",
+      uri: `https://e.example/?q=${"x".repeat(1200)}`,
+    };
+    const message = {
+      type: "flex",
+      altText: "Raw Flex",
+      contents: {
+        type: "bubble",
+        action: oversizedPostback,
+        hero: { type: "video", url: "https://e.example/video.mp4", action: oversizedUri },
+        body: {
+          type: "box",
+          layout: "vertical",
+          action: oversizedPostback,
+          contents: [
+            { type: "text", text: "Open", action: oversizedUri },
+            { type: "button", action: oversizedPostback },
+          ],
+        },
+      },
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ contents: Record<string, unknown> }>;
+    };
+    const replied = replyMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ contents: Record<string, unknown> }>;
+    };
+    expect(pushed.messages[0]?.contents).toEqual(replied.messages[0]?.contents);
+
+    const contents = pushed.messages[0]?.contents as {
+      action: unknown;
+      hero: { action: unknown };
+      body: { action: unknown; contents: Array<{ action: unknown }> };
+    };
+    const unavailableAction = {
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    };
+    const unavailableLink = {
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+    };
+    expect(contents.action).toEqual(unavailableAction);
+    expect(contents.hero.action).toBeUndefined();
+    expect(contents.body.action).toEqual(unavailableAction);
+    expect(contents.body.contents[0]?.action).toEqual(unavailableLink);
+    expect(contents.body.contents[1]?.action).toEqual(unavailableAction);
+    expect(message.contents.action).toBe(oversizedPostback);
+  });
+
   it("pushes images via normalized LINE target", async () => {
     const result = await sendModule.pushImageMessage(
       "line:user:U123",
