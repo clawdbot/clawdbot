@@ -152,6 +152,7 @@ above). `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
 path is not supported; use plugin surfaces.
+The `sessions.observer.ask` method was removed; use `sessions.companion.ask`.
 The snapshot's optional `appliedConfigHash` is the resolved source-config revision
 accepted by the active Gateway runtime. Clients can compare it with
 `config.get.configRevisionHash` to determine whether a newer saved config still

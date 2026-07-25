@@ -19,7 +19,6 @@ import {
   validateSessionsCompanionAskParams,
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
-  validateSessionsObserverAskParams,
   validateSessionsObserverVisibilityParams,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
@@ -276,24 +275,6 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsSearchParams({ query: "deployment failure", limit: 26 })).toBe(false);
     expect(validateSessionsSearchParams({ query: "" })).toBe(false);
     expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
-  });
-
-  it("validates bounded session observer questions", () => {
-    expect(
-      validateSessionsObserverAskParams({
-        sessionKey: "agent:main:current",
-        question: "Why is it rerunning that test?",
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsObserverAskParams({ sessionKey: "agent:main:current", question: "" }),
-    ).toBe(false);
-    expect(
-      validateSessionsObserverAskParams({
-        sessionKey: "agent:main:current",
-        question: "x".repeat(401),
-      }),
-    ).toBe(false);
   });
 
   it("validates closed bounded session companion params", () => {

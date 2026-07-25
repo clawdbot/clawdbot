@@ -1763,13 +1763,13 @@ async function createChatPickerScenario(
           },
         ],
       },
-      "sessions.observer.ask": {
+      "sessions.companion.ask": {
         cases: [
           {
             match: { sessionKey: OBSERVER_DEMO_SESSION_KEY },
             response: {
               answer: "It is rerunning the focused test to check whether the latest fix is stable.",
-              digestRevision: 4,
+              ts: baseTime + 2_000,
             },
           },
         ],

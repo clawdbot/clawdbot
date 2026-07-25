@@ -7,9 +7,9 @@ read_when:
 title: "Moonshot AI"
 ---
 
-Moonshot provides the Kimi API with OpenAI-compatible endpoints. Select
-`moonshot/kimi-k3` for Kimi K3, keep the onboarding default
-`moonshot/kimi-k2.6`, or use `kimi/kimi-for-coding` for Kimi Coding.
+Moonshot provides the Kimi API with OpenAI-compatible endpoints. Fresh Moonshot
+onboarding selects `moonshot/kimi-k3`; use `kimi/kimi-for-coding` for the
+separate Kimi Coding provider.
 
 <Warning>
 Moonshot and Kimi Coding are **separate providers**, each shipped as a separate external plugin. Keys are not interchangeable, endpoints differ, and model refs differ (`moonshot/...` vs `kimi/...`).
@@ -39,7 +39,7 @@ overrides (`temperature`, `top_p`, `n`, `presence_penalty`, and
 `frequency_penalty`) that K3 fixes to provider defaults. Kimi K2.7 Code also
 always uses native thinking but requires both `thinking` and
 `reasoning_effort` to be omitted; the HighSpeed variant uses the same contract.
-Kimi K2.6 remains the onboarding default.
+Kimi K3 is the onboarding default.
 See Moonshot's [Kimi K3 quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart).
 
 ## Getting started
@@ -75,9 +75,8 @@ onboarding.
         openclaw onboard --auth-choice moonshot-api-key-cn
         ```
       </Step>
-      <Step title="Set Kimi K3 as the default model">
-        Onboarding keeps Kimi K2.6 as the initial default. Switch explicitly
-        when you want Kimi K3:
+      <Step title="Confirm the Kimi K3 default">
+        Fresh onboarding selects Kimi K3. Existing installations can switch explicitly:
 
         ```bash
         openclaw models set moonshot/kimi-k3
@@ -398,7 +397,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     provider id pointed at the same native Moonshot host inherits the same
     streaming-usage behavior.
 
-    With the catalog K2.6 pricing, streamed usage that includes input, output,
+    With the catalog K3 pricing, streamed usage that includes input, output,
     and cache-read tokens is also converted into local estimated USD cost for
     `/status`, `/usage full`, `/usage cost`, and transcript-backed session
     accounting.
