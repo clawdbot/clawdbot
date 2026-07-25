@@ -33,7 +33,7 @@ async function writeSecretPlanFile(params: {
     await (params.createPrivateWindowsFile ?? createPrivateWindowsPlanFile)(
       params.planPath,
       params.content,
-    ).catch((error) => throwPlanFileError(error, params.planPath));
+    ).catch((error: unknown) => throwPlanFileError(error, params.planPath));
     return;
   }
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
