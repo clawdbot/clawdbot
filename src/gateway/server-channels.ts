@@ -493,7 +493,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return;
     }
 
-    let handedOffAccountStarts = 0;
     const startup = await runTasksWithConcurrency({
       limit: CHANNEL_STARTUP_CONCURRENCY,
       tasks: accountIds.map((id) => async () => {
@@ -885,7 +884,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             return store.tasks.get(id) === trackedPromise;
           }
           handedOffTask = true;
-          handedOffAccountStarts += 1;
           store.tasks.set(id, trackedPromise);
         } catch (error) {
           if (!handedOffTask) {
@@ -909,20 +907,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           }
         }
       }),
-      onTaskError: (error, index) => {
-        if (!accountId) {
-          const id = accountIds[index];
-          ensureChannelLog(channelId).error?.(
-            `[${id}] channel startup failed: ${formatErrorMessage(error)}`,
-          );
-        }
-      },
     });
-    // Whole-channel callers own independent accounts, so one failed account
-    // must not roll back healthy siblings. Total failure still reaches recovery.
-    const hasStartedAccount =
-      handedOffAccountStarts > 0 || accountIds.some((id) => store.tasks.has(id));
-    if (startup.hasError && (accountId || !hasStartedAccount)) {
+    if (startup.hasError) {
       throw startup.firstError;
     }
   };
@@ -965,6 +951,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       knownIds.add(accountId);
     }
 
+    let stopFailure: { error: unknown } | undefined;
     await Promise.all(
       Array.from(knownIds.values()).map(async (id) => {
         const abort = store.aborts.get(id);
@@ -996,6 +983,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           } catch (error) {
             // A plugin hook failure belongs to this account. Preserve its
             // diagnostic, but always finish manager-owned lifecycle cleanup.
+            stopFailure ??= { error };
             stopError = formatErrorMessage(error);
             log.warn?.(`[${id}] stopAccount failed: ${stopError}`);
           }
@@ -1037,6 +1025,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         });
       }),
     );
+    // Lifecycle owners still need the failure signal, but only after every
+    // account has completed its independent manager-owned cleanup.
+    if (stopFailure) {
+      throw stopFailure.error;
+    }
   };
 
   const startChannels = async () => {

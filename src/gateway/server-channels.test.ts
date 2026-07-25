@@ -473,10 +473,17 @@ describe("server-channels auto restart", () => {
 
   it("isolates stop hook failures to the failing account", async () => {
     const accountIds = ["broken", "healthy"];
+    const releaseStop = createDeferred();
     const startAccount = vi.fn(
       async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
         await new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          abortSignal.addEventListener(
+            "abort",
+            () => {
+              void releaseStop.promise.then(resolve);
+            },
+            { once: true },
+          );
         }),
     );
     const stopAccount = vi.fn(async ({ accountId }: ChannelGatewayContext<TestAccount>) => {
@@ -496,7 +503,21 @@ describe("server-channels auto restart", () => {
 
     await manager.startChannels();
     await flushMicrotasks();
-    await expect(manager.stopChannel("discord")).resolves.toBeUndefined();
+    const stopTask = manager.stopChannel("discord");
+    let stopSettled = false;
+    void stopTask.then(
+      () => {
+        stopSettled = true;
+      },
+      () => {
+        stopSettled = true;
+      },
+    );
+    await flushMicrotasks();
+    expect(stopSettled).toBe(false);
+
+    releaseStop.resolve();
+    await expect(stopTask).rejects.toThrow("stop hook failed");
 
     const accounts = manager.getRuntimeSnapshot().channelAccounts.discord;
     expect(stopAccount.mock.calls.map(([context]) => context.accountId)).toEqual(accountIds);
@@ -1358,48 +1379,6 @@ describe("server-channels auto restart", () => {
 
     expect(failingStart).toHaveBeenCalledTimes(1);
     expect(succeedingStart).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps healthy accounts running when a whole-channel start has one failure", async () => {
-    const brokenAccount = { enabled: true, configured: true };
-    const healthyAccount = { enabled: true, configured: true };
-    const startAccount = vi.fn(
-      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
-        await new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        }),
-    );
-    installTestRegistry(
-      createTestPlugin({
-        listAccountIds: () => ["broken", "healthy"],
-        resolveAccount: (_cfg, accountId) =>
-          accountId === "broken" ? brokenAccount : healthyAccount,
-        isConfigured: (account) => {
-          if (account === brokenAccount) {
-            throw new Error("invalid broken config");
-          }
-          return true;
-        },
-        startAccount,
-      }),
-    );
-    const manager = createManager();
-
-    await expect(manager.startChannel("discord")).resolves.toBeUndefined();
-    await flushMicrotasks();
-
-    const accounts = manager.getRuntimeSnapshot().channelAccounts.discord;
-    expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual(["healthy"]);
-    expect(accounts?.broken).toMatchObject({
-      running: false,
-      lastError: "invalid broken config",
-    });
-    expect(accounts?.healthy?.running).toBe(true);
-
-    await manager.stopChannel("discord");
-
-    healthyAccount.enabled = false;
-    await expect(manager.startChannel("discord")).rejects.toThrow("invalid broken config");
   });
 
   it("keeps only the degraded channel account cold", async () => {
