@@ -1,7 +1,8 @@
-import { DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS } from "../../../src/gateway/plugin-node-capability.js";
-
 const RENEWAL_LEAD_MS = 15_000;
 const MIN_RENEWAL_DELAY_MS = 1_000;
+// Used only when a refresh response omits expiry; an early one-minute refresh
+// is safe because it asks the server to rotate rather than extending authority.
+const MISSING_EXPIRY_RENEWAL_DELAY_MS = 60_000;
 const RETRY_START_MS = 1_000;
 const RETRY_MAX_MS = 30_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -22,6 +23,7 @@ export function createCanvasSurfaceLease<
 >(params: {
   request: (method: string, params: unknown) => Promise<unknown>;
   onChange: (url: string | null) => void;
+  onConnectionChange?: () => void;
   now?: () => number;
   setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
   clearTimer?: (timer: TimerHandle) => void;
@@ -97,7 +99,7 @@ export function createCanvasSurfaceLease<
         params.onChange(currentUrl);
         const delayMs =
           refreshed.expiresAtMs === undefined
-            ? DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS / 2
+            ? MISSING_EXPIRY_RENEWAL_DELAY_MS
             : Math.max(MIN_RENEWAL_DELAY_MS, refreshed.expiresAtMs - now() - RENEWAL_LEAD_MS);
         schedule(delayMs, expectedGeneration);
       })
@@ -116,11 +118,12 @@ export function createCanvasSurfaceLease<
       started = true;
       consecutiveFailures = 0;
       clearScheduledRenewal();
+      params.onConnectionChange?.();
       const trimmedUrl = helloUrl?.trim();
       currentUrl = trimmedUrl ? trimmedUrl : null;
       params.onChange(currentUrl);
       if (currentUrl) {
-        schedule(DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS / 2, generation);
+        renew(generation);
       }
     },
     stop() {
@@ -131,6 +134,7 @@ export function createCanvasSurfaceLease<
       started = false;
       consecutiveFailures = 0;
       clearScheduledRenewal();
+      params.onConnectionChange?.();
       currentUrl = null;
       params.onChange(null);
     },

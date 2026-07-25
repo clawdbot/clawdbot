@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS } from "../../../src/gateway/plugin-node-capability.js";
 import { createCanvasSurfaceLease } from "./canvas-surface-lease.ts";
 
 type ScheduledTimer = {
@@ -66,9 +65,9 @@ class FakeClock {
 }
 
 async function flushPromises() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function deferred<T>() {
@@ -82,24 +81,26 @@ function deferred<T>() {
 function createLeaseHarness(request: (method: string, params: unknown) => Promise<unknown>) {
   const clock = new FakeClock();
   const changes: Array<string | null> = [];
+  const connectionChanges: number[] = [];
   const lease = createCanvasSurfaceLease({
     request,
     onChange: (url) => changes.push(url),
     now: clock.now,
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
+    onConnectionChange: () => connectionChanges.push(clock.nowMs),
   });
-  return { changes, clock, lease };
+  return { changes, clock, connectionChanges, lease };
 }
 
 describe("createCanvasSurfaceLease", () => {
-  it("seeds from hello, renews before the default TTL, and honors the refreshed expiry", async () => {
+  it("seeds from hello, renews immediately, and honors the refreshed expiry", async () => {
     const request = vi
       .fn<(method: string, params: unknown) => Promise<unknown>>()
       .mockResolvedValueOnce({
         surface: "canvas",
         pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/two" },
-        expiresAtMs: 500_000,
+        expiresAtMs: 200_000,
       })
       .mockResolvedValueOnce({
         surface: "canvas",
@@ -110,11 +111,8 @@ describe("createCanvasSurfaceLease", () => {
 
     lease.start(helloUrl);
     expect(changes).toEqual([helloUrl]);
-    expect(clock.nextDelayMs).toBe(DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS / 2);
-
-    await clock.advanceBy(DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS / 2 - 1);
     expect(request).not.toHaveBeenCalled();
-    await clock.advanceBy(1);
+    await flushPromises();
 
     expect(request).toHaveBeenCalledWith("plugin.surface.refresh", {
       surface: "canvas",
@@ -125,21 +123,29 @@ describe("createCanvasSurfaceLease", () => {
 
     await clock.advanceBy(85_000);
     expect(changes.at(-1)).toBe("https://canvas.test/__openclaw__/cap/three");
-    expect(clock.nextDelayMs).toBe(DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS / 2);
+    expect(clock.nextDelayMs).toBe(60_000);
   });
 
   it("keeps overlapping renewals single-flight", async () => {
     const pending = deferred<unknown>();
-    const request = vi.fn(() => pending.promise);
+    const request = vi
+      .fn<(method: string, params: unknown) => Promise<unknown>>()
+      .mockResolvedValueOnce({
+        surface: "canvas",
+        pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/two" },
+        expiresAtMs: 116_000,
+      })
+      .mockImplementation(() => pending.promise);
     const { clock, lease } = createLeaseHarness(request);
     lease.start("https://canvas.test/__openclaw__/cap/one");
+    await flushPromises();
 
     const callback = clock.takeNextCallback();
     expect(callback).toBeDefined();
     callback?.();
     callback?.();
     await flushPromises();
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
 
     pending.resolve({
       surface: "canvas",
@@ -163,7 +169,7 @@ describe("createCanvasSurfaceLease", () => {
     const originalUrl = "https://canvas.test/__openclaw__/cap/one";
     lease.start(originalUrl);
 
-    await clock.advanceBy(DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS / 2);
+    await flushPromises();
     expect(clock.nextDelayMs).toBe(1_000);
     await clock.advanceBy(1_000);
     expect(clock.nextDelayMs).toBe(2_000);
@@ -174,21 +180,22 @@ describe("createCanvasSurfaceLease", () => {
     expect(changes).toEqual([originalUrl]);
 
     lease.start("https://canvas.test/__openclaw__/cap/reconnected");
-    await clock.advanceBy(DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS / 2);
+    await flushPromises();
     expect(request).toHaveBeenCalledTimes(4);
     expect(changes.at(-1)).toBe("https://canvas.test/__openclaw__/cap/fresh");
   });
 
   it("stop clears timers, ignores an in-flight result, and publishes null once", async () => {
     const pending = deferred<unknown>();
-    const { changes, clock, lease } = createLeaseHarness(() => pending.promise);
+    const { changes, clock, connectionChanges, lease } = createLeaseHarness(() => pending.promise);
     lease.start("https://canvas.test/__openclaw__/cap/one");
-    clock.takeNextCallback()?.();
+    await flushPromises();
 
     lease.stop();
     lease.stop();
     expect(clock.pendingCount).toBe(0);
     expect(changes).toEqual(["https://canvas.test/__openclaw__/cap/one", null]);
+    expect(connectionChanges).toHaveLength(2);
 
     pending.resolve({
       surface: "canvas",

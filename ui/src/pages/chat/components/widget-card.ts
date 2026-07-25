@@ -14,6 +14,7 @@ import {
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
+import { resolveCanvasWidgetFrameSrc } from "../../../lib/chat/canvas-widget-frame-src-cache.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import {
   isInternalCanvasEntryUrl,
@@ -143,8 +144,6 @@ const widgetFrameRegistry = new Set<HTMLIFrameElement>();
 // binding, so the template must read the reported height back or it resets.
 const widgetFrameHeightsBySrc = new Map<string, number>();
 const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
-const widgetFrameSrcByDocumentId = new Map<string, string>();
-const WIDGET_FRAME_SRCS_MAX_ENTRIES = 100;
 // Keyed by window, not a module boolean: non-isolated test workers swap the
 // global window between files while module state persists.
 const widgetSizeListenerWindows = new WeakSet<Window>();
@@ -173,23 +172,7 @@ function resolveWidgetFrameSrc(preview: ToolPreview, options?: WidgetCardOptions
   if (!documentId || !isManagedCanvasDocumentPreview(preview)) {
     return resolve();
   }
-  if (widgetFrameSrcByDocumentId.has(documentId)) {
-    return widgetFrameSrcByDocumentId.get(documentId);
-  }
-  const src = resolve();
-  if (!src) {
-    return undefined;
-  }
-  // A document keeps its first capability URL so lease rotation cannot re-key
-  // and reload a mounted frame, which would flash and discard widget state.
-  if (widgetFrameSrcByDocumentId.size >= WIDGET_FRAME_SRCS_MAX_ENTRIES) {
-    const oldest = widgetFrameSrcByDocumentId.keys().next().value;
-    if (oldest !== undefined) {
-      widgetFrameSrcByDocumentId.delete(oldest);
-    }
-  }
-  widgetFrameSrcByDocumentId.set(documentId, src);
-  return src;
+  return resolveCanvasWidgetFrameSrc({ documentId, resolve });
 }
 
 function registerWidgetFrame(event: Event) {
