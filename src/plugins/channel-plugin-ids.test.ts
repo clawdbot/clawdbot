@@ -805,6 +805,19 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
     ],
     [
+      "includes bundled model providers selected only as agent fallbacks at startup",
+      {
+        agents: {
+          defaults: {
+            model: {
+              fallbacks: ["amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
+    ],
+    [
       "honors explicit plugin disablement for selected model providers",
       {
         agents: {

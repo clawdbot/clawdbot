@@ -155,6 +155,10 @@ final class RootSidebarModel {
                     method: "sessions.subscribe",
                     paramsJSON: nil,
                     timeoutSeconds: 12)
+                _ = try? await appModel.operatorSession.request(
+                    method: "sessions.observer.visibility",
+                    paramsJSON: #"{"visible":true}"#,
+                    timeoutSeconds: 12)
             },
             onEvent: { [weak self] frame in
                 await self?.handleSessionEvent(frame, appModel: appModel) ?? false

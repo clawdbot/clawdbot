@@ -27,6 +27,18 @@ export type ReliabilityStateProof = {
 export type ReliabilityReport = {
   arch: string;
   concurrentRestoresVerified: number;
+  crashRecoveryProof: {
+    committedStatePreserved: true;
+    exit: {
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    };
+    partialVisibleAfterRecovery: false;
+    sourceRecovered: true;
+    stateAfterRecovery: ReliabilityStateProof;
+    stateBeforeKill: ReliabilityStateProof;
+    writerRestarted: true;
+  };
   iterations: number;
   maintenanceProof: {
     bloatBytes: number;
@@ -49,12 +61,141 @@ export type ReliabilityReport = {
         before: number;
       };
     };
+    vacuumInterruption: {
+      autoVacuumAfterRecovery: number;
+      autoVacuumBeforeKill: number;
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      journalBytesObserved: number;
+      payloadAfterRecovery: {
+        bytes: number;
+        idSum: number;
+        rows: number;
+      };
+      payloadBeforeKill: {
+        bytes: number;
+        idSum: number;
+        rows: number;
+      };
+      recoveryVerified: true;
+      stateAfterRecovery: ReliabilityStateProof;
+      stateBeforeKill: ReliabilityStateProof;
+      walBytesObserved: number;
+    };
     postCompact: {
       restoreMs: number;
       restoreVerified: true;
       snapshotBytes: number;
       snapshotMs: number;
       state: ReliabilityStateProof;
+    };
+    repositoryInterruption: {
+      afterCommit: {
+        crashSnapshotVerifiedAfterCrash: true;
+        crashSnapshotVisibleAfterCrash: true;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        incompleteEntries: 0;
+        payload: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        repositoryVerified: true;
+        retryCreated: true;
+        sourcePayloadPreserved: true;
+        sourceStatePreserved: true;
+        stagingEntries: number;
+        state: ReliabilityStateProof;
+        visibleSnapshotsAfterCrash: number;
+      };
+      beforePending: {
+        crashSnapshotVerifiedAfterCrash: false;
+        crashSnapshotVisibleAfterCrash: false;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        incompleteEntries: 1;
+        payload: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        repositoryVerified: true;
+        retryCreated: true;
+        sourcePayloadPreserved: true;
+        sourceStatePreserved: true;
+        stagingEntries: number;
+        state: ReliabilityStateProof;
+        visibleSnapshotsAfterCrash: number;
+      };
+      pending: {
+        crashSnapshotVerifiedAfterCrash: true;
+        crashSnapshotVisibleAfterCrash: true;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        incompleteEntries: 0;
+        payload: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        repositoryVerified: true;
+        retryCreated: true;
+        sourcePayloadPreserved: true;
+        sourceStatePreserved: true;
+        stagingEntries: number;
+        state: ReliabilityStateProof;
+        visibleSnapshotsAfterCrash: number;
+      };
+    };
+    restoreInterruption: {
+      afterPublish: {
+        existingTargetPreserved: true;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        payloadAfterRecovery: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        recoveryVerified: true;
+        repositoryVerified: true;
+        retryRestored: false;
+        stagingEntries: number;
+        stateAfterRecovery: ReliabilityStateProof;
+        targetVerifiedAfterCrash: true;
+        targetVisibleAfterCrash: true;
+      };
+      beforePublish: {
+        existingTargetPreserved: false;
+        exit: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        };
+        payloadAfterRecovery: {
+          bytes: number;
+          idSum: number;
+          rows: number;
+        };
+        recoveryVerified: true;
+        repositoryVerified: true;
+        retryRestored: true;
+        stagingEntries: number;
+        stateAfterRecovery: ReliabilityStateProof;
+        targetVerifiedAfterCrash: false;
+        targetVisibleAfterCrash: false;
+      };
+      snapshotBytes: number;
     };
   };
   node: string;
@@ -66,6 +207,32 @@ export type ReliabilityReport = {
   };
   platform: NodeJS.Platform;
   profile: ProfileId;
+  publicationInterruptionProof: {
+    afterPublish: {
+      existingTargetPreserved: true;
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      recoveryVerified: true;
+      sourceStatePreserved: true;
+      stagingEntries: number;
+      targetVerifiedAfterCrash: true;
+      targetVisibleAfterCrash: true;
+    };
+    beforePublish: {
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      recoveryVerified: true;
+      retryPublished: true;
+      sourceStatePreserved: true;
+      stagingEntries: number;
+      targetVerifiedAfterCrash: false;
+      targetVisibleAfterCrash: false;
+    };
+  };
   retainedBatches: number;
   restoresVerified: number;
   rowsPerBatch: number;

@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   type InternalSessionEntry as SessionEntry,
@@ -48,8 +47,15 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import { isAnnounceRunId } from "./announce-idempotency.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
+import {
+  getTranscriptMessageRole as getMessageRole,
+  isMeaningfulTranscriptMessage,
+  isTerminalSilentAssistantMessage,
+  readTerminalSourceReplyDeliveryMirror,
+} from "./embedded-agent-runner/message-visibility.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -434,14 +440,6 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   return result;
 }
 
-function getMessageRole(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const role = (message as { role?: unknown }).role;
-  return typeof role === "string" ? role : undefined;
-}
-
 function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
   const runs = entry.restartRecoveryRuns;
   return Boolean(runs?.length && runs.every((run) => isAnnounceRunId(run.runId)));
@@ -649,68 +647,17 @@ function findSuccessfulMessageToolResultIndex(params: {
   return undefined;
 }
 
-function isExactMessageToolDeliveryMirror(params: {
-  message: unknown;
-  sourceTurnId: string;
-  toolCallId: string;
-}): boolean {
-  if (!params.message || typeof params.message !== "object") {
-    return false;
-  }
-  const marker = (params.message as { openclawDeliveryMirror?: unknown }).openclawDeliveryMirror;
-  if (!marker || typeof marker !== "object") {
-    return false;
-  }
-  const delivery = marker as Record<string, unknown>;
-  return (
-    delivery.kind === "message-tool-source-reply" &&
-    delivery.final === true &&
-    normalizeOptionalString(delivery.sourceTurnId) === params.sourceTurnId &&
-    normalizeOptionalString(delivery.toolCallId) === params.toolCallId
-  );
-}
-
 function isSafeTerminalDeliveryTailMessage(params: {
   message: unknown;
   sourceTurnId: string;
   toolCallId: string;
 }): boolean {
-  if (isExactMessageToolDeliveryMirror(params)) {
+  const mirror = readTerminalSourceReplyDeliveryMirror(params.message);
+  if (mirror?.sourceTurnId === params.sourceTurnId && mirror.toolCallId === params.toolCallId) {
     return true;
   }
   // An empty provider abort is restart lifecycle noise. Partial output remains unsafe.
   return isRestartAbortTailArtifact(params.message);
-}
-
-function isTerminalSilentAssistantMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
-    return false;
-  }
-  if (normalizeOptionalString((message as { stopReason?: unknown }).stopReason) !== "stop") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  const textParts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const type = normalizeOptionalString((block as { type?: unknown }).type);
-    if (type === "thinking") {
-      continue;
-    }
-    if (type !== "text") {
-      return false;
-    }
-    const text = normalizeOptionalString((block as { text?: unknown }).text);
-    if (text) {
-      textParts.push(text);
-    }
-  }
-  return isSilentReplyPayloadText(textParts.join("\n"), SILENT_REPLY_TOKEN);
 }
 
 function canReconcileTerminalDeliveryAtSourceTurnTail(params: {
@@ -759,14 +706,6 @@ function buildRecoveryToolResultIdempotencyKey(sourceTurnId: string, toolCallId:
   return `restart-recovery:message-tool-result:${sourceTurnId}:${toolCallId}`;
 }
 
-function isMeaningfulTailMessage(message: unknown): boolean {
-  const role = getMessageRole(message);
-  if (!role || role === "system") {
-    return false;
-  }
-  return true;
-}
-
 function readDeliveredTerminalSourceReplyToolCallId(
   messages: readonly unknown[],
   expectedSourceTurnId: string | undefined,
@@ -775,25 +714,12 @@ function readDeliveredTerminalSourceReplyToolCallId(
     return undefined;
   }
   for (const message of messages.toReversed()) {
-    if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+    if (getMessageRole(message) !== "assistant") {
       continue;
     }
-    const marker = (message as { openclawDeliveryMirror?: unknown }).openclawDeliveryMirror;
-    if (!marker || typeof marker !== "object") {
-      continue;
-    }
-    const delivery = marker as {
-      final?: unknown;
-      kind?: unknown;
-      sourceTurnId?: unknown;
-      toolCallId?: unknown;
-    };
-    if (
-      delivery.kind === "message-tool-source-reply" &&
-      delivery.final === true &&
-      normalizeOptionalString(delivery.sourceTurnId) === expectedSourceTurnId
-    ) {
-      return normalizeOptionalString(delivery.toolCallId);
+    const mirror = readTerminalSourceReplyDeliveryMirror(message);
+    if (mirror?.sourceTurnId === expectedSourceTurnId) {
+      return mirror.toolCallId;
     }
   }
   return undefined;
@@ -1137,7 +1063,7 @@ function resolveMainSessionResumePolicy(
   }
   // `admitted` means no optional hook started. The dispatch boundary reloads
   // the current hook set before it permits this transcript to resume.
-  const meaningfulMessages = messages.toReversed().filter(isMeaningfulTailMessage);
+  const meaningfulMessages = messages.toReversed().filter(isMeaningfulTranscriptMessage);
   // A restart abort tail without tool calls is lifecycle noise whether or not
   // partial streamed text was persisted with it; the partial output stays in
   // the transcript for the continuation, and the message beneath decides
@@ -1232,6 +1158,7 @@ type RecoveryCheckpointCompletion =
   | { outcome: "unsafe-transcript"; reason: string };
 
 async function markSessionCompletedAfterRecoveryCheckpoint(params: {
+  agentId: string;
   entry: SessionEntry;
   messages: readonly unknown[];
   reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
@@ -1390,7 +1317,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     };
     const persisted = await persistSessionTranscriptTurn(
       {
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        agentId: params.agentId,
         sessionId: params.entry.sessionId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
@@ -1497,12 +1424,13 @@ async function sendUnresumableSessionNotice(params: {
 }
 
 async function writeUnresumableSessionNotice(params: {
+  agentId: string;
   entry: SessionEntry;
   sessionKey: string;
   storePath: string;
 }): Promise<boolean> {
   const result = await appendAssistantMessageToSessionTranscript({
-    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     expectedSessionId: params.entry.sessionId,
     expectedSessionState: {
@@ -1554,6 +1482,10 @@ async function failUnresumableMainSession(params: {
   if (
     !deliveryContext &&
     !(await writeUnresumableSessionNotice({
+      agentId: resolveAgentIdFromSessionKey(
+        params.sessionKey,
+        params.cfg ? resolveDefaultAgentId(params.cfg) : undefined,
+      ),
       entry: params.entry,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
@@ -1711,6 +1643,10 @@ async function recoverStore(params: {
     a.sessionKey.localeCompare(b.sessionKey),
   )) {
     let entry = loadedEntry;
+    const agentId = resolveAgentIdFromSessionKey(
+      sessionKey,
+      params.cfg ? resolveDefaultAgentId(params.cfg) : undefined,
+    );
     if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
       continue;
     }
@@ -1899,7 +1835,7 @@ async function recoverStore(params: {
     try {
       messages = await readSessionMessagesAsync(
         {
-          agentId: resolveAgentIdFromSessionKey(sessionKey),
+          agentId,
           sessionEntry: entry,
           sessionId: entry.sessionId,
           sessionKey,
@@ -2000,6 +1936,7 @@ async function recoverStore(params: {
     );
     if (resumePolicy.action === "complete") {
       const completion = await markSessionCompletedAfterRecoveryCheckpoint({
+        agentId,
         entry,
         messages,
         reason: resumePolicy.reason,

@@ -1,5 +1,5 @@
 // Covers backup archive creation and verification filtering.
-import { rmSync } from "node:fs";
+import fsSync, { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -394,23 +395,21 @@ describe("writeTarArchiveWithRetry", () => {
     expect(log).toHaveBeenCalledTimes(2);
   });
 
-  it("uses a fresh temp archive path when cleanup cannot remove a failed attempt", async () => {
+  it("uses a fresh temp archive path without pathname-based cleanup", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
       path: "/state/sessions/s-abc/transcript.jsonl",
     });
     const tempArchivePath = "/tmp/backup.tar.gz.tmp";
     const runTar = vi
-      .fn<(attemptTempArchivePath: string) => Promise<void>>()
+      .fn<(attemptTempArchivePath: string) => Promise<string>>()
       .mockRejectedValueOnce(eofErr)
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce("complete");
     const log = vi.fn();
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async () => {
-      throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
-    });
+    const rmSpy = vi.spyOn(fs, "rm");
 
     try {
-      const completedTempArchivePath = await writeTarArchiveWithRetry({
+      const result = await writeTarArchiveWithRetry({
         tempArchivePath,
         runTar,
         log,
@@ -419,17 +418,15 @@ describe("writeTarArchiveWithRetry", () => {
 
       expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
       expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
-      expect(completedTempArchivePath).toBe(`${tempArchivePath}.retry-2`);
-      expect(rmSpy).toHaveBeenCalledWith(tempArchivePath, { force: true });
-      expect(log).toHaveBeenCalledWith(
-        `Backup archiver could not remove temp archive ${tempArchivePath} between retries: EBUSY. Continuing.`,
-      );
+      expect(result).toBe("complete");
+      expect(rmSpy).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledOnce();
     } finally {
       rmSpy.mockRestore();
     }
   });
 
-  it("cleans retry temp archive paths when a later attempt fails", async () => {
+  it("does not remove retry paths by pathname when a later attempt fails", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
       path: "/state/sessions/s-abc/transcript.jsonl",
     });
@@ -452,7 +449,7 @@ describe("writeTarArchiveWithRetry", () => {
 
       expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
       expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
-      expect(rmSpy).toHaveBeenCalledWith(`${tempArchivePath}.retry-2`, { force: true });
+      expect(rmSpy).not.toHaveBeenCalled();
     } finally {
       rmSpy.mockRestore();
     }
@@ -908,24 +905,27 @@ describe("createBackupArchive", () => {
 
         const restoredDatabasePath = path.join(extractDir, databaseEntry);
         const restoredStateDir = path.dirname(path.dirname(restoredDatabasePath));
-        const restoredDetection = detectLegacyAuditLogs({
-          stateDir: restoredStateDir,
-          doctorOnlyStateMigrations: true,
-        });
-        expect(restoredDetection.hasLegacy).toBe(true);
-        await migrateLegacyAuditLogs({
-          detected: restoredDetection,
-          stateDir: restoredStateDir,
-        });
-        const restoredEntries = createSqliteAuditRecordStore({
-          scope: CONFIG_AUDIT_SCOPE,
-          maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-          env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
-        }).entries();
-        expect(restoredEntries).toHaveLength(2);
-        expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
-        expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
-        closeOpenClawStateDatabase();
+        try {
+          const restoredDetection = detectLegacyAuditLogs({
+            stateDir: restoredStateDir,
+            doctorOnlyStateMigrations: true,
+          });
+          expect(restoredDetection.hasLegacy).toBe(true);
+          await migrateLegacyAuditLogs({
+            detected: restoredDetection,
+            stateDir: restoredStateDir,
+          });
+          const restoredEntries = createSqliteAuditRecordStore({
+            scope: CONFIG_AUDIT_SCOPE,
+            maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+            env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
+          }).entries();
+          expect(restoredEntries).toHaveLength(2);
+          expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
+          expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
+        } finally {
+          closeOpenClawStateDatabaseByPath(restoredDatabasePath);
+        }
       },
     );
   });
@@ -1891,6 +1891,7 @@ describe("createBackupArchive", () => {
 
           const originalReaddir = fs.readdir.bind(fs);
           let createdLatePath = false;
+          let stagedArchiveCleanupAttempts = 0;
           const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (
             ...args: unknown[]
           ) => {
@@ -1906,6 +1907,20 @@ describe("createBackupArchive", () => {
             }
             return entries;
           }) as typeof fs.readdir);
+          const originalUnlinkSync = fsSync.unlinkSync.bind(fsSync);
+          const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
+            const targetPath = path.resolve(String(target));
+            if (
+              targetPath.startsWith(path.resolve(outputDir)) &&
+              targetPath.includes(".openclaw-backup-publish-")
+            ) {
+              stagedArchiveCleanupAttempts += 1;
+              if (stagedArchiveCleanupAttempts === 1) {
+                throw Object.assign(new Error("busy"), { code: "EBUSY" });
+              }
+            }
+            return originalUnlinkSync(target);
+          });
 
           try {
             await expect(
@@ -1916,8 +1931,10 @@ describe("createBackupArchive", () => {
               }),
             ).rejects.toThrow(/SQLite state appeared after snapshot discovery/);
             expect(createdLatePath).toBe(true);
+            expect(stagedArchiveCleanupAttempts).toBeGreaterThanOrEqual(2);
             expect(await fs.readdir(outputDir)).toEqual([]);
           } finally {
+            unlinkSpy.mockRestore();
             readdirSpy.mockRestore();
           }
         },
@@ -2626,40 +2643,56 @@ describe("createBackupArchive", () => {
   });
 
   describe.runIf(process.platform !== "win32")("archive permissions", () => {
-    it.each([
-      ["hard link", false],
-      ["copy fallback", true],
-    ] as const)("publishes via %s with owner-only 0o600 permissions", async (_name, forceCopy) => {
-      const linkSpy = forceCopy
-        ? vi
-            .spyOn(fs, "link")
-            .mockRejectedValue(
-              Object.assign(new Error("hard links unsupported"), { code: "EPERM" }),
-            )
-        : undefined;
+    it("publishes via hard link with owner-only 0o600 permissions", async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-mode-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputDir = state.path("backups");
+          await fs.mkdir(outputDir, { recursive: true });
+
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+          });
+
+          const stat = await fs.stat(result.archivePath);
+          expect(stat.mode & 0o777).toBe(0o600);
+        },
+      );
+    });
+
+    it("fails closed when the destination does not support hard links", async () => {
+      const linkSpy = vi
+        .spyOn(fs, "link")
+        .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "EPERM" }));
       try {
         await withOpenClawTestState(
           {
             layout: "state-only",
-            prefix: "openclaw-backup-mode-",
+            prefix: "openclaw-backup-no-hardlinks-",
             scenario: "minimal",
           },
           async (state) => {
             const outputDir = state.path("backups");
             await fs.mkdir(outputDir, { recursive: true });
 
-            const result = await createBackupArchive({
-              output: outputDir,
-              includeWorkspace: false,
-              nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
-            });
-
-            const stat = await fs.stat(result.archivePath);
-            expect(stat.mode & 0o777).toBe(0o600);
+            await expect(
+              createBackupArchive({
+                output: outputDir,
+                includeWorkspace: false,
+                nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+              }),
+            ).rejects.toThrow(/requires hard-link support/iu);
+            await expect(fs.readdir(outputDir)).resolves.toEqual([]);
           },
         );
       } finally {
-        linkSpy?.mockRestore();
+        linkSpy.mockRestore();
       }
     });
   });

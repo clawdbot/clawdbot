@@ -41,11 +41,7 @@ import { normalizeTargetForProvider } from "../../infra/outbound/target-normaliz
 import { retryAsync } from "../../infra/retry.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import {
-  isCronSessionKey,
-  parseThreadSessionSuffix,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { isCronSessionKey, parseThreadSessionSuffix } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
@@ -1423,7 +1419,9 @@ export async function dispatchCronDelivery(
           // are folded into mirrorText so media does not replace delivered text.
           mediaUrls: undefined,
           storePath: resolveStorePath(params.cfgWithAgentDefaults.session?.store, {
-            agentId: resolveAgentIdFromSessionKey(deliverySessionKey),
+            // This mirror already carries the admitted run owner. Re-parsing a
+            // route alias can reject legacy keys or select a different store.
+            agentId: params.agentId,
           }),
           idempotencyKey: deliveryIdempotencyKey,
           config: params.cfgWithAgentDefaults,

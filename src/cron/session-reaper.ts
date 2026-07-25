@@ -5,9 +5,11 @@ import {
   listSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
 import type { Logger } from "./service/state.js";
@@ -17,7 +19,11 @@ const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 /** Minimum interval between reaper sweeps (avoid running every timer tick). */
 const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
-const lastSweepAtMsByStore = new Map<string, number>();
+const lastSweepAtMsByTarget = new Map<string, number>();
+
+function reaperTargetKey(agentId: string, storePath: string): string {
+  return `${agentId}\0${storePath}`;
+}
 
 /** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
 function resolveRetentionMs(cronConfig?: CronConfig): number | null {
@@ -48,6 +54,8 @@ type ReaperResult = {
  */
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
+  agentId: string;
+  defaultAgentId: string;
   /** Resolved path to sessions.json — required. */
   sessionStorePath: string;
   nowMs?: number;
@@ -57,17 +65,20 @@ export async function sweepCronRunSessions(params: {
 }): Promise<ReaperResult> {
   const now = params.nowMs ?? Date.now();
   const storePath = params.sessionStorePath;
-  const lastSweepAtMs = lastSweepAtMsByStore.get(storePath) ?? 0;
+  // Shared physical stores still hold agent-scoped rows. The throttle also
+  // suppresses in-flight attempts, so its identity must retain both scopes.
+  const targetKey = reaperTargetKey(params.agentId, storePath);
+  const lastSweepAtMs = lastSweepAtMsByTarget.get(targetKey) ?? 0;
 
-  // Timer ticks can be frequent; throttle per store path to avoid repeated
-  // session-store I/O while preserving a force path for deterministic tests.
+  // Timer ticks can be frequent; throttle per agent/store target to avoid
+  // repeated session-store I/O while preserving a force path for tests.
   if (!params.force && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
   }
 
   // Throttle attempts, not only successful sweeps. A broken session store must
   // not turn frequent timer ticks into an unbounded persistence-error loop.
-  lastSweepAtMsByStore.set(storePath, now);
+  lastSweepAtMsByTarget.set(targetKey, now);
 
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
@@ -78,9 +89,31 @@ export async function sweepCronRunSessions(params: {
   let transcriptCleanupError: unknown;
   try {
     const cutoff = now - retentionMs;
+    const resolvedTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: params.agentId,
+      defaultAgentId: params.defaultAgentId,
+    });
+    const sharedPhysicalOwner = resolvedTarget.shared
+      ? normalizeAgentId(resolvedTarget.agentId ?? params.defaultAgentId)
+      : undefined;
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
-    for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
+    // The accessor keeps agentId logical for admission checks and resolves a shared
+    // store's physical database owner internally through its SQLite scope.
+    for (const { sessionKey, entry } of listSessionEntries({
+      agentId: params.agentId,
+      storePath,
+    })) {
+      const scopedOwner = parseAgentSessionKey(sessionKey)?.agentId;
+      const requestedOwner = normalizeAgentId(params.agentId);
+      if (
+        (scopedOwner && normalizeAgentId(scopedOwner) !== requestedOwner) ||
+        (!scopedOwner &&
+          sharedPhysicalOwner !== undefined &&
+          sharedPhysicalOwner !== requestedOwner)
+      ) {
+        continue;
+      }
       if (!isCronRunSessionKey(sessionKey)) {
         continue;
       }
@@ -111,6 +144,7 @@ export async function sweepCronRunSessions(params: {
       // retention policy (null = keep until the disk budget evicts).
       const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
       const result = await applySessionEntryLifecycleMutation({
+        agentId: params.agentId,
         storePath,
         removals,
         preserveActiveWork: true,
@@ -150,9 +184,9 @@ export async function sweepCronRunSessions(params: {
   return { swept: true, pruned };
 }
 
-/** Resets per-store reaper throttles between tests. */
+/** Resets per-target reaper throttles between tests. */
 function resetReaperThrottle(): void {
-  lastSweepAtMsByStore.clear();
+  lastSweepAtMsByTarget.clear();
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

@@ -130,10 +130,6 @@ function preserveInlineInitialImageProjection(
       ? (authoritative as Record<string, unknown>)
       : {};
   const {
-    MediaPath: _mediaPath,
-    MediaPaths: _mediaPaths,
-    MediaType: _mediaType,
-    MediaTypes: _mediaTypes,
     content: _content,
     __openclaw: authoritativeMetadata,
     ...authoritativeFields
@@ -142,18 +138,19 @@ function preserveInlineInitialImageProjection(
     authoritativeMetadata &&
     typeof authoritativeMetadata === "object" &&
     !Array.isArray(authoritativeMetadata)
-      ? authoritativeMetadata
+      ? (authoritativeMetadata as Record<string, unknown>)
       : {};
+  const { media: _media, ...authoritativeMetadataFields } = normalizedAuthoritativeMetadata;
   const nextMessages = [...host.chatMessages];
-  // History persists attachments as local MediaPath entries. Keep the already
+  // History projects canonical local attachment facts. Keep the already
   // decoded inline projection for this page lifecycle so adopting history does
-  // not change the <img> source and visibly flash the accepted first prompt.
+  // not add a second image source or visibly flash the accepted first prompt.
   nextMessages[matchingIndex] = {
     ...message,
     ...authoritativeFields,
     content: message.content,
     __openclaw: {
-      ...normalizedAuthoritativeMetadata,
+      ...authoritativeMetadataFields,
       ...message["__openclaw"],
     },
   };

@@ -50,7 +50,10 @@ function loadSessionStore(
   _options?: { skipCache?: boolean },
 ): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
 }
 
@@ -74,7 +77,10 @@ async function withProjectionSessionStore(
 ): Promise<void> {
   const stateDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), prefix));
   const storePath = path.join(stateDir, "sessions.json");
-  const tempConfig = { session: { store: storePath } };
+  const tempConfig = {
+    agents: { entries: { main: { default: true } } },
+    session: { store: storePath },
+  };
   try {
     return await withEnvAsync(
       { OPENCLAW_STATE_DIR: stateDir },

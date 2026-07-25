@@ -15,6 +15,7 @@ import type {
   QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
 import type { CronStoreFile } from "../../../cron/types.js";
+import { syncDirectoryIfSupported } from "../../../infra/directory-durability.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 const LEGACY_CRON_ARCHIVE_SUFFIX = ".migrated";
@@ -93,30 +94,6 @@ function formatArchiveError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function isUnsupportedDirectorySyncError(err: unknown): boolean {
-  const code = (err as NodeJS.ErrnoException).code;
-  if (code === "EINVAL" || code === "ENOTSUP" || code === "ENOSYS") {
-    return true;
-  }
-  return (
-    process.platform === "win32" && (code === "EISDIR" || code === "EPERM" || code === "EACCES")
-  );
-}
-
-async function syncArchiveDirectory(dirPath: string): Promise<void> {
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  try {
-    handle = await fs.open(dirPath, "r");
-    await handle.sync();
-  } catch (err) {
-    if (!isUnsupportedDirectorySyncError(err)) {
-      throw err;
-    }
-  } finally {
-    await handle?.close();
-  }
-}
-
 async function sha256File(filePath: string): Promise<string> {
   return createHash("sha256")
     .update(await fs.readFile(filePath))
@@ -175,7 +152,7 @@ async function restoreArchivedSource(
     };
   }
   try {
-    await syncArchiveDirectory(path.dirname(sourcePath));
+    await syncDirectoryIfSupported(path.dirname(sourcePath));
     return { ok: true };
   } catch (err) {
     return {
@@ -232,7 +209,7 @@ async function copyLegacyCronFileAcrossDevices(
     } finally {
       await archiveHandle.close();
     }
-    await syncArchiveDirectory(path.dirname(archivePath));
+    await syncDirectoryIfSupported(path.dirname(archivePath));
     const currentSourceStat = await fs.stat(filePath);
     if (
       currentSourceStat.dev !== sourceStat.dev ||
@@ -245,7 +222,7 @@ async function copyLegacyCronFileAcrossDevices(
     // unlink, so hashes close observed external edits before migration-owned removal.
     await fs.unlink(filePath);
     sourceRemoved = true;
-    await syncArchiveDirectory(path.dirname(filePath));
+    await syncDirectoryIfSupported(path.dirname(filePath));
     return { ok: true, archivePath };
   } catch (err) {
     if (sourceRemoved) {
@@ -266,7 +243,7 @@ async function copyLegacyCronFileAcrossDevices(
           }
         }
         archiveRemoved = true;
-        await syncArchiveDirectory(path.dirname(archivePath));
+        await syncDirectoryIfSupported(path.dirname(archivePath));
       } catch (cleanupErr) {
         cleanupFailures.push(
           archiveRemoved
@@ -311,7 +288,7 @@ async function archiveLegacyCronFile(
     if (expectedSha256 && (await sha256File(archivePath)) !== expectedSha256) {
       throw new Error("legacy cron source changed after it was imported; refusing to archive it");
     }
-    await syncArchiveDirectory(path.dirname(filePath));
+    await syncDirectoryIfSupported(path.dirname(filePath));
     if (await legacyCronFileExists(filePath)) {
       return {
         ok: false,

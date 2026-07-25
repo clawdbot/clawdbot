@@ -2630,13 +2630,19 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessages).toEqual([messages[0], messages[2]]);
   });
 
-  it("keeps image-only user messages that carry transcript media paths", async () => {
+  it("keeps image-only user messages that carry transcript media facts", async () => {
     const messages = [
-      { role: "user", content: "", MediaPath: "/tmp/openclaw/user-upload.png" },
       {
         role: "user",
         content: "",
-        MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+        __openclaw: { media: [{ path: "/tmp/openclaw/user-upload.png" }] },
+      },
+      {
+        role: "user",
+        content: "",
+        __openclaw: {
+          media: [{ path: "/tmp/openclaw/first.png" }, { path: "/tmp/openclaw/second.jpg" }],
+        },
       },
       { role: "user", content: "" },
     ];

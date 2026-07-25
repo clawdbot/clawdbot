@@ -4,6 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveSecretPlanTargetByPath } from "openclaw/plugin-sdk/secret-ref-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { parseVaultSecretId } from "../vault-secret-id.js";
 
@@ -200,15 +201,6 @@ function resolveStatusProviderAlias(config: OpenClawConfig, requestedAlias?: str
     );
   }
   return configuredAliases[0] ?? VAULT_PROVIDER_ALIAS;
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function resolverScriptPathCandidates(baseUrl: string): [string, string] {

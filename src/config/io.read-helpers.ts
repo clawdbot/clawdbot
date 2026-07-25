@@ -233,6 +233,7 @@ export function resolveConfigIncludesForRead(
   includeFileHashesForWrite?: Record<string, string>,
   includeFileTargetsForWrite?: Record<string, string>,
   includeFilePathsForWatch?: Set<string>,
+  onIncludeResolved?: (event: { path: readonly string[]; value: unknown }) => void,
 ): unknown {
   const allowedRoots = resolveIncludeRoots(deps.env, deps.homedir);
   const recordIncludeWatchPath = (resolvedPath: string) => {
@@ -258,6 +259,7 @@ export function resolveConfigIncludesForRead(
     {
       readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
       onLexicalPath: recordIncludeWatchPath,
+      onIncludeResolved,
       readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) => {
         try {
           const raw = readConfigIncludeFileWithGuards({

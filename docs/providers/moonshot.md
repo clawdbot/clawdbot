@@ -21,20 +21,16 @@ Moonshot and Kimi Coding are **separate providers**, each shipped as a separate 
 
 | Model ref                           | Name                     | Reasoning  | Input       | Context   | Max output |
 | ----------------------------------- | ------------------------ | ---------- | ----------- | --------- | ---------- |
-| `moonshot/kimi-k2.6`                | Kimi K2.6                | No         | text, image | 262,144   | 262,144    |
 | `moonshot/kimi-k3`                  | Kimi K3                  | Always max | text, image | 1,048,576 | 1,048,576  |
 | `moonshot/kimi-k2.7-code`           | Kimi K2.7 Code           | Always on  | text, image | 262,144   | 262,144    |
 | `moonshot/kimi-k2.7-code-highspeed` | Kimi K2.7 Code HighSpeed | Always on  | text, image | 262,144   | 262,144    |
-| `moonshot/kimi-k2.5`                | Kimi K2.5                | No         | text, image | 262,144   | 262,144    |
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
 Catalog cost estimates use Moonshot's published pay-as-you-go rates. Check the
-live vendor pages for [Kimi K3](https://platform.kimi.ai/docs/pricing/chat-k3),
-[Kimi K2.7 Code](https://platform.kimi.ai/docs/pricing/chat-k27-code),
-[Kimi K2.6](https://platform.kimi.ai/docs/pricing/chat-k26), and
-[Kimi K2.5](https://platform.kimi.ai/docs/pricing/chat-k25) before making cost
-decisions.
+live vendor pages for [Kimi K3](https://platform.kimi.ai/docs/pricing/chat-k3)
+and [Kimi K2.7 Code](https://platform.kimi.ai/docs/pricing/chat-k27-code)
+before making cost decisions.
 
 Kimi K3 always reasons at `reasoning_effort: "max"`. OpenClaw exposes only
 `/think max`, omits the K2-only `thinking` field, and removes sampling
@@ -119,14 +115,12 @@ onboarding.
       env: { MOONSHOT_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "moonshot/kimi-k2.6" },
+          model: { primary: "moonshot/kimi-k3" },
           models: {
             // moonshot-kimi-k2-aliases:start
-            "moonshot/kimi-k2.6": { alias: "Kimi K2.6" },
             "moonshot/kimi-k3": { alias: "Kimi K3" },
             "moonshot/kimi-k2.7-code": { alias: "Kimi K2.7 Code" },
             "moonshot/kimi-k2.7-code-highspeed": { alias: "Kimi K2.7 Code HighSpeed" },
-            "moonshot/kimi-k2.5": { alias: "Kimi K2.5" },
             // moonshot-kimi-k2-aliases:end
           },
         },
@@ -140,15 +134,6 @@ onboarding.
             api: "openai-completions",
             models: [
               // moonshot-kimi-k2-models:start
-              {
-                id: "kimi-k2.6",
-                name: "Kimi K2.6",
-                reasoning: false,
-                input: ["text", "image"],
-                cost: { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 262144,
-              },
               {
                 id: "kimi-k3",
                 name: "Kimi K3",
@@ -182,15 +167,6 @@ onboarding.
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 262144,
-              },
-              {
-                id: "kimi-k2.5",
-                name: "Kimi K2.5",
-                reasoning: false,
-                input: ["text", "image"],
-                cost: { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
               },

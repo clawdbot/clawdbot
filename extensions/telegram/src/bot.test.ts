@@ -12,6 +12,7 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   listSessionEntries,
@@ -26,6 +27,7 @@ import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import {
   createTelegramCallbackContext,
   createTelegramReactionContext,
+  runTelegramChannelInboundEventWithHarness,
 } from "./bot.test-helpers.js";
 import {
   resolveTelegramConversationBaseSessionKey,
@@ -64,54 +66,15 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",
   );
-  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
   return {
     ...actual,
-    runChannelInboundEvent: async (params: RunParams) => {
-      // This file's turn tests were authored against the injected harness
-      // dispatcher. Assembled turns now dispatch through core's own provider
-      // dispatcher, which an extension test cannot intercept; convert each
-      // resolved turn to a prepared one that drives the harness dispatcher,
-      // while leaving the outer runner as the sole lifecycle owner.
+    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
       const harness = await import("./bot.create-telegram-bot.test-harness.js");
-      const resolveTurn = params.adapter.resolveTurn;
-      return await actual.runChannelInboundEvent({
-        ...params,
-        adapter: {
-          ...params.adapter,
-          resolveTurn: async (input, eventClass, preflight) => {
-            const resolved = await resolveTurn(input, eventClass, preflight);
-            if (!("route" in resolved) || "runDispatch" in resolved) {
-              return resolved;
-            }
-            const plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan =
-              resolved;
-            const prepared: Awaited<ReturnType<typeof resolveTurn>> = {
-              ...plan,
-              runDispatch: async () =>
-                await harness.dispatchReplyWithBufferedBlockDispatcher({
-                  ctx: plan.ctxPayload,
-                  cfg: plan.cfg,
-                  dispatcherOptions: {
-                    ...plan.dispatcherOptions,
-                    deliver: plan.delivery.deliver,
-                    onError: plan.delivery.onError,
-                  },
-                  toolsAllow: plan.toolsAllow,
-                  replyOptions: plan.replyOptions,
-                  replyResolver: plan.replyResolver,
-                }),
-              // Prepared dispatch owns the outer durable-ingress lifecycle. If
-              // core suppresses dispatch, release that claim instead of orphaning it.
-              runDispatchLifecycle: {
-                turnAdoptionLifecycle: params.turnAdoptionLifecycle,
-                onDispatchSkipped: () => params.turnAdoptionLifecycle?.onAbandoned?.(),
-              },
-            };
-            return prepared;
-          },
-        },
-      });
+      return await runTelegramChannelInboundEventWithHarness(
+        actual,
+        params,
+        harness.dispatchReplyWithBufferedBlockDispatcher,
+      );
     },
   };
 });
@@ -443,6 +406,178 @@ function systemEventOptions(index = 0) {
     "system event options",
   );
 }
+
+describe("createTelegramReplyDelivery", () => {
+  const runtime = createNonExitingRuntimeEnv();
+
+  it("reports each payload independently when a later provider-hook send is cancelled", async () => {
+    const { createTelegramReplyDelivery } = await import("./bot-message-dispatch-reply.js");
+    const sendPayload = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const reply = createTelegramReplyDelivery({
+      cfg: {} as never,
+      context: { route: { accountId: "default" } } as never,
+      delivery: {
+        normalizeDeliveryPayload: (payload: unknown) => payload,
+        sendPayload,
+      } as never,
+      draft: {
+        answerLane: { stream: undefined },
+        reasoningLane: { stream: undefined },
+        setReasoningStepCallbacks: vi.fn(),
+        splitTextIntoLaneSegments: () => ({ segments: [], suppressedReasoningOnly: false }),
+        enqueueEvent: async (callback: () => Promise<void>) => await callback(),
+        rotateAnswerLaneAfterToolProgress: async () => false,
+      } as never,
+      fence: { generation: () => 1, isSuperseded: () => false },
+      progress: {
+        markFinalStarted: vi.fn(),
+        finalAnswerDeliveryStarted: () => false,
+        finalAnswerDelivered: () => false,
+        markFinalDelivered: vi.fn(),
+      } as never,
+      runtime,
+      state: {} as never,
+      streamMode: "off",
+      telegramCfg: {},
+    });
+
+    await expect(reply.deliver({ text: "visible first" }, { kind: "final" })).resolves.toEqual({
+      visibleReplySent: true,
+    });
+    await expect(reply.deliver({ text: "cancelled second" }, { kind: "final" })).resolves.toEqual({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+    expect(sendPayload).toHaveBeenCalledTimes(2);
+  });
+
+  it("settles a buffered final before a later empty final resets reasoning state", async () => {
+    const { createTelegramReplyDelivery } = await import("./bot-message-dispatch-reply.js");
+    const deliverFinalAnswerText = vi.fn(async () => ({ kind: "sent" as const }));
+    const reply = createTelegramReplyDelivery({
+      cfg: {} as never,
+      context: { route: { accountId: "default" } } as never,
+      delivery: {
+        normalizeDeliveryPayload: (payload: { text?: string }) =>
+          payload.text === "drop terminal" ? undefined : payload,
+        deliverFinalAnswerText,
+      } as never,
+      draft: {
+        answerLane: { stream: undefined },
+        reasoningLane: { stream: undefined },
+        setReasoningStepCallbacks: vi.fn(),
+        splitTextIntoLaneSegments: (
+          input: { text?: string },
+          isReasoning: boolean | undefined,
+        ) => ({
+          segments: input.text
+            ? [
+                {
+                  lane: isReasoning ? ("reasoning" as const) : ("answer" as const),
+                  update: { text: input.text },
+                },
+              ]
+            : [],
+          suppressedReasoningOnly: false,
+        }),
+        enqueueEvent: async (callback: () => Promise<void>) => await callback(),
+        dropQueuedAnswerBlockRotation: vi.fn(),
+        isQueuedAnswerBlock: () => false,
+      } as never,
+      fence: { generation: () => 1, isSuperseded: () => false },
+      progress: {
+        markFinalStarted: vi.fn(),
+        finalAnswerDeliveryStarted: () => false,
+        finalAnswerDelivered: () => false,
+      } as never,
+      runtime,
+      state: {} as never,
+      streamMode: "off",
+      telegramCfg: {},
+    });
+    reply.reasoningStepState.noteReasoningHint();
+
+    const buffered = (await reply.deliver({ text: "buffered answer" }, { kind: "final" })) as {
+      visibleReplySent: boolean;
+      finalization: Promise<unknown>;
+    };
+    expect(buffered).toMatchObject({ visibleReplySent: false });
+    expect(buffered.finalization).toBeInstanceOf(Promise);
+
+    await expect(reply.deliver({ text: "drop terminal" }, { kind: "final" })).resolves.toEqual({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+    await expect(buffered.finalization).resolves.toEqual({ visibleReplySent: true });
+    expect(deliverFinalAnswerText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "buffered answer" }),
+      "buffered answer",
+      undefined,
+    );
+  });
+
+  it("keeps buffered-final failure separate from a visible reasoning payload", async () => {
+    const { createTelegramReplyDelivery } = await import("./bot-message-dispatch-reply.js");
+    const error = new Error("buffered final failed");
+    const reply = createTelegramReplyDelivery({
+      cfg: {} as never,
+      context: { route: { accountId: "default" } } as never,
+      delivery: {
+        normalizeDeliveryPayload: (payload: unknown) => payload,
+        deliverFinalAnswerText: async () => {
+          throw error;
+        },
+        deliverLaneText: async () => ({ kind: "sent" as const }),
+      } as never,
+      draft: {
+        answerLane: { stream: undefined },
+        reasoningLane: { stream: undefined },
+        setReasoningStepCallbacks: vi.fn(),
+        splitTextIntoLaneSegments: (
+          input: { text?: string },
+          isReasoning: boolean | undefined,
+        ) => ({
+          segments: [
+            {
+              lane: isReasoning ? ("reasoning" as const) : ("answer" as const),
+              update: { text: input.text ?? "" },
+            },
+          ],
+          suppressedReasoningOnly: false,
+        }),
+        enqueueEvent: async (callback: () => Promise<void>) => await callback(),
+        dropQueuedAnswerBlockRotation: vi.fn(),
+        isQueuedAnswerBlock: () => false,
+      } as never,
+      fence: { generation: () => 1, isSuperseded: () => false },
+      progress: {
+        markFinalStarted: vi.fn(),
+        finalAnswerDeliveryStarted: () => false,
+        finalAnswerDelivered: () => false,
+      } as never,
+      runtime,
+      state: {} as never,
+      streamMode: "off",
+      telegramCfg: {},
+    });
+    reply.reasoningStepState.noteReasoningHint();
+    const buffered = (await reply.deliver({ text: "buffered answer" }, { kind: "final" })) as {
+      finalization: Promise<unknown>;
+    };
+    const bufferedSettlement = buffered.finalization.then(
+      () => ({ status: "resolved" as const }),
+      (settlementError: unknown) => ({ status: "rejected" as const, error: settlementError }),
+    );
+
+    await expect(
+      reply.deliver({ text: "visible reasoning", isReasoning: true }, { kind: "block" }),
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { visibleReplySent: true },
+    });
+    await expect(bufferedSettlement).resolves.toEqual({ status: "rejected", error });
+  });
+});
 
 const ORIGINAL_TZ = process.env.TZ;
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;

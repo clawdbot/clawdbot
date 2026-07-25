@@ -313,10 +313,15 @@ export function buildOllamaModelDefinition(
       : capabilities.includes("thinking"));
   const compat =
     capabilities === undefined
-      ? { supportsTools: true, supportsUsageInStreaming: true }
+      ? {
+          supportsTools: true,
+          supportsUsageInStreaming: true,
+          supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
+        }
       : {
           supportsTools: capabilities.includes("tools"),
           supportsUsageInStreaming: true,
+          supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
         };
   return {
     id: modelId,

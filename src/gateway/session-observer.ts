@@ -10,9 +10,11 @@ import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createSessionObserverAskRuntime } from "./session-observer-ask.js";
+import { createSessionObserverAudience } from "./session-observer-audience.js";
+import { createSessionObserverCompletion } from "./session-observer-completion.js";
 import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
+import { createSessionObserverModelSlots } from "./session-observer-model-slots.js";
 import {
-  buildSessionObserverPrompt,
   createDormantSessionObserverRun,
   defaultCompleteModel,
   defaultPersistDigest,
@@ -20,35 +22,31 @@ import {
   defaultReadSession,
   isTerminalLifecycleEvent,
   markSessionObserverRunSuperseded,
-  normalizeSessionObserverModelOutput,
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
   rememberSessionObserverRevisionFloor,
-  SESSION_OBSERVER_MODEL_MAX_TOKENS,
-  SESSION_OBSERVER_SYSTEM_PROMPT,
   synthesizeSessionObserverTerminalDigest,
 } from "./session-observer-model.js";
 import type {
   DormantSessionObserverRun,
-  PreparedModel,
   SessionObserverDeps,
   SessionObserverRevisionFloor,
   SessionObserverState,
 } from "./session-observer-model.js";
+import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
+import { createSessionObserverPreamblePublisher } from "./session-observer-preamble.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
 
 const MIN_NOTES_PER_DIGEST = 4;
 const MIN_DIGEST_INTERVAL_MS = 12_000;
-const MODEL_TIMEOUT_MS = 10_000;
 const MAX_DIGESTS_PER_RUN = 40;
 const MAX_LIVE_DIGESTS_PER_RUN = MAX_DIGESTS_PER_RUN - 1;
 const MAX_CONSECUTIVE_FAILURES = 2;
 const FINAL_DIGEST_MIN_RUN_MS = 30_000;
-const PERSIST_INTERVAL_MS = 60_000;
 // The Control UI opens at most six live session subscriptions; matching that cap
 // prevents background observer calls from outgrowing the surface consuming them.
-const MAX_CONCURRENT_OBSERVED_SESSIONS = 6;
+const MAX_CONCURRENT_MODEL_SESSIONS = 6;
 
 type SessionObserver = SessionObserverService &
   Pick<ReturnType<typeof createSessionObserverAskRuntime>, "getSnapshot">;
@@ -66,6 +64,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const dormantRuns = new Map<string, DormantSessionObserverRun>();
   const revisionFloors = new Map<string, SessionObserverRevisionFloor>();
   const supersededRuns = new Map<string, number>();
+  const contextlessTerminalRuns = new Map<string, number>();
+  const terminalRuns = new Map<string, number>();
   const disabledRuns = new Set<string>();
   const visibleConnections = new Set<string>();
   let disposed = false;
@@ -82,11 +82,39 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     clearTimeoutFn,
     isDisposed: () => disposed,
   });
-
+  const audience = createSessionObserverAudience({
+    subscribers: deps.subscribers,
+    sessionEventSubscribers: deps.sessionEventSubscribers,
+    isVisible: (connId) => visibleConnections.has(connId),
+  });
   // Narrow run-identity guard shared by persist paths: a digest may still land
   // while its session is unwatched, but never after a newer run replaces it.
   const runStillCurrent = (runId: string, sessionKey: string) => () =>
     !disposed && !supersededRuns.has(runId) && (states.get(sessionKey)?.runId ?? runId) === runId;
+  const persistAcceptedDigest = createSessionObserverDigestPersister({
+    now,
+    persistDigest,
+    stillCurrent: runStillCurrent,
+    onError: (state, error) => {
+      observerLog.warn("session observer digest persistence failed", {
+        sessionKey: state.sessionKey,
+        runId: state.runId,
+        error,
+      });
+    },
+  });
+  const preamblePublisher = createSessionObserverPreamblePublisher({
+    now,
+    setTimeoutFn,
+    clearTimeoutFn,
+    isCurrent: stateIsCurrent,
+    publish: (state, digest) => {
+      deps.broadcastToConnIds("session.observer", digest, audience.recipients(state.sessionKey), {
+        dropIfSlow: true,
+      });
+      void persistAcceptedDigest(state, digest, false, "preamble");
+    },
+  });
 
   // Terminal paths that cannot run the model must still retire same-run live
   // health, or idle session rows can display a stale in-progress judgment forever.
@@ -122,7 +150,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         deps.broadcastToConnIds(
           "session.observer",
           digest,
-          deps.subscribers.get(digest.sessionKey),
+          audience.recipients(digest.sessionKey),
           {
             dropIfSlow: true,
           },
@@ -134,12 +162,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   }
 
   const dropState = (state: SessionObserverState) => {
+    preamblePublisher.clear(state);
     if (state.timer) {
       clearTimeoutFn(state.timer);
-      state.timer = undefined;
     }
-    state.activeController?.abort();
-    state.activeController = undefined;
+    modelSlots.invalidateRequest(state);
     if (states.get(state.sessionKey) === state) {
       states.delete(state.sessionKey);
     }
@@ -160,190 +187,73 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     dropState(state);
   };
 
-  const disableRun = (state: SessionObserverState) => {
-    rememberSessionObserverDisabledRun(disabledRuns, state.runId);
-    rememberSessionObserverDormantRun(
-      dormantRuns,
-      revisionFloors,
-      createDormantSessionObserverRun(state),
-    );
-    dropState(state);
-  };
-
-  const hasSubscribers = (sessionKey: string) => deps.subscribers.get(sessionKey).size > 0;
-
-  const hasObserverAudience = (sessionKey: string) => {
-    // Only the Control UI renders these model-backed digests. Fail closed for
-    // undeclared subscribers so TUI and script connections never spend unseen
-    // tokens. Accepted tradeoff: a pre-2026.7 Control UI tab left open across a
-    // gateway upgrade cannot declare visibility and misses live digests until
-    // reload; terminal digests still reach it, and a fail-open default would
-    // re-enable unseen spend for every non-rendering subscriber permanently.
-    for (const connId of deps.subscribers.get(sessionKey)) {
-      if (visibleConnections.has(connId)) {
-        return true;
-      }
+  const demoteUtilityModel = (state: SessionObserverState): void => {
+    if (state.timer) {
+      clearTimeoutFn(state.timer);
+      state.timer = undefined;
     }
-    return false;
+    modelSlots.invalidateRequest(state);
+    state.preparedPromise = undefined;
+    state.utilityModelRef = undefined;
+    state.consecutiveFailures = 0;
+  };
+  const modelSlots = createSessionObserverModelSlots({
+    states,
+    maxSessions: MAX_CONCURRENT_MODEL_SESSIONS,
+    resolve: (agentId) => resolveUtilityModelRef({ cfg: deps.getConfig(), agentId }),
+    demote: demoteUtilityModel,
+  });
+
+  const disableModelForRun = (state: SessionObserverState) => {
+    rememberSessionObserverDisabledRun(disabledRuns, state.runId);
+    demoteUtilityModel(state);
   };
 
   const suspendStatesWithoutAudience = () => {
     // suspendState deletes from `states`; Map iteration tolerates removal of
     // the entry being visited.
     for (const state of states.values()) {
-      if (!hasObserverAudience(state.sessionKey)) {
+      if (!audience.has(state.sessionKey)) {
         suspendState(state);
       }
     }
   };
 
-  const markSuperseded = (runId: string, observedAt: number) =>
-    markSessionObserverRunSuperseded(supersededRuns, runId, observedAt);
-
   const unsubscribeChanges = deps.subscribers.onChange((sessionKey) => {
     const state = states.get(sessionKey);
-    if (state && !hasObserverAudience(sessionKey)) {
+    if (state && !audience.has(sessionKey)) {
       suspendState(state);
     }
   });
 
-  const stateIsCurrent = (state: SessionObserverState) => {
-    if (
-      disposed ||
-      states.get(state.sessionKey) !== state ||
-      !hasObserverAudience(state.sessionKey)
-    ) {
+  function stateIsCurrent(state: SessionObserverState): boolean {
+    return (
+      !disposed &&
+      states.get(state.sessionKey) === state &&
+      audience.has(state.sessionKey) &&
+      deps.getConfig().gateway?.controlUi?.sessionObserver !== false
+    );
+  }
+
+  function modelStateIsCurrent(state: SessionObserverState): boolean {
+    if (!stateIsCurrent(state) || !state.utilityModelRef) {
       return false;
     }
-    const cfg = deps.getConfig();
-    if (cfg.gateway?.controlUi?.sessionObserver === false) {
-      return false;
-    }
-    return resolveUtilityModelRef({ cfg, agentId: state.agentId }) === state.utilityModelRef;
-  };
+    return (
+      resolveUtilityModelRef({ cfg: deps.getConfig(), agentId: state.agentId }) ===
+      state.utilityModelRef
+    );
+  }
 
-  const ensurePrepared = async (state: SessionObserverState): Promise<PreparedModel> => {
-    state.preparedPromise ??= prepareModel({
-      cfg: deps.getConfig(),
-      agentId: state.agentId,
-      modelRef: state.utilityModelRef,
-      useUtilityModel: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
-    });
-    return await state.preparedPromise;
-  };
-
-  const requestModelDigest = async (state: SessionObserverState, notes: readonly string[]) => {
-    const controller = new AbortController();
-    state.activeController = controller;
-    const timeout = setTimeoutFn(() => controller.abort(), MODEL_TIMEOUT_MS);
-    const aborted = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener(
-        "abort",
-        () => reject(new Error("session observer model call timed out or was cancelled")),
-        { once: true },
-      );
-    });
-    try {
-      const execute = async () => {
-        const prepared = await ensurePrepared(state);
-        if (!stateIsCurrent(state) || controller.signal.aborted) {
-          throw new Error("session observer state is no longer active");
-        }
-        if ("error" in prepared) {
-          throw new Error(prepared.error);
-        }
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          if (!stateIsCurrent(state) || controller.signal.aborted) {
-            throw new Error("session observer state is no longer active");
-          }
-          const result = await completeModel({
-            model: prepared.model,
-            auth: prepared.auth,
-            cfg: deps.getConfig(),
-            context: {
-              systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
-              messages: [
-                {
-                  role: "user",
-                  content: buildSessionObserverPrompt(state, notes),
-                  timestamp: now(),
-                },
-              ],
-            },
-            options: {
-              maxTokens: Math.min(
-                SESSION_OBSERVER_MODEL_MAX_TOKENS,
-                Math.floor(prepared.model.maxTokens),
-              ),
-              temperature: 0.2,
-              signal: controller.signal,
-            },
-          });
-          if (result.stopReason === "error") {
-            throw new Error(result.errorMessage?.trim() || "session observer completion failed");
-          }
-          const text = result.content
-            .filter((block): block is { type: "text"; text: string } => block.type === "text")
-            .map((block) => block.text)
-            .join("")
-            .trim();
-          const parsed = normalizeSessionObserverModelOutput(text);
-          if (parsed) {
-            return parsed;
-          }
-        }
-        throw new Error("session observer returned invalid JSON twice");
-      };
-      return await Promise.race([execute(), aborted]);
-    } finally {
-      clearTimeoutFn(timeout);
-      if (state.activeController === controller) {
-        state.activeController = undefined;
-      }
-    }
-  };
-
-  const persistAcceptedDigest = async (
-    state: SessionObserverState,
-    digest: SessionObserverDigest,
-    final: boolean,
-  ) => {
-    const due =
-      state.lastPersistedAt === undefined || now() - state.lastPersistedAt >= PERSIST_INTERVAL_MS;
-    if (!final && !due) {
-      return;
-    }
-    // Broadcasts remain live while durable writes are throttled; terminal
-    // persistence gets one bounded retry so idle rows keep the final judgment.
-    const attempts = final ? 2 : 1;
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try {
-        const accepted = await persistDigest({
-          sessionKey: state.sessionKey,
-          sessionId: state.sessionId,
-          agentId: state.agentId,
-          digest,
-          stillCurrent: runStillCurrent(state.runId, state.sessionKey),
-        });
-        if (accepted) {
-          state.lastPersistedAt = now();
-        }
-        // A rejection is the store guard firing (rollover, reset, stale
-        // revision) — retrying the same candidate can never succeed, but the
-        // next valid digest must not inherit the 60s throttle.
-        return;
-      } catch (error) {
-        if (attempt + 1 === attempts) {
-          observerLog.warn("session observer digest persistence failed", {
-            sessionKey: state.sessionKey,
-            runId: state.runId,
-            error,
-          });
-        }
-      }
-    }
-  };
+  const requestModelDigest = createSessionObserverCompletion({
+    getConfig: deps.getConfig,
+    prepareModel,
+    completeModel,
+    now,
+    setTimeoutFn,
+    clearTimeoutFn,
+    isCurrent: modelStateIsCurrent,
+  });
 
   const pendingNotes = (state: SessionObserverState) =>
     state.notes.filter((note) => note.sequence > state.lastDigestNoteSequence);
@@ -358,6 +268,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       } else {
         suspendState(state);
       }
+      return;
+    }
+    if (!modelStateIsCurrent(state)) {
       return;
     }
     if (state.inFlight || state.timer || state.terminalHealth) {
@@ -389,6 +302,14 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
       return;
     }
+    if (!modelStateIsCurrent(state)) {
+      if (final) {
+        void synthesizeTerminalDigest({ state });
+        dormantRuns.delete(state.runId);
+        dropState(state);
+      }
+      return;
+    }
     if (state.inFlight) {
       state.finalPending ||= final;
       return;
@@ -413,13 +334,25 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     state.inFlight = true;
     state.lastRunAt = now();
     const lastSelectedSequence = selectedNotes.at(-1)?.sequence ?? state.lastDigestNoteSequence;
+    const requestedPreambleGeneration = preamblePublisher.generation(state);
+    const requestGeneration = modelSlots.beginRequest(state);
     void (async () => {
       try {
         const modelDigest = await requestModelDigest(
           state,
           selectedNotes.map((note) => note.text),
         );
-        if (!stateIsCurrent(state)) {
+        const stale =
+          !modelStateIsCurrent(state) ||
+          !modelSlots.requestIsCurrent(state, requestGeneration) ||
+          (!final && state.terminalHealth !== undefined) ||
+          preamblePublisher.generation(state) !== requestedPreambleGeneration;
+        if (stale) {
+          if (final && states.get(state.sessionKey) === state) {
+            void synthesizeTerminalDigest({ state });
+            dormantRuns.delete(state.runId);
+            dropState(state);
+          }
           return;
         }
         // A session reset swaps sessionId under the same key; a digest accepted
@@ -430,6 +363,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         ) {
           return;
         }
+        preamblePublisher.clear(state);
         state.consecutiveFailures = 0;
         state.revision += 1;
         state.digestCount += 1;
@@ -447,18 +381,24 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
             : {}),
         };
         state.previousDigest = digest;
-        deps.broadcastToConnIds(
-          "session.observer",
-          digest,
-          deps.subscribers.get(state.sessionKey),
-          { dropIfSlow: true },
-        );
+        deps.broadcastToConnIds("session.observer", digest, audience.recipients(state.sessionKey), {
+          dropIfSlow: true,
+        });
         await persistAcceptedDigest(state, digest, final);
         if (final) {
           dormantRuns.delete(state.runId);
         }
       } catch (error) {
-        if (!stateIsCurrent(state)) {
+        const stale =
+          !modelStateIsCurrent(state) ||
+          !modelSlots.requestIsCurrent(state, requestGeneration) ||
+          (!final && state.terminalHealth !== undefined);
+        if (stale) {
+          if (final && states.get(state.sessionKey) === state) {
+            void synthesizeTerminalDigest({ state });
+            dormantRuns.delete(state.runId);
+            dropState(state);
+          }
           return;
         }
         state.consecutiveFailures += 1;
@@ -473,7 +413,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
             dormantRuns.delete(state.runId);
             dropState(state);
           } else {
-            disableRun(state);
+            disableModelForRun(state);
           }
         } else if (final) {
           state.finalPending = true;
@@ -495,37 +435,34 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     })();
   };
 
-  const admitState = (event: SessionObserverEvent): SessionObserverState | undefined => {
-    const sessionKey = event.sessionKey?.trim();
-    const agentId = event.agentId?.trim();
-    if (!sessionKey || !agentId || !hasObserverAudience(sessionKey)) {
+  const admitState = (
+    event: SessionObserverEvent,
+    allowPreambleOnly: boolean,
+    sessionKey: string,
+    agentId: string | undefined,
+  ): SessionObserverState | undefined => {
+    if (!agentId || !audience.has(sessionKey)) {
       return undefined;
     }
     const cfg = deps.getConfig();
     if (cfg.gateway?.controlUi?.sessionObserver === false) {
       return undefined;
     }
-    const utilityModelRef = resolveUtilityModelRef({ cfg, agentId });
-    if (!utilityModelRef) {
+    const utilityModelRef = disabledRuns.has(event.runId) ? undefined : modelSlots.claim(agentId);
+    if (!utilityModelRef && !allowPreambleOnly) {
       return undefined;
-    }
-    if (states.size >= MAX_CONCURRENT_OBSERVED_SESSIONS) {
-      const evicted = [...states.values()].toSorted(
-        (left, right) =>
-          left.lastActivityAt - right.lastActivityAt ||
-          left.sessionKey.localeCompare(right.sessionKey),
-      )[0];
-      if (evicted) {
-        suspendState(evicted);
-      }
     }
     const dormant = dormantRuns.get(event.runId);
     if (dormant) {
       dormantRuns.delete(event.runId);
+      const { utilityModelRef: _dormantModelRef, ...dormantState } = dormant;
       const state: SessionObserverState = {
         ...createSessionActivityNoteState(),
-        ...dormant,
-        utilityModelRef,
+        ...dormantState,
+        ...(dormantState.lastPreambleHeadline
+          ? { lastPublishedPreambleHeadline: dormantState.lastPreambleHeadline }
+          : {}),
+        ...(utilityModelRef ? { utilityModelRef } : {}),
         lastActivityAt: event.ts,
         lastRunAt: now(),
         lastDigestNoteSequence: 0,
@@ -544,7 +481,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       sessionId: event.sessionId ?? session?.sessionId,
       runId: event.runId,
       agentId,
-      utilityModelRef,
+      ...(utilityModelRef ? { utilityModelRef } : {}),
       startedAt,
       lastActivityAt: event.ts,
       lastRunAt: startedAt,
@@ -566,28 +503,53 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       return;
     }
     const terminal = isTerminalLifecycleEvent(event);
+    if (terminalRuns.has(event.runId)) {
+      return;
+    }
     if (supersededRuns.has(event.runId)) {
       if (terminal) {
+        markSessionObserverRunSuperseded(terminalRuns, event.runId, event.ts);
+        contextlessTerminalRuns.delete(event.runId);
         supersededRuns.delete(event.runId);
         dormantRuns.delete(event.runId);
-      }
-      return;
-    }
-    if (disabledRuns.has(event.runId)) {
-      if (terminal) {
-        void synthesizeTerminalDigest({ event });
         disabledRuns.delete(event.runId);
-        dormantRuns.delete(event.runId);
       }
       return;
     }
-    const sessionKey = event.sessionKey?.trim();
-    if (!sessionKey) {
+    // A terminal with no recoverable run context still closes the live run, but
+    // one routed terminal duplicate must pass later to finalize durable state.
+    if (contextlessTerminalRuns.has(event.runId) && !terminal) {
       return;
     }
-    if (terminal && !hasSubscribers(sessionKey)) {
+    const eventSessionKey = event.sessionKey?.trim();
+    const eventAgentId = event.agentId?.trim();
+    let knownRun: SessionObserverState | DormantSessionObserverRun | undefined;
+    if (terminal && (!eventSessionKey || !eventAgentId)) {
+      for (const candidate of states.values()) {
+        if (candidate.runId === event.runId) {
+          knownRun = candidate;
+          break;
+        }
+      }
+      knownRun ??= dormantRuns.get(event.runId);
+    }
+    const sessionKey = eventSessionKey || knownRun?.sessionKey;
+    if (!sessionKey) {
+      if (terminal) {
+        markSessionObserverRunSuperseded(contextlessTerminalRuns, event.runId, event.ts);
+      }
+      return;
+    }
+    const agentId = eventAgentId || knownRun?.agentId;
+    if (terminal) {
+      contextlessTerminalRuns.delete(event.runId);
+      markSessionObserverRunSuperseded(terminalRuns, event.runId, event.ts);
+    }
+    const isPreamble = event.stream === "item" && event.data.kind === "preamble";
+    if (terminal && audience.recipients(sessionKey).size === 0) {
       void synthesizeTerminalDigest({ event, state: states.get(sessionKey) });
       dormantRuns.delete(event.runId);
+      disabledRuns.delete(event.runId);
       return;
     }
     const isRunStart = event.stream === "lifecycle" && event.data.phase === "start";
@@ -600,7 +562,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
       const supersededRunId = state.runId;
       if (isRunStart) {
-        markSuperseded(supersededRunId, event.ts);
+        markSessionObserverRunSuperseded(supersededRuns, supersededRunId, event.ts);
       }
       suspendState(state);
       if (isRunStart) {
@@ -623,27 +585,30 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           rememberSessionObserverRevisionFloor(revisionFloors, sessionKey, revisionFloor);
         }
         for (const run of superseded) {
-          markSuperseded(run.runId, event.ts);
+          markSessionObserverRunSuperseded(supersededRuns, run.runId, event.ts);
           dormantRuns.delete(run.runId);
         }
       }
     }
     if (
       state &&
-      (!hasObserverAudience(sessionKey) ||
-        deps.getConfig().gateway?.controlUi?.sessionObserver === false)
+      (!audience.has(sessionKey) || deps.getConfig().gateway?.controlUi?.sessionObserver === false)
     ) {
       suspendState(state);
       state = undefined;
     }
     if (!state) {
-      state = admitState(event);
+      state = admitState(event, isPreamble, sessionKey, agentId);
     }
     if (!state) {
       if (terminal) {
         void synthesizeTerminalDigest({ event });
         dormantRuns.delete(event.runId);
+        disabledRuns.delete(event.runId);
       }
+      return;
+    }
+    if (state.terminalHealth) {
       return;
     }
     if (revisionFloor && revisionFloor.revision > state.revision) {
@@ -651,14 +616,30 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.previousDigest = revisionFloor.previousDigest;
     }
     revisionFloors.delete(sessionKey);
+    const utilityModelRef = disabledRuns.has(state.runId)
+      ? undefined
+      : modelSlots.claim(state.agentId, state);
+    if (state.utilityModelRef !== utilityModelRef) {
+      modelSlots.invalidateRequest(state);
+      state.preparedPromise = undefined;
+      state.utilityModelRef = utilityModelRef;
+      state.consecutiveFailures = 0;
+    }
     state.lastActivityAt = event.ts;
     const eventStartedAt = readFiniteNumber(event.data.startedAt);
     if (eventStartedAt !== undefined) {
       state.startedAt = Math.min(state.startedAt, eventStartedAt);
     }
     noteSessionActivityEvent(state, event);
+    preamblePublisher.handle(state, event);
     if (terminal) {
+      if (!state.terminalHealth) {
+        modelSlots.invalidateRequest(state);
+      }
+      preamblePublisher.flush(state);
+      preamblePublisher.clear(state);
       state.terminalHealth = terminalHealthFor(event);
+      disabledRuns.delete(event.runId);
       const endedAt = readFiniteNumber(event.data.endedAt) ?? now();
       const hasRunDigest = state.digestCount > 0 || state.previousDigest?.runId === state.runId;
       if (!hasRunDigest && endedAt - state.startedAt < FINAL_DIGEST_MIN_RUN_MS) {
@@ -691,6 +672,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     ask: askRuntime.ask,
     dispose() {
       disposed = true;
+      preamblePublisher.dispose();
       unsubscribeChanges();
       askRuntime.dispose();
       for (const state of states.values()) {
@@ -699,6 +681,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       dormantRuns.clear();
       revisionFloors.clear();
       supersededRuns.clear();
+      terminalRuns.clear();
       disabledRuns.clear();
       visibleConnections.clear();
     },

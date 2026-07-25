@@ -541,7 +541,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-drain-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
+    const sessionKey = "agent:main:main";
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -579,6 +579,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       typingMode: "instant",
     });
 
+    expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
   });
 

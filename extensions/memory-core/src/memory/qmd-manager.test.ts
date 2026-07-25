@@ -973,6 +973,160 @@ describe("QmdMemoryManager", () => {
     return { manager: requireValue(manager, "manager missing"), resolved };
   }
 
+  function createAbortChildHarness() {
+    let child: MockChild | undefined;
+    let kill: ReturnType<typeof vi.fn> | undefined;
+
+    return {
+      createChild(): MockChild {
+        const current = createMockChild({ autoClose: false });
+        const currentKill = vi.fn(() => {
+          // Closing only after SIGKILL proves the caller abort reached this child.
+          queueMicrotask(() => current.emit("close", null));
+          return true;
+        });
+        Object.assign(current, { kill: currentKill });
+        child ??= current;
+        kill ??= currentKill;
+        return current;
+      },
+      async waitForSpawn(): Promise<void> {
+        await waitUntil(() => kill !== undefined);
+      },
+      expectKilled(): void {
+        expect(child).toBeDefined();
+        expect(kill).toHaveBeenCalledWith("SIGKILL");
+      },
+    };
+  }
+
+  type AbortSearchScenario = {
+    name: string;
+    qmd: QmdTestConfig | (() => QmdTestConfig);
+    isTarget: (cmd: string, args: string[]) => boolean;
+    preAborted?: boolean;
+    outputFor?: (
+      cmd: string,
+      args: string[],
+    ) => { stream: "stdout" | "stderr"; data: string; code?: number } | undefined;
+    neverSpawns?: (cmd: string, args: string[]) => boolean;
+  };
+
+  async function runAbortSearchScenario(scenario: AbortSearchScenario): Promise<void> {
+    configureQmd(typeof scenario.qmd === "function" ? scenario.qmd() : scenario.qmd);
+    const abortChild = createAbortChildHarness();
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      if (scenario.isTarget(cmd, args)) {
+        return abortChild.createChild();
+      }
+      const output = scenario.outputFor?.(cmd, args);
+      if (output) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, output.stream, output.data, output.code);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const controller = new AbortController();
+    if (scenario.preAborted) {
+      controller.abort(new Error("memory_search timed out after 15s"));
+    }
+    const targetCallsBefore = spawnMock.mock.calls.filter((call: unknown[]) =>
+      scenario.isTarget(String(call[0]), call[1] as string[]),
+    ).length;
+    const searchPromise = manager.search("test", {
+      sessionKey: "agent:main:slack:dm:u123",
+      signal: controller.signal,
+    });
+    searchPromise.catch(() => undefined);
+
+    if (scenario.preAborted) {
+      await expect(searchPromise).rejects.toThrow("memory_search timed out after 15s");
+      const targetCallsAfter = spawnMock.mock.calls.filter((call: unknown[]) =>
+        scenario.isTarget(String(call[0]), call[1] as string[]),
+      ).length;
+      expect(targetCallsAfter).toBe(targetCallsBefore);
+      await manager.close();
+      return;
+    }
+
+    await abortChild.waitForSpawn();
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(searchPromise).rejects.toThrow("memory_search timed out after 15s");
+    abortChild.expectKilled();
+    if (scenario.neverSpawns) {
+      expect(
+        spawnMock.mock.calls.some((call: unknown[]) =>
+          scenario.neverSpawns?.(String(call[0]), call[1] as string[]),
+        ),
+      ).toBe(false);
+    }
+    await manager.close();
+  }
+
+  type QmdCommandMatrixScenario = {
+    name: string;
+    configure: () => void | Promise<void>;
+    supportsMultiCollection?: boolean;
+    rejectSearchFlags?: boolean;
+    expectedCommands: (maxResults: number) => string[][];
+  };
+
+  function qmdQueryArgs(
+    command: "query" | "search",
+    maxResults: number,
+    ...collections: string[]
+  ): string[] {
+    return [
+      command,
+      "test",
+      "--json",
+      "-n",
+      String(maxResults),
+      ...collections.flatMap((collection) => ["-c", collection]),
+    ];
+  }
+
+  async function runQmdCommandMatrixScenario(scenario: QmdCommandMatrixScenario): Promise<void> {
+    await scenario.configure();
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "--help" && scenario.supportsMultiCollection) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          "-c, --collection <name>    Filter by one or more collections",
+        );
+        return child;
+      }
+      if (args[0] === "search" && scenario.rejectSearchFlags) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stderr", "unknown flag: --json", 2);
+        return child;
+      }
+      if (args[0] === "search" || args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager, resolved } = await createManager();
+    const maxResults = requireValue(resolved.qmd?.limits.maxResults, "qmd maxResults missing");
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toStrictEqual([]);
+    const commandCalls = qmdCommandCalls().filter(
+      (args) => args[0] === "search" || args[0] === "query",
+    );
+    expect(commandCalls).toEqual(scenario.expectedCommands(maxResults));
+    await manager.close();
+  }
+
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qmd-manager-test-fixtures-"));
   });
@@ -2889,254 +3043,63 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("aborts the in-flight qmd search subprocess when the caller signal aborts", async () => {
-    configureQmd({ searchMode: "query" });
-
-    // The query child never closes on its own so the only way the search can
-    // settle is the caller-owned abort signal killing the subprocess.
-    let queryChildKill: ReturnType<typeof vi.fn> | undefined;
-    let queryChild: MockChild | undefined;
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
-        const kill = vi.fn(() => {
-          // Mirror a real child exiting after SIGKILL so the close handler runs.
-          queueMicrotask(() => child.emit("close", null));
-        });
-        Object.assign(child, { kill });
-        queryChildKill = kill;
-        queryChild = child;
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-    const controller = new AbortController();
-
-    const searchPromise = manager.search("test", {
-      sessionKey: "agent:main:slack:dm:u123",
-      signal: controller.signal,
-    });
-    searchPromise.catch(() => undefined);
-
-    await waitUntil(() => queryChildKill !== undefined);
-    expect(queryChild).toBeDefined();
-
-    controller.abort(new Error("memory_search timed out after 15s"));
-
-    await expect(searchPromise).rejects.toThrow("memory_search timed out after 15s");
-    expect(queryChildKill).toHaveBeenCalledWith("SIGKILL");
-    await manager.close();
-  });
-
-  it("rejects the qmd search before spawning when the caller signal is already aborted", async () => {
-    configureQmd({ searchMode: "query" });
-
-    const { manager } = await createManager();
-    const controller = new AbortController();
-    controller.abort(new Error("memory_search timed out after 15s"));
-
-    const callsBefore = spawnMock.mock.calls.filter(
-      (call: unknown[]) => (call[1] as string[])?.[0] === "query",
-    ).length;
-
-    await expect(
-      manager.search("test", {
-        sessionKey: "agent:main:slack:dm:u123",
-        signal: controller.signal,
+  const abortSearchScenarios = [
+    {
+      name: "aborts the in-flight qmd search subprocess when the caller signal aborts",
+      qmd: { searchMode: "query" },
+      isTarget: (_cmd, args) => args[0] === "query",
+    },
+    {
+      name: "rejects the qmd search before spawning when the caller signal is already aborted",
+      qmd: { searchMode: "query" },
+      isTarget: (_cmd, args) => args[0] === "query",
+      preAborted: true,
+    },
+    {
+      name: "aborts the in-flight grouped qmd search subprocess when the caller signal aborts",
+      qmd: { sessions: { enabled: true } },
+      isTarget: (_cmd, args) => args[0] === "search",
+      outputFor: (_cmd, args) =>
+        args[0] === "--help"
+          ? {
+              stream: "stdout",
+              data: "-c, --collection <name>    Filter by one or more collections",
+            }
+          : undefined,
+    },
+    {
+      name: "aborts the multi-collection capability probe without caching a failure",
+      qmd: () => ({
+        paths: [
+          { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+          { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+        ],
       }),
-    ).rejects.toThrow("memory_search timed out after 15s");
+      isTarget: (_cmd, args) => args[0] === "--help",
+      outputFor: (_cmd, args) =>
+        args[0] === "search" ? { stream: "stdout", data: "[]" } : undefined,
+      neverSpawns: (_cmd, args) => args[0] === "search",
+    },
+    {
+      name: "aborts the in-flight mcporter search subprocess when the caller signal aborts",
+      qmd: {
+        searchMode: "query",
+        mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+      },
+      isTarget: (cmd, args) => isMcporterCommand(cmd) && args[0] === "call",
+    },
+    {
+      name: "rejects the mcporter search before spawning a call subprocess when the caller signal is already aborted",
+      qmd: {
+        searchMode: "query",
+        mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+      },
+      isTarget: (cmd, args) => isMcporterCommand(cmd) && args[0] === "call",
+      preAborted: true,
+    },
+  ] satisfies AbortSearchScenario[];
 
-    const callsAfter = spawnMock.mock.calls.filter(
-      (call: unknown[]) => (call[1] as string[])?.[0] === "query",
-    ).length;
-    expect(callsAfter).toBe(callsBefore);
-    await manager.close();
-  });
-
-  it("aborts the in-flight grouped qmd search subprocess when the caller signal aborts", async () => {
-    configureQmd({ sessions: { enabled: true } });
-
-    // Mixed memory/session sources route the search through
-    // runQueryAcrossCollectionGroups. The first grouped search child never
-    // closes on its own, so the only way the search can settle is the
-    // caller-owned abort signal reaching the grouped subprocess and killing it.
-    let groupedChildKill: ReturnType<typeof vi.fn> | undefined;
-    let groupedChild: MockChild | undefined;
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "--help") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          "-c, --collection <name>    Filter by one or more collections",
-        );
-        return child;
-      }
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        const kill = vi.fn(() => {
-          // Mirror a real child exiting after SIGKILL so the close handler runs.
-          queueMicrotask(() => child.emit("close", null));
-        });
-        Object.assign(child, { kill });
-        if (!groupedChildKill) {
-          groupedChildKill = kill;
-          groupedChild = child;
-        }
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-    const controller = new AbortController();
-
-    const searchPromise = manager.search("test", {
-      sessionKey: "agent:main:slack:dm:u123",
-      signal: controller.signal,
-    });
-    searchPromise.catch(() => undefined);
-
-    await waitUntil(() => groupedChildKill !== undefined);
-    expect(groupedChild).toBeDefined();
-
-    controller.abort(new Error("memory_search timed out after 15s"));
-
-    await expect(searchPromise).rejects.toThrow("memory_search timed out after 15s");
-    expect(groupedChildKill).toHaveBeenCalledWith("SIGKILL");
-    await manager.close();
-  });
-
-  it("aborts the multi-collection capability probe without caching a failure", async () => {
-    configureQmd({
-      paths: [
-        { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
-        { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
-      ],
-    });
-
-    let helpChildKill: ReturnType<typeof vi.fn> | undefined;
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "--help") {
-        const child = createMockChild({ autoClose: false });
-        const kill = vi.fn(() => {
-          queueMicrotask(() => child.emit("close", null));
-        });
-        Object.assign(child, { kill });
-        helpChildKill = kill;
-        return child;
-      }
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-    const controller = new AbortController();
-    const searchPromise = manager.search("test", {
-      sessionKey: "agent:main:slack:dm:u123",
-      signal: controller.signal,
-    });
-    searchPromise.catch(() => undefined);
-
-    await waitUntil(() => helpChildKill !== undefined);
-    controller.abort(new Error("memory_search timed out after 15s"));
-
-    await expect(searchPromise).rejects.toThrow("memory_search timed out after 15s");
-    expect(helpChildKill).toHaveBeenCalledWith("SIGKILL");
-    expect(
-      spawnMock.mock.calls.some((call: unknown[]) => (call[1] as string[])?.[0] === "search"),
-    ).toBe(false);
-    await manager.close();
-  });
-
-  it("aborts the in-flight mcporter search subprocess when the caller signal aborts", async () => {
-    configureQmd({
-      searchMode: "query",
-      mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
-    });
-
-    // The mcporter `call` child never closes on its own, so the only way the
-    // search can settle is the caller-owned abort signal reaching the mcporter
-    // subprocess via runMcporter -> runCliCommand and killing it.
-    let mcporterCallKill: ReturnType<typeof vi.fn> | undefined;
-    let mcporterCallChild: MockChild | undefined;
-    spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      if (isMcporterCommand(cmd) && args[0] === "call") {
-        const child = createMockChild({ autoClose: false });
-        const kill = vi.fn(() => {
-          // Mirror a real child exiting after SIGKILL so the close handler runs.
-          queueMicrotask(() => child.emit("close", null));
-        });
-        Object.assign(child, { kill });
-        mcporterCallKill = kill;
-        mcporterCallChild = child;
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager();
-    const controller = new AbortController();
-
-    const searchPromise = manager.search("test", {
-      sessionKey: "agent:main:slack:dm:u123",
-      signal: controller.signal,
-    });
-    searchPromise.catch(() => undefined);
-
-    await waitUntil(() => mcporterCallKill !== undefined);
-    expect(mcporterCallChild).toBeDefined();
-
-    controller.abort(new Error("memory_search timed out after 15s"));
-
-    await expect(searchPromise).rejects.toThrow("memory_search timed out after 15s");
-    expect(mcporterCallKill).toHaveBeenCalledWith("SIGKILL");
-    await manager.close();
-  });
-
-  it("rejects the mcporter search before spawning a call subprocess when the caller signal is already aborted", async () => {
-    configureQmd({
-      searchMode: "query",
-      mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
-    });
-
-    spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
-      if (isMcporterCommand(cmd) && args[0] === "call") {
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
-      }
-      emitAndClose(child, "stdout", "[]");
-      return child;
-    });
-
-    const { manager } = await createManager();
-    const controller = new AbortController();
-    controller.abort(new Error("memory_search timed out after 15s"));
-
-    const callsBefore = spawnMock.mock.calls.filter(
-      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])?.[0] === "call",
-    ).length;
-
-    await expect(
-      manager.search("test", {
-        sessionKey: "agent:main:slack:dm:u123",
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("memory_search timed out after 15s");
-
-    const callsAfter = spawnMock.mock.calls.filter(
-      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])?.[0] === "call",
-    ).length;
-    expect(callsAfter).toBe(callsBefore);
-    await manager.close();
-  });
+  it.each(abortSearchScenarios)("$name", runAbortSearchScenario);
 
   it("does not pass --no-rerank to direct query fallback from search mode", async () => {
     configureQmd({ searchMode: "search", rerank: false });
@@ -3271,273 +3234,101 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("scopes qmd queries to managed collections", async () => {
-    configureQmd({
-      paths: [
-        { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
-        { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+  const qmdCommandMatrixScenarios = [
+    {
+      name: "scopes qmd queries to managed collections",
+      configure: () =>
+        configureQmd({
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+          ],
+        }),
+      expectedCommands: (maxResults) => [
+        qmdQueryArgs("search", maxResults, "workspace-main"),
+        qmdQueryArgs("search", maxResults, "notes-main"),
       ],
-    });
-
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager, resolved } = await createManager();
-
-    await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
-    const searchCalls = spawnMock.mock.calls
-      .map((call: unknown[]) => call[1] as string[])
-      .filter((args: string[]) => args[0] === "search");
-    expect(searchCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
-    ]);
-    await manager.close();
-  });
-
-  it("groups same-source qmd queries when the installed qmd supports multiple collection filters", async () => {
-    configureQmd({
-      paths: [
-        { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
-        { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+    },
+    {
+      name: "groups same-source qmd queries when the installed qmd supports multiple collection filters",
+      configure: () =>
+        configureQmd({
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+          ],
+        }),
+      supportsMultiCollection: true,
+      expectedCommands: (maxResults) => [
+        qmdQueryArgs("search", maxResults, "workspace-main", "notes-main"),
       ],
-    });
-
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "--help") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          "-c, --collection <name>    Filter by one or more collections",
-        );
-        return child;
-      }
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager, resolved } = await createManager();
-
-    await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
-    const searchCalls = spawnMock.mock.calls
-      .map((call: unknown[]) => call[1] as string[])
-      .filter((args: string[]) => args[0] === "search");
-    expect(searchCalls).toEqual([
-      [
-        "search",
-        "test",
-        "--json",
-        "-n",
-        String(maxResults),
-        "-c",
-        "workspace-main",
-        "-c",
-        "notes-main",
+    },
+    {
+      name: "keeps mixed-source qmd queries in separate source groups",
+      configure: () => configureQmd({ sessions: { enabled: true } }),
+      supportsMultiCollection: true,
+      expectedCommands: (maxResults) => [
+        qmdQueryArgs("search", maxResults, "workspace-main"),
+        qmdQueryArgs("search", maxResults, "sessions-main"),
       ],
-    ]);
-    await manager.close();
-  });
-
-  it("keeps mixed-source qmd queries in separate source groups", async () => {
-    configureQmd({ sessions: { enabled: true } });
-
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "--help") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          "-c, --collection <name>    Filter by one or more collections",
-        );
-        return child;
-      }
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager, resolved } = await createManager();
-
-    await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
-    const searchCalls = spawnMock.mock.calls
-      .map((call: unknown[]) => call[1] as string[])
-      .filter((args: string[]) => args[0] === "search");
-    expect(searchCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "sessions-main"],
-    ]);
-    await manager.close();
-  });
-
-  it("does not query phantom memory-alt collections when MEMORY.md exists", async () => {
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# canonical root");
-    configureQmd({ includeDefaultMemory: true, paths: [] });
-
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager, resolved } = await createManager();
-
-    await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
-    const searchCalls = spawnMock.mock.calls
-      .map((call: unknown[]) => call[1] as string[])
-      .filter((args: string[]) => args[0] === "search");
-    expect(searchCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "memory-root-main"],
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "memory-dir-main"],
-    ]);
-    await manager.close();
-  });
-
-  it("uses explicit external custom collection names verbatim at query time", async () => {
-    const sharedMirrorDir = path.join(tmpRoot, "shared-notion-mirror");
-    await fs.mkdir(sharedMirrorDir);
-    configureQmd({
-      paths: [{ path: sharedMirrorDir, pattern: "**/*.md", name: "notion-mirror" }],
-    });
-
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager, resolved } = await createManager();
-
-    await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
-    const searchCalls = spawnMock.mock.calls
-      .map((call: unknown[]) => call[1] as string[])
-      .filter((args: string[]) => args[0] === "search");
-    expect(searchCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "notion-mirror"],
-    ]);
-    await manager.close();
-  });
-
-  it("runs qmd query per collection when query mode has multiple collection filters", async () => {
-    configureQmd({
-      searchMode: "query",
-      paths: [
-        { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
-        { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+    },
+    {
+      name: "does not query phantom memory-alt collections when MEMORY.md exists",
+      configure: async () => {
+        await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# canonical root");
+        configureQmd({ includeDefaultMemory: true, paths: [] });
+      },
+      expectedCommands: (maxResults) => [
+        qmdQueryArgs("search", maxResults, "memory-root-main"),
+        qmdQueryArgs("search", maxResults, "memory-dir-main"),
       ],
-    });
-
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager, resolved } = await createManager();
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
-
-    await expect(
-      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toStrictEqual([]);
-
-    const queryCalls = spawnMock.mock.calls
-      .map((call: unknown[]) => call[1] as string[])
-      .filter((args: string[]) => args[0] === "query");
-    expect(queryCalls).toEqual([
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
-    ]);
-    await manager.close();
-  });
-
-  it("uses per-collection query fallback when search mode rejects flags", async () => {
-    configureQmd({
-      searchMode: "search",
-      paths: [
-        { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
-        { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+    },
+    {
+      name: "uses explicit external custom collection names verbatim at query time",
+      configure: async () => {
+        const sharedMirrorDir = path.join(tmpRoot, "shared-notion-mirror");
+        await fs.mkdir(sharedMirrorDir);
+        configureQmd({
+          paths: [{ path: sharedMirrorDir, pattern: "**/*.md", name: "notion-mirror" }],
+        });
+      },
+      expectedCommands: (maxResults) => [qmdQueryArgs("search", maxResults, "notion-mirror")],
+    },
+    {
+      name: "runs qmd query per collection when query mode has multiple collection filters",
+      configure: () =>
+        configureQmd({
+          searchMode: "query",
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+          ],
+        }),
+      expectedCommands: (maxResults) => [
+        qmdQueryArgs("query", maxResults, "workspace-main"),
+        qmdQueryArgs("query", maxResults, "notes-main"),
       ],
-    });
+    },
+    {
+      name: "uses per-collection query fallback when search mode rejects flags",
+      configure: () =>
+        configureQmd({
+          searchMode: "search",
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+          ],
+        }),
+      rejectSearchFlags: true,
+      expectedCommands: (maxResults) => [
+        qmdQueryArgs("search", maxResults, "workspace-main"),
+        qmdQueryArgs("query", maxResults, "workspace-main"),
+        qmdQueryArgs("query", maxResults, "notes-main"),
+      ],
+    },
+  ] satisfies QmdCommandMatrixScenario[];
 
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "unknown flag: --json", 2);
-        return child;
-      }
-      if (args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager, resolved } = await createManager();
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
-
-    await expect(
-      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toStrictEqual([]);
-
-    const searchAndQueryCalls = spawnMock.mock.calls
-      .map((call: unknown[]) => call[1] as string[])
-      .filter((args: string[]) => args[0] === "search" || args[0] === "query");
-    expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
-    ]);
-    await manager.close();
-  });
+  it.each(qmdCommandMatrixScenarios)("$name", runQmdCommandMatrixScenario);
 
   it("runs qmd searches via mcporter and warns when startDaemon=false", async () => {
     configureQmd({
