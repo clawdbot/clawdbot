@@ -7,6 +7,7 @@ import {
   discoverVeniceModels,
   VENICE_MODEL_CATALOG,
 } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 const ORIGINAL_VITEST = process.env.VITEST;
@@ -167,12 +168,17 @@ describe("venice-models", () => {
   });
 
   it("keeps only immediate predecessors as deprecated compatibility rows", () => {
+    // Lifecycle metadata lives on the manifest rows; the runtime provider-config
+    // bridge (ModelDefinitionConfig) intentionally carries no status fields.
+    const manifestRows = manifest.modelCatalog.providers.venice.models as Array<
+      Record<string, unknown>
+    >;
     for (const [id, replacedBy] of [
       ["zai-org-glm-4.6", "zai-org-glm-4.7"],
       ["google-gemma-3-27b-it", "google-gemma-4-31b-it"],
       ["kimi-k2-5", "kimi-k2-6"],
     ]) {
-      expect(VENICE_MODEL_CATALOG.find((model) => model.id === id)).toMatchObject({
+      expect(manifestRows.find((model) => model.id === id)).toMatchObject({
         status: "deprecated",
         replacedBy,
       });
