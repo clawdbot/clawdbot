@@ -43,6 +43,9 @@ function printProofLines(report: ReliabilityReport): void {
     `SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=${report.publicationInterruptionProof.beforePublish.recoveryVerified && report.publicationInterruptionProof.afterPublish.targetVerifiedAfterCrash && report.publicationInterruptionProof.afterPublish.recoveryVerified ? "verified" : "missing"}`,
   );
   console.log(
+    `SQLITE_RELIABILITY_RESTORE_INTERRUPTION=${report.maintenanceProof.restoreInterruption.beforePublish.recoveryVerified && report.maintenanceProof.restoreInterruption.beforePublish.retryRestored && report.maintenanceProof.restoreInterruption.afterPublish.targetVerifiedAfterCrash && report.maintenanceProof.restoreInterruption.afterPublish.existingTargetPreserved ? "verified" : "missing"}`,
+  );
+  console.log(
     `SQLITE_RELIABILITY_WAL_SENTINEL=${report.transactionProof.committedWalSentinel ? "verified" : "missing"}`,
   );
   console.log(`SQLITE_RELIABILITY_HELD_BATCH=${report.transactionProof.heldBatch}`);
