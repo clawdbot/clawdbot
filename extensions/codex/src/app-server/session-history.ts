@@ -30,7 +30,7 @@ type CodexMirroredSessionHistoryTarget = {
 };
 
 function selectPreferredSessionKey(
-  matches: Array<{ entry: SessionEntry; sessionKey: string }>,
+  matches: Array<{ entry: { updatedAt?: number }; sessionKey: string }>,
   sessionId: string,
 ): string | undefined {
   const structural = matches.filter(
@@ -40,7 +40,9 @@ function selectPreferredSessionKey(
   if (candidates.length === 1) {
     return candidates[0]?.sessionKey;
   }
-  const sorted = candidates.toSorted((left, right) => right.entry.updatedAt - left.entry.updatedAt);
+  const sorted = candidates.toSorted(
+    (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
+  );
   return (sorted[0]?.entry.updatedAt ?? 0) > (sorted[1]?.entry.updatedAt ?? 0)
     ? sorted[0]?.sessionKey
     : undefined;
