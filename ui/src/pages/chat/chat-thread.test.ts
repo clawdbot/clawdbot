@@ -145,6 +145,53 @@ describe("assistant commentary grouping", () => {
     resetChatThreadState(paneId);
   });
 
+  it("keeps current live work above a future queued user turn when it becomes stable", () => {
+    const paneId = "clock-skew-future-queue-transition";
+    const activeUser = {
+      role: "user",
+      content: "Active prompt",
+      timestamp: 2_000,
+      __openclaw: { idempotencyKey: "run-active:user" },
+    };
+    const liveTool = {
+      role: "toolResult",
+      toolCallId: "call-active",
+      toolName: "shell",
+      content: "Current tool output",
+      timestamp: 1_000,
+    };
+    const activeSend = {
+      id: "active-send",
+      text: "Active prompt",
+      createdAt: 2_000,
+      sendRunId: "run-active",
+      sendSubmittedAtMs: 10,
+      sendState: "waiting-model" as const,
+    };
+    const futureSend = {
+      id: "future-send",
+      text: "Future prompt",
+      createdAt: 3_000,
+      sendAttempts: 1,
+      sendState: "waiting-reconnect" as const,
+    };
+    const liveGroups = messageGroups({
+      paneId,
+      queue: [activeSend, futureSend],
+      toolMessages: [liveTool],
+    });
+    const stableGroups = messageGroups({
+      paneId,
+      messages: [activeUser, liveTool],
+      queue: [futureSend],
+      toolMessages: [],
+    });
+
+    expect(liveGroups.map((group) => group.role)).toEqual(["user", "tool", "user"]);
+    expect(stableGroups.map((group) => group.role)).toEqual(["user", "tool", "user"]);
+    resetChatThreadState(paneId);
+  });
+
   it("keeps keyed commentary separate from the terminal assistant reply", () => {
     const groups = messageGroups({
       messages: [

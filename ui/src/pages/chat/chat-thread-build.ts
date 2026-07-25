@@ -263,9 +263,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       ),
     };
   }
-  for (const queued of futureQueuedSends) {
-    appendQueuedSend(queued);
-  }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
@@ -358,6 +355,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         : false;
     }) + 1;
   insertChatItemsByTimestamp(items, toolStreamItems, currentTurnStartIndex, toolStreamPredecessors);
+  // Future queued turns are a causal ceiling for current-run activity. Append
+  // them only after live rows so neither clock skew nor materialization can
+  // move the current tool/stream work across the next user prompt.
+  for (const queued of futureQueuedSends) {
+    appendQueuedSend(queued);
+  }
 
   // Working spark contract: whenever the agent works with nothing visibly
   // streaming (pre-first-token, or a queued send in flight), the thread shows
