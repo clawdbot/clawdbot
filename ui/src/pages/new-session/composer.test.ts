@@ -4,11 +4,12 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { renderNewSessionDraftComposer } from "./composer.ts";
+import { NewSessionComposerTextareaController, renderNewSessionDraftComposer } from "./composer.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
+const textareaControllers: NewSessionComposerTextareaController[] = [];
 
 function renderComposer(
   overrides: {
@@ -17,11 +18,19 @@ function renderComposer(
     visibility?: NewSessionVisibility;
     draftAvailable?: boolean;
     onVisibilityChange?: (visibility: NewSessionVisibility) => void;
+    message?: string;
+    onInput?: (message: string) => void;
+    textareaController?: NewSessionComposerTextareaController;
   } = {},
 ) {
   const container = document.createElement("div");
   const attachmentDraft = new NewSessionAttachmentDraft(() => undefined);
   attachmentDrafts.push(attachmentDraft);
+  const textareaController =
+    overrides.textareaController ?? new NewSessionComposerTextareaController();
+  if (!textareaControllers.includes(textareaController)) {
+    textareaControllers.push(textareaController);
+  }
   render(
     renderNewSessionDraftComposer({
       agentId: "main",
@@ -29,14 +38,15 @@ function renderComposer(
       canSubmit: true,
       context: undefined,
       isCatalogTarget: true,
-      message: "",
+      message: overrides.message ?? "",
       visibility: overrides.visibility,
       draftAvailable: overrides.draftAvailable,
       modelControl: new NewSessionModelControl(() => undefined),
       requiresModifier: false,
       submitting: overrides.submitting ?? false,
+      textareaController,
       messageLocked: overrides.messageLocked,
-      onInput: () => undefined,
+      onInput: overrides.onInput ?? (() => undefined),
       onVisibilityChange: overrides.onVisibilityChange,
       onSubmit: () => undefined,
     }),
@@ -46,7 +56,7 @@ function renderComposer(
   if (!composer) {
     throw new Error("Expected new-session composer");
   }
-  return { attachmentDraft, composer };
+  return { attachmentDraft, composer, container, textareaController };
 }
 
 function createDragEvent(type: string, files: File[] = [], types = ["Files"]): Event {
@@ -62,7 +72,101 @@ afterEach(() => {
     attachmentDraft.reset({ release: true });
   }
   attachmentDrafts.length = 0;
+  for (const textareaController of textareaControllers) {
+    textareaController.disconnect();
+  }
+  textareaControllers.length = 0;
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("new-session composer sizing lifecycle", () => {
+  it("keeps one observer across controlled updates and remeasures programmatic drafts", async () => {
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    const resizeObserverConstructed = vi.fn();
+    class TestResizeObserver {
+      constructor() {
+        resizeObserverConstructed();
+      }
+      observe = observe;
+      disconnect = disconnect;
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    const textareaController = new NewSessionComposerTextareaController();
+    const onInput = vi.fn();
+    const first = renderComposer({ textareaController, onInput });
+    document.body.append(first.container);
+    const textarea = first.composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    let scrollHeightReads = 0;
+    Object.defineProperty(textarea, "scrollHeight", {
+      configurable: true,
+      get: () => {
+        scrollHeightReads += 1;
+        return 42;
+      },
+    });
+    await Promise.resolve();
+    const readsAfterAttach = scrollHeightReads;
+
+    textarea.value = "typed";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(onInput).toHaveBeenCalledWith("typed");
+    const readsAfterInput = scrollHeightReads;
+    render(
+      renderNewSessionDraftComposer({
+        agentId: "main",
+        attachmentDraft: first.attachmentDraft,
+        canSubmit: true,
+        context: undefined,
+        isCatalogTarget: true,
+        message: "typed",
+        modelControl: new NewSessionModelControl(() => undefined),
+        requiresModifier: false,
+        submitting: false,
+        textareaController,
+        onInput,
+        onSubmit: () => undefined,
+      }),
+      first.container,
+    );
+    await Promise.resolve();
+
+    expect(first.container.querySelector("textarea")).toBe(textarea);
+    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(scrollHeightReads).toBe(readsAfterInput);
+
+    render(
+      renderNewSessionDraftComposer({
+        agentId: "main",
+        attachmentDraft: first.attachmentDraft,
+        canSubmit: true,
+        context: undefined,
+        isCatalogTarget: true,
+        message: "restored programmatically",
+        modelControl: new NewSessionModelControl(() => undefined),
+        requiresModifier: false,
+        submitting: false,
+        textareaController,
+        onInput,
+        onSubmit: () => undefined,
+      }),
+      first.container,
+    );
+    await Promise.resolve();
+
+    expect(scrollHeightReads).toBeGreaterThan(readsAfterInput);
+    expect(readsAfterAttach).toBeGreaterThan(0);
+    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
+    expect(disconnect).not.toHaveBeenCalled();
+    textareaController.disconnect();
+    expect(disconnect).toHaveBeenCalledOnce();
+    first.container.remove();
+  });
 });
 
 describe("new-session composer attachment drops", () => {
