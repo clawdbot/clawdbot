@@ -1,6 +1,5 @@
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveMatrixRoomKeyBackupReadinessError } from "../backup-health.js";
-import { formatMatrixErrorMessage, isMatrixNotFoundError } from "../errors.js";
+import { formatMatrixErrorMessage } from "../errors.js";
 import { loadMatrixCryptoRuntime } from "./client-base.js";
 import { MatrixClientCore } from "./client-core.js";
 import {
