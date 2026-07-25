@@ -16,7 +16,7 @@ import {
   safeFileURLToPath,
 } from "../infra/local-file-access.js";
 import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
-import { isPathInside } from "../infra/path-guards.js";
+import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -89,64 +89,35 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   return { resolved, relative };
 }
 
-// OS realpath honors symlinks per-component. Node's JS `fs.realpathSync` and
-// `path.resolve` instead collapse `..` lexically BEFORE resolving symlinks, so a
-// `symlink/..` sequence resolves to a different (in-root, harmless) path than the
-// OS produces — which is exactly the boundary bypass `assertRawParentWithinRoot`
-// guards against. The native realpath is therefore mandatory here.
 const realpathNative = promisify(fs.realpath.native);
 
-/**
- * Resolve the deepest existing ancestor of a raw, non-lexically-collapsed path
- * via the OS realpath, re-appending any not-yet-existing trailing segments.
- */
-async function realpathExistingAncestorNative(rawAbsolute: string): Promise<string> {
-  let cursor = rawAbsolute;
-  const missing: string[] = [];
-  for (let guard = 0; guard < 8192; guard += 1) {
+async function resolveRawPathViaExistingAncestor(rawPath: string): Promise<string> {
+  let cursor = rawPath;
+  const missingSuffix: string[] = [];
+  while (true) {
     try {
-      const real = await realpathNative(cursor);
-      return missing.length > 0 ? path.join(real, ...missing.toReversed()) : real;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") {
-        throw err;
+      return path.resolve(await realpathNative(cursor), ...missingSuffix);
+    } catch (error) {
+      if (!isNotFoundPathError(error)) {
+        throw error;
       }
-      const sep = cursor.lastIndexOf(path.sep);
-      if (sep < 0) {
-        return path.resolve(rawAbsolute);
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        throw error;
       }
-      const parent = cursor.slice(0, sep);
-      if (!parent || parent === cursor) {
-        return path.resolve(rawAbsolute);
-      }
-      missing.push(cursor.slice(sep + 1));
+      missingSuffix.unshift(path.basename(cursor));
       cursor = parent;
     }
   }
-  return path.resolve(rawAbsolute);
 }
 
-/**
- * Assert the parent chain of the raw input stays inside the workspace root using
- * the OS realpath (symlink-aware, no lexical `..` pre-collapse). This closes the
- * `symlink/..` bypass that `resolveSandboxPath` (built on `path.resolve`) misses.
- * The final component is intentionally left to `assertNoPathAliasEscape`, which
- * applies the caller's final-symlink/hardlink unlink policy.
- */
 async function assertRawParentWithinRoot(params: {
   filePath: string;
   cwd: string;
   root: string;
 }): Promise<void> {
-  // POSIX-only by design: the symlink-then-`..` escape does not exist on Windows.
-  // Win32 path normalization (GetFullPathName) collapses `..` lexically BEFORE
-  // traversing a reparse point, so `<symlink>\..\x` resolves to `<symlink-parent>\x`
-  // (in-root), not the link target's parent. Verified on Windows 10/11 (Node 22) with
-  // both directory symlinks and junctions: the escape read returns ENOENT with no leak,
-  // whereas the identical POSIX setup reads the out-of-root file. Running the
-  // native-realpath check on Win32 would add over-rejection risk (drive-letter casing,
-  // `\\?\` prefixes, 8.3 short names) for no security benefit.
+  // Win32 resolves reparse-point/.. paths lexically, so it has no equivalent escape.
+  // Avoid adding another realpath to this hot path on Windows, where it is expensive.
   if (process.platform === "win32") {
     return;
   }
@@ -154,26 +125,18 @@ async function assertRawParentWithinRoot(params: {
   if (isWindowsDrivePath(expanded)) {
     return;
   }
+  // Do not use path.resolve here: it would erase the symlink-sensitive `..` before
+  // native realpath can traverse the raw parent chain. The final component stays
+  // unresolved so assertNoPathAliasEscape retains final-link policy ownership.
   const rawAbsolute = path.isAbsolute(expanded) ? expanded : `${params.cwd}${path.sep}${expanded}`;
-  const sep = rawAbsolute.lastIndexOf(path.sep);
-  const basename = sep >= 0 ? rawAbsolute.slice(sep + 1) : rawAbsolute;
-  const rawParent = sep > 0 ? rawAbsolute.slice(0, sep) : path.sep;
-  let rootCanonical: string;
-  try {
-    rootCanonical = await realpathExistingAncestorNative(path.resolve(params.root));
-  } catch {
-    // If the root itself cannot be canonicalized, fall back to the lexical guards.
-    return;
-  }
-  // Resolve the parent chain (symlinks honored) then re-attach the final
-  // component WITHOUT resolving it — a final symlink is the caller's concern via
-  // assertNoPathAliasEscape and its unlink policy. "."/".." apply lexically to
-  // the already-canonical parent, which is correct once no symlinks remain. This
-  // keeps the workspace root itself (target === root, whose real parent is
-  // legitimately outside) accepted.
-  const parentCanonical = await realpathExistingAncestorNative(rawParent);
-  const targetCanonical =
-    !basename || basename === "." ? parentCanonical : path.join(parentCanonical, basename);
+  const hasTrailingSeparator = rawAbsolute.endsWith(path.sep);
+  const rawParent = hasTrailingSeparator ? rawAbsolute : path.dirname(rawAbsolute);
+  const finalSegment = hasTrailingSeparator ? "." : path.basename(rawAbsolute);
+  const [rootCanonical, parentCanonical] = await Promise.all([
+    resolveRawPathViaExistingAncestor(path.resolve(params.root)),
+    resolveRawPathViaExistingAncestor(rawParent),
+  ]);
+  const targetCanonical = path.resolve(parentCanonical, finalSegment);
   if (targetCanonical !== rootCanonical && !isPathInside(rootCanonical, targetCanonical)) {
     throw new Error(
       `Path escapes sandbox root (${shortenHomePath(rootCanonical)}): ${params.filePath}`,
@@ -199,10 +162,8 @@ export async function assertSandboxPath(params: {
     boundaryLabel: "sandbox root",
     policy,
   });
-  // Runs after the alias-escape check so its (more specific) messages win for the
-  // cases it already catches; this closes the residual symlink-then-`..` gap that
-  // the lexical `resolveSandboxPath` collapses away and the alias check therefore
-  // never sees.
+  // The alias guard owns its specific symlink/hardlink errors; this closes the raw
+  // symlink-then-`..` gap that lexical normalization hides from that guard.
   await assertRawParentWithinRoot(params);
   return resolved;
 }
