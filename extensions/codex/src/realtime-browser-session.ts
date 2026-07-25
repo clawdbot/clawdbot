@@ -42,7 +42,7 @@ export type CodexRealtimeBrowserSessionFallback = {
   createBrowserSession: (
     request: RealtimeVoiceBrowserSessionCreateRequest,
   ) => Promise<RealtimeVoiceBrowserSession>;
-  cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => void;
+  cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
 };
 
 type ActiveSession = {

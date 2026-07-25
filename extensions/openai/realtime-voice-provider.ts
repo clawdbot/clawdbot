@@ -1506,7 +1506,7 @@ type CodexRealtimeGlobalState = {
     createBrowserSession: (
       request: RealtimeVoiceBrowserSessionCreateRequest,
     ) => Promise<RealtimeVoiceBrowserSession>;
-    cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => void;
+    cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
   };
 };
 
@@ -1631,7 +1631,7 @@ async function cancelOpenAIRealtimeBrowserSession(
 ): Promise<void> {
   const fallback = codexFallbackBySession.get(session);
   codexFallbackBySession.delete(session);
-  await fallback?.cancelBrowserSession?.(session);
+  await fallback?.cancelBrowserSession(session);
 }
 
 export function buildOpenAIRealtimeVoiceProvider(options?: {

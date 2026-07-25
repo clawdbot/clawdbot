@@ -298,7 +298,7 @@ describe("Codex OAuth realtime browser session", () => {
       throw new Error("Expected Codex browser sessions to use WebRTC");
     }
     expect(second.clientSecret).not.toBe(first.clientSecret);
-    await realtime.broker.cancelBrowserSession?.(cancelled);
+    await realtime.broker.cancelBrowserSession(cancelled);
 
     try {
       const accepted = createResponseHarness();
