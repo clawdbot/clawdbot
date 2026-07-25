@@ -46,7 +46,7 @@ export type CurrentRuntimeSecretsPreparation = {
   expectedRevision: number;
 };
 
-export type GatewayHotReloadState = {
+type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof import("./hooks.js").resolveHooksConfig>;
   hookClientIpConfig: HookClientIpConfig;
   heartbeatRunner: HeartbeatRunner;
@@ -54,7 +54,7 @@ export type GatewayHotReloadState = {
   channelHealthMonitor: ChannelHealthMonitor | null;
 };
 
-export type GatewayReloadLog = {
+type GatewayReloadLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
   error?: (msg: string) => void;
