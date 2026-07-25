@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/claw-spec",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "croner": "10.0.1",
+    "zod": "4.4.3"
+  }
+}

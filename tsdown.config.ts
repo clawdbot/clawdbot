@@ -228,6 +228,7 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
     id === "@openclaw/fs-safe" ||
     id.startsWith("@openclaw/fs-safe/") ||
+    id === "@openclaw/claw-spec" ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||

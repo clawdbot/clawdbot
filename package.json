@@ -1418,6 +1418,8 @@
     "build:plugin-sdk:dts": "node scripts/run-tsgo.mjs -p tsconfig.plugin-sdk.dts.json --declaration true",
     "build:plugin-sdk:strict-smoke": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/run-with-env.mjs OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
     "build:strict-smoke": "pnpm plugins:assets:build && node scripts/tsdown-build.mjs && node scripts/check-cli-bootstrap-imports.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node scripts/runtime-postbuild-stamp.mjs && node scripts/run-with-env.mjs OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
+    "claws:standalone": "node --import tsx packages/claw-cli/src/cli.ts",
+    "claws:standalone:build": "node node_modules/tsdown/dist/run.mjs --config packages/claw-cli/tsdown.config.ts",
     "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
     "canvas:a2ui:native:check": "node scripts/sync-native-a2ui.mjs --check",
     "canvas:a2ui:native:sync": "node scripts/sync-native-a2ui.mjs --write",

@@ -2134,6 +2134,27 @@ importers:
         specifier: 1.3.6
         version: 1.3.6
 
+  packages/claw-cli:
+    devDependencies:
+      '@openclaw/claw-spec':
+        specifier: workspace:*
+        version: link:../claw-spec
+      '@openclaw/fs-safe':
+        specifier: 0.4.7
+        version: 0.4.7
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
+
+  packages/claw-spec:
+    dependencies:
+      croner:
+        specifier: 10.0.1
+        version: 10.0.1
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
   packages/gateway-client:
     dependencies:
       '@openclaw/gateway-protocol':

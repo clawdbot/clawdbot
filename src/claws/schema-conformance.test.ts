@@ -69,6 +69,20 @@ describe("portable Claw schema conformance", () => {
     expect(paddedPath.ok).toBe(false);
   });
 
+  it("requires forward slashes for portable package paths", () => {
+    const result = parseClawManifest({
+      ...baseManifest,
+      workspace: {
+        bootstrapFiles: { "SOUL.md": { source: "workspace\\SOUL.md" } },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ path: "$.workspace.bootstrapFiles.SOUL.md.source" }),
+    );
+  });
+
   it("requires pinned package-manager MCP commands and safe environment keys", () => {
     const unpinned = parseClawManifest({
       ...baseManifest,
@@ -201,6 +215,12 @@ describe("portable Claw schema conformance", () => {
       },
     });
     expect(managed.ok).toBe(true);
+
+    const dataUrl = parseClawManifest({
+      ...baseManifest,
+      agent: { ...baseManifest.agent, identity: { avatar: "DATA:image/png;base64,AA==" } },
+    });
+    expect(dataUrl.ok).toBe(true);
   });
 
   it("requires portable cron timezone, session, field count, and delivery", () => {
