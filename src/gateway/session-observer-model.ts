@@ -23,7 +23,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import type {
+  SessionEventSubscriberRegistry,
+  SessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
 
 const HEADLINE_MAX_CHARS = 120;
 const ASSESSMENT_MAX_CHARS = 320;
@@ -35,14 +38,14 @@ const MAX_DISABLED_RUNS = 512;
 export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
 type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
 type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
-export type PreparedModel = Awaited<ReturnType<PrepareModel>>;
+type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
 export type SessionObserverState = SessionActivityNoteState & {
   sessionKey: string;
   sessionId?: string;
   runId: string;
   agentId: string;
-  utilityModelRef: string;
+  utilityModelRef?: string;
   startedAt: number;
   lastActivityAt: number;
   lastRunAt: number;
@@ -51,6 +54,8 @@ export type SessionObserverState = SessionActivityNoteState & {
   digestCount: number;
   consecutiveFailures: number;
   lastDigestNoteSequence: number;
+  lastPreambleHeadline?: string;
+  lastPublishedPreambleHeadline?: string;
   previousDigest?: SessionObserverDigest;
   preparedPromise?: Promise<PreparedModel>;
   activeController?: AbortController;
@@ -72,6 +77,7 @@ export type DormantSessionObserverRun = Pick<
   | "revision"
   | "digestCount"
   | "consecutiveFailures"
+  | "lastPreambleHeadline"
   | "planProgress"
   | "previousDigest"
 >;
@@ -161,12 +167,15 @@ export function createDormantSessionObserverRun(
     sessionId: state.sessionId,
     runId: state.runId,
     agentId: state.agentId,
-    utilityModelRef: state.utilityModelRef,
+    ...(state.utilityModelRef ? { utilityModelRef: state.utilityModelRef } : {}),
     startedAt: state.startedAt,
     lastPersistedAt: state.lastPersistedAt,
     revision: state.revision,
     digestCount: state.digestCount,
     consecutiveFailures: state.consecutiveFailures,
+    ...(state.lastPublishedPreambleHeadline
+      ? { lastPreambleHeadline: state.lastPublishedPreambleHeadline }
+      : {}),
     planProgress: state.planProgress,
     previousDigest: state.previousDigest,
   };
@@ -175,6 +184,7 @@ export function createDormantSessionObserverRun(
 export type SessionObserverDeps = {
   getConfig: () => OpenClawConfig;
   subscribers: SessionMessageSubscriberRegistry;
+  sessionEventSubscribers?: SessionEventSubscriberRegistry;
   broadcastToConnIds: (
     event: string,
     payload: unknown,

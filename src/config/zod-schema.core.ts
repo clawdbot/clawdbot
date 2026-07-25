@@ -211,6 +211,7 @@ const ModelCompatSchema = z
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
+    supportsJsonSchemaResponseFormat: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
     strictMessageKeys: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
@@ -554,11 +555,39 @@ const ModelPricingConfigSchema = z
   .strict()
   .optional();
 
+const ModelCatalogRefreshConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    url: z
+      .string()
+      .refine(
+        (value) => {
+          try {
+            const parsed = new URL(value);
+            return (
+              parsed.protocol === "https:" ||
+              (parsed.protocol === "http:" &&
+                ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))
+            );
+          } catch {
+            return false;
+          }
+        },
+        {
+          message: "models.catalogRefresh.url must use https, or http on localhost",
+        },
+      )
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
     pricing: ModelPricingConfigSchema,
+    catalogRefresh: ModelCatalogRefreshConfigSchema,
   })
   .strict()
   .optional();

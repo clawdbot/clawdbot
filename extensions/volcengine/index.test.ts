@@ -38,7 +38,10 @@ describe("volcengine plugin", () => {
     ]);
     expect(DOUBAO_CODING_MODEL_CATALOG.map((entry) => entry.id)).toEqual([
       "ark-code-latest",
-      "doubao-seed-code",
+      "doubao-seed-2.1-turbo",
+      "glm-5.2",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
     ]);
   });
 
@@ -77,9 +80,9 @@ describe("volcengine plugin", () => {
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "volcengine-plan",
-      modelId: "doubao-seed-code",
+      modelId: "doubao-seed-2.1-turbo",
       model: {
-        id: "doubao-seed-code",
+        id: "doubao-seed-2.1-turbo",
         provider: "volcengine-plan",
         api: "openai-completions",
         compat: { unsupportedToolSchemaKeywords: ["not"] },

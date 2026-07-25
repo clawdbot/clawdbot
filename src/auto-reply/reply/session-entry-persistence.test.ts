@@ -7,6 +7,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionKey = "agent:main:main";
 
 describe("persistReplySessionEntry", () => {
   it("does not restore policy fields revoked during reply processing", async () => {
@@ -27,11 +28,11 @@ describe("persistReplySessionEntry", () => {
         thinkingLevel: "low",
         sendPolicy: "deny",
       };
-      await replaceSessionEntry({ sessionKey: "main", storePath }, currentEntry);
+      await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
 
       const result = await persistReplySessionEntry({
         storePath,
-        sessionKey: "main",
+        sessionKey,
         initialEntry,
         entry: {
           ...initialEntry,
@@ -52,9 +53,9 @@ describe("persistReplySessionEntry", () => {
       });
       expect(result.entry.elevatedLevel).toBeUndefined();
       expect(result.entry.inheritedToolAllow).toBeUndefined();
-      expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
-      ).toEqual(result.entry);
+      expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+        result.entry,
+      );
     } finally {
       clearSessionStoreCacheForTest();
     }
@@ -75,23 +76,23 @@ describe("persistReplySessionEntry", () => {
         thinkingLevel: "medium",
         delivery: { kind: "none" },
       };
-      await replaceSessionEntry({ sessionKey: "main", storePath }, currentEntry);
+      await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
 
       const result = await persistReplySessionEntry({
         storePath,
-        sessionKey: "main",
+        sessionKey,
         initialEntry,
         entry: { ...initialEntry, thinkingLevel: "high", updatedAt: 250 },
       });
 
       expect(result).toEqual({
         status: "lifecycle-invalidated",
-        error: 'Session "main" changed while starting work. Retry.',
+        error: `Session "${sessionKey}" changed while starting work. Retry.`,
         entry: currentEntry,
       });
-      expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
-      ).toEqual(currentEntry);
+      expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+        currentEntry,
+      );
     } finally {
       clearSessionStoreCacheForTest();
     }
@@ -107,17 +108,17 @@ describe("persistReplySessionEntry", () => {
       };
       const result = await persistReplySessionEntry({
         storePath,
-        sessionKey: "main",
+        sessionKey,
         initialEntry,
         entry: { ...initialEntry, updatedAt: 250 },
       });
 
       expect(result).toEqual({
         status: "lifecycle-invalidated",
-        error: 'Session "main" was deleted while starting work. Retry.',
+        error: `Session "${sessionKey}" was deleted while starting work. Retry.`,
       });
       expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
+        loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" }),
       ).toBeUndefined();
     } finally {
       clearSessionStoreCacheForTest();
@@ -139,11 +140,11 @@ describe("persistReplySessionEntry", () => {
         archivedAt: 300,
         delivery: { kind: "none" },
       };
-      await replaceSessionEntry({ sessionKey: "main", storePath }, archivedEntry);
+      await replaceSessionEntry({ sessionKey, storePath }, archivedEntry);
 
       const result = await persistReplySessionEntry({
         storePath,
-        sessionKey: "main",
+        sessionKey,
         initialEntry,
         entry: { ...initialEntry, updatedAt: 250 },
         touchedFields: ["modelOverride"],
@@ -151,12 +152,12 @@ describe("persistReplySessionEntry", () => {
 
       expect(result).toEqual({
         status: "lifecycle-invalidated",
-        error: 'Session "main" is archived. Restore it before starting new work.',
+        error: `Session "${sessionKey}" is archived. Restore it before starting new work.`,
         entry: archivedEntry,
       });
-      expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
-      ).toEqual(archivedEntry);
+      expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+        archivedEntry,
+      );
     } finally {
       clearSessionStoreCacheForTest();
     }

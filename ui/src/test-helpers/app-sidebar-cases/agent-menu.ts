@@ -84,6 +84,33 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 
+  it("drops the menu below the agent card instead of covering it", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main");
+    if (!card) {
+      throw new Error("Expected the sidebar agent card");
+    }
+    card.getBoundingClientRect = () => ({ bottom: 88, left: 12, right: 252, top: 40 }) as DOMRect;
+    card.click();
+    await sidebar.updateComplete;
+
+    const menus = (sidebar as unknown as { sidebarMenus: { agentMenuPosition: unknown } })
+      .sidebarMenus;
+    expect(menus.agentMenuPosition).toEqual({ x: 12, top: 92 });
+    const menu = sidebar.querySelector(".sidebar-agent-menu");
+    expect(menu?.getAttribute("placement")).toBe("bottom-start");
+    expect(menu?.querySelector('[slot="trigger"]')?.getAttribute("style")).toContain("top: 92px");
+  });
+
   it("collapses a single-agent roster to the three agent actions", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(

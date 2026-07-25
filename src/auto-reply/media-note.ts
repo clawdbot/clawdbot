@@ -1,7 +1,7 @@
 /** Builds compact prompt notes for inbound media attachments. */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveMediaFacts, type MediaFact } from "../media/media-facts.js";
+import { normalizeMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { getMediaDir } from "../media/store.js";
 import type { RuntimeMsgContext as MsgContext } from "./templating.js";
 
@@ -146,7 +146,7 @@ type InboundMediaNoteProjection = {
 
 /** Formats prompt-visible attachment text and retains facts that still need native hydration. */
 export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNoteProjection {
-  const facts = resolveMediaFacts(ctx);
+  const facts = normalizeMediaFacts(ctx.media);
   const entries = facts.flatMap((fact, index) => {
     const mediaPath = fact.path?.trim() ?? "";
     return mediaPath || fact.url?.trim()

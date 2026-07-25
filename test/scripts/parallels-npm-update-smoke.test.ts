@@ -116,9 +116,12 @@ describe("parallels npm update smoke", () => {
         "/tmp/openclaw-candidate.tgz",
         "--dependency-tarball",
         "/tmp/openclaw-ai-candidate.tgz",
+        "--registry-package-tarball",
+        "/tmp/openclaw-codex-candidate.tgz",
       ]),
     ).toMatchObject({
       dependencyTarballs: ["/tmp/openclaw-ai-candidate.tgz"],
+      registryPackageTarballs: ["/tmp/openclaw-codex-candidate.tgz"],
       targetTarball: "/tmp/openclaw-candidate.tgz",
       updateTarget: "",
       freshTargetSpec: undefined,
@@ -129,6 +132,9 @@ describe("parallels npm update smoke", () => {
     expect(() => parseArgs(["--dependency-tarball", "/tmp/openclaw-ai-candidate.tgz"])).toThrow(
       "--dependency-tarball requires --target-tarball",
     );
+    expect(() =>
+      parseArgs(["--registry-package-tarball", "/tmp/openclaw-codex-candidate.tgz"]),
+    ).toThrow("--registry-package-tarball requires --target-tarball");
   });
 
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
@@ -158,6 +164,7 @@ describe("parallels npm update smoke", () => {
       const smoke = new FailingNpmUpdateSmoke({
         ...TEST_AUTH,
         dependencyTarballs: [],
+        registryPackageTarballs: [],
         json: false,
         packageSpec: "openclaw@latest",
         platforms: new Set<Platform>(["linux"]),
@@ -208,6 +215,7 @@ exit 1
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
           dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -253,12 +261,17 @@ exit 1
 
     expect(script).toContain("--target-tarball <path>");
     expect(script).toContain("--dependency-tarball <path>");
+    expect(script).toContain("--registry-package-tarball <path>");
     expect(script).toContain('label: "prepared candidate tgz"');
     expect(script).toContain("await copyFile(this.targetTarballPath, hostedTarballPath)");
     expect(script).toContain("startNpmRegistryServer");
+    expect(script).toContain("...this.targetRegistryPackages");
     expect(script).toContain("this.updateTargetEffective = this.targetTarballVersion");
-    expect(script).toContain("this.freshTargetSpec = this.updateTargetTarball");
+    expect(script).toContain("this.freshTargetSpec = `openclaw@${this.targetTarballVersion}`");
+    expect(script).toContain("NPM_CONFIG_REGISTRY: this.targetRegistryHostUrl");
+    expect(script).toContain("npm_config_registry: this.targetRegistryHostUrl");
     expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
+    expect(script).toContain('readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700)');
   });
 
   it("routes update installs through the prepared package registry", () => {
@@ -273,6 +286,19 @@ exit 1
     expect(macosUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
     expect(linuxUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
     expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
+  });
+
+  it("relaunches POSIX gateways after a transient post-update startup failure", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    };
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script).toContain("attempt=$((attempt + 1))");
+      expect(script).toContain('if [ "$attempt" -eq 4 ]; then\n      start_openclaw_gateway');
+    }
   });
 
   it("does not recreate retired workspace setup state in release smoke scripts", () => {
@@ -565,6 +591,7 @@ exit 1
         new NpmUpdateSmoke({
           ...TEST_AUTH,
           dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -606,6 +633,7 @@ exit 1
           new NpmUpdateSmoke({
             ...TEST_AUTH,
             dependencyTarballs: [],
+            registryPackageTarballs: [],
             json: false,
             packageSpec: "openclaw@latest",
             platforms: new Set<Platform>(["linux"]),
@@ -839,6 +867,7 @@ exit 7
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
           dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),
@@ -881,6 +910,7 @@ exit 7
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
           dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),

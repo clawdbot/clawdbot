@@ -266,11 +266,12 @@ unconfigured, or when deferred loading is enabled. See
 
 Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 
-| Import                              | Use for                                                                                                                                                                            |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openclaw/plugin-sdk/setup-runtime` | Runtime-safe setup helpers: `createSetupTranslator`, import-safe setup patch adapters, lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
-| `openclaw/plugin-sdk/channel-setup` | Optional-install setup surfaces                                                                                                                                                    |
-| `openclaw/plugin-sdk/setup-tools`   | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
+| Import                                  | Use for                                                                                                                                                                            |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw/plugin-sdk/setup-runtime`     | Runtime-safe setup helpers: `createSetupTranslator`, import-safe setup patch adapters, lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
+| `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
+| `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
+| `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
 
 Keep heavy SDKs, CLI registration, and long-lived runtime services in the
 full entry.

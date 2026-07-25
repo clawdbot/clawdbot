@@ -37,6 +37,7 @@ import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
   type ChannelKind,
+  isNoopGatewayReloadPlan,
   resolveConfigReloadMetadata,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
@@ -140,19 +141,19 @@ describe("diffConfigPaths", () => {
     expect(diffConfigPaths(prev, next)).toContain("memory.qmd.paths");
   });
 
-  it("collapses changed agents.list heartbeat entries to agents.list", () => {
+  it("collapses changed agent heartbeat entries to agents.entries", () => {
     const prev = {
       agents: {
-        list: [{ id: "ops", heartbeat: { every: "5m", lightContext: false } }],
+        entries: { ops: { heartbeat: { every: "5m", lightContext: false } } },
       },
     };
     const next = {
       agents: {
-        list: [{ id: "ops", heartbeat: { every: "5m", lightContext: true } }],
+        entries: { ops: { heartbeat: { every: "5m", lightContext: true } } },
       },
     };
 
-    expect(diffConfigPaths(prev, next)).toEqual(["agents.list"]);
+    expect(diffConfigPaths(prev, next)).toEqual(["agents.entries.ops.heartbeat.lightContext"]);
   });
 
   it("can emit duplicate path strings for install timestamp and dotted install id add", () => {
@@ -349,7 +350,7 @@ describe("buildGatewayReloadPlan", () => {
       expected: { restartHeartbeat: true },
     },
     {
-      path: "agents.list",
+      path: "agents.entries",
       expected: { restartHeartbeat: true },
     },
     {
@@ -377,6 +378,7 @@ describe("buildGatewayReloadPlan", () => {
       expect(plan.restartReasons).toStrictEqual([]);
       expect(plan.hotReasons).toStrictEqual([]);
       expect(plan.noopPaths).toEqual([path]);
+      expect(isNoopGatewayReloadPlan(plan)).toBe(true);
     },
   );
 
@@ -481,6 +483,7 @@ describe("buildGatewayReloadPlan", () => {
 
     expect(plan.restartChannels).toEqual(expectedChannels);
     expect(plan.restartChannelAccounts).toEqual(expectedAccounts);
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
 
   it("restarts every channel whose config prefix matches", () => {

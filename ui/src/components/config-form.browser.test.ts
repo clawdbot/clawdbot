@@ -1,7 +1,15 @@
 // Control UI tests cover config form behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { analyzeConfigSchema, renderConfigForm } from "./config-form.ts";
+import { analyzeConfigSchema, renderConfigForm as renderConfigFormBase } from "./config-form.ts";
+
+function renderConfigForm(
+  props: Omit<Parameters<typeof renderConfigFormBase>[0], "onShowAdvanced"> & {
+    onShowAdvanced?: () => void;
+  },
+) {
+  return renderConfigFormBase({ showAdvanced: true, onShowAdvanced: () => {}, ...props });
+}
 
 const rootSchema = {
   type: "object",
@@ -440,10 +448,11 @@ describe("config form renderer", () => {
       renderConfigForm({
         schema: analysis.schema,
         uiHints: {
-          "gateway.auth.token": { tags: ["security", "secret"] },
+          "gateway.auth.token": { tags: ["security", "advanced", "secret"] },
         },
         unsupportedPaths: analysis.unsupportedPaths,
         value: {},
+        showAdvanced: true,
         onPatch,
       }),
       container,
@@ -458,11 +467,11 @@ describe("config form renderer", () => {
       renderConfigForm({
         schema: analysis.schema,
         uiHints: {
-          "gateway.auth.token": { tags: ["security"] },
+          "gateway.auth.token": { tags: ["security", "advanced"] },
         },
         unsupportedPaths: analysis.unsupportedPaths,
         value: {},
-        searchQuery: "tag:security",
+        searchQuery: "tag:advanced",
         onPatch,
       }),
       container,

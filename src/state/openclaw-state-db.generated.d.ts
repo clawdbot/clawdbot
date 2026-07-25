@@ -873,6 +873,17 @@ export interface ModelCapabilityCache {
   updated_at_ms: number;
 }
 
+export interface ModelCatalogRemote {
+  bundle_json: string;
+  checked_at: number;
+  etag: string | null;
+  generated_at: number;
+  id: Generated<number>;
+  last_modified: string | null;
+  min_version: string | null;
+  source_url: string;
+}
+
 export interface NativeHookRelayBridges {
   expires_at_ms: number;
   hostname: string;
@@ -1538,6 +1549,7 @@ export interface DB {
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;
+  model_catalog_remote: ModelCatalogRemote;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;

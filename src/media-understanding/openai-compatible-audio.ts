@@ -68,6 +68,7 @@ export async function transcribeOpenAiCompatibleAudio(
     headers,
     body: form,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     pinDns: false,
     allowPrivateNetwork,

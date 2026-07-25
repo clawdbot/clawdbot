@@ -10,6 +10,7 @@ import {
 } from "../config/sessions/ambient-transcript-watermark.js";
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,

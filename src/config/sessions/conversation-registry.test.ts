@@ -234,6 +234,7 @@ describe("conversation registry", () => {
     expect(linked?.sessionId).toBe("deleted-session");
 
     await deleteSessionEntryLifecycle({
+      agentId: "main",
       storePath,
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       archiveTranscript: false,

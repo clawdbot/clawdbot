@@ -31,6 +31,7 @@ import {
   type ChannelInboundMediaInput,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
@@ -576,72 +577,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
-  // Fan one settlement out to every constituent claim of a (possibly merged)
-  // flush, and track whether the reply lane took ownership. A merged turn owns
-  // ALL constituent queue claims: adoption must complete each of them or the
-  // unmerged events would stall and redeliver duplicates.
-  function buildFlushIngressLifecycle(entries: SignalInboundEntry[]): {
-    lifecycle: SignalIngressLifecycle | undefined;
-    settle: () => Promise<void>;
-  } {
-    const lifecycles = entries
-      .map((entry) => entry.turnAdoptionLifecycle)
-      .filter((lifecycle) => lifecycle !== undefined);
-    const [firstLifecycle] = lifecycles;
-    if (!firstLifecycle) {
-      return { lifecycle: undefined, settle: async () => {} };
-    }
-    let handedOff = false;
-    const adoptAll = async () => {
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAdopted();
-      }
-    };
-    return {
-      lifecycle: {
-        abortSignal:
-          lifecycles.length === 1
-            ? firstLifecycle.abortSignal
-            : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-        onAdopted: async () => {
-          handedOff = true;
-          await adoptAll();
-        },
-        onDeferred: () => {
-          handedOff = true;
-          for (const lifecycle of lifecycles) {
-            lifecycle.onDeferred();
-          }
-        },
-        onAdoptionFinalizing: () => {
-          for (const lifecycle of lifecycles) {
-            lifecycle.onAdoptionFinalizing();
-          }
-        },
-        onAbandoned: async () => {
-          handedOff = true;
-          await Promise.all(
-            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-          );
-        },
-      },
-      // Terminal no-dispatch (gated, whitespace-only, deliberate skip) must
-      // still tombstone the claims — mirrors the drain's skipped→completed
-      // mapping; leaving them deferred would watchdog-dead-letter live turns.
-      settle: async () => {
-        if (!handedOff) {
-          await adoptAll();
-        }
-      },
-    };
-  }
-
   async function flushSignalInboundEntries(entries: SignalInboundEntry[]): Promise<void> {
     const last = entries.at(-1);
     if (!last) {
       return;
     }
-    const { lifecycle, settle } = buildFlushIngressLifecycle(entries);
+    const { lifecycle, settle } = fanInChannelIngressLifecycles(
+      entries.map((entry) => entry.turnAdoptionLifecycle),
+    );
     if (entries.length === 1) {
       await handleSignalInboundMessage(
         lifecycle ? { ...last, turnAdoptionLifecycle: lifecycle } : last,

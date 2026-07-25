@@ -1,29 +1,7 @@
 // Config-tranche migrations move legacy aliases before canonical validation.
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/account-id.js";
-
-function deletePath(owner: unknown, path: readonly string[], index = 0): boolean {
-  const record = getRecord(owner);
-  const key = path[index];
-  if (!record || !key) {
-    return false;
-  }
-  if (index === path.length - 1) {
-    if (!Object.hasOwn(record, key)) {
-      return false;
-    }
-    delete record[key];
-    return true;
-  }
-  const child = getRecord(record[key]);
-  if (!child || !deletePath(child, path, index + 1)) {
-    return false;
-  }
-  if (Object.keys(child).length === 0) {
-    delete record[key];
-  }
-  return true;
-}
+import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 function visitAgentEntries(
   raw: Record<string, unknown>,
@@ -81,7 +59,8 @@ function stripRetiredAgentConfig(raw: Record<string, unknown>, changes: string[]
   let removedContextLimits = false;
   const stripContextLimits = (owner: Record<string, unknown>) => {
     for (const key of ["memoryGetDefaultLines", "toolResultMaxChars"]) {
-      removedContextLimits = deletePath(owner, ["contextLimits", key]) || removedContextLimits;
+      removedContextLimits =
+        deleteRetiredPath(owner, ["contextLimits", key]) || removedContextLimits;
     }
   };
   if (defaults) {
@@ -203,7 +182,7 @@ function migrateWhatsAppDebounce(raw: Record<string, unknown>, changes: string[]
 
 export function migrateConfigTranche(raw: Record<string, unknown>, changes: string[]): void {
   stripRetiredPresentationPrefs(raw, changes);
-  if (deletePath(raw, ["skills", "load", "watchDebounceMs"])) {
+  if (deleteRetiredPath(raw, ["skills", "load", "watchDebounceMs"])) {
     changes.push("Removed skills.load.watchDebounceMs; the watcher now uses the 250 ms default.");
   }
   stripRetiredAgentConfig(raw, changes);

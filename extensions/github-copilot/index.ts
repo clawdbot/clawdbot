@@ -42,7 +42,7 @@ const COPILOT_ENV_VARS: [string, string, string] = [
   "GH_TOKEN",
   "GITHUB_TOKEN",
 ];
-const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-4.7";
+const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-5";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
 
 type GithubCopilotPluginConfig = {

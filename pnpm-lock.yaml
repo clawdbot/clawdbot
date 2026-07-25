@@ -85,8 +85,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.4.4
-        version: 0.4.4
+        specifier: 0.4.7
+        version: 0.4.7
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.6.0)
@@ -1423,6 +1423,13 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/onepassword:
+    dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.4.7
+        version: 0.4.7
+      execa:
+        specifier: 10.0.0
+        version: 10.0.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2204,6 +2211,9 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/net-policy:
     dependencies:
@@ -3821,8 +3831,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@openclaw/fs-safe@0.4.4':
-    resolution: {integrity: sha512-QklFGshaQDXl7RFyxPeSN/1moYq/X+SJcmX/nY3oXJO/tzVasL9i1g3m4nJqIfd6qUTJQjeu+41aIqw8+SbUww==}
+  '@openclaw/fs-safe@0.4.7':
+    resolution: {integrity: sha512-UO+FCB8vF+VJngOzZuVTdkOapX/gPml0HFEjRj2qIeEmBlCkGLHjRJ4CZWFziRtcq3g4YioWra/6J3iwEH1JaA==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.2':
@@ -10419,7 +10429,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.4.4':
+  '@openclaw/fs-safe@0.4.7':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.20

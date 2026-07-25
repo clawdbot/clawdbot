@@ -247,10 +247,10 @@ function resolveSshTargetHint(): string {
 export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
   runtime: RuntimeEnv,
-  options?: {
+  options: {
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
-    agentId?: string;
+    agentId: string;
   },
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
@@ -259,7 +259,7 @@ export async function ensureWorkspaceAndSessions(
     skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };

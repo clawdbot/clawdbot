@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { CronJob } from "../../api/types.ts";
+import type { CronJob, CronRunsResult } from "../../api/types.ts";
 import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import {
   addCronJob,
@@ -19,6 +19,7 @@ import {
   startCronEdit,
   startCronClone,
   updateCronJobsFilter,
+  updateCronRunsFilter,
   validateCronForm,
   type CronState,
 } from "../../lib/cron/index.ts";
@@ -117,6 +118,16 @@ type EmptyCronListResponse = {
   hasMore: boolean;
   nextOffset: null;
 };
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 describe("cron controller", () => {
   it("collects configured model suggestions from defaults and per-agent entries", () => {
@@ -2156,6 +2167,206 @@ describe("cron controller", () => {
     expect(state.cronRuns).toHaveLength(2);
     expect(state.cronRuns[0]?.summary).toBe("newest");
     expect(state.cronRuns[1]?.summary).toBe("older");
+  });
+
+  it("keeps the newest filtered run history when an older overview request finishes last", async () => {
+    const olderOverview = createDeferred<CronRunsResult>();
+    const currentEntry = { ts: 2, jobId: "fresh-job", status: "ok" as const, summary: "fresh" };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderOverview.promise)
+      .mockResolvedValueOnce({
+        entries: [currentEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({ client: { request } as unknown as CronState["client"] });
+
+    const olderLoad = loadCronRuns(state, null);
+    updateCronRunsFilter(state, { cronRunsQuery: "fresh" });
+    await expect(loadCronRuns(state, null)).resolves.toBe("ok");
+    expect(state.cronRuns).toEqual([currentEntry]);
+
+    olderOverview.resolve({
+      entries: [{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale" }],
+      total: 8,
+      hasMore: true,
+      nextOffset: 1,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRuns).toEqual([currentEntry]);
+    expect(state.cronRunsTotal).toBe(1);
+    expect(state.cronRunsHasMore).toBe(false);
+    expect(state.cronRunsNextOffset).toBeNull();
+  });
+
+  it("does not let a deferred overview replace a newly selected job's run history", async () => {
+    const olderOverview = createDeferred<CronRunsResult>();
+    const selectedEntry = {
+      ts: 2,
+      jobId: "selected-job",
+      status: "ok" as const,
+      summary: "selected history",
+    };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderOverview.promise)
+      .mockResolvedValueOnce({
+        entries: [selectedEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({ client: { request } as unknown as CronState["client"] });
+
+    const olderLoad = loadCronRuns(state, null);
+    updateCronRunsFilter(state, { cronRunsScope: "job" });
+    state.cronRunsJobId = "selected-job";
+    await expect(loadCronRuns(state, "selected-job")).resolves.toBe("ok");
+
+    olderOverview.resolve({
+      entries: [{ ts: 1, jobId: "other-job", status: "ok", summary: "wrong task" }],
+      total: 1,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRunsJobId).toBe("selected-job");
+    expect(state.cronRuns).toEqual([selectedEntry]);
+  });
+
+  it("does not let a deferred selected job replace the current overview", async () => {
+    const olderJobHistory = createDeferred<CronRunsResult>();
+    const overviewEntry = {
+      ts: 2,
+      jobId: "overview-job",
+      status: "ok" as const,
+      summary: "current overview",
+    };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderJobHistory.promise)
+      .mockResolvedValueOnce({
+        entries: [overviewEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronRunsScope: "job",
+      cronRunsJobId: "selected-job",
+    });
+
+    const olderLoad = loadCronRuns(state, "selected-job");
+    updateCronRunsFilter(state, { cronRunsScope: "all" });
+    state.cronRunsJobId = null;
+    await expect(loadCronRuns(state, null)).resolves.toBe("ok");
+
+    olderJobHistory.resolve({
+      entries: [{ ts: 1, jobId: "selected-job", status: "ok", summary: "stale task" }],
+      total: 1,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRunsJobId).toBeNull();
+    expect(state.cronRuns).toEqual([overviewEntry]);
+  });
+
+  it("drops an older paginated response after run-history filters are replaced", async () => {
+    const olderPage = createDeferred<CronRunsResult>();
+    const currentEntry = {
+      ts: 3,
+      jobId: "filtered-job",
+      status: "error" as const,
+      summary: "filtered result",
+    };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderPage.promise)
+      .mockResolvedValueOnce({
+        entries: [currentEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronRuns: [{ ts: 2, jobId: "previous-job", status: "ok", summary: "previous" }],
+      cronRunsHasMore: true,
+      cronRunsNextOffset: 1,
+    });
+
+    const olderLoad = loadCronRuns(state, null, { append: true });
+    expect(state.cronRunsLoadingMore).toBe(true);
+    updateCronRunsFilter(state, { cronRunsStatuses: ["error"] });
+    await expect(loadCronRuns(state, null)).resolves.toBe("ok");
+    expect(state.cronRunsLoadingMore).toBe(false);
+
+    olderPage.resolve({
+      entries: [{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale older page" }],
+      total: 9,
+      hasMore: true,
+      nextOffset: 2,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRuns).toEqual([currentEntry]);
+    expect(state.cronRunsTotal).toBe(1);
+    expect(state.cronRunsHasMore).toBe(false);
+    expect(state.cronRunsLoadingMore).toBe(false);
+  });
+
+  it("ignores a stale run-history failure after the current request succeeds", async () => {
+    const olderFailure = createDeferred<CronRunsResult>();
+    const currentEntry = { ts: 2, jobId: "fresh-job", status: "ok" as const, summary: "fresh" };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderFailure.promise)
+      .mockResolvedValueOnce({
+        entries: [currentEntry],
+        total: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const state = createState({ client: { request } as unknown as CronState["client"] });
+
+    const olderLoad = loadCronRuns(state, null);
+    await expect(loadCronRuns(state, null)).resolves.toBe("ok");
+    olderFailure.reject(new Error("stale cron history unavailable"));
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRuns).toEqual([currentEntry]);
+    expect(state.cronError).toBeNull();
+  });
+
+  it("preserves the current run-history failure when an older response later succeeds", async () => {
+    const olderOverview = createDeferred<CronRunsResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => olderOverview.promise)
+      .mockRejectedValueOnce(new Error("current cron history unavailable"));
+    const state = createState({ client: { request } as unknown as CronState["client"] });
+
+    const olderLoad = loadCronRuns(state, null);
+    await expect(loadCronRuns(state, null)).resolves.toBe("error");
+    expect(state.cronError).toBe("Error: current cron history unavailable");
+
+    olderOverview.resolve({
+      entries: [{ ts: 1, jobId: "stale-job", status: "ok", summary: "stale" }],
+      total: 1,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    await expect(olderLoad).resolves.toBe("skipped");
+    expect(state.cronRuns).toEqual([]);
+    expect(state.cronError).toBe("Error: current cron history unavailable");
   });
 
   it("scopes jobs and run history requests to the selected agent", async () => {

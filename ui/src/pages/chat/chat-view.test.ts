@@ -45,7 +45,6 @@ import {
   type ChatModelControlsProps,
 } from "./components/chat-model-controls.ts";
 import {
-  isChatThreadSearchOpen,
   resetChatThreadPresentationState,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
@@ -637,7 +636,6 @@ function createChatProps(
     compactionStatus: null,
     fallbackStatus: null,
     messages: [],
-    sideChatTurns: [],
     toolMessages: [],
     streamSegments: [],
     stream: null,
@@ -684,8 +682,6 @@ function createChatProps(
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
-    onSideChatClose: () => undefined,
-    onSideChatClear: () => undefined,
     onNewSession: () => undefined,
     onClearHistory: () => undefined,
     onOpenSessionCheckpoints: () => undefined,
@@ -718,6 +714,38 @@ function createDeferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+describe("chat Swarm progress", () => {
+  it("stays visible during an active run between the transcript and composer", () => {
+    const parentSessionKey = "agent:main:parent";
+    const container = renderChatView({
+      sessionKey: parentSessionKey,
+      canAbort: true,
+      showNewMessages: true,
+      swarmSessions: [
+        {
+          key: "agent:main:subagent:worker",
+          kind: "direct",
+          updatedAt: 1,
+          parentSessionKey,
+          swarmGroupId: "swarm:agent:main:parent:turn-42",
+          label: "Worker A",
+          status: "running",
+        },
+      ],
+    });
+
+    const widget = container.querySelector("[data-test-id=chat-swarm]");
+    expect(widget).not.toBeNull();
+    const scrollAnchor = widget?.previousElementSibling;
+    expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
+    expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(widget?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(container.querySelector(".chat-swarm__dot--running")?.getAttribute("title")).toBe(
+      "Worker A: Running",
+    );
+  });
+});
 
 describe("inline approval card", () => {
   it("renders between the transcript and composer and forwards its decision id", () => {
@@ -1786,7 +1814,8 @@ describe("chat composer workbench", () => {
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
-      onToggleTask: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
       onOpenSession: () => undefined,
     };
 
@@ -1832,7 +1861,8 @@ describe("chat composer workbench", () => {
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
-      onToggleTask: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
       onOpenSession: () => undefined,
     };
     const messages = [{ role: "assistant", content: "done", timestamp: 1 }];
@@ -1924,15 +1954,24 @@ describe("per-pane chat presentation state", () => {
   });
 
   it("keeps thread search independent and resets only the targeted pane", () => {
+    const paneA = document.createElement("div");
+    const paneB = document.createElement("div");
+    const renderPane = (container: HTMLElement, paneId: string, draft: string) => {
+      render(renderChat(createChatProps({ paneId, draft, getDraft: () => draft })), container);
+    };
+
     toggleChatThreadSearch("pane-a", vi.fn());
-    expect(isChatThreadSearchOpen("pane-a")).toBe(true);
-    expect(isChatThreadSearchOpen("pane-b")).toBe(false);
+    renderPane(paneA, "pane-a", "");
+    renderPane(paneB, "pane-b", "");
+    expect(paneA.querySelector(".agent-chat__search-bar")).not.toBeNull();
+    expect(paneB.querySelector(".agent-chat__search-bar")).toBeNull();
 
     toggleChatThreadSearch("pane-b", vi.fn());
     resetChatThreadPresentationState("pane-a");
-
-    expect(isChatThreadSearchOpen("pane-a")).toBe(false);
-    expect(isChatThreadSearchOpen("pane-b")).toBe(true);
+    renderPane(paneA, "pane-a", "");
+    renderPane(paneB, "pane-b", "");
+    expect(paneA.querySelector(".agent-chat__search-bar")).toBeNull();
+    expect(paneB.querySelector(".agent-chat__search-bar")).not.toBeNull();
   });
 });
 

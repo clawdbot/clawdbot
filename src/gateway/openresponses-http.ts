@@ -32,6 +32,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isReplaceableAssistantStreamEvent,
@@ -58,6 +59,7 @@ import {
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
@@ -422,6 +424,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
   deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
@@ -437,6 +440,7 @@ async function runResponsesAgentCommand(params: {
       runId: params.runId,
       deliver: false,
       messageChannel: params.messageChannel,
+      senderIsOwner: params.senderIsOwner,
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
       abortSignal: params.abortSignal,
@@ -478,6 +482,7 @@ export async function handleOpenResponsesHttpRequest(
     sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
     return true;
   }
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
@@ -751,6 +756,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });
@@ -991,6 +997,19 @@ export async function handleOpenResponsesHttpRequest(
     maybeFinalize();
   };
 
+  const finalizeFailedResponse = (response: ResponseResource) => {
+    if (closed) {
+      return;
+    }
+    // Failure is terminal even when an earlier lifecycle event is waiting for usage.
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    writeSseEvent(res, { type: "response.failed", response });
+    writeDone(res);
+    res.end();
+  };
+
   // Send initial events
   const initialResponse = createResponseResource({
     id: responseId,
@@ -1108,6 +1127,10 @@ export async function handleOpenResponsesHttpRequest(
     unsubscribe();
   });
 
+  // The streamed run outlives this handler, whose root-work admission is
+  // released on return. Without retaining it, subordinate session/lane
+  // admissions inherit a released lease and fail as GatewayDrainingError.
+  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await runResponsesAgentCommand({
@@ -1120,6 +1143,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });
@@ -1307,7 +1331,7 @@ export async function handleOpenResponsesHttpRequest(
           usage: finalUsage,
         });
 
-        writeSseEvent(res, { type: "response.failed", response: errorResponse });
+        finalizeFailedResponse(errorResponse);
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",
@@ -1338,7 +1362,7 @@ export async function handleOpenResponsesHttpRequest(
           usage: finalUsage,
         });
         rememberResponseSession();
-        writeSseEvent(res, { type: "response.failed", response: mappedResponse });
+        finalizeFailedResponse(mappedResponse);
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",
@@ -1347,13 +1371,14 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
       rememberResponseSession();
-      writeSseEvent(res, { type: "response.failed", response: errorResponse });
+      finalizeFailedResponse(errorResponse);
       emitAgentEvent({
         runId: responseId,
         stream: "lifecycle",
         data: { phase: "error" },
       });
     } finally {
+      releaseRootWork?.();
       if (!closed) {
         // Emit lifecycle end to trigger completion
         emitAgentEvent({

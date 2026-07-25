@@ -12,6 +12,23 @@ const snapshot: ModelCatalogSnapshot = {
   routeVariants: [],
 };
 
+function ownerConfig(agentId = "main", extra: OpenClawConfig = {}): OpenClawConfig {
+  return {
+    ...extra,
+    agents: {
+      ...extra.agents,
+      list: [
+        {
+          id: agentId,
+          default: true,
+          agentDir: "/tmp/gateway-agent",
+          workspace: "/tmp/gateway-workspace",
+        },
+      ],
+    },
+  };
+}
+
 function ownerSnapshot(
   config: OpenClawConfig,
   modelCatalog: ModelCatalogSnapshot = snapshot,
@@ -27,7 +44,7 @@ function ownerSnapshot(
 
 describe("gateway prepared model catalog", () => {
   it("reads the published read-only generation directly", async () => {
-    const config = {};
+    const config = ownerConfig();
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
 
     await expect(
@@ -43,7 +60,7 @@ describe("gateway prepared model catalog", () => {
   });
 
   it("forwards the requested agent lifecycle owner", async () => {
-    const config = {};
+    const config = ownerConfig("worker");
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ({
       ...ownerSnapshot(config, snapshot, "worker"),
       workspaceDir: "/tmp/gateway-workspace",
@@ -73,8 +90,24 @@ describe("gateway prepared model catalog", () => {
     });
   });
 
-  it("does not infer agent identity when the published owner omits it", async () => {
-    const config = {};
+  it("rejects an ambiguous owner without an authoritative agent identity", async () => {
+    const config = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            agentDir: "/tmp/gateway-agent",
+            workspace: "/tmp/main-workspace",
+          },
+          {
+            id: "worker",
+            agentDir: "/tmp/gateway-agent",
+            workspace: "/tmp/worker-workspace",
+          },
+        ],
+      },
+    } as OpenClawConfig;
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
 
     await expect(
@@ -83,12 +116,12 @@ describe("gateway prepared model catalog", () => {
         getConfig: () => config,
         loadPublishedPreparedModelCatalogOwnerSnapshot,
       }),
-    ).resolves.not.toHaveProperty("agentId");
+    ).rejects.toThrow("did not identify one configured agent");
   });
 
   it("returns an equivalent replacement owner without repeating discovery", async () => {
-    const initialConfig = { logging: { level: "info" as const } };
-    const latestConfig = { logging: { level: "info" as const } };
+    const initialConfig = ownerConfig("main", { logging: { level: "info" as const } });
+    const latestConfig = ownerConfig("main", { logging: { level: "info" as const } });
     const latestSnapshot: ModelCatalogSnapshot = {
       entries: [{ provider: "openai", id: "latest", name: "Latest" }],
       routeVariants: [],
@@ -107,7 +140,7 @@ describe("gateway prepared model catalog", () => {
   });
 
   it("selects the full prepared owner when requested", async () => {
-    const config = {};
+    const config = ownerConfig();
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
 
     await expect(

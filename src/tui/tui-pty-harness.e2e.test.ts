@@ -232,7 +232,11 @@ async function writeTuiPtyFixtureScript(dir: string) {
             return { runId };
           }
           const responseDelayMs =
-            opts.message === "slow prompt" || opts.message === "streaming prompt" ? 500 : 20;
+            opts.message === "slow prompt" ||
+            opts.message === "slow reset proof" ||
+            opts.message === "streaming prompt"
+              ? 500
+              : 20;
           if (opts.message === "streaming prompt") {
             setTimeout(() => {
               this.onEvent?.({
@@ -477,7 +481,10 @@ async function writeTuiPtyFixtureScript(dir: string) {
         await runTui({
           backend: new FixtureBackend(),
           config: {
-            agents: { defaults: { model: "fixture-provider/fixture-model" } },
+            agents: {
+              defaults: { model: "fixture-provider/fixture-model" },
+              entries: { main: { default: true } },
+            },
             session: { scope: "per-sender", mainKey: "main" },
           },
           deliver: false,
@@ -832,6 +839,30 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "keeps an active session intact when /reset is submitted from the terminal",
+    async () => {
+      const priorResetCount = (await readFixtureLog(fixture.logPath)).filter(
+        (entry) => entry.method === "resetSession",
+      ).length;
+
+      await fixture.run.write("slow reset proof\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "slow reset proof"),
+      );
+      await fixture.run.write("/reset\r", { delay: false });
+      await fixture.run.waitForOutput("abort the current run before /reset");
+
+      const resetCalls = (await readFixtureLog(fixture.logPath)).filter(
+        (entry) => entry.method === "resetSession",
+      );
+      expect(resetCalls).toHaveLength(priorResetCount);
+      await fixture.run.waitForOutput("PTY_RESPONSE: slow reset proof");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "submits a follow-up prompt while a run is streaming",
     async () => {
       await fixture.run.write("\x15", { delay: false });
@@ -854,6 +885,8 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.run.write("/help\r", { delay: false });
       await fixture.run.waitForOutput("Slash commands:");
       await fixture.run.waitForOutput("/help");
+      await fixture.run.waitForOutput("/verbose <on|off|full>");
+      await fixture.run.waitForOutput("/reasoning <on|off|stream>");
       await fixture.run.waitForOutput("/exit");
     },
     TEST_TIMEOUT_MS,
@@ -890,6 +923,52 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.run.waitForOutput("→ status");
       await fixture.run.write("\r", { delay: false });
       await fixture.run.waitForOutput("fast mode: off");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    { command: "verbose", level: "full", field: "verboseLevel" },
+    { command: "reasoning", level: "stream", field: "reasoningLevel" },
+  ])(
+    "submits the canonical /$command $level terminal completion with one Enter",
+    async ({ command, level, field }) => {
+      await fixture.run.write(`/${command} ${level}`, { delay: false });
+      await fixture.run.waitForOutput(`→ ${level}`);
+      await fixture.run.write("\r", { delay: false });
+
+      await fixture.waitForLogEntry(
+        (entry) => entry.method === "patchSession" && objectFieldEquals(entry, field, level),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    {
+      sessionKey: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
+      message: "mixed-case matrix session identity proof",
+    },
+    {
+      sessionKey: "agent:main:signal:group:AbC123=",
+      message: "mixed-case signal session identity proof",
+    },
+  ])(
+    "preserves provider-owned identity when selecting $sessionKey in the terminal",
+    async ({ sessionKey, message }) => {
+      await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
+      );
+
+      await fixture.run.write(`${message}\r`, { delay: false });
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+      );
+
+      expect(sent.payload).toMatchObject({ sessionKey, message });
+      await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
     },
     TEST_TIMEOUT_MS,
   );

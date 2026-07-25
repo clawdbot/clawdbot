@@ -381,6 +381,40 @@ internal fun resolveDefaultManualGatewayPort(
   return if (tls && host.endsWith(".ts.net")) tailnetTlsGatewayPort else defaultManualGatewayPort
 }
 
+/** Parses manual authorities before formatting so host:port is not mistaken for IPv6. */
+private fun resolveGatewayManualAuthority(hostInput: String): URI? {
+  val authority = hostInput.trim().trimEnd('/')
+  if (authority.isEmpty() || authority.contains('/')) return null
+
+  val normalizedAuthority =
+    if (!authority.startsWith("[") && authority.count { it == ':' } > 1) {
+      "[$authority]"
+    } else {
+      authority
+    }
+  val uri = runCatching { URI("http://$normalizedAuthority") }.getOrNull() ?: return null
+  // This field owns only a host and optional port. Dropping user-info or
+  // query/fragment components could quietly connect credentials to another host.
+  if (
+    uri.host.isNullOrEmpty() ||
+    uri.rawUserInfo != null ||
+    uri.rawQuery != null ||
+    uri.rawFragment != null ||
+    uri.rawPath.isNotEmpty()
+  ) {
+    return null
+  }
+
+  val hasExplicitPort =
+    if (normalizedAuthority.startsWith("[")) {
+      normalizedAuthority.substringAfter(']', "").startsWith(':')
+    } else {
+      normalizedAuthority.contains(':')
+    }
+  if (hasExplicitPort && uri.port !in 1..65535) return null
+  return uri
+}
+
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
 internal fun composeGatewayManualUrl(
   hostInput: String,
@@ -395,14 +429,18 @@ internal fun composeGatewayManualUrl(
     val parsed = parseGatewayEndpointResult(host)
     return host.takeUnless { parsed.error == GatewayEndpointValidationError.INVALID_URL }
   }
-  val bareHost = host.trimEnd('/')
-  if (bareHost.isEmpty() || bareHost.contains('/')) return null
-  val portTrimmed = portInput.trim()
+  val authority = resolveGatewayManualAuthority(host) ?: return null
+  val bareHost = authority.host.trim('[', ']')
   val port =
-    if (portTrimmed.isEmpty()) {
-      resolveDefaultManualGatewayPort(bareHost, tls)
+    if (authority.port != -1) {
+      authority.port
     } else {
-      portTrimmed.toIntOrNull() ?: return null
+      val portTrimmed = portInput.trim()
+      if (portTrimmed.isEmpty()) {
+        resolveDefaultManualGatewayPort(bareHost, tls)
+      } else {
+        portTrimmed.toIntOrNull() ?: return null
+      }
     }
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
@@ -432,7 +470,9 @@ internal fun gatewayManualTransportPresentation(
     }
   }
 
-  val normalizedHost = host.trimEnd('/')
+  val normalizedHost =
+    resolveGatewayManualAuthority(host)?.host?.trim('[', ']')
+      ?: host.trimEnd('/')
   val requiresTls = !isLocalCleartextGatewayHost(normalizedHost)
   val effectiveTls = requestedTls || requiresTls
   return gatewayManualTransportPresentation(

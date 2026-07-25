@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
@@ -485,10 +486,6 @@ function extractAssistantMirrorComparableText(
 
 function isDeliveryMirrorAssistantMessage(message: SessionTranscriptAssistantMessage): boolean {
   return message.provider === "openclaw" && message.model === "delivery-mirror";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readNonEmptyString(value: unknown): string | undefined {

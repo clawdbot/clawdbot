@@ -1375,10 +1375,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         restoreModelOverride();
         return null;
       }
-      await refreshReplacement(options.agentId);
-      if (!isCurrentConnection(scope)) {
-        restoreModelOverride();
-        return null;
+      if (!options.deferListRefresh) {
+        await refreshReplacement(options.agentId);
+        if (!isCurrentConnection(scope)) {
+          restoreModelOverride();
+          return null;
+        }
       }
       if (pendingModelPatches.get(normalizedKey)?.token === modelPatchToken) {
         pendingModelPatches.delete(normalizedKey);

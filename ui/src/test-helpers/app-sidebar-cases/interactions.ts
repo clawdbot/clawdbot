@@ -134,18 +134,22 @@ describe("AppSidebar multi-select", () => {
     menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
 
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
+    // Each row defers its canonical list refresh; the batch pays one refresh at
+    // the end instead of a full sessions.list round trip per archived row.
     expect(harness.patch).toHaveBeenNthCalledWith(
       1,
       "agent:main:a",
       { archived: true },
-      { agentId: "main" },
+      { agentId: "main", deferListRefresh: true },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       "agent:main:b",
       { archived: true },
-      { agentId: "main" },
+      { agentId: "main", deferListRefresh: true },
     );
+    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledTimes(1));
+    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
@@ -492,7 +496,8 @@ describe("AppSidebar catalog session rows", () => {
       const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
       const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
       const node = section?.querySelector('[data-session-catalog-host="node:devbox"]');
-      expect(section?.querySelector(".sidebar-session-group-count")?.textContent?.trim()).toBe("2");
+      // Counts only render while a catalog section is collapsed.
+      expect(section?.querySelector(".sidebar-session-group-count")).toBeNull();
       expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
       expect(local?.textContent).toContain("Local session");
       expect(local?.textContent).not.toContain("Node session");
@@ -501,6 +506,14 @@ describe("AppSidebar catalog session rows", () => {
       );
       expect(node?.textContent).toContain("Node session");
       expect(node?.textContent).not.toContain("Local session");
+
+      // Collapsing the catalog surfaces the row count as the closed-state indicator.
+      section?.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
+      await sidebar.updateComplete;
+      const collapsedSection = sidebar.querySelector('[data-session-section="catalog:codex"]');
+      expect(
+        collapsedSection?.querySelector(".sidebar-session-group-count")?.textContent?.trim(),
+      ).toBe("2");
     } finally {
       vi.useRealTimers();
     }

@@ -28,10 +28,12 @@ import {
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
-  resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
-import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+import {
+  resolveAnnounceOrigin,
+  resolveSubagentCompletionOrigin,
+} from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
   buildChildCompletionFindings,

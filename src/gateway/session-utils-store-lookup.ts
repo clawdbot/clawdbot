@@ -316,7 +316,6 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     readOnly: params.readOnly,
     initialStore: params.store,
   });
-
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];
     return { agentId, storePath, canonicalKey, storeKeys, store };

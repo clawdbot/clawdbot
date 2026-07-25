@@ -10,8 +10,6 @@ import {
   VENICE_MODEL_CATALOG,
 } from "./api.js";
 
-export { VENICE_DEFAULT_MODEL_REF };
-
 const venicePresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: VENICE_DEFAULT_MODEL_REF,
   resolveParams: (_cfg: OpenClawConfig) => ({

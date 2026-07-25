@@ -1,4 +1,3 @@
-// Fireworks setup module handles plugin onboarding behavior.
 import {
   createDefaultModelsPresetAppliers,
   type OpenClawConfig,
@@ -7,9 +6,8 @@ import {
   buildFireworksCatalogModels,
   buildFireworksProvider,
   FIREWORKS_DEFAULT_MODEL_ID,
+  FIREWORKS_DEFAULT_MODEL_REF,
 } from "./provider-catalog.js";
-
-export const FIREWORKS_DEFAULT_MODEL_REF = `fireworks/${FIREWORKS_DEFAULT_MODEL_ID}`;
 
 const fireworksPresetAppliers = createDefaultModelsPresetAppliers({
   primaryModelRef: FIREWORKS_DEFAULT_MODEL_REF,

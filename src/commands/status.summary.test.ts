@@ -171,6 +171,7 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  LEGACY_IMPLICIT_AGENT_ID: "main",
   normalizeAgentId: vi.fn((value: string) => value),
   normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
   parseAgentSessionKey: vi.fn(() => null),

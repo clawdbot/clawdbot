@@ -180,7 +180,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Default AGENTS](/reference/AGENTS.default)
 - [Templates: AGENTS](/reference/templates/AGENTS)
 - [Templates: BOOTSTRAP](/reference/templates/BOOTSTRAP)
-- [Templates: HEARTBEAT](/reference/templates/HEARTBEAT)
+- [Retired HEARTBEAT.md workspace file](/reference/templates/HEARTBEAT)
 - [Templates: IDENTITY](/reference/templates/IDENTITY)
 - [Templates: SOUL](/reference/templates/SOUL)
 - [Templates: TOOLS](/reference/templates/TOOLS)

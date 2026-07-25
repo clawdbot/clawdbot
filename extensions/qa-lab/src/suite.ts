@@ -723,6 +723,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       total: params.scenarios.length,
       passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
       failed: countQaSuiteFailedScenarios(params.scenarios),
+      skipped: params.scenarios.filter((scenario) => scenario.status === "skip").length,
     },
     ...(params.metrics ? { metrics: params.metrics } : {}),
     ...(params.evidence ? { evidence: params.evidence } : {}),

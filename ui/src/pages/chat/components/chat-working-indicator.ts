@@ -4,6 +4,7 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/working-phrase.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { formatCompactTokenCount, formatDurationCompact } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
@@ -46,13 +47,8 @@ function renderLiveOutputTokens(outputTokens: number | null | undefined) {
 }
 
 function stanceClass(key: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < key.length; i++) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
   const total = STANCES.reduce((sum, [, weight]) => sum + weight, 0);
-  let roll = ((((hash ^ STANCE_SALT) >>> 0) % 1000) / 1000) * total;
+  let roll = ((((fnv1aUtf16(key) ^ STANCE_SALT) >>> 0) % 1000) / 1000) * total;
   for (const [stance, weight] of STANCES) {
     roll -= weight;
     if (roll <= 0) {

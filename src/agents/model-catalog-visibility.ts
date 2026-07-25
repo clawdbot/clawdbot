@@ -104,6 +104,19 @@ function dedupeLogicalModelCatalogEntries(
   });
 }
 
+function isPickerVisibleCatalogEntry(
+  entry: ModelCatalogEntry,
+  configuredKeys: ReadonlySet<string>,
+  routePolicy: ModelCatalogRoutePolicy,
+): boolean {
+  // Deprecated and disabled rows stay selectable but are picker-hidden.
+  // Exact configured refs always remain visible so pinned models never disappear.
+  return (
+    (entry.status !== "deprecated" && entry.status !== "disabled") ||
+    configuredKeys.has(resolveLogicalKey(entry, routePolicy))
+  );
+}
+
 /**
  * Resolve catalog entries visible for one view, honoring explicit visibility
  * policy, configured models, and providers with usable auth.
@@ -332,5 +345,8 @@ export async function resolveLogicalVisibleModelCatalog(params: {
   }
   // Physical route rows can share one logical provider/id. Selected-route rows
   // must lead this merge so dedupe cannot retain sibling-route metadata instead.
-  return await projectEntries([...preferred, ...kept, ...retained, ...routeBacked]);
+  const projected = await projectEntries([...preferred, ...kept, ...retained, ...routeBacked]);
+  return projected.filter((entry) =>
+    isPickerVisibleCatalogEntry(entry, configuredKeys, params.routePolicy),
+  );
 }

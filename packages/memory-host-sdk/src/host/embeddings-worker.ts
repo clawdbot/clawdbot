@@ -2,6 +2,7 @@
 import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import {
@@ -289,7 +290,7 @@ class LocalEmbeddingWorkerClient {
           this.pending.delete(id);
           this.shutdownChild();
           reject(
-            toLintErrorObject(
+            toErrorObject(
               options.signal?.reason ?? new Error("Local embedding request aborted"),
               "Non-Error rejection",
             ),
@@ -418,19 +419,4 @@ export async function createLocalEmbeddingWorkerProvider(
   };
   attachLocalEmbeddingRuntimeFacts(provider, () => client.getRuntimeFacts());
   return provider;
-}
-
-/** Convert abort reasons or arbitrary thrown values into lint-safe Error objects. */
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

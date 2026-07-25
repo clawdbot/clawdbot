@@ -1,10 +1,10 @@
 // Telegram tests cover action runtime plugin behavior.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   handleTelegramAction as handleTelegramActionRuntime,
@@ -201,6 +201,7 @@ const createForumTopicTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 let envSnapshot: ReturnType<typeof captureEnv>;
+let openClawState: OpenClawTestState;
 
 type TopicNameEntryForTest = {
   name: string;
@@ -329,8 +330,12 @@ describe("handleTelegramAction", () => {
     expect(options.remove).toBe(false);
   }
 
-  beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "TELEGRAM_BOT_TOKEN"]);
+  beforeEach(async () => {
+    envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-telegram-action-",
+    });
     resetTelegramTopicNameCacheForTest();
     installTopicNameStoreForTest();
     Object.assign(telegramActionRuntime, originalTelegramActionRuntime, {
@@ -360,11 +365,12 @@ describe("handleTelegramAction", () => {
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearTelegramRuntimeForTest();
     resetTelegramTopicNameCacheForTest();
     topicNameStoresForTest.clear();
     envSnapshot.restore();
+    await openClawState.cleanup();
   });
 
   it("adds reactions when reactionLevel is minimal", async () => {
@@ -880,7 +886,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-action-durable-"));
+    const stateDir = openClawState.stateDir;
     const {
       createOutboundTestPlugin,
       createTestRegistry,
@@ -922,7 +928,6 @@ describe("handleTelegramAction", () => {
         return { channel: "telegram", messageId: "tg-ok" };
       });
 
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     telegramActionRuntime.sendDurableMessageBatch =
       originalTelegramActionRuntime.sendDurableMessageBatch;
     setActivePluginRegistry(
@@ -1009,7 +1014,6 @@ describe("handleTelegramAction", () => {
       });
     } finally {
       setActivePluginRegistry(createTestRegistry([]));
-      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
