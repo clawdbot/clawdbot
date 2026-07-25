@@ -490,7 +490,6 @@
     <string name="native_4c2dd6654a535240" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skills นี้ต้องตั้งค่า %1$s รายการ โดย Android จะแสดงสิ่งที่ติดตั้งไว้ ส่วนการตั้งค่า/การเปลี่ยนแปลงการกำหนดค่าต้องดำเนินการบนเดสก์ท็อปหรือ CLI"</string>
     <string name="native_4c8346f441fa1651" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ล่าสุด"</string>
     <string name="native_4c8906cf76f5740a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ช่องทาง"</string>
-    <string name="native_4c9bba30fb790a4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Unphased"</string>
     <string name="native_4cb394d648628e4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ใช้งานอยู่บนโทรศัพท์เครื่องนี้"</string>
     <string name="native_4cdd7410d10bc106" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังตรวจสอบสิทธิ์เข้าถึงโหนด"</string>
     <string name="native_4ceca1d52cede44d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เขตเวลา"</string>
@@ -895,7 +894,6 @@
     <string name="native_8ba5517fc10b3db5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"อนุญาตให้ควบคุมแอปอื่นหรือไม่?"</string>
     <string name="native_8bb7ec15b1e350a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังตรวจสอบ"</string>
     <string name="native_8bf253a125f66985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"สแกนหรือวางรหัสการตั้งค่าเพื่อเพิ่ม Gateway อื่น"</string>
-    <string name="native_8c13f73ba145c626" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Swarm"</string>
     <string name="native_8c4a3896e8f06d27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"TLS หมดเวลา"</string>
     <string name="native_8c55387fb6c584c0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"นำอุปกรณ์ที่จับคู่ออกแล้ว"</string>
     <string name="native_8c93c68056cde54d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"จับคู่ Gateway แล้ว กำลังตรวจสอบการอนุมัติความสามารถของโหนด"</string>
@@ -1390,7 +1388,6 @@
     <string name="native_dafd69eb801901c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมต่อ Gateway เพื่อโหลดการใช้งาน"</string>
     <string name="native_db00d5649192e42d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ตอนนี้คุณช่วยฉันทำอะไรจากโทรศัพท์เครื่องนี้ได้บ้าง?"</string>
     <string name="native_db0e960b68b57894" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ต้องได้รับการอนุมัติ"</string>
-    <string name="native_db1646e2dda2f0b0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"more workers"</string>
     <string name="native_db18382a249e0206" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แชทใหม่"</string>
     <string name="native_db259fef5236a070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมต่อ Gateway เพื่ออัปเดตข้อเสนอ Skill Workshop"</string>
     <string name="native_db4fa8d71b5b2d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"คำขอ OpenClaw ล้มเหลว"</string>

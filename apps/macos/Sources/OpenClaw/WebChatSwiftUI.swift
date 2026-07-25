@@ -217,6 +217,14 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         }
     }
 
+    func isSwarmEnabled(sessionKey: String) async throws -> Bool {
+        let request = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: sessionKey,
+            fallbackAgentID: self.routingIdentity.currentAgentID())
+        let data = try await connection.request(request)
+        return try JSONDecoder().decode(OpenClawChatMetadataCapabilities.self, from: data).swarmEnabled
+    }
+
     func abortRun(sessionKey: String, runId: String) async throws {
         let target = self.sessionTarget(for: sessionKey)
         let request = OpenClawChatGatewayRequests.abortRun(

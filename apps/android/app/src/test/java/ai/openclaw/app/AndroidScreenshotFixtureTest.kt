@@ -78,6 +78,11 @@ class AndroidScreenshotFixtureTest {
           .jsonObject["sessions"]
           ?.jsonArray
           .orEmpty()
+      val metadata =
+        json
+          .parseToJsonElement(AndroidScreenshotFixture.request("chat.metadata", null))
+          .jsonObject
+      assertEquals("true", metadata["swarmEnabled"]?.jsonPrimitive?.content)
       assertEquals(5, sessions.size)
       assertEquals(
         "swarm:${AndroidScreenshotFixture.mainSessionKey}:research",

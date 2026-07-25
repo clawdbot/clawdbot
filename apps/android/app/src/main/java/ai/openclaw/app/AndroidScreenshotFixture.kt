@@ -395,6 +395,7 @@ internal object AndroidScreenshotFixture {
 
   private fun chatMetadata(): String =
     buildJsonObject {
+      put("swarmEnabled", JsonPrimitive(scene == AndroidScreenshotScene.Swarm))
       put(
         "commands",
         buildJsonArray {

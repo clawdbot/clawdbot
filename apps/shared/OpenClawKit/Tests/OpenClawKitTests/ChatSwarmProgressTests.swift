@@ -75,7 +75,7 @@ struct ChatSwarmProgressTests {
         #expect(groups.single?.running == 1)
         #expect(groups.single?.done == 1)
         #expect(groups.single?.failed == 1)
-        #expect(groups.single?.phases.single?.dots.map(\.status) == [.running, .queued, .failed, .done])
+        #expect(groups.single?.phases.single?.dots.map(\.status) == [.queued, .running, .done, .failed])
     }
 
     @Test func `child pager repeats from zero when rows move across offsets`() async throws {
@@ -117,6 +117,34 @@ struct ChatSwarmProgressTests {
         #expect(Set(rows.map(\.key)) == ["zero", "one", "two", "three"])
         #expect(rows.first { $0.key == "one" }?.status == "done")
         #expect(call == 4)
+    }
+
+    @Test func `Swarm events ignore other parents`() {
+        let current = "agent:main:parent"
+        let ownChild = OpenClawChatSessionsChangedEvent(
+            sessionKey: "agent:main:child",
+            parentSessionKey: current,
+            reason: "create",
+            swarmGroupId: "custom-group")
+        let otherPhase = OpenClawChatSessionsChangedEvent(
+            sessionKey: "agent:main:other",
+            reason: "swarm-note",
+            swarmGroupId: "swarm:agent:main:other:turn",
+            kind: "phase",
+            text: "Research")
+
+        #expect(SelfContainedSwarmHelpers.eventBelongsToParent(ownChild) { $0 == current })
+        #expect(!SelfContainedSwarmHelpers.eventBelongsToParent(otherPhase) { $0 == current })
+    }
+
+    @Test func `projection uses derived title before the raw session key`() {
+        let groupID = "swarm:agent:main:parent:labels"
+        var row = self.session(key: "agent:main:child", status: "running", groupID: groupID)
+        row.displayName = nil
+        row.derivedTitle = "Research worker"
+
+        let group = buildOpenClawChatSwarmGroups(sessions: [row]) { $0 == "agent:main:parent" }.single
+        #expect(group?.phases.single?.dots.single?.label == "Research worker")
     }
 
     @Test func `projection caps historical dots while retaining active workers`() {

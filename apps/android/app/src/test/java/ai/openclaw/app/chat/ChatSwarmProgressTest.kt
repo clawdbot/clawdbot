@@ -73,7 +73,7 @@ class ChatSwarmProgressTest {
     assertEquals(1, groups.single().done)
     assertEquals(1, groups.single().failed)
     assertEquals(
-      listOf(ChatSwarmDotStatus.Running, ChatSwarmDotStatus.Queued, ChatSwarmDotStatus.Failed, ChatSwarmDotStatus.Done),
+      listOf(ChatSwarmDotStatus.Queued, ChatSwarmDotStatus.Running, ChatSwarmDotStatus.Done, ChatSwarmDotStatus.Failed),
       groups
         .single()
         .phases
@@ -81,6 +81,78 @@ class ChatSwarmProgressTest {
         .dots
         .map(ChatSwarmDot::status),
     )
+  }
+
+  @Test
+  fun childPagerRepeatsFromZeroWhenRowsMoveAcrossOffsets() =
+    kotlinx.coroutines.test.runTest {
+      val groupId = "swarm:agent:main:parent:paged"
+      val pages =
+        listOf(
+          listOf(session("zero", "running", groupId), session("one", "running", groupId)),
+          listOf(session("one", "running", groupId), session("two", "running", groupId)),
+          listOf(session("zero", "running", groupId), session("one", "done", groupId)),
+          listOf(session("three", "running", groupId), session("two", "running", groupId)),
+        )
+      var call = 0
+
+      val rows =
+        collectChatSwarmChildSessions { offset ->
+          val page = pages[call++]
+          ChatSwarmSessionPage(
+            sessions = page,
+            totalCount = 4,
+            nextOffset = if (offset == 0) 2 else null,
+            hasMore = offset == 0,
+          )
+        }
+
+      assertEquals(setOf("zero", "one", "two", "three"), rows.map(ChatSessionEntry::key).toSet())
+      assertEquals("done", rows.first { it.key == "one" }.status)
+      assertEquals(4, call)
+    }
+
+  @Test
+  fun childPagerUsesTotalCountWhenHasMoreIsAbsent() =
+    kotlinx.coroutines.test.runTest {
+      var call = 0
+      val rows =
+        collectChatSwarmChildSessions { offset ->
+          call += 1
+          ChatSwarmSessionPage(
+            sessions = listOf(session("child-$offset", "running", "swarm:agent:main:parent:paged")),
+            totalCount = 2,
+            nextOffset = if (offset == 0) 1 else null,
+            hasMore = null,
+          )
+        }
+
+      assertEquals(listOf("child-0", "child-1"), rows.map(ChatSessionEntry::key))
+      assertEquals(2, call)
+    }
+
+  @Test
+  fun swarmEventsIgnoreOtherParents() {
+    val current = "agent:main:parent"
+    val other = "agent:main:other"
+    val ownChild =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive("agent:main:child"))
+        put("parentSessionKey", JsonPrimitive(current))
+        put("reason", JsonPrimitive("create"))
+        put("swarmGroupId", JsonPrimitive("custom-group"))
+      }
+    val otherPhase =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive(other))
+        put("reason", JsonPrimitive("swarm-note"))
+        put("swarmGroupId", JsonPrimitive("swarm:$other:turn"))
+        put("kind", JsonPrimitive("phase"))
+        put("text", JsonPrimitive("Research"))
+      }
+
+    assertTrue(chatSwarmEventBelongsToParent(ownChild) { it == current })
+    assertTrue(!chatSwarmEventBelongsToParent(otherPhase) { it == current })
   }
 
   @Test

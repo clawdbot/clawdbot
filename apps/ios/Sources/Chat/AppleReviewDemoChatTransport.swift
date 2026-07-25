@@ -150,6 +150,10 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         ]
     }
 
+    func isSwarmEnabled(sessionKey _: String) async throws -> Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-swarm-chat-fixture")
+    }
+
     func sendMessage(
         sessionKey: String,
         message: String,

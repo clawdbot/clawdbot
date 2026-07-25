@@ -266,6 +266,19 @@ struct ChatGatewayRequestTests {
         #expect(fork.params["fork"]?.value as? Bool == true)
     }
 
+    @Test func `chat metadata request selects session agent before fallback`() {
+        let scoped = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: "agent:reviewer:main",
+            fallbackAgentID: "fallback")
+        #expect(scoped.method == "chat.metadata")
+        #expect(scoped.params["agentId"]?.value as? String == "reviewer")
+
+        let global = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: "global",
+            fallbackAgentID: "reviewer")
+        #expect(global.params["agentId"]?.value as? String == "reviewer")
+    }
+
     @Test func `commands request selects session agent before fallback`() {
         let scoped = OpenClawChatGatewayRequests.commandsList(
             sessionKey: "agent:reviewer:main",

@@ -28,6 +28,10 @@ struct MacSwarmFixtureChatTransport: OpenClawChatTransport {
             contextWindow: 400_000)]
     }
 
+    func isSwarmEnabled(sessionKey _: String) async throws -> Bool {
+        true
+    }
+
     func sendMessage(
         sessionKey _: String,
         message _: String,

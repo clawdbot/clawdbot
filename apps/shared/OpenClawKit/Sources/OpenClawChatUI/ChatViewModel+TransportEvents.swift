@@ -28,7 +28,7 @@ extension OpenClawChatViewModel {
             applyTransportHealth(ok)
             if reconnected {
                 Task { [weak self] in await self?.refreshQuestions() }
-                Task { [weak self] in await self?.refreshSwarmSessions() }
+                Task { [weak self] in await self?.refreshSwarmCapability() }
             }
         case .tick:
             let context = self.currentSessionSnapshot()
@@ -104,7 +104,9 @@ extension OpenClawChatViewModel {
         case .seqGap:
             self.errorText = nil
             self.resetSwarmProgress()
-            Task { [weak self] in await self?.refreshSwarmSessions() }
+            if self.swarmEnabled {
+                Task { [weak self] in await self?.refreshSwarmSessions() }
+            }
             self.invalidateHistorySnapshots()
             self.invalidateRunSnapshots()
             self.clearPendingRuns(reason: nil)

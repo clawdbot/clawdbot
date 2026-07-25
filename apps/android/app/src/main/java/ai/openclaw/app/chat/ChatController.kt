@@ -54,6 +54,7 @@ import java.util.concurrent.atomic.AtomicLong
 // Bounds one-shot search list fetches like the primary session list.
 internal const val SESSION_LIST_FETCH_LIMIT = 200
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
+private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
 
@@ -295,6 +296,7 @@ class ChatController internal constructor(
   private val swarmRequestSequence = AtomicLong(0)
   private var swarmRefreshJob: Job? = null
   private var swarmSessionKey: String? = null
+  private var swarmEnabled = false
 
   private val _sessionBranches = MutableStateFlow<List<SessionBranch>>(emptyList())
   val sessionBranches: StateFlow<List<SessionBranch>> = _sessionBranches.asStateFlow()
@@ -480,6 +482,7 @@ class ChatController internal constructor(
     _modelCatalog.value = emptyList()
     chatMetadataAgentId = null
     chatMetadataLoadState = ChatMetadataLoadState.Unloaded
+    disableSwarmProgress()
     clearLiveHistoryMarker()
     synchronized(pendingRuns) {
       disconnectedPendingRunIds.addAll(pendingRuns)
@@ -594,6 +597,7 @@ class ChatController internal constructor(
   /** Invalidates and clears gateway-bound UI state before a target switch can race old responses. */
   fun onGatewayScopeChanging(retireRunState: Boolean = false) {
     retireMainSessionReadiness()
+    disableSwarmProgress()
     synchronized(gatewayScopeApplyLock) {
       if (retireRunState) {
         restoreRunStateOnReconnect = false
@@ -2145,6 +2149,7 @@ class ChatController internal constructor(
       _modelCatalog.value = emptyList()
       chatMetadataAgentId = null
       chatMetadataLoadState = ChatMetadataLoadState.Unloaded
+      disableSwarmProgress(key)
     }
     updateErrorText(null)
     _healthOk.value = false
@@ -2826,7 +2831,6 @@ class ChatController internal constructor(
       }
       "health" -> {
         refreshQuestions()
-        refreshSwarmSessions()
         if (restoreRunStateOnReconnect) {
           refreshHistoryForRecovery(forceHealth = true, completesReconnectRecovery = true)
         } else {
@@ -2838,7 +2842,7 @@ class ChatController internal constructor(
         // Missed events may include deltas or the terminal state of a pending run;
         // retain local ownership until the recovery snapshot can reconcile it.
         resetSwarmProgress()
-        refreshSwarmSessions()
+        if (isSwarmEnabled()) refreshSwarmSessions()
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
@@ -3357,7 +3361,9 @@ class ChatController internal constructor(
         )
       }
 
-      fetchSwarmSessions(sessionKey)
+      if (isSwarmEnabled()) {
+        fetchSwarmSessions(sessionKey, attempt = 0)
+      }
       if (!ownsReconnectRecovery) {
         pollHealthIfNeeded(force = forceHealth)
       }
@@ -3841,16 +3847,19 @@ class ChatController internal constructor(
   private suspend fun fetchChatMetadata() {
     val requestCacheScope = currentCacheScope()
     val agentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
+    var shouldRefreshSwarm = false
+    var shouldDisableSwarm = false
     try {
       val params =
         buildJsonObject {
           put("agentId", JsonPrimitive(agentId))
         }
       val res = requestGatewayBound(requestCacheScope?.gatewayId, "chat.metadata", params.toString())
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      val metadataSwarmEnabled = root?.get("swarmEnabled").asBooleanOrNull() == true
       synchronized(gatewayScopeApplyLock) {
         if (requestCacheScope == currentCacheScope() && agentId == resolveAgentIdForSessionKey(_sessionKey.value)) {
           _commands.value = parseChatCommands(json, res)
-          val root = json.parseToJsonElement(res).asObjectOrNull()
           val models = parseGatewayModels(root?.get("models") as? JsonArray)
           _modelCatalog.value = models
           // chat.metadata cannot distinguish a valid empty catalog from its timeout fallback.
@@ -3862,6 +3871,9 @@ class ChatController internal constructor(
               else -> ChatMetadataLoadState.RetryEmptyCatalog
             }
           chatMetadataAgentId = agentId
+          synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
+          shouldRefreshSwarm = metadataSwarmEnabled
+          shouldDisableSwarm = !metadataSwarmEnabled
         }
       }
     } catch (_: Throwable) {
@@ -3871,9 +3883,20 @@ class ChatController internal constructor(
           _modelCatalog.value = emptyList()
           chatMetadataAgentId = null
           chatMetadataLoadState = ChatMetadataLoadState.Unloaded
+          synchronized(swarmLock) { swarmEnabled = false }
+          shouldDisableSwarm = true
         }
       }
     }
+    when {
+      shouldRefreshSwarm -> refreshSwarmSessions()
+      shouldDisableSwarm -> resetSwarmProgress()
+    }
+  }
+
+  private fun disableSwarmProgress(sessionKey: String = _sessionKey.value) {
+    synchronized(swarmLock) { swarmEnabled = false }
+    resetSwarmProgress(sessionKey)
   }
 
   private fun resetSwarmProgress(sessionKey: String = _sessionKey.value) {
@@ -3888,7 +3911,12 @@ class ChatController internal constructor(
     }
   }
 
+  private fun isSwarmEnabled(): Boolean = synchronized(swarmLock) { swarmEnabled }
+
   private fun observeSwarmEvent(payload: JsonObject): Boolean {
+    if (!isSwarmEnabled()) return false
+    val parentKey = _sessionKey.value
+    if (!chatSwarmEventBelongsToParent(payload) { candidate -> sameOutboxSession(candidate, parentKey) }) return false
     val observed = synchronized(swarmLock) { swarmActivityTracker.observe(payload) }
     if (!observed) return false
     val kind = payload["kind"].asStringOrNull()?.trim()
@@ -3908,53 +3936,73 @@ class ChatController internal constructor(
   }
 
   private fun scheduleSwarmRefresh() {
+    if (!isSwarmEnabled()) return
     val parentKey = _sessionKey.value
     swarmRefreshJob?.cancel()
     swarmRefreshJob =
       scope.launch {
         delay(250)
-        fetchSwarmSessions(parentKey)
+        fetchSwarmSessions(parentKey, attempt = 0)
       }
   }
 
   private fun refreshSwarmSessions() {
+    if (!isSwarmEnabled()) return
     val parentKey = _sessionKey.value
-    scope.launch { fetchSwarmSessions(parentKey) }
+    scope.launch { fetchSwarmSessions(parentKey, attempt = 0) }
   }
 
-  private suspend fun fetchSwarmSessions(parentKey: String) {
+  private suspend fun fetchSwarmSessions(
+    parentKey: String,
+    attempt: Int,
+  ) {
+    val requestCacheScope = currentCacheScope() ?: return
     val requestSequence = swarmRequestSequence.incrementAndGet()
-    val rows = mutableListOf<ChatSessionEntry>()
-    val seen = mutableSetOf<String>()
-    var offset = 0
-    try {
-      while (true) {
-        val params =
-          buildJsonObject {
-            put("includeGlobal", JsonPrimitive(false))
-            put("includeUnknown", JsonPrimitive(false))
-            put("configuredAgentsOnly", JsonPrimitive(true))
-            put("spawnedBy", JsonPrimitive(parentKey))
-            put("limit", JsonPrimitive(10_000))
-            put("offset", JsonPrimitive(offset))
-          }
-        val root = json.parseToJsonElement(requestGateway("sessions.list", params.toString())).asObjectOrNull() ?: return
-        val page = root["sessions"].asArrayOrNull().orEmpty()
-        page.forEach { item ->
-          parseSessionEntry(item.asObjectOrNull())?.let { row ->
-            if (seen.add(row.key)) rows += row
-          }
+    val rows =
+      try {
+        collectChatSwarmChildSessions { offset ->
+          val params =
+            buildJsonObject {
+              put("includeGlobal", JsonPrimitive(false))
+              put("includeUnknown", JsonPrimitive(false))
+              put("configuredAgentsOnly", JsonPrimitive(true))
+              put("spawnedBy", JsonPrimitive(parentKey))
+              put("limit", JsonPrimitive(10_000))
+              put("offset", JsonPrimitive(offset))
+            }
+          val root =
+            json
+              .parseToJsonElement(requestGatewayBound(requestCacheScope.gatewayId, "sessions.list", params.toString()))
+              .asObjectOrNull()
+              ?: throw IllegalStateException("invalid sessions.list response")
+          ChatSwarmSessionPage(
+            sessions = root["sessions"].asArrayOrNull().orEmpty().mapNotNull { parseSessionEntry(it.asObjectOrNull()) },
+            totalCount = root["totalCount"].asLongOrNull()?.toInt(),
+            nextOffset = root["nextOffset"].asLongOrNull()?.toInt(),
+            hasMore = root["hasMore"].asBooleanOrNull(),
+          )
         }
-        val hasMore = root["hasMore"].asBooleanOrNull() == true
-        if (!hasMore) break
-        val nextOffset = root["nextOffset"].asLongOrNull()?.toInt() ?: (offset + page.size)
-        if (nextOffset <= offset) break
-        offset = nextOffset
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        if (
+          requestSequence == swarmRequestSequence.get() &&
+          requestCacheScope == currentCacheScope() &&
+          sameOutboxSession(parentKey, _sessionKey.value) &&
+          isSwarmEnabled()
+        ) {
+          scheduleSwarmRetry(parentKey, requestCacheScope, attempt)
+        }
+        return
       }
-    } catch (_: Throwable) {
+    if (
+      requestSequence != swarmRequestSequence.get() ||
+      requestCacheScope != currentCacheScope() ||
+      !sameOutboxSession(parentKey, _sessionKey.value) ||
+      !isSwarmEnabled()
+    ) {
       return
     }
-    if (requestSequence != swarmRequestSequence.get() || !sameOutboxSession(parentKey, _sessionKey.value)) return
     synchronized(swarmLock) {
       if (swarmSessionKey != parentKey) {
         swarmSessionKey = parentKey
@@ -3963,6 +4011,26 @@ class ChatController internal constructor(
       swarmSessions = swarmActivityTracker.decorate(rows)
     }
     publishSwarmGroups()
+  }
+
+  private fun scheduleSwarmRetry(
+    parentKey: String,
+    requestCacheScope: ChatCacheScope,
+    attempt: Int,
+  ) {
+    val delayMs = SWARM_REFRESH_RETRY_DELAYS_MS.getOrNull(attempt) ?: return
+    swarmRefreshJob?.cancel()
+    swarmRefreshJob =
+      scope.launch {
+        delay(delayMs)
+        if (
+          requestCacheScope == currentCacheScope() &&
+          sameOutboxSession(parentKey, _sessionKey.value) &&
+          isSwarmEnabled()
+        ) {
+          fetchSwarmSessions(parentKey, attempt = attempt + 1)
+        }
+      }
   }
 
   private fun currentSessionWindowLimit(): Int = _sessions.value.size.takeIf { it > 0 } ?: 100
@@ -5781,6 +5849,7 @@ class ChatController internal constructor(
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
       ownerAgentId = obj["agentId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
       displayName = obj["displayName"].asStringOrNull()?.trim(),
+      derivedTitle = obj["derivedTitle"].asStringOrNull()?.trim(),
       label = obj["label"].asStringOrNull()?.trim(),
       category = obj["category"].asStringOrNull()?.trim(),
       pinned = obj["pinned"].asBooleanOrNull(),

@@ -352,6 +352,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var key: String
     public var kind: String?
     public var displayName: String?
+    public var derivedTitle: String?
     public var label: String?
     public var category: String?
     public var pinned: Bool?
@@ -464,11 +465,13 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         startedAt: Double? = nil,
         endedAt: Double? = nil,
         runtimeMs: Double? = nil,
-        agentRuntime: OpenClawChatAgentRuntime? = nil)
+        agentRuntime: OpenClawChatAgentRuntime? = nil,
+        derivedTitle: String? = nil)
     {
         self.key = key
         self.kind = kind
         self.displayName = displayName
+        self.derivedTitle = derivedTitle
         self.label = label
         self.category = category
         self.pinned = pinned

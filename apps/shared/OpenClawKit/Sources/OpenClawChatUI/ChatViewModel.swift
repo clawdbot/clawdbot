@@ -137,6 +137,8 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var swarmSessionKey: String?
     @ObservationIgnored
+    var swarmEnabled = false
+    @ObservationIgnored
     var swarmRefreshTask: Task<Void, Never>?
 
     public internal(set) var contextUsageFraction: Double?
@@ -894,6 +896,7 @@ extension OpenClawChatViewModel {
         let sessionKey = requestedSessionKey ?? self.sessionKey
         guard sessionKey == self.sessionKey else { return }
         if self.swarmSessionKey != sessionKey {
+            self.swarmEnabled = false
             self.resetSwarmProgress()
         }
         self.unreadPatchGuard.activate(key: self.sessionMutationIdentity(for: sessionKey))
@@ -953,7 +956,7 @@ extension OpenClawChatViewModel {
             guard self.isCurrentBootstrap(context) else { return }
 
             Task { [weak self] in await self?.refreshQuestions() }
-            Task { [weak self] in await self?.refreshSwarmSessions(sessionSnapshot: context.session) }
+            Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: context.session) }
 
             let payload = try await transport.requestHistory(sessionKey: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }

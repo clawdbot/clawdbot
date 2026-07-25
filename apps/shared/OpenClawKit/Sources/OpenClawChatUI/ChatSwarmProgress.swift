@@ -3,6 +3,7 @@ import SwiftUI
 private let maxTrackedSwarmGroups = 10000
 private let maxTrackedSwarmChildren = 100_000
 private let maxRenderedSwarmDotsPerPhase = 256
+private let swarmRefreshRetryDelays = [1.0, 2.0, 4.0]
 
 struct OpenClawChatSwarmActivityState: Equatable {
     private var currentPhaseByGroup: [String: String] = [:]
@@ -165,7 +166,7 @@ func buildOpenClawChatSwarmGroups(
               SelfContainedSwarmHelpers.belongsToParent(row, groupID: groupID, matchesParent: matchesParent),
               let status = SelfContainedSwarmHelpers.status(row)
         else { continue }
-        let label = [row.label, row.displayName, row.key]
+        let label = [row.label, row.displayName, row.derivedTitle, row.key]
             .compactMap { value -> String? in
                 let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return normalized?.isEmpty == false ? normalized : nil
@@ -188,7 +189,9 @@ func buildOpenClawChatSwarmGroups(
             phaseBuckets[phaseKey] = bucket
         }
         let phases = phaseBuckets.map { key, bucket -> OpenClawChatSwarmPhase in
-            let ordered = bucket.dots.sorted { $0.status < $1.status }
+            let ordered = bucket.dots.count > maxRenderedSwarmDotsPerPhase
+                ? bucket.dots.sorted { $0.status < $1.status }
+                : bucket.dots
             return OpenClawChatSwarmPhase(
                 id: key,
                 title: bucket.title,
@@ -218,7 +221,7 @@ func buildOpenClawChatSwarmGroups(
     }.sorted { $0.id < $1.id }
 }
 
-private enum SelfContainedSwarmHelpers {
+enum SelfContainedSwarmHelpers {
     static func status(_ row: OpenClawChatSessionEntry) -> OpenClawChatSwarmDotStatus? {
         if row.status == "running" || row.hasActiveRun == true {
             return .running
@@ -243,9 +246,37 @@ private enum SelfContainedSwarmHelpers {
         if let spawnedBy = row.spawnedBy, matchesParent(spawnedBy) {
             return true
         }
+        return self.generatedGroupBelongsToParent(groupID, matchesParent: matchesParent)
+    }
+
+    static func eventBelongsToParent(
+        _ event: OpenClawChatSessionsChangedEvent,
+        matchesParent: (String) -> Bool) -> Bool
+    {
+        if let parent = normalized(event.parentSessionKey) ?? normalized(event.spawnedBy) {
+            return matchesParent(parent)
+        }
+        let kind = self.normalized(event.kind)
+        if kind == "phase" || kind == "log" {
+            guard let sessionKey = normalized(event.sessionKey) else { return false }
+            return matchesParent(sessionKey)
+        }
+        guard let groupID = normalized(event.swarmGroupId) else { return false }
+        return self.generatedGroupBelongsToParent(groupID, matchesParent: matchesParent)
+    }
+
+    private static func generatedGroupBelongsToParent(
+        _ groupID: String,
+        matchesParent: (String) -> Bool) -> Bool
+    {
         let parts = groupID.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count > 2 else { return false }
+        guard parts.first == "swarm", parts.count > 2 else { return false }
         return matchesParent(parts.dropFirst().dropLast().joined(separator: ":"))
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized?.isEmpty == false ? normalized : nil
     }
 }
 
@@ -257,6 +288,11 @@ extension OpenClawChatViewModel {
     }
 
     func observeSwarmEvent(_ event: OpenClawChatSessionsChangedEvent) -> Bool {
+        guard swarmEnabled,
+              SelfContainedSwarmHelpers.eventBelongsToParent(event, matchesParent: { candidate in
+                  self.matchesCurrentSessionKey(incoming: candidate, current: self.sessionKey)
+              })
+        else { return false }
         var nextActivity = swarmActivityState
         guard nextActivity.observe(event) else { return false }
         swarmActivityState = nextActivity
@@ -267,7 +303,21 @@ extension OpenClawChatViewModel {
         return true
     }
 
+    func refreshSwarmCapability(sessionSnapshot: SessionSnapshot? = nil) async {
+        let requestedKey = sessionSnapshot?.key ?? sessionKey
+        guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
+        let enabled = await (try? transport.isSwarmEnabled(sessionKey: requestedKey)) == true
+        guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
+        swarmEnabled = enabled
+        guard enabled else {
+            self.resetSwarmProgress()
+            return
+        }
+        await self.refreshSwarmSessions(sessionKey: requestedKey, sessionSnapshot: sessionSnapshot)
+    }
+
     func scheduleSwarmRefresh() {
+        guard swarmEnabled else { return }
         let requestedKey = sessionKey
         swarmRefreshTask?.cancel()
         swarmRefreshTask = Task { [weak self] in
@@ -279,8 +329,10 @@ extension OpenClawChatViewModel {
 
     func refreshSwarmSessions(
         sessionKey requestedSessionKey: String? = nil,
-        sessionSnapshot: SessionSnapshot? = nil) async
+        sessionSnapshot: SessionSnapshot? = nil,
+        retryAttempt: Int = 0) async
     {
+        guard swarmEnabled else { return }
         let requestedKey = requestedSessionKey ?? sessionSnapshot?.key ?? sessionKey
         guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
         if swarmSessionKey != sessionKey {
@@ -293,12 +345,27 @@ extension OpenClawChatViewModel {
         do {
             let rows = try await transport.listChildSessions(parentKey: requestedKey)
             guard generation == swarmRefreshGeneration,
+                  swarmEnabled,
                   matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
             else { return }
             swarmSessions = swarmActivityState.decorate(rows)
         } catch {
-            guard generation == swarmRefreshGeneration else { return }
+            guard generation == swarmRefreshGeneration,
+                  swarmEnabled,
+                  matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
+            else { return }
             chatUILogger.debug("swarm child refresh failed: \(error.localizedDescription, privacy: .public)")
+            guard swarmRefreshRetryDelays.indices.contains(retryAttempt) else { return }
+            let delay = swarmRefreshRetryDelays[retryAttempt]
+            swarmRefreshTask?.cancel()
+            swarmRefreshTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+                await self?.refreshSwarmSessions(
+                    sessionKey: requestedKey,
+                    sessionSnapshot: sessionSnapshot,
+                    retryAttempt: retryAttempt + 1)
+            }
         }
     }
 

@@ -65,7 +65,7 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
     modifier = Modifier.fillMaxWidth(),
     shape = RoundedCornerShape(10.dp),
     color = ClawTheme.colors.surfaceRaised,
-    border = androidx.compose.foundation.BorderStroke(1.dp, ClawTheme.colors.danger.copy(alpha = 0.2f)),
+    border = androidx.compose.foundation.BorderStroke(1.dp, ClawTheme.colors.primary.copy(alpha = 0.2f)),
   ) {
     Column(
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -143,7 +143,7 @@ private fun ChatSwarmDotView(dot: ChatSwarmDot) {
         drawCircle(color = color, style = Stroke(width = 1.dp.toPx()))
       }
     }
-    ChatSwarmDotStatus.Running -> StatusDot(ClawTheme.colors.danger, description)
+    ChatSwarmDotStatus.Running -> StatusDot(ClawTheme.colors.primary, description)
     ChatSwarmDotStatus.Done -> StatusDot(ClawTheme.colors.success, description)
     ChatSwarmDotStatus.Failed ->
       Box(

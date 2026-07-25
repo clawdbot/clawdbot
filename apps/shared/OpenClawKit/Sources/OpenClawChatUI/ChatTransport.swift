@@ -30,6 +30,8 @@ public struct OpenClawQuestionResolvedEvent: Codable, Sendable {
 public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let sessionKey: String?
     public let agentId: String?
+    public let parentSessionKey: String?
+    public let spawnedBy: String?
     public let reason: String
     public let updatedAt: Double?
     public let lastReadAt: Double?
@@ -53,6 +55,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public init(
         sessionKey: String?,
         agentId: String? = nil,
+        parentSessionKey: String? = nil,
+        spawnedBy: String? = nil,
         reason: String,
         updatedAt: Double? = nil,
         lastReadAt: Double? = nil,
@@ -75,6 +79,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     {
         self.sessionKey = sessionKey
         self.agentId = agentId
+        self.parentSessionKey = parentSessionKey
+        self.spawnedBy = spawnedBy
         self.reason = reason
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
@@ -100,6 +106,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.sessionKey = try container.decodeIfPresent(String.self, forKey: .sessionKey)
         self.agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
+        self.parentSessionKey = try container.decodeIfPresent(String.self, forKey: .parentSessionKey)
+        self.spawnedBy = try container.decodeIfPresent(String.self, forKey: .spawnedBy)
         self.reason = try container.decode(String.self, forKey: .reason)
         self.updatedAt = try container.decodeIfPresent(Double.self, forKey: .updatedAt)
         self.lastReadAt = try container.decodeIfPresent(Double.self, forKey: .lastReadAt)
@@ -128,6 +136,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case sessionKey
         case agentId
+        case parentSessionKey
+        case spawnedBy
         case reason
         case updatedAt
         case lastReadAt
@@ -482,6 +492,14 @@ public enum OpenClawChatRunObservation: Sendable, Equatable {
     }
 }
 
+public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
+    public let swarmEnabled: Bool
+
+    public init(swarmEnabled: Bool) {
+        self.swarmEnabled = swarmEnabled
+    }
+}
+
 public protocol OpenClawChatTransport: Sendable {
     func createSession(
         key: String,
@@ -499,6 +517,7 @@ public protocol OpenClawChatTransport: Sendable {
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels() async throws -> [OpenClawChatModelChoice]
+    func isSwarmEnabled(sessionKey: String) async throws -> Bool
     var supportsSlashCommandCatalog: Bool { get }
     func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice]
     func sendMessage(
@@ -584,6 +603,10 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func isSwarmEnabled(sessionKey _: String) async throws -> Bool {
+        false
+    }
+
     public func listQuestions() async throws -> [QuestionRecord] {
         []
     }

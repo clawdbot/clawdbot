@@ -326,6 +326,14 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(response)
     }
 
+    func isSwarmEnabled(sessionKey: String) async throws -> Bool {
+        let request = OpenClawChatGatewayRequests.chatMetadata(
+            sessionKey: sessionKey,
+            fallbackAgentID: self.globalAgentId)
+        let response = try await gateway.request(request)
+        return try JSONDecoder().decode(OpenClawChatMetadataCapabilities.self, from: response).swarmEnabled
+    }
+
     func setSessionModel(sessionKey: String, model: String?) async throws {
         _ = try await self.patchSessionModel(sessionKey: sessionKey, agentID: nil, model: model)
     }

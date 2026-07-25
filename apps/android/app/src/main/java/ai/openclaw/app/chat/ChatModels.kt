@@ -171,6 +171,7 @@ data class ChatSessionEntry(
   val updatedAtMs: Long?,
   val ownerAgentId: String? = null,
   val displayName: String? = null,
+  val derivedTitle: String? = null,
   val label: String? = null,
   val category: String? = null,
   val pinned: Boolean? = null,
