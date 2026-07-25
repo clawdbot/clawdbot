@@ -88,6 +88,8 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
+  /** Agent that owns Talk sessions created without an agent-scoped session key. */
+  agentId?: string;
   /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */

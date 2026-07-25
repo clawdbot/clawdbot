@@ -1,10 +1,12 @@
 // Line plugin module implements setup surface behavior.
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
   createAllowFromSection,
+  createPromptParsedAllowFromForAccount,
   createStandardChannelSetupStatus,
-  defineTokenCredential,
-  mergeAllowFromEntries,
   createSetupTranslator,
+  defineTokenCredential,
+  parseSetupEntriesWithParser,
 } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultLineAccountId } from "./accounts.js";
@@ -20,7 +22,6 @@ import {
   resolveLineAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
-  type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "./setup-runtime-api.js";
 
@@ -46,45 +47,44 @@ const LINE_ALLOW_FROM_HELP_LINES = [
   t("wizard.channels.docs", { link: formatDocsLink("/channels/line", "channels/line") }),
 ];
 
-const lineDmPolicy: ChannelSetupDmPolicy = {
-  label: "LINE",
-  channel,
-  policyKey: "channels.line.dmPolicy",
-  allowFromKey: "channels.line.allowFrom",
-  resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultLineAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
-      ? {
-          policyKey: `channels.line.accounts.${accountId ?? resolveDefaultLineAccountId(cfg)}.dmPolicy`,
-          allowFromKey: `channels.line.accounts.${accountId ?? resolveDefaultLineAccountId(cfg)}.allowFrom`,
-        }
-      : {
-          policyKey: "channels.line.dmPolicy",
-          allowFromKey: "channels.line.allowFrom",
-        },
-  getCurrent: (cfg, accountId) =>
-    resolveLineAccount({ cfg, accountId: accountId ?? resolveDefaultLineAccountId(cfg) }).config
-      .dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy, accountId) =>
+const promptLineAllowFrom = createPromptParsedAllowFromForAccount({
+  defaultAccountId: resolveDefaultLineAccountId,
+  noteTitle: t("wizard.line.allowlistTitle"),
+  noteLines: LINE_ALLOW_FROM_HELP_LINES,
+  message: t("wizard.line.allowFromPrompt"),
+  placeholder: "U1234567890abcdef1234567890abcdef",
+  parseEntries: (raw) =>
+    parseSetupEntriesWithParser(raw, (entry) => {
+      const id = parseLineAllowFromId(entry);
+      return id ? { value: id } : { error: t("wizard.line.allowFromInvalid") };
+    }),
+  getExistingAllowFrom: ({ cfg, accountId }) =>
+    resolveLineAccount({ cfg, accountId }).config.allowFrom ?? [],
+  applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
     patchLineAccountConfig({
       cfg,
-      accountId: accountId ?? resolveDefaultLineAccountId(cfg),
+      accountId,
       enabled: true,
-      patch:
-        policy === "open"
-          ? {
-              dmPolicy: "open",
-              allowFrom: mergeAllowFromEntries(
-                resolveLineAccount({
-                  cfg,
-                  accountId: accountId ?? resolveDefaultLineAccountId(cfg),
-                }).config.allowFrom,
-                ["*"],
-              ),
-            }
-          : { dmPolicy: policy },
-      clearFields: policy === "pairing" || policy === "disabled" ? ["allowFrom"] : undefined,
+      patch: { allowFrom },
     }),
-};
+});
+
+const lineDmPolicy = createChannelDmPolicy({
+  label: "LINE",
+  channel,
+  resolveAccount: (cfg, accountId) =>
+    resolveLineAccount({ cfg, accountId: accountId ?? resolveDefaultLineAccountId(cfg) }),
+  applyPatch: ({ cfg, account, patch }) =>
+    patchLineAccountConfig({
+      cfg,
+      accountId: account.accountId,
+      enabled: true,
+      patch,
+      clearFields:
+        patch.dmPolicy === "pairing" || patch.dmPolicy === "disabled" ? ["allowFrom"] : undefined,
+    }),
+  promptAllowFrom: promptLineAllowFrom,
+});
 
 export const lineSetupWizard: ChannelSetupWizard = {
   channel,

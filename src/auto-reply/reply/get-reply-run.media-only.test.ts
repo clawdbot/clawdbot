@@ -769,7 +769,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "",
-      MediaPath: "/tmp/input.png",
+      __openclaw: { media: [expect.objectContaining({ path: "/tmp/input.png" })] },
     });
   });
 
@@ -1227,10 +1227,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "describe this",
-      MediaPath: imagePath,
-      MediaPaths: [imagePath],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: {
+        media: [expect.objectContaining({ path: imagePath, contentType: "image/png" })],
+      },
     });
     expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
     expect(call.followupRun.imageOrder).toEqual(["inline"]);

@@ -86,13 +86,13 @@ function assertAgentsDeleteResult([outputPath]) {
   );
   assert(fs.existsSync(process.env.SHARED_WORKSPACE), "shared workspace was removed");
   const remaining =
-    readJson(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"))?.agents?.list ?? [];
-  assert(Array.isArray(remaining), "agents list missing after delete");
-  assert(!remaining.some((entry) => entry?.id === "ops"), "deleted agent remained in config");
+    readJson(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"))?.agents?.entries ?? {};
   assert(
-    remaining.some((entry) => entry?.id === "main"),
-    "main agent missing after delete",
+    remaining && typeof remaining === "object" && !Array.isArray(remaining),
+    "agents entries missing after delete",
   );
+  assert(!Object.hasOwn(remaining, "ops"), "deleted agent remained in config");
+  assert(Object.hasOwn(remaining, "main"), "main agent missing after delete");
   console.log("agents delete shared workspace smoke ok");
 }
 

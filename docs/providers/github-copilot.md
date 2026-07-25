@@ -30,7 +30,7 @@ provider or agent runtime in three different ways.
       </Step>
       <Step title="Set a default model">
         ```bash
-        openclaw models set github-copilot/claude-opus-4.7
+        openclaw models set github-copilot/claude-opus-5
         ```
 
         Or in config:
@@ -38,7 +38,7 @@ provider or agent runtime in three different ways.
         ```json5
         {
           agents: {
-            defaults: { model: { primary: "github-copilot/claude-opus-4.7" } },
+            defaults: { model: { primary: "github-copilot/claude-opus-5" } },
           },
         }
         ```
@@ -62,9 +62,9 @@ provider or agent runtime in three different ways.
     {
       agents: {
         defaults: {
-          model: "github-copilot/gpt-5.5",
+          model: "github-copilot/gpt-5.6-sol",
           models: {
-            "github-copilot/gpt-5.5": {
+            "github-copilot/gpt-5.6-sol": {
               agentRuntime: { id: "copilot" },
             },
           },
@@ -211,7 +211,7 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 
   <Accordion title="Model availability depends on your plan">
     Copilot model availability depends on your GitHub plan. If a model is
-    rejected, try another ID (for example `github-copilot/gpt-5.5`). See
+    rejected, try another ID (for example `github-copilot/gpt-5.6-sol`). See
     GitHub's [supported models per Copilot plan](https://docs.github.com/en/copilot/reference/ai-models/supported-models#supported-ai-models-per-copilot-plan)
     for the current model list.
   </Accordion>

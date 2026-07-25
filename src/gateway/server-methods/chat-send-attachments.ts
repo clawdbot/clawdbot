@@ -19,6 +19,7 @@ import {
   type OffloadedRef,
   parseMessageWithAttachments,
   resolveChatAttachmentMaxBytes,
+  stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
@@ -239,16 +240,15 @@ export async function prepareChatSendAttachments(params: {
             supportsSessionModelImages ||
             explicitOriginTargetsAcpSession(explicitOrigin) ||
             explicitOriginTargetsPlugin;
-          const routeImageOffloadsAsMediaPaths = !supportsImages;
           const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: context.logGateway,
             supportsImages,
             acceptNonImage: true,
           });
-          parsedMessage = routeImageOffloadsAsMediaPaths
-            ? parsed.messageWithoutOffloadedImageRefs
-            : parsed.message;
+          parsedMessage = supportsImages
+            ? parsed.message
+            : stripImageMediaMarkers(parsed.message, parsed.offloadedRefs);
           parsedImages = parsed.images;
           imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
@@ -258,7 +258,7 @@ export async function prepareChatSendAttachments(params: {
             workspaceDir: mediaPathOffloadWorkspaceDir,
           } = await prestageMediaPathOffloads({
             offloadedRefs,
-            includeImageRefs: routeImageOffloadsAsMediaPaths,
+            includeImageRefs: !supportsImages,
             cfg,
             sessionKey,
             agentId,

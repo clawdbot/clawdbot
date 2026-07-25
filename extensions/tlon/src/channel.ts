@@ -170,11 +170,11 @@ export const tlonPlugin = createChatChannelPlugin({
           url: s.url ?? null,
         };
       },
-      probeAccount: async ({ account }) => {
+      probeAccount: async ({ account, timeoutMs }) => {
         if (!account.configured || !account.ship || !account.url || !account.code) {
           return { ok: false, error: "Not configured" };
         }
-        return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never);
+        return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never, timeoutMs);
       },
       resolveAccountSnapshot: ({ account }) => ({
         accountId: account.accountId,

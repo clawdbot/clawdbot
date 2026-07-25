@@ -36,6 +36,8 @@ function prepareCatalogExecutor(
       yieldDetected: boolean;
     };
     runAbortController?: AbortController;
+    sandboxSessionKey?: string;
+    sessionKey?: string;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -43,7 +45,7 @@ function prepareCatalogExecutor(
     attempt: {
       runId: "run-output-schema",
       sessionId: "session-output-schema",
-      sessionKey: "agent:main:main",
+      sessionKey: options?.sessionKey ?? "agent:main:main",
     } as never,
     activeSession: { agent: {}, isStreaming: false } as never,
     hookRunner: undefined as never,
@@ -67,7 +69,7 @@ function prepareCatalogExecutor(
     markSourceReplyDelivered: vi.fn(),
     onBlockReply: vi.fn(),
     onBlockReplyFlush: vi.fn(),
-    sandboxSessionKey: "agent:main:main",
+    sandboxSessionKey: options?.sandboxSessionKey ?? "agent:main:main",
     builtinToolNames: new Set(),
     replaySafeToolNames: new Set(),
   });
@@ -82,6 +84,19 @@ describe("prepareEmbeddedAttemptStream", () => {
       runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
       isCompacting: vi.fn(() => false),
     });
+  });
+
+  it("routes live events to the transcript session instead of the sandbox authority session", () => {
+    prepareCatalogExecutor([], {
+      sessionKey: "agent:main:internal-session-effects:companion-run",
+      sandboxSessionKey: "agent:main:main",
+    });
+
+    expect(mocks.buildSubscriptionParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:internal-session-effects:companion-run",
+      }),
+    );
   });
 
   it("validates hidden tool results before queuing transcript projections", async () => {

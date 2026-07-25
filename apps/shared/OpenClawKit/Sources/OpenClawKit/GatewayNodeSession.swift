@@ -828,11 +828,15 @@ public actor GatewayNodeSession {
         }
 
         if let expectedRoute {
-            return try await channel.request(
+            let data = try await channel.request(
                 method: method,
                 params: params,
                 timeoutMs: timeoutMs,
                 ifCurrentConnectionGeneration: expectedRoute.socketGeneration)
+            guard self.isCurrentRoute(expectedRoute), self.channel === channel else {
+                throw CancellationError()
+            }
+            return data
         }
         return try await channel.request(
             method: method,

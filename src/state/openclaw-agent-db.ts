@@ -38,6 +38,7 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
 import {
+  assertCanonicalAgentMediaPersistenceVersion,
   assertExistingAgentSchemaOwner,
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
@@ -181,6 +182,14 @@ export function inspectOpenClawAgentDatabaseOwner(
 ): OpenClawAgentDatabaseOwnerInspection {
   let db: DatabaseSync | undefined;
   try {
+    // A handle this process holds was owner-validated when it was opened, and
+    // ownership never changes afterwards. Answering from it keeps store
+    // resolution off a fresh connection for every row it inspects.
+    const opened = cachedDatabases.get(path.resolve(pathname));
+    if (opened?.db.isOpen) {
+      assertSupportedAgentSchemaVersion(opened.db, pathname);
+      return { status: "owned", agentId: opened.agentId };
+    }
     db = openNodeSqliteDatabase(pathname, { readOnly: true });
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);
@@ -312,6 +321,7 @@ export function openOpenClawAgentDatabase(
         // Integrity is not process-stable: the file can be damaged while evicted.
         // This guard is read-only (no busy waits), so every physical open pays it.
         assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
+        assertCanonicalAgentMediaPersistenceVersion(db, pathname);
         configureSqlitePreSchemaPragmas(db, {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         });

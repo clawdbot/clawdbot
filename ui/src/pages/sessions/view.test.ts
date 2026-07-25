@@ -226,17 +226,21 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const buttons = container.querySelectorAll<HTMLButtonElement>(".sessions-view-segment button");
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual([
+    const radios = container.querySelectorAll<HTMLElement & { checked: boolean }>(
+      ".sessions-view-segment wa-radio",
+    );
+    expect([...radios].map((radio) => radio.textContent?.trim())).toEqual([
       "Active",
       "Archived",
       "All",
     ]);
-    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
-    expect(buttons[1]?.getAttribute("aria-pressed")).toBe("false");
-    expect(buttons[2]?.getAttribute("aria-pressed")).toBe("false");
+    expect([...radios].map((radio) => radio.checked)).toEqual([true, false, false]);
 
-    buttons[2]?.click();
+    const group = radios[2]?.closest<HTMLElement & { value: string }>("wa-radio-group");
+    if (group) {
+      group.value = "all";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    }
 
     expect(onStatusFilterChange).toHaveBeenCalledWith("all");
   });

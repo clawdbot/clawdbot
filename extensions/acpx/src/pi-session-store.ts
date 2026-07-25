@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { piSessionStore } from "./pi-session-paths.js";
+import { piAcpSessionStoreRoot, piSessionStore } from "./pi-session-paths.js";
 
 const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
@@ -22,6 +22,7 @@ type PiFileCandidate = {
   identity: string;
   mtimeMs: number;
   size: number;
+  resumable: boolean;
 };
 
 type PiSummaryScanState = {
@@ -84,9 +85,10 @@ async function discoverPiSessionFiles(
   env: NodeJS.ProcessEnv,
 ): Promise<{ root: string; files: string[] }> {
   const store = piSessionStore(env);
+  const resolvedRoot = await realpathOrResolve(store.root);
   let entries: Array<import("node:fs").Dirent>;
   try {
-    entries = await fs.readdir(store.root, { withFileTypes: true });
+    entries = await fs.readdir(resolvedRoot, { withFileTypes: true });
   } catch {
     return { root: store.root, files: [] };
   }
@@ -96,7 +98,7 @@ async function discoverPiSessionFiles(
       files: entries
         .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
         .slice(0, MAX_DISCOVERY_FILES)
-        .map((entry) => path.join(store.root, entry.name)),
+        .map((entry) => path.join(resolvedRoot, entry.name)),
     };
   }
   const files: string[] = [];
@@ -104,7 +106,7 @@ async function discoverPiSessionFiles(
     if (!entry.isDirectory() || files.length >= MAX_DISCOVERY_FILES) {
       continue;
     }
-    const directory = path.join(store.root, entry.name);
+    const directory = path.join(resolvedRoot, entry.name);
     let children: Array<import("node:fs").Dirent>;
     try {
       children = await fs.readdir(directory, { withFileTypes: true });
@@ -121,6 +123,14 @@ async function discoverPiSessionFiles(
     }
   }
   return { root: store.root, files };
+}
+
+async function realpathOrResolve(value: string): Promise<string> {
+  try {
+    return await fs.realpath(value);
+  } catch {
+    return path.resolve(value);
+  }
 }
 
 async function mapConcurrent<T, R>(
@@ -143,6 +153,8 @@ async function mapConcurrent<T, R>(
 
 async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate[]> {
   const { root, files } = await discoverPiSessionFiles(env);
+  const configuredAcpRoot = piAcpSessionStoreRoot(env);
+  const acpRoot = configuredAcpRoot ? await realpathOrResolve(configuredAcpRoot) : undefined;
   const candidates = await mapConcurrent(files, IO_CONCURRENCY, async (file) => {
     try {
       const stats = await fs.stat(file);
@@ -153,6 +165,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
             identity: `${String(stats.dev)}:${String(stats.ino)}:${String(stats.birthtimeMs)}`,
             mtimeMs: stats.mtimeMs,
             size: stats.size,
+            resumable: acpRoot ? pathIsWithin(acpRoot, file) : false,
           }
         : undefined;
     } catch {
@@ -162,6 +175,16 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
   return candidates
     .filter((candidate): candidate is PiFileCandidate => candidate !== undefined)
     .toSorted((left, right) => right.mtimeMs - left.mtimeMs);
+}
+
+function pathIsWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
 }
 
 function parsePiJsonLines(content: string): Record<string, unknown>[] {
@@ -320,7 +343,9 @@ async function readPiSessionSummary(
   if (cached?.mtimeMs === candidate.mtimeMs && cached.size === candidate.size) {
     summaryCache.delete(candidate.file);
     summaryCache.set(candidate.file, cached);
-    return cached.summary;
+    return cached.summary
+      ? { ...cached.summary, canContinue: candidate.resumable }
+      : cached.summary;
   }
   let summary: PiSessionSummary | undefined;
   let scanState: PiSummaryScanState;
@@ -365,7 +390,7 @@ async function readPiSessionSummary(
         source: "pi-cli",
         modelProvider: "pi",
         archived: false,
-        canContinue: false,
+        canContinue: candidate.resumable,
         canArchive: false,
       };
     }

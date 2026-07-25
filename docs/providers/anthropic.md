@@ -281,6 +281,20 @@ remain read-only even on a continuation-enabled node.
 See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)
 for the node command and security boundary.
 
+## Live model discovery
+
+With an Anthropic API key configured, OpenClaw refreshes the Claude catalog from
+Anthropic's models endpoint, so newly published snapshots of supported model
+families appear without an OpenClaw release. Models the shipped catalog already
+describes always keep their published metadata and pricing.
+
+A newly discovered model is only offered when Anthropic's advertised
+capabilities match the request shaping OpenClaw would apply to it. A brand-new
+model generation therefore stays hidden until OpenClaw adds support for it,
+rather than appearing in the picker and failing every request. Discovery is
+advisory: without an API key, or if the endpoint is unreachable, the shipped
+catalog is used unchanged.
+
 ## Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
 
 Bare family aliases are rolling: `opus` tracks the current supported Claude

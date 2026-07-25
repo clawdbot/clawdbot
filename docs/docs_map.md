@@ -247,6 +247,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/ambient-room-events
 - Headings:
   - H2: Recommended setup
+  - H2: Prerequisites
   - H2: What changes
   - H2: Discord example
   - H2: Slack example
@@ -353,6 +354,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Forum channels
   - H2: Interactive components
   - H2: Access control and routing
+  - H3: Guild channel maps are allowlists
   - H3: Role-based agent routing
   - H2: Native commands and command auth
   - H2: Feature details
@@ -1020,6 +1022,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: QQ Bot failure signatures
   - H2: Matrix
   - H3: Matrix failure signatures
+  - H2: Gateway up but channel never connects
   - H2: Related
 
 ## channels/twitch.md
@@ -1337,7 +1340,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: If the command is missing
   - H2: Profiles
   - H2: Tabs
-  - H2: Snapshot / screenshot / actions
+  - H2: Extract / snapshot / screenshot / actions
   - H2: State and storage
   - H2: Debugging
   - H2: Existing Chrome via MCP
@@ -2758,6 +2761,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: /model in chat
   - H2: CLI
   - H2: Models registry (models.json)
+  - H3: Hosted catalog updates
   - H2: Related
 
 ## concepts/multi-agent.md
@@ -3332,6 +3336,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: CLI backend selection
   - H3: agents.defaults.promptOverlays
   - H3: agents.defaults.heartbeat
+  - H3: agents.defaults.systemAgent
   - H3: agents.defaults.compaction
   - H3: agents.defaults.contextPruning
   - H3: Block streaming
@@ -7864,6 +7869,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Usage and cost tracking
   - H2: Getting started
   - H2: Claude sessions across computers
+  - H2: Live model discovery
   - H2: Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Opus 5 and Fable 5)
   - H3: Why this exists
@@ -8551,7 +8557,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Privacy modes
   - H2: Getting started
   - H2: Model selection
-  - H2: Built-in catalog (30 models)
+  - H2: Built-in catalog (16 visible models)
   - H2: Model discovery
   - H2: DeepSeek V4 replay behavior
   - H2: Streaming and tool support

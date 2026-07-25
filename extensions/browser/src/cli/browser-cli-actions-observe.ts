@@ -3,14 +3,33 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { completeBrowserExtract, resolveBrowserExtractTimeoutMs } from "../browser-extract.js";
 import { runCommandWithRuntime } from "../core-api.js";
+import {
+  completeWithPreparedSimpleCompletionModel,
+  extractAssistantText,
+  htmlToMarkdown,
+  normalizeWhitespace,
+  prepareSimpleCompletionModelForAgent,
+  sanitizeHtml,
+} from "../sdk-setup-tools.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
+import { danger, defaultRuntime, getRuntimeConfig, shortenHomePath } from "./core-api.js";
+
+const browserCliExtractDeps = {
+  completeWithPreparedSimpleCompletionModel,
+  extractAssistantText,
+  getRuntimeConfig,
+  htmlToMarkdown,
+  normalizeWhitespace,
+  prepareSimpleCompletionModelForAgent,
+  sanitizeHtml,
+};
 
 function runBrowserObserve(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -24,6 +43,62 @@ export function registerBrowserActionObserveCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
+  browser
+    .command("extract")
+    .description("Answer a question from the current page")
+    .argument("<question>", "Question to answer from page content")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .option("--timeout-ms <ms>", "Overall timeout (default: 60000)", (v: string) =>
+      parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
+    )
+    .action(async (question: string, opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserObserve(async () => {
+        const query = question.trim();
+        if (!query) {
+          throw new Error("question must not be empty");
+        }
+        const timeoutMs = resolveBrowserExtractTimeoutMs({ timeoutMs: opts.timeoutMs });
+        const deadlineAt = Date.now() + timeoutMs;
+        const captured = await callBrowserRequest<{
+          ok: true;
+          targetId: string;
+          url: string;
+          html: string;
+        }>(
+          parent,
+          {
+            method: "POST",
+            path: "/extract",
+            query: profile ? { profile } : undefined,
+            body: { targetId: normalizeOptionalString(opts.targetId), timeoutMs },
+          },
+          { timeoutMs },
+        );
+        const result = await completeBrowserExtract({
+          html: captured.html,
+          url: captured.url,
+          query,
+          agentId: "main",
+          deadlineAt,
+          deps: browserCliExtractDeps,
+        });
+        if ((result.details as { ok?: unknown } | undefined)?.ok === false) {
+          const text = result.content.find((block) => block.type === "text")?.text;
+          throw new Error(text || "Browser extract failed");
+        }
+        if (parent?.json) {
+          defaultRuntime.writeJson(result);
+          return;
+        }
+        const text = result.content.find((block) => block.type === "text")?.text;
+        if (text) {
+          defaultRuntime.log(text);
+        }
+      });
+    });
+
   browser
     .command("console")
     .description("Get recent console messages")

@@ -14,6 +14,7 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatTranscriptCache
@@ -2841,6 +2842,7 @@ class NodeRuntime private constructor(
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
+  val chatSwarmGroups: StateFlow<List<ChatSwarmGroup>> = chat.swarmGroups
   val chatSessionBranches: StateFlow<List<SessionBranch>> = chat.sessionBranches
   val chatSessionBranchesLoading: StateFlow<Boolean> = chat.sessionBranchesLoading
   val chatSessionBranchSwitching: StateFlow<Boolean> = chat.sessionBranchSwitching

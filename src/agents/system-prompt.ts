@@ -467,6 +467,22 @@ function buildWebchatCanvasSection(params: {
   ];
 }
 
+function buildControlUiSessionCompanionSection(params: {
+  isMinimal: boolean;
+  runtimeChannel?: string;
+}) {
+  if (params.isMinimal || params.runtimeChannel !== "webchat") {
+    return [];
+  }
+  return [
+    "## Control UI Session Companion",
+    "- Operator has a read-only rail companion for this session's status and explanations.",
+    "- On request, do not spawn sub-agents or burn main-thread turns merely to summarize status or re-explain recent work.",
+    "- Reserve `sessions_spawn` for delegated work with its own deliverable.",
+    "",
+  ];
+}
+
 function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   if (params.isMinimal) {
     return [];
@@ -1327,6 +1343,10 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       runtimeChannel,
       sourceMessageToolOnly,
+    }),
+    ...buildControlUiSessionCompanionSection({
+      isMinimal,
+      runtimeChannel,
     }),
     ...buildMessagingSection({
       isMinimal,

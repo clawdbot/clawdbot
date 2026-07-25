@@ -49,9 +49,9 @@ describe("moonshot provider catalog", () => {
       thinkingLevelMap: {
         off: null,
         minimal: null,
-        low: null,
+        low: "low",
         medium: null,
-        high: null,
+        high: "high",
         xhigh: "max",
         max: "max",
       },
@@ -66,7 +66,7 @@ describe("moonshot provider catalog", () => {
       },
       compat: {
         supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["max"],
+        supportedReasoningEfforts: ["low", "high", "max"],
       },
     });
     expect(requireMoonshotModel(provider, "kimi-k2.7-code")).toMatchObject({

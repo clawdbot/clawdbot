@@ -100,21 +100,21 @@ describe("detectZaiEndpoint", () => {
     }> = [
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 200 },
         },
-        expected: { endpoint: "global", modelId: "glm-5.1" },
+        expected: { endpoint: "global", modelId: "glm-5.2" },
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
-          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 404 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.2": { status: 200 },
         },
-        expected: { endpoint: "cn", modelId: "glm-5.1" },
+        expected: { endpoint: "cn", modelId: "glm-5.2" },
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
-          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 404 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.2": { status: 404 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": { status: 200 },
         },
         expected: { endpoint: "coding-global", modelId: "glm-5.2" },
@@ -199,8 +199,8 @@ describe("detectZaiEndpoint", () => {
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 401 },
-          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 401 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 401 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.2": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-4.7": { status: 401 },
@@ -240,7 +240,7 @@ describe("detectZaiEndpoint", () => {
       .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
     vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
     const fetchFn = makeFetch({
-      "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
+      "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 200 },
     });
 
     await detectZaiEndpoint({

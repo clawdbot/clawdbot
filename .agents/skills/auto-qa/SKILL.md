@@ -1,0 +1,64 @@
+---
+name: auto-qa
+description: "Continuously audit, live-test, and stress-test the current OpenClaw codebase across at least ten independently scoped subsystem lanes; reproduce and deduplicate genuine bugs, verify focused fixes, maintain an evidence-backed report, and prepare or land pull requests according to maintainer authorization and risk. Use for OpenClaw-wide autonomous QA, live-provider campaigns, gateway, CLI, web, plugin, native-app, scenario, packaging, and extended soak testing."
+---
+
+# OpenClaw Auto QA
+
+Run a continuous, current-`main` OpenClaw product campaign. Treat a reviewer finding as a hypothesis, a passing test as evidence only for its actual head, and a merge as complete only when the canonical repository confirms it. Repair the actual root cause in its canonical owner; a smaller patch is not better if it leaves sibling paths, lifecycle invariants, or the defective abstraction intact.
+
+## Start with the moving source
+
+1. Read all of root `AGENTS.md`, then each scoped guide for the lanes under inspection. Read the current skill for a specialized workflow instead of reproducing stale instructions:
+   - `$openclaw-landable-bug-sweep` for bug acceptance and duplicate handling.
+   - `$openclaw-testing` for actual test and CI selection.
+   - `$openclaw-qa-testing` for QA Lab, scenario catalogs, and real provider lanes.
+   - `$control-ui-e2e` for browser and Control UI proof.
+   - `$crabbox` for remote, Docker, packaged, cross-platform, and live proof.
+   - `$autoreview` for fresh independent review before publishing or landing.
+   - `$openclaw-pr-maintainer` for authorized maintainer-side GitHub actions.
+2. Check `git status -sb`. When network access is authorized, let the orchestrator refresh with `git fetch origin main`; record the full `origin/main` SHA and inspect the current source, package scripts, scenario inventory, workflows, and scoped guides at that SHA. For an explicitly offline or read-only assignment, record the existing remote-tracking SHA and disclose that remote freshness is unverified; never fetch or contact a provider without authorization. Never pull, rebase, or switch a checkout that another agent is using.
+3. Make one requested, fresh `codex/` worktree per implementation task. Keep reviewer workers read-only. Serialize all shared `origin/main` refreshes through the orchestrator; pause worker fetches before repository-native PR review, preparation, or landing. After a successful landing, fetch `origin/main` again, verify the recorded merge commit is an ancestor of that fetched ref, and only then broadcast its full immutable SHA and resume workers. Revalidate candidates against each new head without changing a sibling's active worktree. When offline, disclose that remote freshness is unverified.
+4. Initialize or resume the user-requested Markdown report and numbered ledger. Read [references/campaign-evidence.md](references/campaign-evidence.md) and [references/evidence-ledger.md](references/evidence-ledger.md) before accepting a finding. If the operator increases the target, update the active denominator and existing numbered ledger without erasing historical time-stamped progress.
+
+## Keep at least ten lanes active
+
+When independent worker execution is authorized, keep **at least ten materially different subsystem investigations** in flight throughout the active campaign. Replace completed, failed, or stale workers promptly. Network authorization separately determines whether a lane may fetch, invoke an externally hosted model, or contact a provider; it does not prohibit authorized local subagents. If independent workers are unavailable or forbidden, record the concurrency requirement as blocked rather than claiming sequential reviews are concurrent. Start with the OpenClaw-specific lane map in [references/subsystem-lanes.md](references/subsystem-lanes.md). Split a large area into narrow, independent ownership surfaces instead of giving one worker the entire gateway, provider, UI, or app tree.
+
+Use first-class subagents when available and bounded `codex exec --sandbox read-only --ephemeral` reviewers when agent slots are exhausted; verify the installed CLI's supported options with `codex exec --help`. Give each worker the frozen main SHA, one subsystem and its scoped guide, a bounded duration, and the required evidence shape. Ask for source, at least one caller and callee, sibling behavior, regression tests, current-main reproduction, upstream dependency proof when relevant, severity, and duplicate references. Do not disclose a proposed diagnosis to an independent verifier. When the assignment forbids external model calls or independent workers, inspect ten subsystem slices locally, report the actual concurrency as blocked, and never represent sequential inspection as ten active lanes.
+
+Observe CPU, memory pressure, disk, open ports, actual worker count, and gateway health between waves. Scale to the machine and operator-authorized load rather than mechanically starting 64 workers or treating a brief load-average spike as failure. Reduce campaign concurrency for sustained memory pressure, gateway failures, process starvation, or an actual operator limit. Keep remote proofs serialized per Testbox lease; never reclaim, sync, or launch another command while that lease has an active command. When a local process session disappears, recover the authoritative remote job and exact exit before retrying or claiming a pass. Use bounded retries and timeouts. Stop only campaign-owned processes.
+
+## Prove actual product behavior
+
+Read [references/live-proof-routing.md](references/live-proof-routing.md) before invoking a provider, private QA build, remote lease, packaged install, or native app.
+
+- Use isolated campaign state and free localhost ports for dev gateways. Never stop, restart, reconfigure, migrate, or bind the operator's running gateway, app, device, state directory, or default gateway port.
+- Classify source trust before execution. Do not execute untrusted contributor scripts, hooks, configuration, tests, or package installation on a local or credential-hydrated machine.
+- Use the existing service-account or provider credential only through the approved secret-backed workflow. Never print, log, commit, echo, export into an untrusted worker, or include credentials in test artifacts.
+- For an OpenAI claim, assert the actual configured `openai/<model>`, a real model response, and the requested tool, file, image, streaming, or subagent behavior. An unavailable provider, mock, skipped test, fallback response, or an earlier head is not live proof.
+- Derive QA scenario IDs from current `qa/scenarios/index.yaml` and scenario YAML. Inspect the actual harness and generated summary. Count a scenario only when the requested run reports a nonzero total, zero failures, and the exact model, provider mode, and relevant behavior.
+- Cap an individual live subagent-fanout scenario at 780 seconds after startup. Separately verify setup, timeout recovery, the original parent, child completion, and the final nonzero scenario result.
+- For installed-package or plugin bugs, run the real current packaging and user install/update path. Unit tests alone do not prove a built distribution, npm package, Docker image, or Git plugin.
+- Test iOS, Android, and macOS only where the current host, device, simulator, signing identity, emulator, or hosted proof actually supports the operation. Record unavailable prerequisites rather than manufacturing mobile or UI coverage.
+- Bound stress and soak tests, record exact start time and successful/failed/skipped counts, and continue observing system health. Never describe a ten-hour soak as complete before ten actual elapsed hours.
+
+## Turn findings into verified fixes
+
+1. Deduplicate against the current ledger, `origin/main`, current open and merged GitHub work, and sibling root causes. Count one broken invariant once, even when it produces multiple model, platform, route, lifecycle, or UI symptoms.
+2. Independently reproduce the actual current-main user path. Map the entry point, canonical owner, callers, callees, sibling implementations, state lifecycle, existing regressions, shipped contracts, and relevant direct upstream source. Identify why the current design fails before proposing a repair.
+3. Refactor the canonical owner in an isolated worktree. Repair all affected sibling paths in the same coherent change, simplify or remove the defective abstraction, and carry authoritative facts through the existing lifecycle. Prefer the appropriately sized root-cause solution over a minimal guard, special case, extra cache, fallback, compatibility shim, or narrowly passing test.
+4. Preserve public configuration, plugin ownership, gateway protocol, migrations, provider contracts, persistent state, and external dependencies. When a correct root-cause repair would change a sensitive contract or requires a product decision, prepare it for operator review; do not disguise that risk as a small autonomous fix.
+5. Add authentic regression coverage for the original reproduction, affected siblings, lifecycle cleanup, and unchanged legitimate behavior. Run appropriately scoped proof on the exact candidate head. Route Docker, real providers, packaging, full checks, typechecking, broad suites, and browser work through the existing remote workflow; inspect actual exit status, nonzero scenario counts, and artifacts.
+6. Run a fresh `$autoreview` on the complete final refactor. Resolve actionable findings; rerun review after any production, test, or head change. Personally read the latest ClawSweeper review, satisfy each applicable rank-up move with real evidence, and update the existing PR body before landing.
+7. Check existing open PRs, current author counts, and the actual repository automation before publishing. Read both the current labeler and response policy; verify the authenticated author association, repository permission, account type, automation branch prefix, and actual override label. Apply only exemptions proved by that current policy, including eligible owners, maintainers, collaborators, bots or apps, approved automation branches, and explicit overrides. Never infer capacity from a truncated list or assume that one privileged role represents every exemption. Reuse and repair an existing candidate PR for the same cause. When a real cap applies, hold reviewed worktrees and finish or land existing verified work first.
+8. Create a focused PR with the repository's actual template, canonical cause, user impact, frozen head, completed proof, and risk. Use only the current repo-native `scripts/pr` review, artifact, prepare, and merge workflow for authorized main landing.
+9. Autonomously merge only when the user authorized it **and** the canonical root-cause refactor is individually reproduced, low-risk, independently reviewed, current-main-compatible, and has green required exact-head proof. Evaluate risk by ownership and behavioral impact, not by whether the diff is the smallest possible. Verify the resulting canonical merge SHA before incrementing the ledger.
+
+Prepare but **do not autonomously merge** security or authentication changes; SQLite integrity, migration, schema, or persistent-state changes; public configuration or plugin SDK compatibility changes; protocol changes; architectural or product decisions; broad high-impact refactors; uncertain diagnoses; or a candidate with pending, skipped, stale, conflicting, or failing proof. A bounded low-risk root-cause refactor may be autonomously landable when explicitly authorized; sensitive or uncertain impact is not. Mark higher-risk changes **user review required** and keep them outside the accepted-bug count.
+
+## Maintain accurate campaign state
+
+Update the requested report throughout the campaign, not only at the end. Follow [references/campaign-evidence.md](references/campaign-evidence.md) for campaign and active-lane evidence and [references/evidence-ledger.md](references/evidence-ledger.md) for verified bug states. Separate discovered hypotheses, reproduced bugs, review-required PRs, exact-head validated fixes, and actually merged fixes. Report the frozen main SHA, worker lanes, resource use, live model and gateway proof, soak timestamps, actual failures, independent review, CI run IDs, PR links, and canonical merge SHAs.
+
+Count only distinct, verified, authorized, **actually merged** low-risk root-cause fixes toward the operator's current explicit target. Never count the Auto QA skill PR, observations, pending PRs, skipped checks, existing unrelated merges, individual symptoms of the same defect, hypotheses, or review-required fixes. Keep iterating on this skill from real OpenClaw campaign evidence in a separate skill-only worktree and PR.

@@ -8,10 +8,7 @@ import type {
   SessionSuggestionResolution,
   TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type {
-  SessionObserverDigest,
-  SessionsObserverAskResult,
-} from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -32,11 +29,11 @@ import type {
   ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
-import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
+import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import { renderChatViewNotices } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import {
@@ -51,13 +48,13 @@ import {
 } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
-import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import "./components/chat-sidebar.ts";
+import type { SessionRailMode } from "./components/chat-session-rail.ts";
+import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
 import type {
   DetailFullMessageResult,
   SidebarContent,
@@ -67,7 +64,6 @@ import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
   type ChatTranscriptController,
-  isChatThreadSearchOpen,
   renderChatPinnedMessages,
   renderChatSearchBar,
   renderChatThread,
@@ -110,21 +106,25 @@ export type ChatProps = {
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
   observerDigest?: SessionObserverDigest | null;
-  observerHudReady?: boolean;
+  sessionRailReady?: boolean;
   observerRunId?: string | null;
   observerStartedAt?: number;
   observerLastReadAt?: number;
-  onObserverAsk?: (sessionKey: string, question: string) => Promise<SessionsObserverAskResult>;
   onObserverVisibilityChange?: (visible: boolean) => void;
+  sessionRailCompanion?: ChatSessionCompanionThread;
+  sessionRailOpenRequest?: number;
+  sessionRailMode?: SessionRailMode;
+  sessionRailDocked?: boolean;
+  onSessionRailSubmit?: (question: string) => void;
+  onSessionRailDraftChange?: (draft: string) => void;
+  onSessionRailClear?: () => void;
+  onSessionRailModeChange?: (mode: SessionRailMode) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
   messages: unknown[];
   historyPagination?: { loading: boolean };
-  sideChatTurns?: ChatSideResult[];
-  sideChatPending?: ChatSideResultPending | null;
-  sideChatHidden?: boolean;
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
@@ -225,15 +225,8 @@ export type ChatProps = {
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
   onHistoryIntent?: (event: Event) => void;
-  /** Sends a detached /btw side question (selection popup or side-chat
-   * follow-up). `displayQuestion` overrides the pending-turn display when the
-   * command embeds carried follow-up context; `onSendRejected` lets the panel
-   * restore its typed follow-up when the detached send is not accepted. */
-  onSideQuestion?: (command: string, displayQuestion?: string, onSendRejected?: () => void) => void;
-  /** Hides the side-chat panel; the conversation (and a pending run) survives. */
-  onSideChatClose?: () => void;
-  /** Discards the side-chat conversation and retires any pending run. */
-  onSideChatClear?: () => void;
+  onCompanionQuestion?: (question: string) => void;
+  onCompanionPrefill?: (question: string) => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
   agentsList: {
@@ -305,11 +298,6 @@ export function renderChat(props: ChatProps) {
   const tasksOpen = props.backgroundTasks?.collapsed === false;
   const tasksDockBottom = tasksOpen && props.backgroundTasks?.narrowLayout === true;
   const canCompose = props.canSend;
-  const sideChatProps = {
-    turns: props.sideChatTurns ?? [],
-    pending: props.sideChatPending ?? null,
-    hidden: props.sideChatHidden === true,
-  };
   const openImage = props.onOpenImage
     ? (item: ImageLightboxItem, requestVersion?: number) => {
         if (requestVersion === undefined) {
@@ -322,7 +310,6 @@ export function renderChat(props: ChatProps) {
   const openImmediateImage = props.onOpenImage
     ? (item: ImageLightboxItem) => openImage?.(item, props.onRequestOpenImage?.())
     : undefined;
-  const sideChatVisible = isSideChatPanelVisible(sideChatProps);
   const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
   let chatSection: HTMLElement | null = null;
   const thread = renderChatThread(
@@ -377,14 +364,16 @@ export function renderChat(props: ChatProps) {
       onChatScroll: props.onChatScroll,
       onHistoryIntent: props.onHistoryIntent,
       onDraftChange: props.onDraftChange,
-      getDraft: props.getDraft,
       onSend: props.onSend,
       onSetReply: props.onSetReply,
       onRewindMessage: props.onRewindMessage,
       onForkMessage: props.onForkMessage,
       // Archived/non-composable sessions must not offer selection actions:
       // withholding the callback keeps the popup from rendering at all.
-      onSideQuestion: props.canSend && !props.suggestionComposer ? props.onSideQuestion : undefined,
+      onCompanionQuestion:
+        props.canSend && !props.suggestionComposer ? props.onCompanionQuestion : undefined,
+      onCompanionPrefill:
+        props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
       onOpenSession: props.onSessionSelect,
       backgroundTasks: props.backgroundTasks,
       onFocusComposer: () =>
@@ -514,11 +503,6 @@ export function renderChat(props: ChatProps) {
           props.onClearReply?.();
           return;
         }
-        if (event.key === "Escape" && sideChatVisible && !isChatThreadSearchOpen(props.paneId)) {
-          event.preventDefault();
-          props.onSideChatClose?.();
-          return;
-        }
         if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === "f") {
           event.preventDefault();
           toggleChatThreadSearch(props.paneId, requestUpdate);
@@ -575,80 +559,79 @@ export function renderChat(props: ChatProps) {
               : ""} ${sidebarOpen && sidebarStacked ? "chat-split-container--stacked" : ""}"
           >
             <div
-              class="chat-main"
+              class="chat-main ${props.sessionRailDocked && props.sessionRailMode === "expanded"
+                ? "chat-main--rail-docked"
+                : ""}"
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
             >
-              ${thread}
-              ${props.inlineApproval && props.onApprovalDecision
-                ? html`<div class="chat-inline-approval">
-                    ${renderExecApprovalCard({
-                      approval: props.inlineApproval,
-                      busy: props.approvalBusy === true,
-                      error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
-                      nowMs: props.approvalNowMs ?? Date.now(),
-                      variant: "inline",
-                      onDecision: props.onApprovalDecision,
-                    })}
-                  </div>`
-                : nothing}
-              ${renderChatTaskSuggestions({
-                suggestions: props.taskSuggestions ?? [],
-                busyIds: props.taskSuggestionBusyIds ?? new Set(),
-                canAccept: props.canAcceptTaskSuggestions === true,
-                canDismiss: props.canDismissTaskSuggestions === true,
-                onAccept: (suggestion) => props.onAcceptTaskSuggestion?.(suggestion),
-                onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
-              })}
-              ${renderChatPullRequests({
-                pullRequests: props.pullRequests ?? [],
-                branch: props.pullRequestsBranch,
-                rateLimited: props.pullRequestsRateLimited === true,
-                expanded: props.pullRequestsExpanded === true,
-                onExpand: () => props.onExpandPullRequests?.(),
-                onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
-              })}
-              ${renderChatSessionSuggestions({
-                suggestions: props.sessionSuggestions ?? [],
-                role: props.sessionSuggestionRole,
-                busyIds: props.sessionSuggestionBusyIds ?? new Set(),
-                archived: props.sessionSuggestionsArchived === true,
-                canResolve: props.canResolveSessionSuggestions === true,
-                onResolve: (suggestion, resolution) =>
-                  props.onResolveSessionSuggestion?.(suggestion, resolution),
-              })}
-              ${props.observerHudReady
+              <div class="chat-main__conversation">
+                ${thread}
+                ${props.inlineApproval && props.onApprovalDecision
+                  ? html`<div class="chat-inline-approval">
+                      ${renderExecApprovalCard({
+                        approval: props.inlineApproval,
+                        busy: props.approvalBusy === true,
+                        error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
+                        nowMs: props.approvalNowMs ?? Date.now(),
+                        variant: "inline",
+                        onDecision: props.onApprovalDecision,
+                      })}
+                    </div>`
+                  : nothing}
+                ${renderChatTaskSuggestions({
+                  suggestions: props.taskSuggestions ?? [],
+                  busyIds: props.taskSuggestionBusyIds ?? new Set(),
+                  canAccept: props.canAcceptTaskSuggestions === true,
+                  canDismiss: props.canDismissTaskSuggestions === true,
+                  onAccept: (suggestion) => props.onAcceptTaskSuggestion?.(suggestion),
+                  onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
+                })}
+                ${renderChatPullRequests({
+                  pullRequests: props.pullRequests ?? [],
+                  branch: props.pullRequestsBranch,
+                  rateLimited: props.pullRequestsRateLimited === true,
+                  expanded: props.pullRequestsExpanded === true,
+                  onExpand: () => props.onExpandPullRequests?.(),
+                  onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+                })}
+                ${renderChatSessionSuggestions({
+                  suggestions: props.sessionSuggestions ?? [],
+                  role: props.sessionSuggestionRole,
+                  busyIds: props.sessionSuggestionBusyIds ?? new Set(),
+                  archived: props.sessionSuggestionsArchived === true,
+                  canResolve: props.canResolveSessionSuggestions === true,
+                  onResolve: (suggestion, resolution) =>
+                    props.onResolveSessionSuggestion?.(suggestion, resolution),
+                })}
+                ${scrollToBottomButton}
+                ${renderChatSwarmProgress({
+                  sessions: props.swarmSessions ?? [],
+                  sessionKey: props.sessionKey,
+                })}
+                ${chatColumnFooter}
+              </div>
+              ${props.sessionRailReady
                 ? html`
-                    <openclaw-chat-observer-hud
+                    <openclaw-chat-session-rail
                       .sessionKey=${props.sessionKey}
                       .digest=${props.observerDigest ?? null}
                       .running=${Boolean(props.observerRunId)}
                       .activeRunId=${props.observerRunId ?? null}
                       .startedAt=${props.observerStartedAt}
                       .lastReadAt=${props.observerLastReadAt}
-                      .sideChatOpen=${sideChatVisible}
                       .planStatus=${props.planStatus ?? null}
                       .pullRequests=${props.pullRequests ?? []}
-                      .onAsk=${props.onObserverAsk}
+                      .companion=${props.sessionRailCompanion}
+                      .connected=${props.connected}
+                      .openRequest=${props.sessionRailOpenRequest ?? 0}
+                      .onSubmit=${props.onSessionRailSubmit}
+                      .onDraftChange=${props.onSessionRailDraftChange}
+                      .onClear=${props.onSessionRailClear}
+                      .onModeChange=${props.onSessionRailModeChange}
                       .onVisibilityChange=${props.onObserverVisibilityChange}
-                    ></openclaw-chat-observer-hud>
+                    ></openclaw-chat-session-rail>
                   `
                 : nothing}
-              ${scrollToBottomButton}
-              ${renderChatSwarmProgress({
-                sessions: props.swarmSessions ?? [],
-                sessionKey: props.sessionKey,
-              })}
-              ${chatColumnFooter}
-              ${renderSideChatPanel({
-                ...sideChatProps,
-                // Detached slash sends are refused while disconnected (see
-                // canSubmitDraft); hide the input instead of eating drafts.
-                canFollowUp:
-                  canCompose && props.connected && typeof props.onSideQuestion === "function",
-                onFollowUp: props.onSideQuestion,
-                onClose: props.onSideChatClose,
-                onClear: props.onSideChatClear,
-              })}
             </div>
 
             ${sidebarOpen

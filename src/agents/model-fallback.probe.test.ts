@@ -110,6 +110,7 @@ type AuthProfilesStoreModule = typeof import("./auth-profiles/store.js");
 type AuthProfilesSourceCheckModule = typeof import("./auth-profiles/source-check.js");
 type AuthProfilesUsageModule = typeof import("./auth-profiles/usage.js");
 type AuthProfilesOrderModule = typeof import("./auth-profiles/order.js");
+type ModelFallbackCooldownModule = typeof import("./model-fallback-cooldown.js");
 type ModelFallbackModule = typeof import("./model-fallback.js");
 type LoggerModule = typeof import("../logging/logger.js");
 
@@ -133,7 +134,7 @@ let mockedResolveAuthProfileOrder: ReturnType<
 >;
 let runWithModelFallback: ModelFallbackModule["runWithModelFallback"];
 let resolveCooldownDecision: (typeof import("./model-fallback.test-support.js"))["resolveCooldownDecision"];
-let probeThrottleInternals: ModelFallbackModule["probeThrottleInternals"];
+let probeThrottleInternals: ModelFallbackCooldownModule["probeThrottleInternals"];
 let resetLogger: LoggerModule["resetLogger"];
 let setLoggerOverride: LoggerModule["setLoggerOverride"];
 
@@ -147,6 +148,7 @@ async function loadModelFallbackProbeModules() {
   const authProfilesUsageModule = await import("./auth-profiles/usage.js");
   const authProfilesOrderModule = await import("./auth-profiles/order.js");
   const loggerModule = await import("../logging/logger.js");
+  const modelFallbackCooldownModule = await import("./model-fallback-cooldown.js");
   const modelFallbackModule = await import("./model-fallback.js");
   const modelFallbackTestSupport = await import("./model-fallback.test-support.js");
   mockedEnsureAuthProfileStore = vi.mocked(authProfilesStoreModule.ensureAuthProfileStore);
@@ -161,7 +163,7 @@ async function loadModelFallbackProbeModules() {
   mockedResolveAuthProfileOrder = vi.mocked(authProfilesOrderModule.resolveAuthProfileOrder);
   runWithModelFallback = modelFallbackModule.runWithModelFallback;
   resolveCooldownDecision = modelFallbackTestSupport.resolveCooldownDecision;
-  probeThrottleInternals = modelFallbackModule.probeThrottleInternals;
+  probeThrottleInternals = modelFallbackCooldownModule.probeThrottleInternals;
   resetLogger = loggerModule.resetLogger;
   setLoggerOverride = loggerModule.setLoggerOverride;
 }

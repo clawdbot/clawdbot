@@ -27,6 +27,7 @@ openclaw skills search "calendar"
 openclaw skills search --limit 20 --json
 openclaw skills install @owner/<slug>
 openclaw skills install @owner/<slug> --version <version>
+openclaw skills install skills-sh:<owner>/<repo>/<slug>
 openclaw skills install git:owner/repo
 openclaw skills install git:owner/repo@main
 openclaw skills install ./path/to/skill --as custom-name
@@ -69,8 +70,13 @@ openclaw skills workshop quarantine <proposal-id> --reason "Needs security revie
 ```
 
 `search`, `update`, and `verify` use ClawHub directly. `install @owner/<slug>`
-installs a ClawHub skill, `install git:owner/repo[@ref]` clones a Git skill,
-and `install ./path` copies a local skill directory. By default, `install`,
+installs a native ClawHub skill. `install skills-sh:<owner>/<repo>/<slug>` asks
+ClawHub to resolve an external listing to its exact synchronized GitHub commit;
+OpenClaw does not download from skills.sh. These entries are shown as
+**Not scanned by ClawHub**, and that trust state is preserved through updates
+and verification. Claimed or ClawHub-scanned skills use `@owner/<slug>`.
+`install git:owner/repo[@ref]` clones an unmanaged Git skill, and `install
+./path` copies a local skill directory. By default, `install`,
 `update`, and `verify` target the active workspace `skills/` directory; with
 `--global`, they target the shared managed skills directory. `list`/`info`/`check`
 still inspect the local skills visible to the current workspace and config.
@@ -97,7 +103,7 @@ Notes:
 | `install git:owner/repo[@ref]`   | Installs a Git skill. Branch refs may contain slashes, such as `git:owner/repo@feature/foo`.                                                                                                                                                                                      |
 | `install ./path/to/skill`        | Installs a local directory whose root contains `SKILL.md`.                                                                                                                                                                                                                        |
 | `install --as <slug>`            | Overrides the inferred slug for Git and local directory installs.                                                                                                                                                                                                                 |
-| `install --version <version>`    | Applies only to ClawHub skill refs.                                                                                                                                                                                                                                               |
+| `install --version <version>`    | Applies to native ClawHub skill refs, not `skills-sh:` refs; the mirrored reference already identifies the exact synchronized commit.                                                                                                                                             |
 | `install --force`                | Overwrites an existing workspace skill folder for the same slug.                                                                                                                                                                                                                  |
 | `install/update --force-install` | Installs a pending GitHub-backed ClawHub skill before ClawHub's scan completes.                                                                                                                                                                                                   |
 | `--global`                       | Targets the shared managed skills directory; cannot combine with `--agent <id>`.                                                                                                                                                                                                  |
