@@ -6,7 +6,7 @@ import {
   getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildManifestModelDefinition } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -23,22 +23,15 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const log = createSubsystemLogger("chutes-models");
 
-const CHUTES_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
-  providerId: "chutes",
-  catalog: manifest.modelCatalog.providers.chutes,
-});
+const CHUTES_MANIFEST_CATALOG = manifest.modelCatalog.providers.chutes;
 
 /** Base URL for Chutes OpenAI-compatible inference. */
-export const CHUTES_BASE_URL = CHUTES_MANIFEST_PROVIDER.baseUrl;
+export const CHUTES_BASE_URL = CHUTES_MANIFEST_CATALOG.baseUrl;
 
 const CHUTES_DEFAULT_CONTEXT_WINDOW = 128000;
 const CHUTES_DEFAULT_MAX_TOKENS = 4096;
 
-/** Bundled fallback Chutes model catalog, normalized from the plugin manifest. */
-export const CHUTES_MODEL_CATALOG = CHUTES_MANIFEST_PROVIDER.models;
-
-/** Adds Chutes provider compat metadata to one model catalog entry. */
-export function buildChutesModelDefinition(model: ModelDefinitionConfig): ModelDefinitionConfig {
+function decorateChutesModelDefinition(model: ModelDefinitionConfig): ModelDefinitionConfig {
   return {
     ...model,
     compat: {
@@ -47,6 +40,15 @@ export function buildChutesModelDefinition(model: ModelDefinitionConfig): ModelD
     },
   };
 }
+
+/** Bundled fallback Chutes model catalog, normalized from the plugin manifest. */
+export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = CHUTES_MANIFEST_CATALOG.models.map(
+  buildManifestModelDefinition({
+    providerId: "chutes",
+    catalog: CHUTES_MANIFEST_CATALOG,
+    decorate: decorateChutesModelDefinition,
+  }),
+);
 
 interface ChutesModelEntry {
   id: string;
@@ -87,10 +89,10 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
   const trimmedKey = normalizeOptionalString(accessToken) ?? "";
 
   if (isChutesModelDiscoveryTestEnvironment()) {
-    return CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
+    return structuredClone(CHUTES_MODEL_CATALOG);
   }
 
-  const staticCatalog = () => CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
+  const staticCatalog = () => structuredClone(CHUTES_MODEL_CATALOG);
 
   try {
     const data = await fetchChutesModelRows(trimmedKey || undefined);

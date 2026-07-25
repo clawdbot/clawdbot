@@ -5,7 +5,6 @@ export {
   BASETEN_DEFAULT_MODEL_REF,
   BASETEN_MODEL_CATALOG,
   buildBasetenModelCompat,
-  buildBasetenModelDefinition,
   buildStaticBasetenModels,
   discoverBasetenModels,
   projectBasetenLiveModels,
