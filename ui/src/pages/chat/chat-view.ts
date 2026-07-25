@@ -64,7 +64,6 @@ import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
   type ChatTranscriptController,
-  isChatThreadSearchOpen,
   renderChatPinnedMessages,
   renderChatSearchBar,
   renderChatThread,
