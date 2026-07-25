@@ -96,10 +96,26 @@ describe("agent run session target", () => {
       { agentId: "main", sessionKey, storePath },
       { sessionId: "legacy-session", updatedAt: 1 },
     );
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:legacy-session", storePath },
+      { sessionId: "legacy-session", updatedAt: 2 },
+    );
 
     await expect(
       resolveAgentRunSessionTarget({
         sessionId: "legacy-session",
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "legacy-session",
+          storePath,
+        }),
+      }),
+    ).resolves.toMatchObject({ sessionKey: "agent:main:legacy-session", storePath });
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "legacy-session",
+        sessionKey,
         sessionFile: formatSqliteSessionFileMarker({
           agentId: "main",
           sessionId: "legacy-session",
