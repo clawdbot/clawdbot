@@ -815,6 +815,15 @@ export class NpmUpdateSmoke {
       "--json",
       ...extraArgs,
     ];
+    const commandEnv = {
+      ...env,
+      ...(phase === "fresh-target" && this.targetRegistryUrl
+        ? {
+            NPM_CONFIG_REGISTRY: this.targetRegistryUrl,
+            npm_config_registry: this.targetRegistryUrl,
+          }
+        : {}),
+    };
     const startedAt = Date.now();
     const job: Job = {
       done: false,
@@ -829,14 +838,14 @@ export class NpmUpdateSmoke {
         attempt === 1
           ? () => this.spawnFresh(label, platform, extraArgs, env, packageSpec, phase, attempt + 1)
           : undefined,
-      rerunCommand: this.formatRerun("bash", args, env),
+      rerunCommand: this.formatRerun("bash", args, commandEnv),
       startedAt,
     };
     job.promise = this.spawnLogged(
       "bash",
       args,
       logPath,
-      env,
+      commandEnv,
       (text) => this.noteJobOutput(job, text),
       {
         timeoutLabel: `${label} ${phase}`,
