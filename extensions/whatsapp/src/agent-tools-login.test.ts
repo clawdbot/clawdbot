@@ -112,4 +112,18 @@ describe("createWhatsAppLoginTool", () => {
       currentQrDataUrl: undefined,
     });
   });
+
+  it("anchors the currentQrDataUrl pattern for grammar-constrained tool calling", () => {
+    const tool = createWhatsAppLoginTool();
+    const pattern = (tool.parameters as { properties: { currentQrDataUrl?: { pattern?: string } } })
+      .properties.currentQrDataUrl?.pattern;
+
+    // llama.cpp / GBNF rejects any model-facing `pattern` that is not fully
+    // anchored, aborting the whole tool catalog with "Pattern must start with
+    // '^' and end with '$'". The QR data URL pattern must be fully anchored.
+    expect(typeof pattern, "currentQrDataUrl must declare a pattern").toBe("string");
+    expect(pattern).toMatch(/^\^.*\$$/);
+    expect(pattern?.startsWith("^")).toBe(true);
+    expect(pattern?.endsWith("$")).toBe(true);
+  });
 });

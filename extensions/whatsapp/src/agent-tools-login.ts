@@ -26,7 +26,10 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
       currentQrDataUrl: Type.Optional(
         Type.String({
           maxLength: QR_DATA_URL_MAX_LENGTH,
-          pattern: "^data:image/png;base64,",
+          // Anchor both ends so llama.cpp / GBNF grammar-constrained tool
+          // calling can compile this schema; an unanchored pattern aborts the
+          // whole tool catalog with "Pattern must start with '^' and end with '$'".
+          pattern: "^data:image/png;base64,.+$",
         }),
       ),
     }),
