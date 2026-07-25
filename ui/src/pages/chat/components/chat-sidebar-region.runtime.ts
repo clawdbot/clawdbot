@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, render as renderTemplate } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
@@ -17,18 +17,9 @@ import {
 } from "../sidebar-layout.ts";
 import { resolveSplitDropZone } from "../split-drop-zone.ts";
 import { renderChatResizableDivider } from "./chat-resizable-divider.ts";
+import type { SidebarPanelTemplates, SidebarRegionCallbacks } from "./chat-sidebar-region-types.ts";
 import "./chat-sidebar.ts";
 import "./session-discussion-panel.ts";
-
-export type SidebarPanelTemplates = Partial<Record<SidebarSlotId, TemplateResult>>;
-
-export type SidebarRegionCallbacks = {
-  activatePanel: (panelId: string) => void;
-  closeSlot: (slot: SidebarSlotId) => void;
-  detachPanel: (panelId: string, side: SidebarSide, columnIndex: number) => void;
-  mergePanel: (panelId: string, targetColumnId: string, panelIndex: number) => void;
-  resizeColumn: (columnId: string, width: number) => void;
-};
 
 function panelTitle(slot: SidebarSlotId): string {
   if (slot === "chat") {
@@ -46,7 +37,6 @@ function panelsOf(layout: SidebarLayout): SidebarPanel[] {
 
 class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
-  @property({ attribute: false }) primary: TemplateResult | null = null;
   @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
   @property({ attribute: false }) panelOpenUrls: Partial<Record<SidebarSlotId, string | null>> = {};
   @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
@@ -254,8 +244,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           return;
         }
         queueMicrotask(() => {
-          const previous = element.previousElementSibling?.getBoundingClientRect();
-          const next = element.nextElementSibling?.getBoundingClientRect();
+          const { previous, next } = this.dividerNeighbors(column, side);
           const total = (previous?.width ?? 0) + (next?.width ?? 0);
           if (total > 0) {
             (element as HTMLElement & { splitRatio: number }).splitRatio =
@@ -266,9 +255,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       onDragover: (event) => this.allowPanelDrop(event),
       onDrop: (event) => this.dropOnBoundary(event, side, columnIndex, divider),
       onResize: (event) => {
-        const element = event.currentTarget as HTMLElement | null;
-        const previous = element?.previousElementSibling?.getBoundingClientRect();
-        const next = element?.nextElementSibling?.getBoundingClientRect();
+        const { previous, next } = this.dividerNeighbors(column, side);
         const total = (previous?.width ?? 0) + (next?.width ?? 0);
         if (total <= 0) {
           return;
@@ -276,11 +263,41 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         const requested =
           side === "left" ? total * event.detail.splitRatio : total * (1 - event.detail.splitRatio);
         const regionWidth =
-          this.availableWidth > 0 ? this.availableWidth : this.getBoundingClientRect().width;
+          this.availableWidth > 0
+            ? this.availableWidth
+            : (this.parentElement?.getBoundingClientRect().width ?? 0);
         const maxWidth = Math.max(SIDEBAR_MIN_WIDTH_PX, regionWidth * 0.6);
         this.callbacks?.resizeColumn(column.id, Math.min(requested, maxWidth));
       },
     });
+  }
+
+  private dividerNeighbors(column: SidebarColumn, side: SidebarSide) {
+    const sideColumns = this.layout.columns.filter((candidate) => candidate.side === side);
+    const columnIndex = sideColumns.findIndex((candidate) => candidate.id === column.id);
+    const columnElements = new Map(
+      Array.from(
+        this.parentElement?.querySelectorAll<HTMLElement>(".sidebar-column[data-column-id]") ?? [],
+        (element) => [element.dataset.columnId, element],
+      ),
+    );
+    const primary = this.parentElement?.querySelector<HTMLElement>(".sidebar-region__primary");
+    const previousElement =
+      side === "left"
+        ? columnElements.get(column.id)
+        : columnIndex > 0
+          ? columnElements.get(sideColumns[columnIndex - 1]?.id)
+          : primary;
+    const nextElement =
+      side === "left"
+        ? columnIndex + 1 < sideColumns.length
+          ? columnElements.get(sideColumns[columnIndex + 1]?.id)
+          : primary
+        : columnElements.get(column.id);
+    return {
+      previous: previousElement?.getBoundingClientRect(),
+      next: nextElement?.getBoundingClientRect(),
+    };
   }
 
   private renderNarrowColumn(panels: SidebarPanel[], activePanelId: string) {
@@ -299,43 +316,61 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       : nothing;
   }
 
-  override render() {
+  private renderState() {
     const width = this.availableWidth > 0 ? this.availableWidth : Number.POSITIVE_INFINITY;
     const collapsed = this.narrow || isSidebarRegionCollapsed(this.layout, width);
     const panels = panelsOf(this.layout);
-    const left = this.layout.columns.filter((column) => column.side === "left");
-    const right = this.layout.columns.filter((column) => column.side === "right");
     const activePanelId =
       panels.find((panel) => panel.id === this.focusPanelId)?.id ??
       this.layout.columns.at(-1)?.activePanelId ??
       panels[0]?.id ??
       "";
-    // The narrow grid reserves a second row for the collapsed panel strip; with no
-    // panels open that row would just steal height from the primary surface, which
-    // is the default state of every mobile chat pane.
-    const narrowShell = collapsed && panels.length > 0;
-    return html`<div class="sidebar-region ${narrowShell ? "sidebar-region--narrow" : ""}">
-      ${collapsed
-        ? nothing
-        : left.map(
-            (column, index) => html`
-              ${this.renderColumn(column)} ${this.renderDivider(column, "left", index + 1)}
-            `,
-          )}
-      <div class="sidebar-region__primary">${this.primary}</div>
-      ${collapsed
-        ? this.renderNarrowColumn(panels, activePanelId)
-        : right.map(
-            (column, index) => html`
-              ${this.renderDivider(column, "right", index)} ${this.renderColumn(column)}
-            `,
-          )}
-      ${repeat(
-        panels,
-        (panel) => panel.id,
-        (panel) => this.renderPanel(panel, collapsed, activePanelId),
-      )}
-    </div>`;
+    return { activePanelId, collapsed, panels };
+  }
+
+  private renderRight(collapsed: boolean, panels: SidebarPanel[], activePanelId: string) {
+    if (collapsed) {
+      return this.renderNarrowColumn(panels, activePanelId);
+    }
+    return this.layout.columns
+      .filter((column) => column.side === "right")
+      .map(
+        (column, index) => html`
+          ${this.renderDivider(column, "right", index)} ${this.renderColumn(column)}
+        `,
+      );
+  }
+
+  private renderPanels(collapsed: boolean, panels: SidebarPanel[], activePanelId: string) {
+    return repeat(
+      panels,
+      (panel) => panel.id,
+      (panel) => this.renderPanel(panel, collapsed, activePanelId),
+    );
+  }
+
+  protected override updated() {
+    const shell = this.parentElement;
+    const rightRoot = shell?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
+    const panelsRoot = shell?.querySelector<HTMLElement>(".sidebar-region__panels-runtime");
+    if (!rightRoot || !panelsRoot) {
+      return;
+    }
+    const { activePanelId, collapsed, panels } = this.renderState();
+    renderTemplate(this.renderRight(collapsed, panels, activePanelId), rightRoot);
+    renderTemplate(this.renderPanels(collapsed, panels, activePanelId), panelsRoot);
+  }
+
+  override render() {
+    const { collapsed } = this.renderState();
+    const left = this.layout.columns.filter((column) => column.side === "left");
+    return html`${collapsed
+      ? nothing
+      : left.map(
+          (column, index) => html`
+            ${this.renderColumn(column)} ${this.renderDivider(column, "left", index + 1)}
+          `,
+        )}`;
   }
 }
 

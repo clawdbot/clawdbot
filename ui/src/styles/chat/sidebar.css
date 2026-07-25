@@ -195,12 +195,10 @@
   flex: 0 0 400px;
 }
 
-openclaw-chat-sidebar-region {
-  display: flex;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
+openclaw-chat-sidebar-region,
+.sidebar-region__right-runtime,
+.sidebar-region__panels-runtime {
+  display: contents;
 }
 
 .sidebar-region {

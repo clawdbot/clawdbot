@@ -25,32 +25,46 @@ describe("chat pane sidebar layout", () => {
       mergePanel: vi.fn(),
       resizeColumn: vi.fn(),
     };
-    const renderLayout = async (layout: ReturnType<typeof openSlot> | { columns: [] }) => {
+    const renderLayout = async (
+      layout: ReturnType<typeof openSlot> | { columns: [] },
+      narrow = false,
+    ) => {
       render(
         renderSidebarRegion({
-          availableWidth: 1_400,
+          availableWidth: narrow ? 620 : 1_400,
           callbacks,
           discussionOpenUrl: null,
           focusPanelId: "",
           focusVersion: 0,
           layout,
-          narrow: false,
+          narrow,
           panelTemplates: { detail: html`<aside>Details</aside>` },
           primary: html`<main data-primary>Primary</main>`,
           sessionKey: "agent:main:current",
         }),
         container,
       );
-      await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
     };
 
     await renderLayout({ columns: [] });
     const primary = container.querySelector("[data-primary]");
     await renderLayout(openSlot({ columns: [] }, "detail"));
     expect(container.querySelector("[data-primary]")).toBe(primary);
+    await customElements.whenDefined("openclaw-chat-sidebar-region");
+    await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+    expect(container.querySelector("[data-primary]")).toBe(primary);
+    const rightTab = container.querySelector(".sidebar-region__right-runtime .sidebar-column__tab");
+    expect(rightTab).not.toBeNull();
+    expect(primary!.compareDocumentPosition(rightTab!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     await renderLayout({ columns: [] });
     expect(container.querySelector("[data-primary]")).toBe(primary);
     await renderLayout(openSlot({ columns: [] }, "detail"));
+    expect(container.querySelector("[data-primary]")).toBe(primary);
+    await renderLayout(openSlot({ columns: [] }, "detail"), true);
+    await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+    expect(container.querySelector("[data-primary]")).toBe(primary);
+    await renderLayout(openSlot({ columns: [] }, "detail"));
+    await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
     expect(container.querySelector("[data-primary]")).toBe(primary);
 
     container.remove();
@@ -65,6 +79,33 @@ describe("chat pane sidebar layout", () => {
     });
     expect(layout.columns[0]?.side).toBe("left");
     expect(layout.columns[0]?.panels[0]?.slot).toBe("chat");
+  });
+
+  it("keeps an unmeasured wide shell aligned with the sidebar runtime", () => {
+    const container = document.createElement("div");
+    render(
+      renderSidebarRegion({
+        availableWidth: 0,
+        callbacks: {
+          activatePanel: vi.fn(),
+          closeSlot: vi.fn(),
+          detachPanel: vi.fn(),
+          mergePanel: vi.fn(),
+          resizeColumn: vi.fn(),
+        },
+        discussionOpenUrl: null,
+        focusPanelId: "",
+        focusVersion: 0,
+        layout: openSlot({ columns: [] }, "detail"),
+        narrow: false,
+        panelTemplates: { detail: html`<aside>Details</aside>` },
+        primary: html`<main>Primary</main>`,
+        sessionKey: "agent:main:current",
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".sidebar-region--narrow")).toBeNull();
   });
 
   it("keeps bottom chat outside the sidebar model", () => {

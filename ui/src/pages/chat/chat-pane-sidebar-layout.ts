@@ -4,7 +4,7 @@ import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type {
   SidebarPanelTemplates,
   SidebarRegionCallbacks,
-} from "./components/chat-sidebar-region.ts";
+} from "./components/chat-sidebar-region-types.ts";
 import type {
   DetailFullMessageResult,
   SidebarFullMessageRequest,
@@ -13,12 +13,13 @@ import {
   closeSlot,
   detachPanelToColumn,
   fitSidebarLayout,
+  isSidebarRegionCollapsed,
   openSlot,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
-import "./components/chat-sidebar-region.ts";
 
 const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
+let sidebarRegionLoad: Promise<boolean> | null = null;
 
 export function renderSidebarRegion(params: {
   availableWidth: number;
@@ -32,18 +33,35 @@ export function renderSidebarRegion(params: {
   primary: TemplateResult;
   sessionKey: string;
 }): TemplateResult {
-  return html`<openclaw-chat-sidebar-region
-    .layout=${params.layout}
-    .primary=${params.primary}
-    .panelTemplates=${params.panelTemplates}
-    .panelOpenUrls=${{ discussion: params.discussionOpenUrl }}
-    .callbacks=${params.callbacks}
-    .sessionKey=${params.sessionKey}
-    .focusPanelId=${params.focusPanelId}
-    .focusVersion=${params.focusVersion}
-    .narrow=${params.narrow}
-    .availableWidth=${params.availableWidth}
-  ></openclaw-chat-sidebar-region>`;
+  const hasPanels = params.layout.columns.some((column) => column.panels.length > 0);
+  if (hasPanels && !customElements.get("openclaw-chat-sidebar-region")) {
+    sidebarRegionLoad ??= import("./components/chat-sidebar-region.runtime.ts").then(
+      () => true,
+      () => {
+        sidebarRegionLoad = null;
+        return false;
+      },
+    );
+  }
+  const availableWidth =
+    params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
+  const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
+  return html`<div class="sidebar-region ${collapsed && hasPanels ? "sidebar-region--narrow" : ""}">
+    <openclaw-chat-sidebar-region
+      .layout=${params.layout}
+      .panelTemplates=${params.panelTemplates}
+      .panelOpenUrls=${{ discussion: params.discussionOpenUrl }}
+      .callbacks=${params.callbacks}
+      .sessionKey=${params.sessionKey}
+      .focusPanelId=${params.focusPanelId}
+      .focusVersion=${params.focusVersion}
+      .narrow=${params.narrow}
+      .availableWidth=${params.availableWidth}
+    ></openclaw-chat-sidebar-region>
+    <div class="sidebar-region__primary">${params.primary}</div>
+    <div class="sidebar-region__right-runtime"></div>
+    <div class="sidebar-region__panels-runtime"></div>
+  </div>`;
 }
 
 export function resolveSidebarLayoutForBoard(params: {

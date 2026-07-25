@@ -3,7 +3,7 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mergePanelIntoColumn, openSlot } from "../sidebar-layout.ts";
-import "./chat-sidebar-region.ts";
+import "./chat-sidebar-region.runtime.ts";
 
 type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
   updateComplete: Promise<unknown>;
@@ -12,9 +12,10 @@ type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
 const regions: Region[] = [];
 
 async function createRegion(narrow: boolean) {
+  const shell = document.createElement("div");
+  shell.className = `sidebar-region ${narrow ? "sidebar-region--narrow" : ""}`;
   const region = document.createElement("openclaw-chat-sidebar-region") as Region;
   region.layout = openSlot(openSlot(openSlot({ columns: [] }, "discussion"), "chat"), "detail");
-  region.primary = html`<main data-primary>Primary</main>`;
   region.panelTemplates = {
     chat: html`<div data-panel="chat">Chat panel</div>`,
     detail: html`<div data-panel="detail">Detail panel</div>`,
@@ -29,43 +30,57 @@ async function createRegion(narrow: boolean) {
   };
   region.narrow = narrow;
   region.availableWidth = narrow ? 620 : 1_600;
-  document.body.append(region);
+  const primary = document.createElement("div");
+  primary.className = "sidebar-region__primary";
+  primary.innerHTML = "<main data-primary>Primary</main>";
+  const rightRuntime = document.createElement("div");
+  rightRuntime.className = "sidebar-region__right-runtime";
+  const panelsRuntime = document.createElement("div");
+  panelsRuntime.className = "sidebar-region__panels-runtime";
+  shell.append(region, primary, rightRuntime, panelsRuntime);
+  document.body.append(shell);
   regions.push(region);
   await region.updateComplete;
   return region;
 }
 
+function regionRoot(region: Region): HTMLElement {
+  return region.parentElement!;
+}
+
 afterEach(() => {
   for (const region of regions.splice(0)) {
-    region.remove();
+    region.parentElement?.remove();
   }
 });
 
 describe("chat sidebar region", () => {
   it("renders independent columns in rank order on wide panes", async () => {
     const region = await createRegion(false);
-    expect(region.querySelectorAll(".sidebar-column")).toHaveLength(3);
+    expect(regionRoot(region).querySelectorAll(".sidebar-column")).toHaveLength(3);
     expect(
-      Array.from(region.querySelectorAll(".sidebar-column__tab"), (tab) => tab.textContent?.trim()),
+      Array.from(regionRoot(region).querySelectorAll(".sidebar-column__tab"), (tab) =>
+        tab.textContent?.trim(),
+      ),
     ).toEqual(["Chat", "Details", "Discussion"]);
-    expect(region.querySelector("[data-primary]")).not.toBeNull();
+    expect(regionRoot(region).querySelector("[data-primary]")).not.toBeNull();
   });
 
   it("collapses every open panel into one tabbed column on narrow panes", async () => {
     const region = await createRegion(true);
-    expect(region.querySelectorAll(".sidebar-column")).toHaveLength(1);
-    expect(region.querySelectorAll(".sidebar-column__tab")).toHaveLength(3);
+    expect(regionRoot(region).querySelectorAll(".sidebar-column")).toHaveLength(1);
+    expect(regionRoot(region).querySelectorAll(".sidebar-column__tab")).toHaveLength(3);
     expect(
-      Array.from(region.querySelectorAll<HTMLButtonElement>(".sidebar-column__tab")).every(
-        (tab) => !tab.draggable,
-      ),
+      Array.from(
+        regionRoot(region).querySelectorAll<HTMLButtonElement>(".sidebar-column__tab"),
+      ).every((tab) => !tab.draggable),
     ).toBe(true);
 
-    region.querySelectorAll<HTMLButtonElement>(".sidebar-column__tab")[1]?.click();
+    regionRoot(region).querySelectorAll<HTMLButtonElement>(".sidebar-column__tab")[1]?.click();
     await region.updateComplete;
 
-    expect(region.querySelector('[data-panel="detail"]')).not.toBeNull();
-    expect(region.querySelector('[data-panel="chat"]')).not.toBeNull();
+    expect(regionRoot(region).querySelector('[data-panel="detail"]')).not.toBeNull();
+    expect(regionRoot(region).querySelector('[data-panel="chat"]')).not.toBeNull();
     expect(region.callbacks?.activatePanel).toHaveBeenCalled();
   });
 
@@ -77,7 +92,7 @@ describe("chat sidebar region", () => {
     region.layout = openSlot(region.layout, "discussion");
     await region.updateComplete;
 
-    expect(region.querySelector('[data-panel="discussion"]')).not.toBeNull();
+    expect(regionRoot(region).querySelector('[data-panel="discussion"]')).not.toBeNull();
   });
 
   it("foregrounds an already-mounted panel from a focus request", async () => {
@@ -88,13 +103,17 @@ describe("chat sidebar region", () => {
     region.focusVersion += 1;
     await region.updateComplete;
 
-    expect(region.querySelector('[data-panel="discussion"]')?.parentElement?.hidden).toBe(false);
-    expect(region.querySelector('[data-panel="chat"]')?.parentElement?.hidden).toBe(true);
+    expect(
+      regionRoot(region).querySelector('[data-panel="discussion"]')?.parentElement?.hidden,
+    ).toBe(false);
+    expect(regionRoot(region).querySelector('[data-panel="chat"]')?.parentElement?.hidden).toBe(
+      true,
+    );
   });
 
   it("routes native header drops through the merge callback", async () => {
     const region = await createRegion(false);
-    const tabs = region.querySelectorAll<HTMLElement>(".sidebar-column__tab");
+    const tabs = regionRoot(region).querySelectorAll<HTMLElement>(".sidebar-column__tab");
     const source = tabs[0];
     const target = tabs[1];
     expect(source).toBeDefined();
@@ -126,8 +145,8 @@ describe("chat sidebar region", () => {
 
   it("routes boundary drops through the detach callback", async () => {
     const region = await createRegion(false);
-    const source = region.querySelectorAll<HTMLElement>(".sidebar-column__tab")[1]!;
-    const boundary = region.querySelector<HTMLElement>("resizable-divider")!;
+    const source = regionRoot(region).querySelectorAll<HTMLElement>(".sidebar-column__tab")[1]!;
+    const boundary = regionRoot(region).querySelector<HTMLElement>("resizable-divider")!;
     boundary.getBoundingClientRect = () => ({ left: 0, top: 0, width: 4, height: 100 }) as DOMRect;
     const values = new Map<string, string>();
     const dataTransfer = {
@@ -154,11 +173,33 @@ describe("chat sidebar region", () => {
     );
   });
 
+  it("resizes the primary-adjacent column across the light-DOM shell boundary", async () => {
+    const region = await createRegion(false);
+    const primary = regionRoot(region).querySelector<HTMLElement>(".sidebar-region__primary");
+    const divider = regionRoot(region).querySelector<HTMLElement>(
+      ".sidebar-region__right-runtime .sidebar-column__divider",
+    );
+    const column = region.layout.columns.find((candidate) => candidate.side === "right");
+    expect(primary).toBeDefined();
+    expect(divider).toBeDefined();
+    expect(column).toBeDefined();
+    primary!.getBoundingClientRect = () => ({ width: 800 }) as DOMRect;
+    regionRoot(region).querySelector<HTMLElement>(
+      `[data-column-id="${column!.id}"]`,
+    )!.getBoundingClientRect = () => ({ width: 320 }) as DOMRect;
+
+    divider!.dispatchEvent(
+      new CustomEvent("resize", { bubbles: true, detail: { splitRatio: 0.25 } }),
+    );
+
+    expect(region.callbacks?.resizeColumn).toHaveBeenCalledWith(column!.id, 840);
+  });
+
   it("ignores a drag payload started by another sidebar region", async () => {
     const sourceRegion = await createRegion(false);
     const targetRegion = await createRegion(false);
-    const source = sourceRegion.querySelector<HTMLElement>(".sidebar-column__tab")!;
-    const target = targetRegion.querySelector<HTMLElement>(".sidebar-column__tab")!;
+    const source = regionRoot(sourceRegion).querySelector<HTMLElement>(".sidebar-column__tab")!;
+    const target = regionRoot(targetRegion).querySelector<HTMLElement>(".sidebar-column__tab")!;
     const values = new Map<string, string>();
     const dataTransfer = {
       effectAllowed: "none",
@@ -184,34 +225,35 @@ describe("chat sidebar region", () => {
     const region = await createRegion(false);
     const detail = region.layout.columns[1]!.panels[0]!;
     const target = region.layout.columns[2]!;
-    const detailNode = region.querySelector('[data-panel="detail"]');
+    const detailNode = regionRoot(region).querySelector('[data-panel="detail"]');
 
     region.layout = mergePanelIntoColumn(region.layout, detail.id, target.id, 0);
     await region.updateComplete;
 
-    expect(region.querySelector('[data-panel="detail"]')).toBe(detailNode);
+    expect(regionRoot(region).querySelector('[data-panel="detail"]')).toBe(detailNode);
   });
 
   it("preserves a panel DOM node while crossing the responsive breakpoint", async () => {
     const region = await createRegion(false);
-    const detailNode = region.querySelector('[data-panel="detail"]');
+    const detailNode = regionRoot(region).querySelector('[data-panel="detail"]');
 
     region.narrow = true;
     region.availableWidth = 620;
+    region.parentElement?.classList.add("sidebar-region--narrow");
     await region.updateComplete;
 
-    expect(region.querySelector('[data-panel="detail"]')).toBe(detailNode);
+    expect(regionRoot(region).querySelector('[data-panel="detail"]')).toBe(detailNode);
   });
 
   it("preserves the primary DOM node while crossing the responsive breakpoint", async () => {
     const region = await createRegion(false);
-    const primaryNode = region.querySelector("[data-primary]");
+    const primaryNode = regionRoot(region).querySelector("[data-primary]");
 
     region.narrow = true;
     region.availableWidth = 620;
     await region.updateComplete;
 
-    expect(region.querySelector("[data-primary]")).toBe(primaryNode);
+    expect(regionRoot(region).querySelector("[data-primary]")).toBe(primaryNode);
   });
 
   it("restores the persisted active tab when the session changes", async () => {
@@ -237,7 +279,9 @@ describe("chat sidebar region", () => {
     region.sessionKey = "session-b";
     await region.updateComplete;
 
-    expect(region.querySelector('[data-panel="discussion"]')?.parentElement?.hidden).toBe(false);
+    expect(
+      regionRoot(region).querySelector('[data-panel="discussion"]')?.parentElement?.hidden,
+    ).toBe(false);
   });
 
   it("gives a simultaneous explicit focus request precedence on session change", async () => {
@@ -249,19 +293,20 @@ describe("chat sidebar region", () => {
     region.focusVersion += 1;
     await region.updateComplete;
 
-    expect(region.querySelector('[data-panel="detail"]')?.parentElement?.hidden).toBe(false);
+    expect(regionRoot(region).querySelector('[data-panel="detail"]')?.parentElement?.hidden).toBe(
+      false,
+    );
   });
 
   it("keeps the narrow grid off when no panel is open", async () => {
     const region = await createRegion(true);
     region.layout = { columns: [] };
+    region.parentElement?.classList.remove("sidebar-region--narrow");
     await region.updateComplete;
 
     // The two-row narrow grid must not reserve a panel row for an empty layout,
     // or every default mobile chat pane loses half its height.
-    expect(
-      region.querySelector(".sidebar-region")?.classList.contains("sidebar-region--narrow"),
-    ).toBe(false);
-    expect(region.querySelector("[data-primary]")).not.toBeNull();
+    expect(region.parentElement?.classList.contains("sidebar-region--narrow")).toBe(false);
+    expect(regionRoot(region).querySelector("[data-primary]")).not.toBeNull();
   });
 });
