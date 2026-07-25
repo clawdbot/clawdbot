@@ -17,16 +17,90 @@ export OPENCLAW_PLUGINS_TMP_DIR
 OPENCLAW_PLUGINS_CLI_TIMEOUT="${OPENCLAW_PLUGINS_CLI_TIMEOUT:-180s}"
 mkdir -p "$OPENCLAW_PLUGINS_TMP_DIR"
 
+plugins_lifecycle_trace_enabled() {
+  case "${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" in
+    1 | true | TRUE | yes | YES)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Redact complete stderr before truncation so a split credential can never expose its suffix.
+print_plugins_stderr_log() {
+  local error_file="$1"
+  local redacted_file
+  redacted_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-redacted.XXXXXX")" || return $?
+  local status=0
+  sed -E \
+    -e 's/[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[^[:space:]]+/Bearer [REDACTED]/g' \
+    -e 's/(^|[^[:alnum:]_])(sk|sess|rk)-[[:alnum:]_-]+/\1[REDACTED]/g' \
+    "$error_file" >"$redacted_file" || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    docker_e2e_print_log "$redacted_file" >&2 || status=$?
+  fi
+  rm -f "$redacted_file"
+  return "$status"
+}
+
 run_plugins_openclaw_logged() {
   local label="$1"
   shift
-  run_logged "$label" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
+  local output_file
+  output_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stdout.XXXXXX")" || return $?
+  local error_file
+  error_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stderr.XXXXXX")" || {
+    local create_status=$?
+    rm -f "$output_file"
+    return "$create_status"
+  }
+  local status=0
+  if openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file" 2>"$error_file"; then
+    if plugins_lifecycle_trace_enabled; then
+      print_plugins_stderr_log "$error_file" || status=$?
+    fi
+  else
+    status=$?
+    if ! print_plugins_stderr_log "$error_file"; then
+      printf 'Plugin sweep stderr redaction failed: %s\n' "$label" >&2
+    fi
+    if [[ "$status" -eq 124 ]]; then
+      printf 'Plugin sweep command timed out after %s: %s\n' \
+        "$OPENCLAW_PLUGINS_CLI_TIMEOUT" "$label" >&2
+    else
+      printf 'Plugin sweep command failed with status %s: %s\n' \
+        "$status" "$label" >&2
+    fi
+  fi
+  rm -f "$error_file" "$output_file"
+  return "$status"
 }
 
 run_plugins_openclaw_capture() {
   local output_file="$1"
   shift
-  openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file"
+  local error_file
+  error_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stderr.XXXXXX")" || return $?
+  local status=0
+  if openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file" 2>"$error_file"; then
+    print_plugins_stderr_log "$error_file" || status=$?
+  else
+    status=$?
+    if ! print_plugins_stderr_log "$error_file"; then
+      printf 'Plugin sweep stderr redaction failed: %s\n' "${output_file##*/}" >&2
+    fi
+    if [[ "$status" -eq 124 ]]; then
+      printf 'Plugin sweep capture timed out after %s: %s\n' \
+        "$OPENCLAW_PLUGINS_CLI_TIMEOUT" "${output_file##*/}" >&2
+    else
+      printf 'Plugin sweep capture failed with status %s: %s\n' \
+        "$status" "${output_file##*/}" >&2
+    fi
+  fi
+  rm -f "$error_file"
+  return "$status"
 }
 
 run_plugins_shell_logged() {
