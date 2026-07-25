@@ -748,6 +748,35 @@ process.on("message", (message) => {
     ).resolves.toBe("closed");
   });
 
+  it("treats confirmed worker exit as closed after graceful disposal fails", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  if (message.type === "close") {
+    process.send({ id: message.id, ok: false, error: "native disposal failed" });
+    return;
+  }
+  process.send({ id: message.id, ok: true });
+});
+`,
+      "utf8",
+    );
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: workerScript },
+    );
+
+    await expect(provider.close?.()).resolves.toBeUndefined();
+
+    expect(warning).toHaveBeenCalledWith(expect.objectContaining({ message: "native disposal failed" }), {
+      code: "OPENCLAW_EMBEDDING_WORKER_CLOSE",
+    });
+  });
+
   it("rejects pending and queued requests when closing a busy worker", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
     const workerScript = path.join(tempDir, "worker.cjs");

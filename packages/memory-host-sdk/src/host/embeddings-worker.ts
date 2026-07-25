@@ -239,16 +239,25 @@ class LocalEmbeddingWorkerClient {
       timeout = setTimeout(() => resolve("timeout"), WORKER_CLOSE_GRACE_MS);
       timeout.unref?.();
     });
+    let gracefulCloseError: unknown;
     try {
       const result = await Promise.race([closeRequest, closeTimeout]);
       if (result === "timeout") {
         closeRequest.catch(() => {});
       }
+    } catch (err) {
+      gracefulCloseError = err;
     } finally {
       if (timeout) {
         clearTimeout(timeout);
       }
       await this.shutdownChild();
+    }
+    if (gracefulCloseError) {
+      process.emitWarning(
+        toErrorObject(gracefulCloseError, "Local embedding worker graceful close failed"),
+        { code: "OPENCLAW_EMBEDDING_WORKER_CLOSE" },
+      );
     }
   }
 
