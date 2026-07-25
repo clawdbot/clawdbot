@@ -168,6 +168,10 @@ one admitted message. The first explicit result in priority order wins. Return
 that have the same channel-owned `event.debounceKey`. Returning nothing keeps
 the channel default.
 
+WhatsApp is currently the only bundled channel that invokes this hook. Other
+channels keep their existing debounce behavior until they add the same typed
+policy seam.
+
 WhatsApp caps every plugin-selected window at five minutes because a text
 message may join a batch that already owns a persisted attachment file. A batch
 that contains media also has an absolute five-minute lifetime that later
