@@ -66,6 +66,11 @@ The `models` root also owns global model-catalog behavior.
   models: {
     // Optional. Default: true. Requires a Gateway restart when changed.
     pricing: { enabled: false },
+    // Optional. Hosted catalog updates default on.
+    catalogRefresh: {
+      enabled: true,
+      // url: "https://catalog.example.com/openclaw/catalog.json",
+    },
   },
 }
 ```
@@ -80,6 +85,14 @@ The `models` root also owns global model-catalog behavior.
   starts after sidecars and channels reach the Gateway ready path. When `false`,
   the Gateway skips OpenRouter and LiteLLM pricing-catalog fetches; configured
   `models.providers.*.models[].cost` values still work for local cost estimates.
+- `models.catalogRefresh.enabled`: controls the hosted model catalog refresh
+  (default: `true`). Set it to `false` to prevent all remote catalog requests;
+  only catalog data shipped in the installed release is then used.
+- `models.catalogRefresh.url`: optional HTTPS mirror override (plain HTTP is
+  accepted only for explicit localhost testing). The Gateway
+  checks in the background at startup and every six hours. A downloaded catalog
+  applies on the next Gateway restart; a release whose bundled catalog is newer
+  always wins.
 
 ## MCP
 
