@@ -83,6 +83,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let promptAborted = false;
   let takeoverDetected = false;
   let promptReleased = false;
+  let cleanupStarted = false;
   let promptSettled = Promise.resolve();
   let settlePrompt: (() => void) | undefined;
   let lifecycle = Promise.resolve();
@@ -126,7 +127,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     readTrustedCurrentSessionFileSnapshot: async () => undefined,
     releaseForPrompt: async () =>
       await serializeLifecycle(() => {
-        if (disposed || promptAborted) {
+        if (disposed || promptAborted || cleanupStarted) {
           throw new Error("attempt disposed before prompt submission");
         }
         promptReleased = true;
@@ -175,8 +176,13 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         return await run();
       }),
     acquireForCleanup: async () => {
-      if (promptReleased) {
-        await promptSettled;
+      let releasedPrompt: Promise<void> | undefined;
+      await serializeLifecycle(() => {
+        cleanupStarted = true;
+        releasedPrompt = promptReleased ? promptSettled : undefined;
+      });
+      if (releasedPrompt) {
+        await releasedPrompt;
       }
       await serializeLifecycle(() => {});
       return noOpLock;
