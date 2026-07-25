@@ -1755,9 +1755,8 @@ export async function startGatewayServer(
           import("./server-runtime-startup-services.js"),
         ]),
       );
-    const { sessionObserver, ...runtimeSubscriptionUnsubs } = await startupTrace.measure(
-      "runtime.subscriptions",
-      () =>
+    const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } =
+      await startupTrace.measure("runtime.subscriptions", () =>
         startGatewayEventSubscriptions({
           log,
           broadcast,
@@ -1771,7 +1770,7 @@ export async function startGatewayServer(
           chatAbortControllers,
           restartRecoveryCandidates,
         }),
-    );
+      );
     Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
     const runtimeServices = await startupTrace.measure("runtime.services", () =>
@@ -2107,6 +2106,7 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          sessionCompanion,
           sessionObserver,
           getMcpAppSandboxPort,
           ensureSandboxHostPort,
