@@ -157,6 +157,7 @@ async function runPdfPrompt(params: {
   password?: string;
   pageNumbers?: number[];
   getExtractions: () => Promise<PdfExtractedContent[]>;
+  signal?: AbortSignal;
 }): Promise<{
   text: string;
   provider: string;
@@ -238,6 +239,8 @@ async function runPdfPrompt(params: {
           }));
 
           if (provider === "anthropic") {
+            // A run cancelled mid-dispatch must not buy another provider call.
+            params.signal?.throwIfAborted();
             const text = await anthropicAnalyzePdf({
               apiKey,
               modelId,
@@ -254,6 +257,8 @@ async function runPdfPrompt(params: {
           }
 
           if (provider === "google") {
+            // A run cancelled mid-dispatch must not buy another provider call.
+            params.signal?.throwIfAborted();
             const text = await geminiAnalyzePdf({
               apiKey,
               modelId,
@@ -293,6 +298,8 @@ async function runPdfPrompt(params: {
             images: [],
           }));
           const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
+          // A run cancelled mid-dispatch must not buy another provider call.
+          params.signal?.throwIfAborted();
           const message = await complete(model, context, {
             apiKey,
             maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -302,6 +309,8 @@ async function runPdfPrompt(params: {
         }
 
         const context = buildPdfExtractionContext(params.prompt, extractions, model);
+        // A run cancelled mid-dispatch must not buy another provider call.
+        params.signal?.throwIfAborted();
         const message = await complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -573,6 +582,7 @@ export function createPdfTool(options?: {
       // Do not issue a paid PDF-model call for an already-aborted run.
       signal?.throwIfAborted();
       const result = await runPdfPrompt({
+        signal,
         cfg: options?.config,
         agentId: options?.agentId,
         agentDir,

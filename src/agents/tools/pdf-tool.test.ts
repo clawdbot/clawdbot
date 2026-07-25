@@ -10,15 +10,15 @@ import * as webMedia from "../../media/web-media.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
-import * as modelsConfig from "../models-config.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
-import {
-  getModelRegistryRuntime,
-  initializeModelRegistryRuntime,
-} from "../sessions/model-registry-runtime.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
-import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
+import {
+  createPdfToolInfraStub,
+  FAKE_PDF_MEDIA,
+  resetPdfToolAuthEnv,
+  withTempPdfAgentDir,
+} from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
 const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
@@ -35,6 +35,8 @@ vi.mock("../provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
 }));
 
+const { createPdfModelRegistry, stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
+
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
 
@@ -49,12 +51,6 @@ const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
 const GOOGLE_PDF_MODEL = "google/gemini-2.5-pro";
 const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
 const CODEX_PDF_MODEL = "openai/gpt-5.4";
-const FAKE_PDF_MEDIA = {
-  kind: "document",
-  buffer: Buffer.from("%PDF-1.4 fake"),
-  contentType: "application/pdf",
-  fileName: "doc.pdf",
-} as const;
 
 function requirePdfTool(
   tool: Awaited<ReturnType<typeof loadCreatePdfTool>> extends (...args: any[]) => infer R
@@ -116,73 +112,6 @@ function firstCompletionContext(): { systemPrompt?: string } | undefined {
     { systemPrompt?: string } | undefined,
   ];
   return context;
-}
-
-function createPdfModelRegistry(find: () => unknown) {
-  const modelRegistry = { find };
-  initializeModelRegistryRuntime(modelRegistry);
-  getModelRegistryRuntime(modelRegistry).llmRuntime.complete = completeMock;
-  return modelRegistry;
-}
-
-async function stubPdfToolInfra(
-  agentDir: string,
-  params?: {
-    mockLoad?: boolean;
-    provider?: string;
-    input?: string[];
-    api?: string;
-    modelFound?: boolean;
-  },
-) {
-  // Keep PDF tool tests focused on orchestration; provider discovery, auth, and
-  // remote media loading are replaced with narrow spies at the module boundary.
-  const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw");
-  if (params?.mockLoad !== false) {
-    loadSpy.mockResolvedValue(FAKE_PDF_MEDIA as never);
-  }
-
-  const setRuntimeApiKey = vi.fn();
-  const authStorage = { setRuntimeApiKey };
-  const find =
-    params?.modelFound === false
-      ? () => null
-      : () =>
-          ({
-            provider: params?.provider ?? "anthropic",
-            api:
-              params?.api ??
-              (params?.provider === "openai"
-                ? "openai-chatgpt-responses"
-                : params?.provider === "openai"
-                  ? "openai-responses"
-                  : "anthropic-messages"),
-            maxTokens: 8192,
-            input: params?.input ?? ["text", "document"],
-          }) as never;
-  const modelRegistry = createPdfModelRegistry(find);
-  vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
-    async (input) =>
-      ({
-        snapshot: {
-          agentDir: input.agentDir,
-          config: input.config,
-          workspaceDir: input.workspaceDir,
-          createStores: () => ({ authStorage, modelRegistry }),
-        },
-        release: vi.fn(),
-      }) as never,
-  );
-
-  vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
-    agentDir,
-    wrote: false,
-  });
-
-  vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
-  vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
-
-  return { loadSpy, setRuntimeApiKey };
 }
 
 async function withManagedInboundPdf(
@@ -1062,30 +991,15 @@ describe("createPdfTool", () => {
       });
     });
   });
-});
-
-describe("pdf tool run abort", () => {
-  const priorFetch = global.fetch;
-
-  beforeEach(() => {
-    resetPdfToolAuthEnv();
-    completeMock.mockReset();
-    registerProviderStreamForModelMock.mockReset();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    global.fetch = priorFetch;
-  });
 
   it("throws before loading or calling the model when the run signal is already aborted", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const { loadSpy } = await stubPdfToolInfra(agentDir, { provider: "anthropic" });
-      const nativeSpy = vi
-        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
-        .mockResolvedValue("native summary");
-      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
-      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+      const nativeSpy = vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf");
+      nativeSpy.mockResolvedValue("native summary");
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({ config: withPdfModel(ANTHROPIC_PDF_MODEL), agentDir }),
+      );
       const controller = new AbortController();
       controller.abort();
 
@@ -1116,11 +1030,11 @@ describe("pdf tool run abort", () => {
         controller.abort();
         return FAKE_PDF_MEDIA as never;
       });
-      const nativeSpy = vi
-        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
-        .mockResolvedValue("native summary");
-      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
-      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+      const nativeSpy = vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf");
+      nativeSpy.mockResolvedValue("native summary");
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({ config: withPdfModel(ANTHROPIC_PDF_MODEL), agentDir }),
+      );
 
       await expect(
         tool.execute(

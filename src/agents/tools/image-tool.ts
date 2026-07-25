@@ -100,6 +100,7 @@ type ImageToolLoadWebMediaOptions = {
   inboundRoots?: readonly string[];
   ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
   readIdleTimeoutMs?: number;
+  requestInit?: RequestInit;
 };
 
 type ImageWebMediaRuntime = {
@@ -704,6 +705,7 @@ async function runImagePrompt(params: {
   images: Array<{ buffer: Buffer; mimeType: string }>;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  signal?: AbortSignal;
 }): Promise<{
   text: string;
   provider: string;
@@ -740,6 +742,8 @@ async function runImagePrompt(params: {
       ) {
         const describeImages =
           imageProvider?.describeImages ?? imageToolProviderDeps.describeImagesWithModel;
+        // A run cancelled mid-dispatch must not buy another provider call.
+        params.signal?.throwIfAborted();
         const described = await describeImages({
           images: params.images.map((image, index) => ({
             buffer: image.buffer,
@@ -769,6 +773,8 @@ async function runImagePrompt(params: {
         if (!image) {
           throw new Error("Image input disappeared during model execution");
         }
+        // A run cancelled mid-dispatch must not buy another provider call.
+        params.signal?.throwIfAborted();
         const described = await describeImage({
           buffer: image.buffer,
           fileName: "image-1",
@@ -792,6 +798,8 @@ async function runImagePrompt(params: {
 
       const parts: string[] = [];
       for (const [index, image] of params.images.entries()) {
+        // A run cancelled mid-dispatch must not buy another provider call.
+        params.signal?.throwIfAborted();
         const described = await describeImage({
           buffer: image.buffer,
           fileName: `image-${index + 1}`,
@@ -1163,6 +1171,7 @@ export function createImageTool(options?: {
       signal?.throwIfAborted();
       // Text-only runs delegate image understanding to the configured fallback model.
       const result = await runImagePrompt({
+        signal,
         cfg: options?.config,
         agentId: options?.agentId,
         agentDir,
