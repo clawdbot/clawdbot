@@ -96,8 +96,7 @@ export async function resolveAgentRunSessionTarget(params: {
       (params.agentId && params.agentId !== legacyMarker.agentId) ||
       (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
       (suppliedKeyAgentId && suppliedKeyAgentId !== legacyMarker.agentId) ||
-      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)) ||
-      params.sessionId !== legacyMarker.sessionId)
+      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)))
   ) {
     throw new Error("Legacy SQLite transcript marker conflicts with the supplied session identity");
   }

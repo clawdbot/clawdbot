@@ -6,7 +6,8 @@ import {
   resolveSessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
-import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { listSessionEntries, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
@@ -107,14 +108,27 @@ export async function readBtwTranscriptMessages(params: {
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
-    if (!params.sessionKey || !params.storePath) {
+    const marker = parseSqliteSessionFileMarker(params.sessionFile);
+    const agentId = params.agentId ?? marker?.agentId;
+    const sessionId = marker?.sessionId ?? params.sessionId;
+    const storePath = params.storePath ?? marker?.storePath;
+    const markerMatches = marker
+      ? listSessionEntries({
+          agentId: marker.agentId,
+          readOnly: true,
+          storePath: marker.storePath,
+        }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+      : [];
+    const sessionKey =
+      params.sessionKey ?? (markerMatches.length === 1 ? markerMatches[0]?.sessionKey : undefined);
+    if (!sessionKey || !storePath) {
       return [];
     }
     const entries = (await loadTranscriptEvents({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
     })) as FileEntry[];
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
@@ -131,7 +145,7 @@ export async function readBtwTranscriptMessages(params: {
       : undefined;
     if (hasSnapshotLeaf && branchEntries === undefined) {
       diag.debug(
-        `btw snapshot leaf unavailable: sessionId=${params.sessionId} leaf=${params.snapshotLeafId}`,
+        `btw snapshot leaf unavailable: sessionId=${sessionId} leaf=${params.snapshotLeafId}`,
       );
     }
     branchEntries ??= buildSessionBranchEntries(tree, tree.leafId);
