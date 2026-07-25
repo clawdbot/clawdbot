@@ -44,7 +44,7 @@ describe("meta provider", () => {
     expect(model.contextWindow).toBe(1048576);
     expect(model.maxTokens).toBe(131072);
     expect(model.reasoning).toBe(true);
-    expect(model.input).toEqual(["text", "image", "video", "audio", "document"]);
+    expect(model.input).toEqual(["text", "image"]);
     expect(model.cost).toEqual({
       input: 1.25,
       output: 4.25,

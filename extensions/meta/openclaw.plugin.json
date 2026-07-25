@@ -34,8 +34,7 @@
             "reasoning": true,
             "input": [
               "text",
-              "image",
-              "document"
+              "image"
             ],
             "contextWindow": 1048576,
             "maxTokens": 131072,
