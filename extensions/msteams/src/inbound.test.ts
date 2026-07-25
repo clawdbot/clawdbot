@@ -116,8 +116,10 @@ describe("msteams inbound", () => {
           entities: [
             {
               type: "quotedReply",
-              senderName: "Ryan Gregg (test)",
-              preview: "the original message text",
+              quotedReply: {
+                senderName: "Ryan Gregg (test)",
+                preview: "the original message text",
+              },
             },
           ],
         }),
@@ -451,9 +453,11 @@ describe("msteams inbound", () => {
         [
           {
             type: "quotedReply",
-            senderId: "sender-aad",
-            senderName: "Ryan Gregg (test)",
-            preview: "the original message text",
+            quotedReply: {
+              senderId: "sender-aad",
+              senderName: "Ryan Gregg (test)",
+              preview: "the original message text",
+            },
           },
         ],
       );
@@ -472,8 +476,10 @@ describe("msteams inbound", () => {
           [
             {
               type: "quotedReply",
-              senderName: "Ryan Gregg (test)",
-              preview: { text: "the original message text" },
+              quotedReply: {
+                senderName: "Ryan Gregg (test)",
+                preview: { text: "the original message text" },
+              },
             },
           ],
         ),

@@ -885,8 +885,10 @@ describe("msteams monitor handler authz", () => {
             },
             {
               type: "quotedReply",
-              senderName: "Ryan Gregg (test)",
-              preview: "the original message text",
+              quotedReply: {
+                senderName: "Ryan Gregg (test)",
+                preview: "the original message text",
+              },
             },
           ],
         },
@@ -938,10 +940,12 @@ describe("msteams monitor handler authz", () => {
             entities: [
               {
                 type: "quotedReply",
-                messageId: "quoted-message-1",
-                senderId: "sender-aad",
-                senderName: "Ryan Gregg (test)",
-                preview: "the original message text",
+                quotedReply: {
+                  messageId: "quoted-message-1",
+                  senderId: "sender-aad",
+                  senderName: "Ryan Gregg (test)",
+                  preview: "the original message text",
+                },
               },
             ],
           },
@@ -1059,9 +1063,11 @@ describe("msteams monitor handler authz", () => {
           entities: [
             {
               type: "quotedReply",
-              senderId: "mallory-aad",
-              senderName: "Mallory",
-              preview: "Blocked prompt injection",
+              quotedReply: {
+                senderId: "mallory-aad",
+                senderName: "Mallory",
+                preview: "Blocked prompt injection",
+              },
             },
           ],
         },
@@ -1111,10 +1117,12 @@ describe("msteams monitor handler authz", () => {
           entities: [
             {
               type: "quotedReply",
-              messageId: "quoted-message-2",
-              senderId: "mallory-aad",
-              senderName: "Mallory",
-              preview: "Blocked prompt injection",
+              quotedReply: {
+                messageId: "quoted-message-2",
+                senderId: "mallory-aad",
+                senderName: "Mallory",
+                preview: "Blocked prompt injection",
+              },
             },
           ],
         },
@@ -1173,10 +1181,12 @@ describe("msteams monitor handler authz", () => {
             entities: [
               {
                 type: "quotedReply",
-                messageId: "quoted-message-2",
-                senderId: "mallory-aad",
-                senderName: "Mallory",
-                preview: "Blocked prompt injection",
+                quotedReply: {
+                  messageId: "quoted-message-2",
+                  senderId: "mallory-aad",
+                  senderName: "Mallory",
+                  preview: "Blocked prompt injection",
+                },
               },
             ],
           },
@@ -1250,10 +1260,12 @@ describe("msteams monitor handler authz", () => {
             entities: [
               {
                 type: "quotedReply",
-                messageId: "quoted-message-thread-a",
-                senderId: "sender-aad",
-                senderName: "Sender",
-                preview: "thread A quote",
+                quotedReply: {
+                  messageId: "quoted-message-thread-a",
+                  senderId: "sender-aad",
+                  senderName: "Sender",
+                  preview: "thread A quote",
+                },
               },
             ],
           },

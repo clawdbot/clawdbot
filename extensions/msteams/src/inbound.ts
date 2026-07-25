@@ -22,14 +22,16 @@ type MSTeamsAttachmentLike = {
 type MSTeamsEntityLike = {
   type?: string;
   text?: unknown;
-  messageId?: unknown;
   mentioned?: {
     id?: unknown;
     name?: unknown;
   };
-  senderId?: unknown;
-  senderName?: unknown;
-  preview?: unknown;
+  quotedReply?: {
+    messageId?: unknown;
+    senderId?: unknown;
+    senderName?: unknown;
+    preview?: unknown;
+  };
 };
 
 type BuildMSTeamsNormalizedTextParams = {
@@ -92,18 +94,20 @@ export function extractMSTeamsQuoteInfo(
     }
   }
   for (const entity of entities ?? []) {
-    if (entity.type !== "quotedReply" || typeof entity.preview !== "string") {
+    const quotedReply = entity.quotedReply;
+    if (entity.type !== "quotedReply" || typeof quotedReply?.preview !== "string") {
       continue;
     }
-    const body = normalizeMSTeamsWhitespace(entity.preview);
+    const body = normalizeMSTeamsWhitespace(quotedReply.preview);
     if (body) {
-      const senderName = typeof entity.senderName === "string" ? entity.senderName.trim() : "";
-      const id = typeof entity.messageId === "string" ? entity.messageId.trim() : "";
+      const senderName =
+        typeof quotedReply.senderName === "string" ? quotedReply.senderName.trim() : "";
+      const id = typeof quotedReply.messageId === "string" ? quotedReply.messageId.trim() : "";
       return {
         sender: senderName || "unknown",
         body,
         ...(id ? { id } : {}),
-        senderId: typeof entity.senderId === "string" ? entity.senderId : undefined,
+        senderId: typeof quotedReply.senderId === "string" ? quotedReply.senderId : undefined,
         fromQuotedReplyEntity: true,
       };
     }
