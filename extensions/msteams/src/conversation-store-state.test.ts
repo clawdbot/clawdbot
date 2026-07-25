@@ -176,6 +176,34 @@ describe("msteams conversation store (plugin state)", () => {
     });
   });
 
+  it("keeps legacy unscoped conversation state available to the default account", async () => {
+    await withTempDir("openclaw-msteams-store-", async (stateDir) => {
+      const baseStore = createMSTeamsConversationStoreState({ stateDir });
+      await baseStore.upsert("legacy-conversation", {
+        conversation: { id: "legacy-conversation", conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com/legacy",
+        user: { id: "legacy-user" },
+      });
+
+      const defaultStore = createAccountScopedMSTeamsConversationStore(baseStore, "default");
+      await expect(defaultStore.get("legacy-conversation")).resolves.toMatchObject({
+        conversation: { id: "legacy-conversation" },
+        user: { id: "legacy-user" },
+      });
+
+      await defaultStore.upsert("legacy-conversation", {
+        conversation: { id: "legacy-conversation", conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com/updated",
+        user: { id: "legacy-user" },
+      });
+      await expect(baseStore.get("legacy-conversation")).resolves.toMatchObject({
+        serviceUrl: "https://service.example.com/updated",
+      });
+    });
+  });
+
   it("serializes concurrent upserts so sparse activities preserve independent fields", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
     const store = createMSTeamsConversationStoreState({ stateDir });
