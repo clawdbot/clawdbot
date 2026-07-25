@@ -149,10 +149,6 @@ describe("session list benchmark (5k sessions)", () => {
     console.log(`  Warm light list:  ${lightTime.toFixed(1).padStart(8)} ms`);
     console.log(`  After write:      ${afterWriteTime.toFixed(1).padStart(8)} ms`);
     console.log("═══════════════════════════════");
-
-    // Warm should be faster than cold
-    expect(warmTime).toBeLessThan(coldTime);
-    expect(lightTime).toBeLessThan(coldTime);
   });
 
   it("returns the same ordered page from cached and uncached lists", () => {

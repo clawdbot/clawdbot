@@ -20,6 +20,8 @@ type SessionStoreCacheEntry = {
   ctimeNs?: bigint;
   mtimeNs?: bigint;
   sizeBytes?: number;
+  walMtimeNs?: bigint;
+  walSizeBytes?: number;
   dataVersion?: number;
   serialized?: string;
 };
@@ -303,6 +305,8 @@ export function readSessionStoreCache(params: {
   ctimeNs?: bigint;
   mtimeNs?: bigint;
   sizeBytes?: number;
+  walMtimeNs?: bigint;
+  walSizeBytes?: number;
   dataVersion?: number;
   clone?: boolean;
 }): Record<string, SessionEntry> | null {
@@ -314,6 +318,8 @@ export function readSessionStoreCache(params: {
     params.ctimeNs !== cached.ctimeNs ||
     params.mtimeNs !== cached.mtimeNs ||
     params.sizeBytes !== cached.sizeBytes ||
+    params.walMtimeNs !== cached.walMtimeNs ||
+    params.walSizeBytes !== cached.walSizeBytes ||
     params.dataVersion !== cached.dataVersion
   ) {
     invalidateSessionStoreCache(params.storePath);
@@ -330,6 +336,8 @@ export function takeMutableSessionStoreCache(params: {
   ctimeNs?: bigint;
   mtimeNs?: bigint;
   sizeBytes?: number;
+  walMtimeNs?: bigint;
+  walSizeBytes?: number;
   dataVersion?: number;
 }): Record<string, SessionEntry> | null {
   const cached = SESSION_STORE_CACHE.get(params.storePath);
@@ -340,6 +348,8 @@ export function takeMutableSessionStoreCache(params: {
     params.ctimeNs !== cached.ctimeNs ||
     params.mtimeNs !== cached.mtimeNs ||
     params.sizeBytes !== cached.sizeBytes ||
+    params.walMtimeNs !== cached.walMtimeNs ||
+    params.walSizeBytes !== cached.walSizeBytes ||
     params.dataVersion !== cached.dataVersion
   ) {
     invalidateSessionStoreCache(params.storePath);
@@ -355,6 +365,8 @@ export function writeSessionStoreCache(params: {
   ctimeNs?: bigint;
   mtimeNs?: bigint;
   sizeBytes?: number;
+  walMtimeNs?: bigint;
+  walSizeBytes?: number;
   dataVersion?: number;
   serialized?: string;
   serializedPromptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
@@ -373,6 +385,8 @@ export function writeSessionStoreCache(params: {
     ctimeNs: params.ctimeNs,
     mtimeNs: params.mtimeNs,
     sizeBytes: params.sizeBytes,
+    walMtimeNs: params.walMtimeNs,
+    walSizeBytes: params.walSizeBytes,
     dataVersion: params.dataVersion,
     serialized: params.cloneSerialized,
   });

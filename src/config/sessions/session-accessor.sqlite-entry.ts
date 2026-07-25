@@ -143,6 +143,8 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
   const dbPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
 
   const currentFileStat = getFileStatSnapshot(dbPath);
+  const walPath = `${dbPath}-wal`;
+  const walStat = getFileStatSnapshot(walPath);
   const currentDataVersion = (
     database.db.prepare("PRAGMA data_version").get() as { data_version?: number }
   )?.data_version;
@@ -152,6 +154,8 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
     const cached = readSessionStoreCache({
       storePath: dbPath,
       ...currentFileStat,
+      walMtimeNs: walStat.mtimeNs,
+      walSizeBytes: walStat.sizeBytes,
       dataVersion: currentDataVersion,
       clone: false,
     });
@@ -160,20 +164,21 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
         .filter(([key]) => !isInternalSessionEffectsKey(key))
         .map(([sessionKey, entry]) => {
           if (scope.light) {
+            const cloned = structuredClone(entry);
             const {
               systemPromptReport: _systemPromptReport,
               skillsSnapshot: _skillsSnapshot,
               ...lightEntry
-            } = entry;
+            } = cloned;
             return { sessionKey, entry: lightEntry as SessionEntry };
           }
           return { sessionKey, entry: structuredClone(entry) };
         });
-      if (scope.offset) {
-        entries = entries.slice(scope.offset);
+      if (scope.offset !== undefined) {
+        entries = entries.slice(Math.max(0, scope.offset));
       }
-      if (scope.limit) {
-        entries = entries.slice(0, scope.limit);
+      if (scope.limit !== undefined) {
+        entries = entries.slice(0, Math.max(0, scope.limit));
       }
       return entries;
     }
@@ -187,13 +192,15 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
   );
 
   // Only cache unpaginated complete loads so the cache always holds the full store.
-  if (!scope.limit && !scope.offset && isSessionStoreCacheEnabled()) {
+  if (scope.limit === undefined && scope.offset === undefined && isSessionStoreCacheEnabled()) {
     const storeRecord = readSqliteSessionEntryStore(database);
     writeSessionStoreCache({
       storePath: dbPath,
       store: storeRecord,
       takeOwnership: true,
       ...currentFileStat,
+      walMtimeNs: walStat.mtimeNs,
+      walSizeBytes: walStat.sizeBytes,
       dataVersion: currentDataVersion,
     });
   }
@@ -225,22 +232,15 @@ function listSqliteSessionEntriesFromDatabase(
   offset?: number,
 ) {
   const db = getSessionKysely(database.db);
-  let query = db
+  const query = db
     .selectFrom("session_nodes")
     .select(["session_key", "entry_json", "current_session_id", "updated_at"])
+    .where("session_key", "not like", "%:internal-session-effects:%")
     .orderBy("session_key", "asc");
-  if (limit) {
-    query = query.limit(limit);
-  }
-  if (offset) {
-    query = query.offset(offset);
-  }
+
   const rows = executeSqliteQuerySync(database.db, query).rows;
-  return rows
+  const entries = rows
     .map((row) => {
-      if (isInternalSessionEffectsKey(row.session_key)) {
-        return undefined;
-      }
       const entry = parseSessionEntryRow(row);
       if (!entry) {
         return undefined;
@@ -256,6 +256,11 @@ function listSqliteSessionEntriesFromDatabase(
       return { sessionKey: row.session_key, entry };
     })
     .filter((entry): entry is SessionEntrySummary => entry !== undefined);
+
+  // Paginate in JS after filtering hidden/invalid rows, consistent with cache path.
+  const sliceOffset = offset ?? 0;
+  const sliceEnd = limit !== undefined ? sliceOffset + limit : undefined;
+  return entries.slice(sliceOffset, sliceEnd);
 }
 
 /** Lists only entries whose normalized session row has one of the requested statuses. */
