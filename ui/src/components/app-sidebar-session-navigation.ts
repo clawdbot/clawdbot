@@ -242,7 +242,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return [
       this.sessionData.activeSessionLineageRoot,
       ...Object.values(this.sessionData.childSessionRowsByParent).flat(),
-    ].find((row) => row != null && areUiSessionKeysEquivalent(row.key, sessionKey));
+    ].find(
+      (row): row is GatewaySessionRow =>
+        row != null && areUiSessionKeysEquivalent(row.key, sessionKey),
+    );
   }
 
   outboxCountForSessionKey(sessionKey: string): number {
@@ -630,20 +633,22 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       knownSessionAttention: this.attention.knownSessionAttention(),
       toSidebarSession: navigationState.toSidebarSession,
     });
-    const projectedRows = [...projected];
-    let selectedAlreadyProjected = false;
-    while (selectedFallback && projectedRows.length > 0) {
-      const row = projectedRows.pop();
-      if (row?.key === selectedFallback.key) {
-        selectedAlreadyProjected = true;
-        break;
+    if (selectedFallback) {
+      const projectedRows = [...projected];
+      let selectedAlreadyProjected = false;
+      while (projectedRows.length > 0) {
+        const row = projectedRows.pop();
+        if (row?.key === selectedFallback.key) {
+          selectedAlreadyProjected = true;
+          break;
+        }
+        if (row) {
+          projectedRows.push(...row.children);
+        }
       }
-      if (row) {
-        projectedRows.push(...row.children);
+      if (!selectedAlreadyProjected) {
+        projected.unshift(selectedFallback);
       }
-    }
-    if (selectedFallback && !selectedAlreadyProjected) {
-      projected.unshift(selectedFallback);
     }
     const creatorFacet =
       rows === this.sessionData.sessionsResult?.sessions
