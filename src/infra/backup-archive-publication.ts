@@ -3,13 +3,19 @@ import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { syncDirectory, type DirectoryReceipt } from "@openclaw/fs-safe/durability";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
-import { requireDirectorySync, syncDirectoryIfSupported } from "./directory-durability.js";
+import {
+  isHardlinkFallbackError,
+  publishFileNoClobber,
+  requireDirectorySync,
+  syncDirectory,
+  syncDirectoryIfSupported,
+  type DirectoryReceipt,
+} from "./directory-durability.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 type BackupArchiveLogger = (message: string) => void;
@@ -102,17 +108,6 @@ async function syncPublishedArchiveCommit(
     label: "backup publication directory",
   });
   requireDirectorySync(outcome, "Backup publication directory");
-}
-
-function isUnsupportedHardLinkError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EPERM" ||
-    code === "EXDEV" ||
-    code === "ENOTSUP" ||
-    code === "EOPNOTSUPP" ||
-    code === "ENOSYS"
-  );
 }
 
 async function openPreparedArchive(
@@ -276,18 +271,21 @@ export async function publishPreparedBackupArchive(params: {
   const { plan, prepared } = params;
   let preparedHandle: FileHandle | undefined;
   let publishedIdentity: Stats | undefined;
-  let hardLinkCreated = false;
   let committed = false;
   try {
     await assertPublicationParentUnchanged(plan);
     preparedHandle = await openPreparedArchive(plan, prepared);
     await assertTargetAbsent(plan.canonicalOutputPath);
-    // Node has no portable link-by-handle primitive. Under OpenClaw's one-user
-    // host trust model, post-link identity checks fence cooperative replacement
-    // races and ensure a changed staging pathname can never produce success.
     try {
-      await fs.link(prepared.archivePath, plan.canonicalOutputPath);
-      hardLinkCreated = true;
+      const publication = await publishFileNoClobber(
+        prepared.archivePath,
+        plan.canonicalOutputPath,
+        {
+          strategy: "link-required",
+          durability: "degrade",
+        },
+      );
+      publishedIdentity = publication.identity;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new Error(
@@ -295,11 +293,16 @@ export async function publishPreparedBackupArchive(params: {
           { cause: error },
         );
       }
-      if (isUnsupportedHardLinkError(error)) {
+      if (isHardlinkFallbackError(error)) {
         throw new Error(
           `Atomic backup publication requires hard-link support in ${plan.requestedParentPath}.`,
           { cause: error },
         );
+      }
+      if ((error as { code?: unknown }).code === "path-mismatch") {
+        throw new Error(`Backup archive changed during publication: ${plan.requestedOutputPath}`, {
+          cause: error,
+        });
       }
       throw error;
     }
@@ -343,7 +346,7 @@ export async function publishPreparedBackupArchive(params: {
     await assertPublishedArchiveUnchanged(plan, preparedHandle, publishedIdentity);
   } catch (error) {
     if (!committed) {
-      if (!publishedIdentity && hardLinkCreated) {
+      if (!publishedIdentity) {
         const currentTargetIdentity = await fs
           .lstat(plan.canonicalOutputPath)
           .catch(() => undefined);

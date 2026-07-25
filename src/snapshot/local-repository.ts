@@ -9,6 +9,7 @@ import { z } from "zod";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   ensureDurableDirectory,
+  isHardlinkFallbackError,
   pinDirectory,
   requireDirectorySync,
   syncDirectory,
@@ -902,17 +903,6 @@ function assertDirectoryIdentitySync(directoryPath: string, expectedIdentity: St
   }
 }
 
-function isSnapshotEntryLinkFallbackError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EPERM" ||
-    code === "EXDEV" ||
-    code === "ENOTSUP" ||
-    code === "EOPNOTSUPP" ||
-    code === "ENOSYS"
-  );
-}
-
 async function publishSnapshotEntryNoOverwrite(
   sourcePath: string,
   targetPath: string,
@@ -927,7 +917,7 @@ async function publishSnapshotEntryNoOverwrite(
     publishedEntries.set(entryName, linkedSourceIdentity);
     linked = true;
   } catch (error) {
-    if (!isSnapshotEntryLinkFallbackError(error)) {
+    if (!isHardlinkFallbackError(error)) {
       throw error;
     }
     const copiedIdentity = await copySnapshotEntryExclusive(sourcePath, targetPath);
