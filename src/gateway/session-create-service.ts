@@ -323,7 +323,9 @@ export async function createGatewaySession(params: {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const agentId = normalizeAgentId(
-    normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
+    normalizeOptionalString(params.agentId) ??
+      parseAgentSessionKey(parentSessionKey)?.agentId ??
+      resolveDefaultAgentId(params.cfg),
   );
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
