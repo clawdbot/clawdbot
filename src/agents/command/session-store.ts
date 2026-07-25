@@ -9,7 +9,6 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
-import { resolveDefaultAgentId } from "../agent-scope.js";
 import {
   clearCliSession,
   getCliSessionBinding,

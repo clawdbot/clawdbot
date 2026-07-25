@@ -349,7 +349,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     });
     const summary = await loadCostUsageSummary({
       config: params.cfg,
-      agentId: sessionAgentId,
+      agentId: usageAgentId,
     });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
