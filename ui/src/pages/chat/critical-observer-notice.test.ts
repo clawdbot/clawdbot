@@ -20,7 +20,7 @@ describe("critical session observer notice", () => {
       showCriticalSessionObserverNotice({
         payload: { sessionKey, headline: "Repeated test failure", health, revision },
         selectedSessionKey: "agent:main:selected",
-        sessions: [{ key: "agent:main:other", label: "Other work" }],
+        sessions: [{ key: "agent:main:other", label: "Other work", kind: "direct", updatedAt: null }],
         tracker,
         onOpen,
       });
