@@ -88,6 +88,18 @@ export function piSessionStore(
   };
 }
 
+/** Store root scanned by pi-acp@0.0.26 when resolving a native session id. */
+export function piAcpSessionStoreRoot(env: NodeJS.ProcessEnv): string | undefined {
+  const configuredAgentDir = env.PI_CODING_AGENT_DIR?.trim();
+  if (configuredAgentDir && !isPiSessionCatalogPathAbsolute(configuredAgentDir)) {
+    return undefined;
+  }
+  const agentDir = configuredAgentDir
+    ? path.resolve(configuredAgentDir)
+    : path.join(piHome(env), ".pi", "agent");
+  return path.join(agentDir, "sessions");
+}
+
 export function piSessionStoreAvailable(env: NodeJS.ProcessEnv): boolean {
   try {
     return statSync(piSessionStore(env).root).isDirectory();
