@@ -1,4 +1,5 @@
 /** Coordinates embedded-attempt lifecycle around SQLite-owned transcript writes. */
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   OwnedSessionTranscriptCacheSnapshot,
   OwnedSessionTranscriptWriteOptions,
@@ -84,16 +85,36 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let promptSettled = Promise.resolve();
   let settlePrompt: (() => void) | undefined;
   let lifecycle = Promise.resolve();
-  const serializeLifecycle = async (run: () => Promise<void> | void): Promise<void> => {
+  let reloadFailed = false;
+  let reloadFailure: unknown;
+  type LifecycleOwner = { active: boolean; pendingOperations: Set<Promise<void>> };
+  const lifecycleOwner = new AsyncLocalStorage<LifecycleOwner>();
+  const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
+    const inheritedOwner = lifecycleOwner.getStore();
+    if (inheritedOwner?.active) {
+      const operation = (async () => await run())();
+      const settlement = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      inheritedOwner.pendingOperations.add(settlement);
+      void settlement.finally(() => inheritedOwner.pendingOperations.delete(settlement));
+      return await operation;
+    }
     const previous = lifecycle;
     let release!: () => void;
     lifecycle = new Promise<void>((resolve) => {
       release = resolve;
     });
     await previous;
+    const owner: LifecycleOwner = { active: true, pendingOperations: new Set() };
     try {
-      await run();
+      return await lifecycleOwner.run(owner, async () => await run());
     } finally {
+      while (owner.pendingOperations.size > 0) {
+        await Promise.all(owner.pendingOperations);
+      }
+      owner.active = false;
       release();
     }
   };
@@ -122,9 +143,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           settlePrompt?.();
           return;
         }
+        if (reloadFailed) {
+          throw reloadFailure;
+        }
         try {
           await params.reloadPromptReleasedSessionFile?.();
         } catch (error) {
+          reloadFailed = true;
+          reloadFailure = error;
           if (error instanceof EmbeddedAttemptSessionTakeoverError) {
             takeoverDetected = true;
           }
@@ -136,7 +162,13 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
       }),
     waitForSessionEvents: async () => {},
-    withSessionWriteLock: async (run) => await run(),
+    withSessionWriteLock: async (run) =>
+      await serializeLifecycle(async () => {
+        if (reloadFailed) {
+          throw reloadFailure;
+        }
+        return await run();
+      }),
     acquireForCleanup: async () => {
       if (promptReleased) {
         await promptSettled;

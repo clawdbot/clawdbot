@@ -107,7 +107,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const existingSessionTarget = sessionPromptState.sessionTarget;
   const reusableSessionTarget =
     existingSessionTarget?.sessionKey === resolvedSessionKey ||
-    existingSessionTarget?.sessionId === sessionPromptState.sessionId
+    sessionPromptState.sessionTargetAdopted
       ? existingSessionTarget
       : undefined;
   const resolvedTranscriptTarget =

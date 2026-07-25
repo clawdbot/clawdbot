@@ -33,6 +33,7 @@ export function createEmbeddedRunSessionPromptState(input: {
       sessionKey: resolvedSessionKey,
       sessionTarget: params.sessionTarget,
     });
+  let sessionTargetAdopted = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let activePrompt: ActivePrompt = {
     persisted: suppressNextUserMessagePersistence,
@@ -65,6 +66,7 @@ export function createEmbeddedRunSessionPromptState(input: {
       sessionTarget: nextSessionTarget,
     });
     activeSessionTarget = resolvedTarget;
+    sessionTargetAdopted = true;
     activeSessionFile = resolvedTarget.sessionKey;
     adoptSessionId(resolvedTarget.sessionId);
   };
@@ -127,6 +129,10 @@ export function createEmbeddedRunSessionPromptState(input: {
     },
     set sessionTarget(value: ContextEngineSessionTarget | undefined) {
       activeSessionTarget = value;
+      sessionTargetAdopted = true;
+    },
+    get sessionTargetAdopted() {
+      return sessionTargetAdopted;
     },
     get activePrompt() {
       return activePrompt;
