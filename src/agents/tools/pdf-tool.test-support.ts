@@ -91,6 +91,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
               input: params?.input ?? ["text", "document"],
             }) as never;
     const modelRegistry = createPdfModelRegistry(find);
+    const release = vi.fn();
     vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
       async (input) =>
         ({
@@ -100,7 +101,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
             workspaceDir: input.workspaceDir,
             createStores: () => ({ authStorage, modelRegistry }),
           },
-          release: vi.fn(),
+          release,
         }) as never,
     );
 
@@ -112,7 +113,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
     vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
     vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
-    return { loadSpy, setRuntimeApiKey };
+    return { loadSpy, release, setRuntimeApiKey };
   }
 
   return { createPdfModelRegistry, stubPdfToolInfra };

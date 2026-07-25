@@ -21,6 +21,7 @@ import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { abortable } from "../embedded-agent-runner/run/abortable.js";
 import { applySecretRefHeaderSentinels } from "../model-auth.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -167,17 +168,34 @@ async function runPdfPrompt(params: {
 }> {
   const requestedCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
 
-  const preparedRuntimeLease = params.preparedModelRuntime
-    ? { snapshot: params.preparedModelRuntime, release: () => {} }
-    : await acquireAgentRunPreparedModelRuntime({
-        agentDir: params.agentDir,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        config: requestedCfg ?? {},
-        inheritedAuthDir: resolveDefaultAgentDir(requestedCfg ?? {}),
-        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      });
+  let preparedRuntimeLease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>;
+  if (params.preparedModelRuntime) {
+    preparedRuntimeLease = { snapshot: params.preparedModelRuntime, release: () => {} };
+  } else {
+    const acquireRuntime = acquireAgentRunPreparedModelRuntime({
+      agentDir: params.agentDir,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      config: requestedCfg ?? {},
+      inheritedAuthDir: resolveDefaultAgentDir(requestedCfg ?? {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    try {
+      preparedRuntimeLease = params.signal
+        ? await abortable(params.signal, acquireRuntime)
+        : await acquireRuntime;
+    } catch (error) {
+      if (params.signal?.aborted) {
+        void acquireRuntime.then(
+          (late) => late.release(),
+          () => undefined,
+        );
+      }
+      throw error;
+    }
+  }
 
   try {
+    params.signal?.throwIfAborted();
     const preparedRuntime = preparedRuntimeLease.snapshot;
     const runtimeAgentDir = preparedRuntime.agentDir;
     const runtimeWorkspaceDir = preparedRuntime.workspaceDir ?? params.workspaceDir;
@@ -206,6 +224,7 @@ async function runPdfPrompt(params: {
     const result = await runWithImageModelFallback({
       cfg: effectiveCfg,
       modelOverride: params.modelOverride,
+      abortSignal: params.signal,
       run: async (provider, modelId) => {
         const model = bindModelLlmRuntime(
           applySecretRefHeaderSentinels(
@@ -252,6 +271,7 @@ async function runPdfPrompt(params: {
                 headers: model.headers,
                 request: getModelProviderRequestTransport(model),
               },
+              signal: params.signal,
             });
             return { text, provider, model: modelId, native: true };
           }
@@ -269,6 +289,7 @@ async function runPdfPrompt(params: {
                 headers: model.headers,
                 request: getModelProviderRequestTransport(model),
               },
+              signal: params.signal,
             });
             return { text, provider, model: modelId, native: true };
           }
@@ -300,10 +321,14 @@ async function runPdfPrompt(params: {
           const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
           // A run cancelled mid-dispatch must not buy another provider call.
           params.signal?.throwIfAborted();
-          const message = await complete(model, context, {
+          const completion = complete(model, context, {
             apiKey,
             maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+            signal: params.signal,
           });
+          const message = params.signal
+            ? await abortable(params.signal, completion)
+            : await completion;
           const text = coercePdfAssistantText({ message, provider, model: modelId });
           return { text, provider, model: modelId, native: false };
         }
@@ -311,10 +336,14 @@ async function runPdfPrompt(params: {
         const context = buildPdfExtractionContext(params.prompt, extractions, model);
         // A run cancelled mid-dispatch must not buy another provider call.
         params.signal?.throwIfAborted();
-        const message = await complete(model, context, {
+        const completion = complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+          signal: params.signal,
         });
+        const message = params.signal
+          ? await abortable(params.signal, completion)
+          : await completion;
         const text = coercePdfAssistantText({ message, provider, model: modelId });
         return { text, provider, model: modelId, native: false };
       },

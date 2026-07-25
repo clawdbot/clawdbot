@@ -58,6 +58,7 @@ async function describeMoonshotVideo(
     headers,
     body,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,

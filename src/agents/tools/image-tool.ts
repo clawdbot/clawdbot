@@ -725,6 +725,7 @@ async function runImagePrompt(params: {
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
+    abortSignal: params.signal,
     run: async (provider, modelId) => {
       const timeoutMs = resolveImageToolTimeoutMs({
         cfg: providerCfg,
@@ -755,6 +756,7 @@ async function runImagePrompt(params: {
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
           timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
           cfg: providerCfg,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           agentDir: params.agentDir,
@@ -784,6 +786,7 @@ async function runImagePrompt(params: {
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
           timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
           cfg: providerCfg,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           agentDir: params.agentDir,
@@ -809,6 +812,7 @@ async function runImagePrompt(params: {
           prompt: `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
           maxTokens: resolveImageToolMaxTokens(undefined),
           timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
           cfg: providerCfg,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           agentDir: params.agentDir,

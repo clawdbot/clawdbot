@@ -3329,8 +3329,9 @@ describe("image tool run abort", () => {
   function installAbortImageDeps(
     loadWebMedia: MockImageLoadWebMedia,
     spies: ReturnType<typeof makeDescribeSpies>,
+    providers: MediaUnderstandingProvider[] = [minimaxProvider, moonshotProvider],
   ) {
-    installImageUnderstandingProviderDeps([minimaxProvider, moonshotProvider], {
+    installImageUnderstandingProviderDeps(providers, {
       loadImageWebMediaRuntime: async () => ({
         loadWebMedia,
         optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
@@ -3344,6 +3345,34 @@ describe("image tool run abort", () => {
       describeImagesWithModel: spies.describeImages,
     });
   }
+
+  it("forwards the run signal through the provider request contract", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    const spies = makeDescribeSpies();
+    installAbortImageDeps(loadWebMedia, spies, [{ id: "minimax", capabilities: ["image"] }]);
+    const controller = new AbortController();
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
+      await tool.execute(
+        "t1",
+        {
+          prompt: "Describe the images.",
+          images: ["https://example.test/a.png", "https://example.test/b.png"],
+        },
+        controller.signal,
+      );
+    });
+
+    expect(spies.describeImages).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
 
   it("throws before downloading or calling the provider when the run signal is already aborted", async () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
