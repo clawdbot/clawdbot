@@ -1,0 +1,52 @@
+name: Publish Model Catalog
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - extensions/*/openclaw.plugin.json
+      - scripts/publish-model-catalog.mjs
+      - scripts/publish-model-catalog.d.mts
+      - .github/workflows/publish-model-catalog.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-model-catalog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      R2_MODEL_CATALOG_ACCOUNT_ID: ${{ secrets.R2_MODEL_CATALOG_ACCOUNT_ID }}
+      R2_MODEL_CATALOG_API_TOKEN: ${{ secrets.R2_MODEL_CATALOG_API_TOKEN }}
+      R2_MODEL_CATALOG_BUCKET: ${{ secrets.R2_MODEL_CATALOG_BUCKET }}
+      R2_MODEL_CATALOG_ENDPOINT: ${{ secrets.R2_MODEL_CATALOG_ENDPOINT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.15.0"
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          npm install --global wrangler@4.114.0
+
+      - name: Validate catalog
+        run: node scripts/publish-model-catalog.mjs --dry-run
+
+      - name: Publish catalog
+        run: node scripts/publish-model-catalog.mjs --bucket "$R2_MODEL_CATALOG_BUCKET"
