@@ -397,7 +397,7 @@ jobs:
             --jq .content | base64 --decode > "${tooling_dir}/lib/plain-gh.mjs"
 
       - name: Checkout release tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -577,14 +577,14 @@ jobs:
     environment: npm-release
     steps:
       - name: Checkout release SHA
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_release_target.outputs.sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout trusted release tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           path: .release-harness

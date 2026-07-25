@@ -1422,6 +1422,7 @@ describe("microsoft-foundry plugin", () => {
 
   it.each([
     ["claude-mythos-preview", 128_000],
+    ["claude-opus-5", 128_000],
     ["claude-fable-5", 128_000],
     ["claude-opus-4.8", 128_000],
     ["claude-opus-4.7", 128_000],
@@ -1478,6 +1479,25 @@ describe("microsoft-foundry plugin", () => {
   it("resolves Claude thinking profiles from configured Foundry model names", () => {
     const provider = registerProvider();
 
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "microsoft-foundry",
+        modelId: "prod-opus",
+        params: { canonicalModelId: "claude-opus-5" },
+      }),
+    ).toMatchObject({
+      defaultLevel: "high",
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
+    });
     expect(
       provider.resolveThinkingProfile?.({
         provider: "microsoft-foundry",

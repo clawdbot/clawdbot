@@ -73,7 +73,12 @@ describe("onboarding recommendations scope migration", () => {
         });
 
         const result = migrateLegacyOnboardingRecommendationsScope({
-          cfg: { agents: { defaults: { workspace: state.workspaceDir } } } as OpenClawConfig,
+          cfg: {
+            agents: {
+              defaults: { workspace: state.workspaceDir },
+              entries: { main: { default: true } },
+            },
+          } as OpenClawConfig,
           env: state.env,
         });
 
@@ -120,7 +125,12 @@ describe("onboarding recommendations scope migration", () => {
         });
 
         const result = migrateLegacyOnboardingRecommendationsScope({
-          cfg: { agents: { defaults: { workspace: state.workspaceDir } } } as OpenClawConfig,
+          cfg: {
+            agents: {
+              defaults: { workspace: state.workspaceDir },
+              entries: { main: { default: true } },
+            },
+          } as OpenClawConfig,
           env: state.env,
         });
 

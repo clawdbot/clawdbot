@@ -473,11 +473,14 @@ describe("gateway usage helpers", () => {
       },
     });
 
-    const config = {} as OpenClawConfig;
+    const config = {
+      agents: { entries: { ops: { default: true } } },
+    } as OpenClawConfig;
     await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
 
-    const entry = testApi.costUsageCache.get("agent:__default__:1-2:gateway");
+    const entry = testApi.costUsageCache.get("agent:ops:1-2:gateway");
     expect(entry?.updatedAt).toBe(Date.now());
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("ops");
 
     await vi.advanceTimersByTimeAsync(29_999);
     await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
@@ -715,7 +718,7 @@ describe("gateway usage helpers", () => {
     } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
 
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBeUndefined();
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("main");
     expect(defaultRespond.mock.calls[0]?.[1]).toMatchObject({
       totals: { totalTokens: 10, totalCost: 1 },
     });
@@ -753,8 +756,7 @@ describe("gateway usage helpers", () => {
       context,
     } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
 
-    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(4);
-    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[3]?.[0]?.agentId).toBe("main");
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(3);
     expect(mainRespond.mock.calls[0]?.[1]).toMatchObject({
       totals: { totalTokens: 10, totalCost: 1 },
     });

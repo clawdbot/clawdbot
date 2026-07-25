@@ -211,6 +211,7 @@ const ModelCompatSchema = z
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
+    supportsJsonSchemaResponseFormat: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
     strictMessageKeys: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),

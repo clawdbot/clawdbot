@@ -12,7 +12,7 @@ type DiscordSupplementalContextSender = {
   id?: string;
   name?: string;
   tag?: string;
-  memberRoleIds?: string[];
+  memberRoleIds?: readonly string[];
 };
 
 export function createDiscordSupplementalContextAccessChecker(params: {
@@ -33,7 +33,7 @@ export function createDiscordSupplementalContextAccessChecker(params: {
         resolveDiscordMemberAllowed({
           userAllowList,
           roleAllowList,
-          memberRoleIds: sender.memberRoleIds ?? [],
+          memberRoleIds: [...(sender.memberRoleIds ?? [])],
           userId: sender.id ?? "",
           userName: sender.name,
           userTag: sender.tag,

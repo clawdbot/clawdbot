@@ -180,6 +180,7 @@ export async function runNonInteractiveLocalSetup(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
   const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
+  const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
   if (workspaceConflict) {
     runtime.error(
       [
@@ -195,6 +196,16 @@ export async function runNonInteractiveLocalSetup(params: {
     baseConfig,
     requestedWorkspaceDir,
   );
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
+  const { ensureOnboardingAgent } = await import("../onboard-agent.js");
+  const created = await ensureOnboardingAgent({
+    config: nextConfig,
+    workspace: workspaceDir,
+    baseConfig,
+  });
+  nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }

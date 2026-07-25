@@ -1,11 +1,7 @@
 // Repairs configured auth orders whose referenced profiles no longer exist.
 import fs from "node:fs";
 import path from "node:path";
-import {
-  listAgentIds,
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-} from "../../../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentDir } from "../../../agents/agent-scope-config.js";
 import { listRuntimeExternalAuthProfiles } from "../../../agents/auth-profiles/external-auth.js";
 import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
 import {
@@ -32,7 +28,10 @@ import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../../routing/session-key.js";
+import {
+  LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
+  normalizeAgentId,
+} from "../../../routing/session-key.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
@@ -291,7 +290,7 @@ function loadConfiguredAgentAuthStores(
   }
   // Every secondary agent inherits the legacy main store at runtime, even when
   // `agents.list` names a different default agent.
-  const mainAgentDir = path.resolve(resolveDefaultAgentDir({}, env));
+  const mainAgentDir = path.join(resolveStateDir(env), "agents", DEFAULT_AGENT_ID, "agent");
   const activeAgentDirs = new Set<string>();
   const expectedAgentIdsByDir = new Map<string, Set<string>>();
   const addExpectedAgentDir = (agentDir: string, agentId: string) => {

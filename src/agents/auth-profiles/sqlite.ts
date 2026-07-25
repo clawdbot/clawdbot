@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefix } from "../../infra/crypto-digest.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -13,7 +14,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -25,7 +26,6 @@ import {
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
-import { resolveDefaultAgentDir } from "../agent-scope-config.js";
 
 type AuthProfileDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -37,7 +37,13 @@ type AuthProfileDatabase = Pick<
 const PRIMARY_ROW_KEY = "primary";
 
 function resolveAgentDir(agentDir?: string): string {
-  return resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
+  if (agentDir) {
+    return resolveUserPath(agentDir);
+  }
+  const configuredMainAgentDir = process.env.OPENCLAW_AGENT_DIR?.trim();
+  return configuredMainAgentDir
+    ? resolveUserPath(configuredMainAgentDir)
+    : path.join(resolveStateDir(), "agents", "main", "agent");
 }
 
 function inferAgentIdFromDir(agentDir: string): string {
@@ -102,10 +108,9 @@ function inspectAuthProfileJsonCellReadOnly(
   pathname: string,
   target: "store" | "state",
 ): PersistedAuthProfileStoreInspection {
-  const sqlite = requireNodeSqlite();
   let db: DatabaseSync | undefined;
   try {
-    db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname), { readOnly: true });
+    db = openNodeSqliteDatabase(pathname, { readOnly: true });
     // This short-lived reader bypasses the canonical agent DB bootstrap, but it
     // must share its busy policy so brief rollback-journal locks do not look
     // like missing credentials.

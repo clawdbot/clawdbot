@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
 // zod@4 ships "sideEffects": false, so bundlers tree-shake the classic entry's
@@ -13,9 +15,7 @@ function installZodDefaultLocale(): void {
 installZodDefaultLocale();
 
 export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((cfg, ctx) => {
-  const agents = Object.entries(cfg.agents?.entries ?? {}).map(([id, entry]) =>
-    Object.assign({ id }, entry),
-  );
+  const agents = listAgentEntries(cfg as OpenClawConfig);
   if (agents.length === 0) {
     return;
   }

@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { projectPersistedMessageMediaFacts } from "../../../media/media-facts.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
@@ -70,7 +71,9 @@ export function finalizeEmbeddedAttempt(
     compactionCount: result.compactionCount,
     assistantTexts: result.assistantTexts,
     finalPromptText: result.finalPromptText,
-    messagesSnapshot: result.messagesSnapshot,
+    messagesSnapshot: result.messagesSnapshot.map((message) =>
+      projectPersistedMessageMediaFacts(message),
+    ),
   });
   trajectoryRecorder?.recordEvent(
     "trace.artifacts",

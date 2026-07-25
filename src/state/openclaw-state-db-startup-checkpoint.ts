@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
@@ -62,8 +62,7 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname));
+  const db = openNodeSqliteDatabase(pathname);
   try {
     assertSqliteIntegrity(db, pathname);
     ensureStartupMigrationCheckpointSchema(db, pathname);

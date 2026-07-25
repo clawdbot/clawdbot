@@ -9,7 +9,7 @@ import {
   formatValidationErrors,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -144,7 +144,7 @@ function resolveSessionUsageFileOrRespond(
 ): {
   config: OpenClawConfig;
   entry: SessionEntry | undefined;
-  agentId: string | undefined;
+  agentId: string;
   sessionId: string;
   sessionFile: string;
 } | null {
@@ -152,7 +152,7 @@ function resolveSessionUsageFileOrRespond(
 
   // For discovered sessions (not in store), try using key as sessionId directly
   const parsed = parseAgentSessionKey(key);
-  const agentId = parsed?.agentId;
+  const agentId = parsed?.agentId ?? resolveDefaultAgentId(config);
   const rawSessionId = parsed?.rest ?? key;
   const sessionId = entry?.sessionId ?? rawSessionId;
   let sessionFile: string;
@@ -901,12 +901,16 @@ async function loadCostUsageSummaryCached(params: {
   agentId?: string;
   agentScope?: "all";
 }): Promise<CostUsageSummary> {
+  const allAgents = params.agentScope === "all";
+  const agentId = allAgents
+    ? undefined
+    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
   const dayBucketKey = params.dayBucket
     ? params.dayBucket.mode === "time-zone"
       ? `time-zone:${params.dayBucket.timeZone}`
       : `utc-offset:${params.dayBucket.utcOffsetMinutes}`
     : "gateway";
-  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
+  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -922,7 +926,7 @@ async function loadCostUsageSummaryCached(params: {
 
   const entry: CostUsageCacheEntry = cached ?? {};
   const inFlight = (
-    params.agentScope === "all"
+    allAgents
       ? loadAllAgentCostUsageSummary({
           startMs: params.startMs,
           endMs: params.endMs,
@@ -934,7 +938,7 @@ async function loadCostUsageSummaryCached(params: {
           endMs: params.endMs,
           dayBucket: params.dayBucket,
           config: params.config,
-          agentId: params.agentId,
+          agentId: expectDefined(agentId, "non-aggregate usage agent id"),
           requestRefresh: true,
           refreshMode: "background",
         })
@@ -978,9 +982,7 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
-    normalizeAgentId(agent.id),
-  );
+  const agentIds = listAgentIds(params.config).map((agentId) => normalizeAgentId(agentId));
   const summaries = await runUsageAgentTasks(
     agentIds.map(
       (agentId) => () =>
@@ -1392,7 +1394,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     // individually re-reads and re-parses the whole cache file, so RSS spikes
     // in proportion to `limit` on every dashboard connect (issue #100041).
     const sessionsByAgent = new Map<
-      string | undefined,
+      string,
       Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
     >();
     for (const [entryIndex, merged] of mergedEntries.entries()) {

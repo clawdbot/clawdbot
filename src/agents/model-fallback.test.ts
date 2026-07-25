@@ -25,7 +25,11 @@ import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
-import { AgentHarnessSessionSupersededError, MissingAgentHarnessError } from "./harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  AgentHarnessSessionSupersededError,
+  MissingAgentHarnessError,
+} from "./harness/errors.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
@@ -1646,6 +1650,36 @@ describe("runWithModelFallback", () => {
         run,
       }),
     ).rejects.toBe(supersededError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repeat model-independent harness preflight on fallback models", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const preflightError = new AgentHarnessPreflightError(
+      "Computer Use live test failed after 2 attempts: thread/start timed out",
+    );
+    const run = vi.fn(async () => {
+      await Promise.resolve();
+      throw preflightError;
+    });
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(preflightError);
     expect(run).toHaveBeenCalledTimes(1);
   });
 

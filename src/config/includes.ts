@@ -77,6 +77,8 @@ export type IncludeResolver = {
   parseJson: (raw: string) => unknown;
   /** Reports lexically contained paths before canonical/open checks for watcher repair flows. */
   onLexicalPath?: (resolvedPath: string) => void;
+  /** Reports the resolved value contributed by an include at its logical config path. */
+  onIncludeResolved?: (event: { path: readonly string[]; value: unknown }) => void;
 };
 
 type IncludeFileReadParams = {
@@ -162,9 +164,9 @@ class IncludeProcessor {
     return this.boundary.configRoot.rootDir;
   }
 
-  process(obj: unknown): unknown {
+  process(obj: unknown, logicalPath: readonly string[] = []): unknown {
     if (Array.isArray(obj)) {
-      return obj.map((item) => this.process(item));
+      return obj.map((item) => this.process(item, logicalPath));
     }
 
     if (!isPlainObject(obj)) {
@@ -172,24 +174,28 @@ class IncludeProcessor {
     }
 
     if (!(INCLUDE_KEY in obj)) {
-      return this.processObject(obj);
+      return this.processObject(obj, logicalPath);
     }
 
-    return this.processInclude(obj);
+    return this.processInclude(obj, logicalPath);
   }
 
-  private processObject(obj: Record<string, unknown>): Record<string, unknown> {
+  private processObject(
+    obj: Record<string, unknown>,
+    logicalPath: readonly string[],
+  ): Record<string, unknown> {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
-      result[key] = this.process(value);
+      result[key] = this.process(value, [...logicalPath, key]);
     }
     return result;
   }
 
-  private processInclude(obj: Record<string, unknown>): unknown {
+  private processInclude(obj: Record<string, unknown>, logicalPath: readonly string[]): unknown {
     const includeValue = obj[INCLUDE_KEY];
     const otherKeys = Object.keys(obj).filter((k) => k !== INCLUDE_KEY);
-    const included = this.resolveInclude(includeValue);
+    const included = this.resolveInclude(includeValue, logicalPath);
+    this.resolver.onIncludeResolved?.({ path: [...logicalPath], value: included });
 
     if (otherKeys.length === 0) {
       return included;
@@ -205,14 +211,14 @@ class IncludeProcessor {
     // Merge included content with sibling keys
     const rest: Record<string, unknown> = {};
     for (const key of otherKeys) {
-      rest[key] = this.process(obj[key]);
+      rest[key] = this.process(obj[key], [...logicalPath, key]);
     }
     return deepMerge(included, rest);
   }
 
-  private resolveInclude(value: unknown): unknown {
+  private resolveInclude(value: unknown, logicalPath: readonly string[]): unknown {
     if (typeof value === "string") {
-      return this.loadFile(value);
+      return this.loadFile(value, logicalPath);
     }
 
     if (Array.isArray(value)) {
@@ -223,7 +229,7 @@ class IncludeProcessor {
             String(item),
           );
         }
-        return deepMerge(merged, this.loadFile(item));
+        return deepMerge(merged, this.loadFile(item, logicalPath));
       }, {});
     }
 
@@ -233,7 +239,7 @@ class IncludeProcessor {
     );
   }
 
-  private loadFile(includePath: string): unknown {
+  private loadFile(includePath: string, logicalPath: readonly string[]): unknown {
     const { resolvedPath, root } = this.resolvePath(includePath);
 
     this.checkCircular(resolvedPath);
@@ -242,7 +248,7 @@ class IncludeProcessor {
     const raw = this.readFile(includePath, resolvedPath, root);
     const parsed = this.parseFile(includePath, resolvedPath, raw);
 
-    return this.processNested(resolvedPath, parsed);
+    return this.processNested(resolvedPath, parsed, logicalPath);
   }
 
   private resolvePath(includePath: string): { resolvedPath: string; root: IncludeRoot } {
@@ -378,11 +384,15 @@ class IncludeProcessor {
     }
   }
 
-  private processNested(resolvedPath: string, parsed: unknown): unknown {
+  private processNested(
+    resolvedPath: string,
+    parsed: unknown,
+    logicalPath: readonly string[],
+  ): unknown {
     const nested = new IncludeProcessor(resolvedPath, this.resolver, this.boundary);
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
-    return nested.process(parsed);
+    return nested.process(parsed, logicalPath);
   }
 }
 

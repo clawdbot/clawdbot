@@ -3,8 +3,8 @@
   "version": "2026.7.2",
   "openclaw": {
     "schemaVersions": {
-      "state": 5,
-      "agent": 14
+      "state": 6,
+      "agent": 15
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -1902,7 +1902,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.4.4",
+    "@openclaw/fs-safe": "0.4.7",
     "@openclaw/proxyline": "0.3.4",
     "@silvia-odwyer/photon-node": "0.3.4",
     "chalk": "5.6.2",

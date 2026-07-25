@@ -14,8 +14,20 @@ import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 type UpdatePlanGatingParams = Parameters<typeof shouldIncludeUpdatePlanToolForOpenClawTools>[0];
 type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
 
+function withDefaultRoster(config: OpenClawConfig | undefined): OpenClawConfig {
+  return {
+    ...config,
+    agents: config?.agents ?? { entries: { main: { default: true } } },
+  };
+}
+
 function expectUpdatePlanEnabled(params: UpdatePlanGatingParams, expected: boolean): void {
-  expect(shouldIncludeUpdatePlanToolForOpenClawTools(params)).toBe(expected);
+  expect(
+    shouldIncludeUpdatePlanToolForOpenClawTools({
+      ...params,
+      config: withDefaultRoster(params.config),
+    }),
+  ).toBe(expected);
 }
 
 function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
@@ -25,13 +37,20 @@ function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
 function createFastToolNames(options: CreateOpenClawToolsOptions): string[] {
   // Disable unrelated dynamic surfaces so registration assertions stay deterministic.
   return toolNames(
-    createOpenClawTools({
+    createTestOpenClawTools({
       disableMessageTool: true,
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
       ...options,
     }),
   );
+}
+
+function createTestOpenClawTools(options: CreateOpenClawToolsOptions = {}) {
+  return createOpenClawTools({
+    ...options,
+    config: withDefaultRoster(options.config),
+  });
 }
 
 function expectToolNamed(
@@ -127,11 +146,11 @@ describe("openclaw-tools update_plan gating", () => {
   });
 
   it("wraps constructed tools with before-tool-call hooks by default", () => {
-    const tools = createOpenClawTools({
+    const tools = createTestOpenClawTools({
       config: {} as OpenClawConfig,
       disablePluginTools: true,
     });
-    const unwrappedTools = createOpenClawTools({
+    const unwrappedTools = createTestOpenClawTools({
       config: {} as OpenClawConfig,
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
@@ -145,7 +164,7 @@ describe("openclaw-tools update_plan gating", () => {
 
   it("keeps message tool in embedded message-tool-only completions", () => {
     setEmbeddedMode(true);
-    const tools = createOpenClawTools({
+    const tools = createTestOpenClawTools({
       config: {} as OpenClawConfig,
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
@@ -220,18 +239,18 @@ describe("openclaw-tools update_plan gating", () => {
 
   it("keeps explicitly allowed message tool in embedded completions", () => {
     setEmbeddedMode(true);
-    const fromRuntimeAllowlist = createOpenClawTools({
+    const fromRuntimeAllowlist = createTestOpenClawTools({
       config: {} as OpenClawConfig,
       disablePluginTools: true,
       pluginToolAllowlist: ["message"],
       wrapBeforeToolCallHook: false,
     });
-    const fromGlobalAlsoAllow = createOpenClawTools({
+    const fromGlobalAlsoAllow = createTestOpenClawTools({
       config: { tools: { profile: "minimal", alsoAllow: ["message"] } } as OpenClawConfig,
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
     });
-    const denied = createOpenClawTools({
+    const denied = createTestOpenClawTools({
       config: {} as OpenClawConfig,
       disablePluginTools: true,
       pluginToolAllowlist: ["message"],
