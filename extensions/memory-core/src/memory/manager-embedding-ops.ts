@@ -657,8 +657,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     signal?: AbortSignal,
     providerOverride?: EmbeddingProvider,
     markDegraded = true,
+    providerRuntimeOverride?: MemoryEmbeddingProviderRuntime,
   ): Promise<number[]> {
     const provider = providerOverride ?? this.provider;
+    const providerRuntime = providerOverride ? providerRuntimeOverride : this.providerRuntime;
     if (!provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
@@ -669,7 +671,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           await runMemoryEmbeddingRetryLoop({
             run: async () => {
               signal?.throwIfAborted();
-              const timeoutMs = this.resolveEmbeddingTimeout("query");
+              const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
               log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
               return await runEmbeddingOperationWithTimeout({
                 timeoutMs,

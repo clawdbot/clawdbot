@@ -2727,6 +2727,60 @@ describe("memory index", () => {
     expect(providerCloseCalls).toBe(1);
   });
 
+  it("uses the leased provider runtime after retirement starts", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+    type QueryProvider = {
+      embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+    };
+    const fields = manager as unknown as {
+      provider: QueryProvider | null;
+      providerRuntime?: { inlineQueryTimeoutMs?: number };
+      acquireProviderUse: (provider: QueryProvider) => () => void;
+      retireCurrentProvider: () => Promise<void>;
+      embedQueryWithRetry: (
+        text: string,
+        signal: AbortSignal | undefined,
+        provider: QueryProvider,
+        markDegraded: boolean,
+        providerRuntime: { inlineQueryTimeoutMs?: number },
+      ) => Promise<number[]>;
+    };
+    await manager.probeEmbeddingAvailability();
+    const provider = fields.provider;
+    if (!provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    const providerRuntime = { inlineQueryTimeoutMs: 10 };
+    fields.providerRuntime = providerRuntime;
+    provider.embedQuery = async (_text, options) =>
+      await new Promise<number[]>((resolve, reject) => {
+        const timer = setTimeout(() => resolve([1, 0, 0, 0]), 100);
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(options.signal?.reason);
+          },
+          { once: true },
+        );
+      });
+
+    const releaseProvider = fields.acquireProviderUse(provider);
+    const retirementPromise = fields.retireCurrentProvider();
+    try {
+      await vi.waitFor(() => expect(fields.provider).toBeNull());
+      await expect(
+        fields.embedQueryWithRetry("alpha", undefined, provider, false, providerRuntime),
+      ).rejects.toThrow("timed out");
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseProvider();
+    }
+
+    await retirementPromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
   it("waits for an admitted search before manager teardown", async () => {
     const manager = await getPersistentManager(createCfg({ provider: "openai" }));
     await manager.sync({ reason: "test" });

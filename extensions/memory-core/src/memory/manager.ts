@@ -1080,6 +1080,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         });
       }
       let semanticProvider = this.provider;
+      let semanticProviderRuntime = this.providerRuntime;
       let vectorProviderIdentity = {
         model: semanticProvider.model,
         aliases: this.resolveProviderIndexIdentities()
@@ -1108,7 +1109,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       try {
         keywordResults = await loadKeywordResults();
         try {
-          queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal, semanticProvider, false);
+          queryVec = await this.embedQueryWithRetry(
+            cleaned,
+            opts?.signal,
+            semanticProvider,
+            false,
+            semanticProviderRuntime,
+          );
         } catch (err) {
           releaseSemanticProvider();
           this.markLocalEmbeddingProviderDegraded(err);
@@ -1138,6 +1145,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
               return [];
             }
             semanticProvider = this.provider;
+            semanticProviderRuntime = this.providerRuntime;
             vectorProviderIdentity = {
               model: semanticProvider.model,
               aliases: this.resolveProviderIndexIdentities()
@@ -1152,6 +1160,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                 opts?.signal,
                 semanticProvider,
                 false,
+                semanticProviderRuntime,
               );
             } catch (fallbackErr) {
               releaseFallbackProvider();
