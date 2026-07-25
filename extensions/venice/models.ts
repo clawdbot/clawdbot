@@ -99,7 +99,7 @@ function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
   return typeof supportsFunctionCalling === "boolean" ? supportsFunctionCalling : undefined;
 }
 
-export function projectVeniceModels(
+function projectVeniceModels(
   rows: readonly unknown[],
   fallback: ModelProviderConfig,
 ): ModelDefinitionConfig[] {

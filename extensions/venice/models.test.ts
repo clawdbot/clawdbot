@@ -5,12 +5,7 @@ import {
   clearLiveCatalogCacheForTests,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  projectVeniceModels,
-  VENICE_BASE_URL,
-  VENICE_MODEL_CATALOG,
-  VENICE_MODEL_DISCOVERY_OPTIONS,
-} from "./models.js";
+import { VENICE_BASE_URL, VENICE_MODEL_CATALOG, VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
@@ -124,10 +119,7 @@ async function discoverVeniceModels() {
       api: "openai-completions",
       models: structuredClone(VENICE_MODEL_CATALOG),
     },
-    modelDiscovery: {
-      ...VENICE_MODEL_DISCOVERY_OPTIONS,
-      projectRows: projectVeniceModels,
-    },
+    modelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
   });
   return provider.models;
 }
