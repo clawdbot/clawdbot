@@ -1,6 +1,7 @@
 export const MODEL_CATALOG_MIN_VERSION: "2026.7.0";
 export const MODEL_CATALOG_MIN_MODELS: 200;
-export const MODEL_CATALOG_R2_OBJECT_KEY: "models/v1/catalog.json";
+export const OPENROUTER_MODELS_URL: "https://openrouter.ai/api/v1/models";
+export const LITELLM_PRICING_URL: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
 export type ModelCatalogManifestInput = {
   pluginId: string;
@@ -9,18 +10,22 @@ export type ModelCatalogManifestInput = {
     modelCatalog?: {
       providers?: Record<string, unknown>;
     };
+    modelPricing?: {
+      providers?: Record<string, unknown>;
+    };
   };
 };
 
 export type PublishModelCatalogArgs = {
   dryRun: boolean;
+  pricing: boolean;
   out?: string;
-  bucket?: string;
 };
 
 export type ModelCatalogBundleSummary = {
   providers: number;
   models: number;
+  costModels: number;
 };
 
 export type PublishedModelCatalogBundle = {
@@ -28,7 +33,13 @@ export type PublishedModelCatalogBundle = {
   generatedAt: number;
   minVersion?: string;
   sourceCommit: string;
-  providers: Record<string, { models: unknown[]; [key: string]: unknown }>;
+  providers: Record<
+    string,
+    {
+      models: Array<{ id: string; cost?: Record<string, unknown>; [key: string]: unknown }>;
+      [key: string]: unknown;
+    }
+  >;
 };
 
 export function parsePublishModelCatalogArgs(args: string[]): PublishModelCatalogArgs;
@@ -45,24 +56,21 @@ export function assembleModelCatalogBundle(options: {
 export function summarizeModelCatalogBundle(
   bundle: PublishedModelCatalogBundle,
 ): ModelCatalogBundleSummary;
+export function enrichModelCatalogPricing(options: {
+  bundle: PublishedModelCatalogBundle;
+  manifests: ModelCatalogManifestInput[];
+  fetchImpl?: typeof fetch;
+}): Promise<number>;
+export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle): string;
 export function runPublishModelCatalog(options?: {
   args?: string[];
   rootDir?: string;
   now?: () => number;
   sourceCommit?: string;
-  env?: NodeJS.ProcessEnv;
-  spawnSyncImpl?: (
-    command: string,
-    args: string[],
-    options: {
-      cwd: string;
-      encoding: string;
-      env: NodeJS.ProcessEnv;
-    },
-  ) => { status: number | null; stdout?: string; stderr?: string };
+  fetchImpl?: typeof fetch;
 }): Promise<{
   bundle: PublishedModelCatalogBundle;
   summary: ModelCatalogBundleSummary;
+  pricingEnriched: number;
   wrote: boolean;
-  uploaded: boolean;
 }>;
