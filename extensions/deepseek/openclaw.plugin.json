@@ -66,46 +66,6 @@
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens"
             }
-          },
-          {
-            "id": "deepseek-chat",
-            "name": "DeepSeek Chat",
-            "status": "deprecated",
-            "replacedBy": "deepseek-v4-flash",
-            "input": ["text"],
-            "contextWindow": 1000000,
-            "maxTokens": 384000,
-            "cost": {
-              "input": 0.14,
-              "output": 0.28,
-              "cacheRead": 0.0028,
-              "cacheWrite": 0
-            },
-            "compat": {
-              "supportsUsageInStreaming": true,
-              "maxTokensField": "max_tokens"
-            }
-          },
-          {
-            "id": "deepseek-reasoner",
-            "name": "DeepSeek Reasoner",
-            "status": "deprecated",
-            "replacedBy": "deepseek-v4-flash",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 1000000,
-            "maxTokens": 384000,
-            "cost": {
-              "input": 0.14,
-              "output": 0.28,
-              "cacheRead": 0.0028,
-              "cacheWrite": 0
-            },
-            "compat": {
-              "supportsUsageInStreaming": true,
-              "supportsReasoningEffort": false,
-              "maxTokensField": "max_tokens"
-            }
           }
         ]
       }

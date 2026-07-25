@@ -15,10 +15,12 @@
           {
             "id": "hy3-preview",
             "name": "Hy3 preview (TokenHub)",
+            "status": "deprecated",
+            "replacedBy": "hy3",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 256000,
-            "maxTokens": 64000,
+            "maxTokens": 128000,
             "cost": {
               "input": 0.176,
               "output": 0.587,
@@ -60,11 +62,17 @@
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 256000,
-            "maxTokens": 64000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0.147,
+              "output": 0.587,
+              "cacheRead": 0.037,
+              "cacheWrite": 0
+            },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "high"]
+              "supportedReasoningEfforts": ["none", "low", "high"]
             }
           }
         ]
@@ -79,11 +87,11 @@
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 256000,
-            "maxTokens": 64000,
+            "maxTokens": 128000,
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "high"]
+              "supportedReasoningEfforts": ["none", "low", "high"]
             }
           }
         ]

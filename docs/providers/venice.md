@@ -12,10 +12,10 @@ All endpoints are OpenAI-compatible (`/v1`).
 
 ## Privacy modes
 
-| Mode           | Behavior                                                         | Models                                                        |
-| -------------- | ---------------------------------------------------------------- | ------------------------------------------------------------- |
-| **Private**    | Prompts/responses are never stored or logged. Ephemeral.         | Llama, Qwen, DeepSeek, Kimi, MiniMax, Venice Uncensored, etc. |
-| **Anonymized** | Proxied through Venice with metadata stripped before forwarding. | Claude, GPT, Gemini, Grok                                     |
+| Mode           | Behavior                                                         | Models                                                          |
+| -------------- | ---------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Private**    | Prompts/responses are never stored or logged. Ephemeral.         | GLM, Gemma, Grok, Qwen, DeepSeek, Kimi, Venice Uncensored, etc. |
+| **Anonymized** | Proxied through Venice with metadata stripped before forwarding. | Claude, GPT, and selected Qwen models                           |
 
 <Warning>
 Anonymized models are not fully private. Venice strips metadata before forwarding, but the underlying provider (OpenAI, Anthropic, Google, xAI) still processes the request. Use Private models when full privacy is required.
@@ -60,18 +60,18 @@ Anonymized models are not fully private. Venice strips metadata before forwardin
   </Step>
   <Step title="Verify setup">
     ```bash
-    openclaw agent --model venice/kimi-k2-5 --message "Hello, are you working?"
+    openclaw agent --model venice/kimi-k2-6 --message "Hello, are you working?"
     ```
   </Step>
 </Steps>
 
 ## Model selection
 
-- **Default**: `venice/kimi-k2-5` (private, reasoning, vision).
-- **Strongest anonymized option**: `venice/claude-opus-4-6`.
+- **Default**: `venice/kimi-k2-6` (private, reasoning, vision).
+- **Strongest anonymized option**: `venice/claude-opus-5`.
 
 ```bash
-openclaw models set venice/kimi-k2-5
+openclaw models set venice/kimi-k2-6
 openclaw models list --all --provider venice
 ```
 
@@ -80,55 +80,49 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
 <Tip>
 | Use case              | Model                                        | Why                                    |
 | --------------------- | -------------------------------------------- | -------------------------------------- |
-| General chat (default) | `kimi-k2-5`                                  | Strong private reasoning plus vision   |
-| Best overall quality   | `claude-opus-4-6`                            | Strongest anonymized Venice option     |
+| General chat (default) | `kimi-k2-6`                                  | Current promoted private Kimi model    |
+| Best overall quality   | `claude-opus-5`                              | Current promoted anonymized Opus model |
 | Privacy + coding       | `qwen3-coder-480b-a35b-instruct-turbo`       | Private coding model with large context |
-| Fast + cheap           | `llama-3.2-3b`                               | Compact private model                  |
-| Complex private tasks  | `deepseek-v3.2`                              | Strong reasoning; tool calling disabled |
+| Fast + cheap           | `google-gemma-4-31b-it`                      | Low-cost promoted private vision model |
+| Complex private tasks  | `deepseek-v3.2`                              | Promoted private reasoning model       |
 | Uncensored             | `venice-uncensored-1-2`                      | Current uncensored Venice model        |
 </Tip>
 
-## Built-in catalog (30 models)
+## Built-in catalog (16 visible models)
 
 <AccordionGroup>
-  <Accordion title="Private models (20) — fully private, no logging">
-    | Model ID                               | Name                                 | Context | Notes                      |
-    | -------------------------------------- | ------------------------------------- | ------- | --------------------------- |
-    | `kimi-k2-5`                            | Kimi K2.5                             | 256k    | Default, reasoning, vision  |
-    | `llama-3.3-70b`                        | Llama 3.3 70B                         | 128k    | General                     |
-    | `llama-3.2-3b`                         | Llama 3.2 3B                          | 128k    | General                     |
-    | `hermes-3-llama-3.1-405b`              | Hermes 3 Llama 3.1 405B               | 128k    | General, tools disabled     |
-    | `qwen3-235b-a22b-thinking-2507`        | Qwen3 235B Thinking                   | 128k    | Reasoning                   |
-    | `qwen3-235b-a22b-instruct-2507`        | Qwen3 235B Instruct                   | 128k    | General                     |
-    | `qwen3-coder-480b-a35b-instruct-turbo` | Qwen3 Coder 480B Turbo                | 256k    | Coding                      |
-    | `qwen3-5-35b-a3b`                      | Qwen3.5 35B A3B                       | 256k    | Reasoning, vision           |
-    | `qwen3-next-80b`                       | Qwen3 Next 80B                        | 256k    | General                     |
-    | `qwen3-vl-235b-a22b`                   | Qwen3 VL 235B (Vision)                | 256k    | Vision                      |
-    | `deepseek-v3.2`                        | DeepSeek V3.2                         | 160k    | Reasoning, tools disabled    |
-    | `google-gemma-3-27b-it`                | Google Gemma 3 27B Instruct           | 198k    | Vision                       |
-    | `openai-gpt-oss-120b`                  | OpenAI GPT OSS 120B                   | 128k    | General                      |
-    | `nvidia-nemotron-3-nano-30b-a3b`       | NVIDIA Nemotron 3 Nano 30B            | 128k    | General                      |
-    | `olafangensan-glm-4.7-flash-heretic`   | GLM 4.7 Flash Heretic                 | 128k    | Reasoning                    |
-    | `zai-org-glm-4.6`                      | GLM 4.6                               | 198k    | General                      |
-    | `zai-org-glm-4.7`                      | GLM 4.7                               | 198k    | Reasoning                    |
-    | `zai-org-glm-4.7-flash`                | GLM 4.7 Flash                         | 128k    | Reasoning                    |
-    | `zai-org-glm-5`                        | GLM 5                                 | 198k    | Reasoning                    |
-    | `minimax-m25`                          | MiniMax M2.5                          | 198k    | Reasoning                    |
+  <Accordion title="Private models (10) — fully private, no logging">
+    | Model ID                               | Name                        | Context | Notes                       |
+    | -------------------------------------- | --------------------------- | ------- | --------------------------- |
+    | `zai-org-glm-5-2`                      | GLM 5.2                     | 1M      | Recommended, coding         |
+    | `zai-org-glm-4.7`                      | GLM 4.7                     | 198k    | Venice default              |
+    | `venice-uncensored-1-2`                | Venice Uncensored 1.2       | 128k    | Most uncensored, vision     |
+    | `google-gemma-4-31b-it`                | Google Gemma 4 31B Instruct | 256k    | Recommended, vision         |
+    | `kimi-k2-6`                            | Kimi K2.6                   | 256k    | Recommended, coding, vision |
+    | `deepseek-v3.2`                        | DeepSeek V3.2               | 160k    | Recommended, reasoning      |
+    | `qwen3-235b-a22b-thinking-2507`        | Qwen3 235B Thinking         | 128k    | Default reasoning           |
+    | `qwen3-coder-480b-a35b-instruct-turbo` | Qwen3 Coder 480B Turbo      | 256k    | Default coding              |
+    | `qwen3-vl-235b-a22b`                   | Qwen3 VL 235B               | 128k    | Default vision              |
+    | `grok-4-5`                             | Grok 4.5                    | 500k    | Recommended, coding, vision |
   </Accordion>
 
-  <Accordion title="Anonymized models (10) — via Venice proxy">
-    | Model ID                        | Name                           | Context | Notes                      |
-    | -------------------------------- | -------------------------------- | ------- | ---------------------------- |
-    | `claude-opus-4-6`               | Claude Opus 4.6 (via Venice)    | 1M      | Reasoning, vision            |
-    | `claude-sonnet-4-6`             | Claude Sonnet 4.6 (via Venice)  | 1M      | Reasoning, vision            |
-    | `openai-gpt-54`                 | GPT-5.4 (via Venice)            | 1M      | Reasoning, vision            |
-    | `openai-gpt-53-codex`           | GPT-5.3 Codex (via Venice)      | 400k    | Reasoning, vision, coding     |
-    | `openai-gpt-52`                 | GPT-5.2 (via Venice)            | 256k    | Reasoning                    |
-    | `openai-gpt-52-codex`           | GPT-5.2 Codex (via Venice)      | 256k    | Reasoning, vision, coding     |
-    | `openai-gpt-4o-2024-11-20`      | GPT-4o (via Venice)             | 128k    | Vision                        |
-    | `openai-gpt-4o-mini-2024-07-18` | GPT-4o Mini (via Venice)        | 128k    | Vision                        |
-    | `gemini-3-1-pro-preview`        | Gemini 3.1 Pro (via Venice)     | 1M      | Reasoning, vision             |
-    | `gemini-3-flash-preview`        | Gemini 3 Flash (via Venice)     | 256k    | Reasoning, vision             |
+  <Accordion title="Anonymized models (6) — via Venice proxy">
+    | Model ID            | Name                             | Context | Notes                       |
+    | ------------------- | -------------------------------- | ------- | --------------------------- |
+    | `qwen-3-7-max`      | Qwen 3.7 Max (via Venice)        | 1M      | Recommended, coding, vision |
+    | `qwen-3-7-plus`     | Qwen 3.7 Plus (via Venice)       | 1M      | Recommended, coding, vision |
+    | `claude-fable-5`    | Claude Fable 5 (via Venice)      | 1M      | Recommended, coding, vision |
+    | `claude-opus-5`     | Claude Opus 5 (via Venice)       | 1M      | Recommended, coding, vision |
+    | `claude-sonnet-4-6` | Claude Sonnet 4.6 (via Venice)   | 1M      | Recommended, coding, vision |
+    | `openai-gpt-56-sol` | GPT-5.6 Sol (via Venice)         | 1M      | Recommended, vision         |
+  </Accordion>
+
+  <Accordion title="Deprecated compatibility rows (3) — hidden from pickers">
+    | Model ID                | Replacement                 |
+    | ----------------------- | --------------------------- |
+    | `zai-org-glm-4.6`       | `zai-org-glm-4.7`           |
+    | `google-gemma-3-27b-it` | `google-gemma-4-31b-it`     |
+    | `kimi-k2-5`             | `kimi-k2-6`                 |
   </Accordion>
 </AccordionGroup>
 
@@ -157,12 +151,12 @@ separate from the native DeepSeek provider's own thinking controls.
 
 ## Streaming and tool support
 
-| Feature          | Support                                           |
-| ---------------- | ------------------------------------------------- |
-| Streaming        | All models                                        |
-| Function calling | Most models; disabled per-model where noted above |
-| Vision/Images    | Models marked "Vision" above                      |
-| JSON mode        | Via `response_format`                             |
+| Feature          | Support                                                |
+| ---------------- | ------------------------------------------------------ |
+| Streaming        | All models                                             |
+| Function calling | All visible seed models; live rows follow API metadata |
+| Vision/Images    | Models marked "Vision" above                           |
+| JSON mode        | Via `response_format`                                  |
 
 ## Pricing
 
@@ -174,10 +168,10 @@ direct API pricing plus a small Venice fee. See
 
 ```bash
 # Default private model
-openclaw agent --model venice/kimi-k2-5 --message "Quick health check"
+openclaw agent --model venice/kimi-k2-6 --message "Quick health check"
 
 # Claude Opus via Venice (anonymized)
-openclaw agent --model venice/claude-opus-4-6 --message "Summarize this task"
+openclaw agent --model venice/claude-opus-5 --message "Summarize this task"
 
 # Uncensored model
 openclaw agent --model venice/venice-uncensored-1-2 --message "Draft options"
@@ -223,7 +217,7 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
     ```json5
     {
       env: { VENICE_API_KEY: "vapi_..." },
-      agents: { defaults: { model: { primary: "venice/kimi-k2-5" } } },
+      agents: { defaults: { model: { primary: "venice/kimi-k2-6" } } },
       models: {
         mode: "merge",
         providers: {
@@ -233,11 +227,11 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
             api: "openai-completions",
             models: [
               {
-                id: "kimi-k2-5",
-                name: "Kimi K2.5",
+                id: "kimi-k2-6",
+                name: "Kimi K2.6",
                 reasoning: true,
                 input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                cost: { input: 0.75, output: 3.5, cacheRead: 0.16, cacheWrite: 0 },
                 contextWindow: 256000,
                 maxTokens: 65536,
               },
