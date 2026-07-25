@@ -35,16 +35,16 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     const workspaceDir = await createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
+    await fs.writeFile(path.join(packageDir, "SOUL.md"), "soul", "utf-8");
     await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
 
     const files = await loadExtraBootstrapFileList(workspaceDir, ["packages/*/*"]);
 
     expect(files).toStrictEqual([
       {
-        name: "TOOLS.md",
-        path: path.join(packageDir, "TOOLS.md"),
-        content: "tools",
+        name: "SOUL.md",
+        path: path.join(packageDir, "SOUL.md"),
+        content: "soul",
         missing: false,
       },
     ]);

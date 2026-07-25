@@ -187,7 +187,6 @@ async function loadTemplate(name: string): Promise<string> {
 export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_AGENTS_FILENAME
   | typeof DEFAULT_SOUL_FILENAME
-  | typeof DEFAULT_TOOLS_FILENAME
   | typeof DEFAULT_IDENTITY_FILENAME
   | typeof DEFAULT_USER_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
@@ -216,7 +215,6 @@ export type ExtraBootstrapLoadDiagnostic = {
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -603,7 +601,6 @@ async function workspaceSetupStateHasSurvivalEvidence(params: {
   return [
     DEFAULT_AGENTS_FILENAME,
     DEFAULT_SOUL_FILENAME,
-    DEFAULT_TOOLS_FILENAME,
     DEFAULT_IDENTITY_FILENAME,
     DEFAULT_USER_FILENAME,
   ].every((fileName) => generatedHashes.has(fileName));
@@ -691,14 +688,13 @@ export async function ensureAgentWorkspace(params?: {
   /**
    * List of optional bootstrap filenames to skip writing.
    * Applies only to SOUL.md, USER.md, IDENTITY.md.
-   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   * Required workspace setup such as AGENTS.md still runs.
    */
   skipOptionalBootstrapFiles?: string[];
 }): Promise<{
   dir: string;
   agentsPath?: string;
   soulPath?: string;
-  toolsPath?: string;
   identityPath?: string;
   userPath?: string;
   bootstrapPath?: string;
@@ -754,12 +750,11 @@ export async function ensureAgentWorkspace(params?: {
 
   const agentsPath = path.join(dir, DEFAULT_AGENTS_FILENAME);
   const soulPath = path.join(dir, DEFAULT_SOUL_FILENAME);
-  const toolsPath = path.join(dir, DEFAULT_TOOLS_FILENAME);
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
 
   const isBrandNewWorkspace = await (async () => {
-    const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath];
+    const templatePaths = [agentsPath, soulPath, identityPath, userPath];
     const paths = [...templatePaths, path.join(dir, "memory")];
     const existing = await Promise.all(
       paths.map(async (p) => {
@@ -823,7 +818,6 @@ export async function ensureAgentWorkspace(params?: {
 
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
   const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   // Template and filesystem checks above are async. Another process may have
@@ -846,7 +840,6 @@ export async function ensureAgentWorkspace(params?: {
   if (shouldWriteBootstrapFile(DEFAULT_SOUL_FILENAME)) {
     await writeFileIfMissing(soulPath, soulTemplate);
   }
-  await writeFileIfMissing(toolsPath, toolsTemplate);
   const identityPathCreated = shouldWriteBootstrapFile(DEFAULT_IDENTITY_FILENAME)
     ? await writeFileIfMissing(identityPath, identityTemplate)
     : false;
@@ -923,7 +916,6 @@ export async function ensureAgentWorkspace(params?: {
     dir,
     agentsPath,
     soulPath,
-    toolsPath,
     identityPath,
     userPath,
     bootstrapPath,
@@ -946,10 +938,6 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     {
       name: DEFAULT_SOUL_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_SOUL_FILENAME),
-    },
-    {
-      name: DEFAULT_TOOLS_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
     },
     {
       name: DEFAULT_IDENTITY_FILENAME,
@@ -995,11 +983,10 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
-const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME]);
 
 const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_AGENTS_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,

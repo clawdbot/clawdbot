@@ -67,7 +67,7 @@ describe("buildBootstrapContextFiles", () => {
     const head = `HEAD-${"a".repeat(600)}`;
     const tail = `${"b".repeat(300)}-TAIL`;
     const long = `${head}${tail}`;
-    const files = [makeFile({ name: "TOOLS.md", content: long })];
+    const files = [makeFile({ name: "AGENTS.md", content: long })];
     const warnings: string[] = [];
     const maxChars = 200;
     const [result] = buildBootstrapContextFiles(files, {
@@ -78,7 +78,7 @@ describe("buildBootstrapContextFiles", () => {
     expect(kept?.slice(0, 3)).toStrictEqual(["kept 74+24 chars", "74", "24"]);
     const headChars = Number(kept?.[1]);
     const tailChars = Number(kept?.[2]);
-    expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
+    expect(result?.content).toContain("[...truncated, read AGENTS.md for full content...]");
     expect(result?.content.length).toBe(199);
     expect(result?.content.length).toBeLessThan(long.length);
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
@@ -87,15 +87,15 @@ describe("buildBootstrapContextFiles", () => {
       expect(result?.content.endsWith(long.slice(-tailChars))).toBe(true);
     }
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("TOOLS.md");
+    expect(warnings[0]).toContain("AGENTS.md");
     expect(warnings[0]).toContain("limit 200");
   });
   it("keeps generic and AGENTS.md truncation valid at UTF-16 boundaries", () => {
     const cases = [
       {
         file: makeFile({
-          name: "TOOLS.md",
-          path: "/tmp/TOOLS.md",
+          name: "AGENTS.md",
+          path: "/tmp/AGENTS.md",
           content: `${"h".repeat(73)}😀${"m".repeat(200)}😀${"t".repeat(23)}`,
         }),
         maxChars: 200,
