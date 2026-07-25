@@ -73,12 +73,13 @@ const EMBEDDING_PROVIDER_ADMISSION_TAILS = new Map<string, Promise<void>>();
 async function acquireEmbeddingProviderLease(
   scopeKey: string,
   create: () => Promise<MemoryEmbeddingProvider>,
+  holdForCleanup: boolean,
 ): Promise<{ provider: MemoryEmbeddingProvider; release: () => void }> {
   const previous = EMBEDDING_PROVIDER_ADMISSION_TAILS.get(scopeKey) ?? Promise.resolve();
   const createLease = async () => {
     await drainEmbeddingProviderRetirements(scopeKey);
     const provider = await create();
-    if (!provider.close) {
+    if (!holdForCleanup) {
       return { provider, lifecycle: Promise.resolve(), release: () => {} };
     }
     let release: () => void = () => {};
@@ -139,6 +140,28 @@ function retainEmbeddingProviderForRetirement(
   EMBEDDING_PROVIDER_RETIREMENTS.set(scopeKey, pending);
 }
 
+export async function drainRetainedOpenAiEmbeddingProviders(): Promise<void> {
+  const activeLifecycles = Array.from(EMBEDDING_PROVIDER_ADMISSION_TAILS.values());
+  if (activeLifecycles.length > 0) {
+    await Promise.allSettled(activeLifecycles);
+  }
+  let firstError: unknown;
+  let closeFailed = false;
+  for (const scopeKey of Array.from(EMBEDDING_PROVIDER_RETIREMENTS.keys())) {
+    try {
+      await drainEmbeddingProviderRetirements(scopeKey);
+    } catch (err) {
+      if (!closeFailed) {
+        firstError = err;
+      }
+      closeFailed = true;
+    }
+  }
+  if (closeFailed) {
+    throw firstError;
+  }
+}
+
 function coerceRequest(value: unknown): EmbeddingsRequest {
   return value && typeof value === "object" ? (value as EmbeddingsRequest) : {};
 }
@@ -189,6 +212,18 @@ function resolveEmbeddingProviderRemoteConfig(remote: MemorySearchEmbeddingConfi
         headers: remote.headers,
       }
     : undefined;
+}
+
+function isLocalEmbeddingProvider(params: {
+  cfg: OpenClawConfig;
+  provider: EmbeddingProviderRequest;
+}): boolean {
+  const providerId =
+    params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
+  return (
+    getMemoryEmbeddingProvider(providerId, params.cfg)?.transport === "local" ||
+    getGenericEmbeddingProvider(providerId, params.cfg)?.transport === "local"
+  );
 }
 
 async function createConfiguredEmbeddingProvider(params: {
@@ -410,6 +445,10 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
   const providerScopeKey = JSON.stringify([agentId, target.provider, target.model]);
+  const holdProviderForCleanup = isLocalEmbeddingProvider({
+    cfg,
+    provider: target.provider,
+  });
 
   try {
     const { provider, release } = await acquireEmbeddingProviderLease(
@@ -430,6 +469,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
               }
             : undefined,
         }),
+      holdProviderForCleanup,
     );
     try {
       const embeddings = await provider.embedBatch(texts);
