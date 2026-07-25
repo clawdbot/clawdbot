@@ -497,3 +497,32 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+## Maintainer Integration Notes
+
+If any of the new directories are intended to function as isolated internal packages 
+(rather than simple folders), ensure they are registered in `pnpm-workspace.yaml`.
+
+Example:
+  packages:
+    - "engine/*"
+    - "state/*"
+    - "routing/*"
+    - "math/*"
+    - "backend/*"
+    - "witness/*"
+
+Additionally, if these directories contain TypeScript source files that should be part 
+of the project’s compilation pipeline, verify that they are included or referenced 
+inside `tsconfig.core.json`.
+
+This may require:
+  - adding them to `include`
+  - adding them to `references`
+  - or creating a dedicated tsconfig inside each sub-package
+
+Failing to register them will cause:
+  - missing type resolution
+  - modules not being compiled
+  - imports failing silently
+  - workspace tools ignoring the new engine
+    
