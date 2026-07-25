@@ -155,7 +155,7 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.createdActor
     : undefined;
-  const { running, pinnedState, leadingIndicator } = renderSessionLeadingState(
+  const { running, leadingIndicator } = renderSessionLeadingState(
     session,
     pullRequestState,
     ownerActor,
@@ -274,7 +274,6 @@ export function renderRecentSession(params: {
             session.key,
           ),
         })}
-        ${pinnedState}
       </a>
       ${session.childSessionKeys.length > 0
         ? html`<button

@@ -1,6 +1,7 @@
 /**
  * Collects configured native harness runtime ids from model provider config.
  */
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
@@ -21,35 +22,6 @@ function isSelectablePluginRuntime(runtime: string | undefined): runtime is stri
     !isDefaultAgentRuntimeId(runtime) &&
     normalizeOptionalAgentRuntimeId(runtime) !== OPENCLAW_AGENT_RUNTIME_ID
   );
-}
-
-// Agent model config accepts a direct string or primary/fallback object. Collect
-// all refs so fallback-only harness preferences still preload their plugin.
-function listAgentModelRefs(value: unknown): string[] {
-  if (typeof value === "string") {
-    return [value];
-  }
-  if (!isRecord(value)) {
-    return [];
-  }
-  const refs: string[] = [];
-  if (typeof value.primary === "string") {
-    refs.push(value.primary);
-  }
-  if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
-      if (typeof fallback === "string") {
-        refs.push(fallback);
-      }
-    }
-  }
-  return refs;
-}
-
-function pushAgentModelRefs(refs: string[], value: unknown): void {
-  for (const ref of listAgentModelRefs(value)) {
-    refs.push(ref);
-  }
 }
 
 // Parses provider/model refs used in config maps before asking harness policy
@@ -148,9 +120,7 @@ function pushConfiguredAgentModelRuntimeIds(
   };
 
   const defaultsModel = config.agents?.defaults?.model;
-  const defaultsModelRefs: string[] = [];
-  pushAgentModelRefs(defaultsModelRefs, defaultsModel);
-  pushModelRefs(defaultsModelRefs);
+  pushModelRefs(listModelRefsFromConfigValue(defaultsModel));
   pushModelMapRefs(config.agents?.defaults?.models);
 
   for (const agent of listAgentEntries(config)) {
@@ -158,9 +128,7 @@ function pushConfiguredAgentModelRuntimeIds(
       continue;
     }
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
-    const selectedModelRefs: string[] = [];
-    pushAgentModelRefs(selectedModelRefs, agent.model ?? defaultsModel);
-    pushModelRefs(selectedModelRefs, agentId);
+    pushModelRefs(listModelRefsFromConfigValue(agent.model ?? defaultsModel), agentId);
     pushModelMapRefs(agent.models, agentId);
   }
 }

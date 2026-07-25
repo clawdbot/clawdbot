@@ -1,6 +1,6 @@
 // Openrouter provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
-import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
@@ -24,7 +24,6 @@ import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
 const OPENROUTER_CLIP_MUSIC_MODEL = "google/lyria-3-clip-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
-const MB = 1024 * 1024;
 const OPENROUTER_SSE_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
 const OPENROUTER_MUSIC_MODELS = [
   DEFAULT_OPENROUTER_MUSIC_MODEL,
@@ -123,14 +122,6 @@ function readDeltaAudio(part: unknown): { data?: string; transcript?: string } |
     data: normalizeOptionalString(audio.data),
     transcript: typeof audio.transcript === "string" ? audio.transcript : undefined,
   };
-}
-
-function resolveGeneratedMusicMaxBytes(req: MusicGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * MB);
-  }
-  return maxBytesForKind("audio");
 }
 
 function resolveOpenRouterSseEventMaxBytes(maxBytes: number): number {
@@ -432,7 +423,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         const streamResult = await readOpenRouterAudioStream(
           response,
           streamDeadline,
-          resolveGeneratedMusicMaxBytes(req),
+          resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
         );
         if (streamResult.audioBuffer.byteLength === 0) {
           throw new Error("OpenRouter music generation response missing audio data");

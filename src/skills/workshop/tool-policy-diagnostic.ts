@@ -36,10 +36,15 @@ function findAgentTools(config: OpenClawConfig, agentId: string): AgentToolsLoca
   if (!listed?.entry.tools) {
     return undefined;
   }
+  // Report the canonical entries path; an id-less legacy list row (which
+  // normalizeAgentId maps to the default id) keeps its indexed path so the
+  // remediation never points at agents.entries.undefined.
   const path =
     listed.source.kind === "entries"
       ? `agents.entries.${listed.source.key}.tools`
-      : `agents.list[${listed.source.index}].tools`;
+      : typeof listed.entry.id === "string" && listed.entry.id.length > 0
+        ? `agents.entries.${listed.entry.id}.tools`
+        : `agents.list[${listed.source.index}].tools`;
   return { path, tools: listed.entry.tools };
 }
 
@@ -111,7 +116,7 @@ function describeExclusion(params: {
   });
   const agentProvider = providerPolicyPath({
     tools: agent?.tools,
-    basePath: agent?.path ?? "agents.list[].tools",
+    basePath: agent?.path ?? "agents.entries.*.tools",
     capabilityProfile: params.capabilityProfile,
   });
 
@@ -152,13 +157,13 @@ function describeExclusion(params: {
   const normalizedLabel = label.startsWith(`agents.${params.agentId}.tools.byProvider`)
     ? label.replace(
         `agents.${params.agentId}.tools.byProvider`,
-        agentProvider?.path ?? `${agent?.path ?? "agents.list[].tools"}.byProvider`,
+        agentProvider?.path ?? `${agent?.path ?? "agents.entries.*.tools"}.byProvider`,
       )
     : label.startsWith("tools.byProvider")
       ? label.replace("tools.byProvider", globalProvider?.path ?? "tools.byProvider")
       : label
-          .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.list[].tools")
-          .replace("agent tools", agent?.path ?? "agents.list[].tools");
+          .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.entries.*.tools")
+          .replace("agent tools", agent?.path ?? "agents.entries.*.tools");
   if (policyDeniesWorkshop(params.event)) {
     const source = normalizedLabel.replace(/\.allow$/, ".deny");
     return {

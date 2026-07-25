@@ -750,7 +750,11 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
   };
 }
 
-function expectNoncanonicalAuditSchemaRejected(stateDir: string, databasePath: string): void {
+function expectNoncanonicalAuditSchemaRejected(
+  stateDir: string,
+  databasePath: string,
+  doctorWarning = "cannot be repaired automatically",
+): void {
   const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
   expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
     { kind: "audit-events-v2", path: databasePath },
@@ -758,7 +762,7 @@ function expectNoncanonicalAuditSchemaRejected(stateDir: string, databasePath: s
   expect(() => openOpenClawStateDatabase(options)).toThrow(/noncanonical audit event schema/);
   expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
     changes: [],
-    warnings: [expect.stringContaining("cannot be repaired automatically")],
+    warnings: [expect.stringContaining(doctorWarning)],
   });
 }
 
@@ -1810,6 +1814,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     drifted.close();
 
     expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table auth_profile_stores/iu);
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("missing table auth_profile_stores")],
+    });
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -1872,13 +1880,31 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         PRIMARY KEY (scope, event_key)
       ) STRICT;
       CREATE INDEX idx_diagnostic_events_scope_sequence
-        ON diagnostic_events(scope, sequence, event_key);
+        ON diagnostic_events(event_key);
     `);
     drifted.close();
 
     expect(() => openOpenClawStateDatabase(options)).toThrow(
       /unexpected unique index on diagnostic_events/iu,
     );
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("unexpected unique index on diagnostic_events")],
+    });
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_diagnostic_events_scope_sequence'",
+          )
+          .get(),
+      ).toEqual({
+        sql: "CREATE INDEX idx_diagnostic_events_scope_sequence\n        ON diagnostic_events(event_key)",
+      });
+    } finally {
+      after.close();
+    }
   });
 
   it("rejects primary-key collation drift in a current-schema table", () => {
@@ -2093,6 +2119,42 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
+  it("does not claim a legacy audit database with conflicting ownership", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createLegacyAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("UPDATE schema_meta SET role = 'agent', agent_id = 'worker-1';");
+    legacy.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("schema role agent; expected global")],
+    });
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(readSqliteNumberPragma(preserved, "user_version")).toBe(1);
+      expect(
+        preserved
+          .prepare(
+            "SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'",
+          )
+          .get(),
+      ).toEqual({ role: "agent", schema_version: 1, agent_id: "worker-1" });
+      expect(
+        preserved
+          .prepare(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'auth_profile_stores'",
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      preserved.close();
+    }
+  });
+
   it("refuses an audit sequence high-water mark outside the supported cursor range", () => {
     const stateDir = createTempStateDir();
     const databasePath = createLegacyAuditStateDatabase(stateDir);
@@ -2264,7 +2326,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     malformed.exec("DROP TABLE audit_events");
     malformed.close();
 
-    expectNoncanonicalAuditSchemaRejected(stateDir, databasePath);
+    expectNoncanonicalAuditSchemaRejected(stateDir, databasePath, "missing table audit_events");
 
     const preserved = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -2468,7 +2530,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const rmSync = fs.rmSync.bind(fs);
     let failRemoval = true;
     vi.spyOn(fs, "rmSync").mockImplementation(((pathname, options) => {
-      if (pathname === privateDirectory && failRemoval) {
+      if (
+        fs.realpathSync.native(String(pathname)) === fs.realpathSync.native(privateDirectory) &&
+        failRemoval
+      ) {
         failRemoval = false;
         const error = new Error("busy");
         (error as NodeJS.ErrnoException).code = "EBUSY";
@@ -2706,7 +2771,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
   });
 
   it.skipIf(process.platform === "win32")(
-    "refuses a hot rollback journal read-only before writable recovery",
+    "recovers a hot rollback journal privately before writable recovery",
     () => {
       const result = runHotRollbackJournalRecoveryProbe({
         moduleUrl: new URL("./openclaw-state-db.ts", import.meta.url).href,
@@ -2714,9 +2779,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       });
 
       expect(result.readOnly).toEqual({
-        error: expect.stringMatching(/readonly|read-only|rollback/iu),
-        opened: false,
-        uncommittedRows: null,
+        error: null,
+        opened: true,
+        uncommittedRows: 0,
       });
       expect(result).toMatchObject({
         committedRowsAfterRecovery: 256,
@@ -3889,6 +3954,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(readSqliteNumberPragma(database.db, "auto_vacuum")).toBe(2);
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(readSqliteNumberPragma(database.db, "wal_autocheckpoint")).toBe(1000);
+    expect(readSqliteNumberPragma(database.db, "journal_size_limit")).toBe(64 * 1024 * 1024);
     const journalMode = database.db.prepare("PRAGMA journal_mode").get() as
       | { journal_mode?: string }
       | undefined;

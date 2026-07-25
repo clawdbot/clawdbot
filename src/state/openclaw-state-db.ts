@@ -17,6 +17,7 @@ import {
   type SqliteIntegrityConfirmation,
 } from "../infra/sqlite-integrity.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
+import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
@@ -148,22 +149,25 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
   const rebuiltIndexNames = new Set<string>();
   try {
     assertSupportedSchemaVersion(db, pathname);
-    if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
-      for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-        allowMissingColumns: true,
-      })) {
-        rebuiltIndexNames.add(name);
-      }
-    }
-    if (rebuiltIndexNames.size === 0) {
-      assertSqliteIntegrity(db, pathname);
-    }
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runSqliteImmediateTransactionSync(
       db,
       () => {
         const applied: string[] = [];
         const previousVersion = readSqliteUserVersion(db);
+        if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+          for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+            allowMissingColumns: true,
+          })) {
+            rebuiltIndexNames.add(name);
+          }
+          // Current-schema doctor repair may normalize recognized columns or
+          // table options, but it must never recreate a missing table empty.
+          assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL);
+        }
+        if (rebuiltIndexNames.size === 0) {
+          assertSqliteIntegrity(db, pathname);
+        }
         dropLegacyStateTables(db);
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
@@ -205,7 +209,12 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
             rebuiltIndexNames.add(name);
           }
         }
-        markCurrentStateSchemaVersion(db);
+        markCurrentStateSchemaVersion(db, {
+          createMetadataIfMissing: previousVersion < OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+          assertCurrentStateRuntimeSchema(db, pathname);
+        }
         if (rebuiltIndexNames.size > 0) {
           applied.push(`Rebuilt canonical shared-state SQLite indexes (${rebuiltIndexNames.size})`);
         }
@@ -262,8 +271,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
           repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             verifyPhysicalIntegrity: false,
           });
-          assertCanonicalStateSchemaShape(db, pathname);
-          assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+          assertCurrentStateRuntimeSchema(db, pathname);
         } else if (previousVersion === 5) {
           assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
         }
@@ -394,6 +402,12 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     },
   };
 }
+
+function assertCurrentStateRuntimeSchema(database: DatabaseSync, pathname: string): void {
+  assertCanonicalStateSchemaShape(database, pathname);
+  assertOpenClawStateDatabaseForMaintenance(database, { pathname });
+}
+
 function assertStateDatabaseIntegrityBeforeMutation(
   database: DatabaseSync,
   pathname: string,
@@ -417,11 +431,15 @@ function assertStateDatabaseIntegrityBeforeMutation(
     userVersion === OPENCLAW_STATE_SCHEMA_VERSION
       ? repairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
           allowMissingColumns: true,
+          validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
         })
       : [];
   if (rebuiltIndexes.length === 0) {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
+  }
+  if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    assertCurrentStateRuntimeSchema(database, pathname);
   }
 }
 

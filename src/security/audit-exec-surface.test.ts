@@ -108,7 +108,7 @@ describe("security audit exec surface findings", () => {
         "warn",
         await collectSecurityAuditFindings({
           agents: {
-            list: [{ id: "ops" }],
+            entries: { ops: {} },
           },
         } satisfies OpenClawConfig),
       ),
@@ -251,6 +251,25 @@ describe("security audit exec surface findings", () => {
     expect(finding.detail).toContain("tools");
     expect(finding.detail).toContain("runtime=[exec, process]");
     expect(finding.remediation).toContain("deny exec and process");
+  });
+
+  it("reports canonical agent paths for filesystem policy drift", async () => {
+    const findings = await collectSecurityAuditFindings({
+      agents: {
+        entries: {
+          ops: {
+            default: true,
+            tools: {
+              allow: ["read", "exec", "process"],
+              deny: ["write", "edit", "apply_patch"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    const finding = requireFinding("tools.exec.fs_tools_disabled_but_exec_enabled", findings);
+    expect(finding.detail).toContain("agents.entries.ops.tools");
   });
 
   it("does not warn when sandbox filesystem policy constrains exec", async () => {

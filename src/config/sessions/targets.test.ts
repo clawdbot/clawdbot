@@ -370,6 +370,44 @@ describe("resolveSessionStoreTargets", () => {
     },
   );
 
+  it("retains a shared-store claimant when the physical owner left the roster", async () => {
+    await withTempHome(async (home) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      const storePath = path.join(home, "shared.sqlite");
+      await replaceSessionEntry(
+        {
+          agentId: "main",
+          defaultAgentId: "main",
+          env,
+          storePath,
+          sessionKey: "agent:main:main",
+        },
+        { sessionId: "main-session", updatedAt: 1 },
+      );
+      await replaceSessionEntry(
+        {
+          agentId: "ops",
+          defaultAgentId: "main",
+          env,
+          storePath,
+          sessionKey: "agent:ops:main",
+        },
+        { sessionId: "ops-session", updatedAt: 2 },
+      );
+      const cfg: OpenClawConfig = {
+        session: { store: storePath },
+        agents: { entries: { ops: { default: true } } },
+      };
+
+      expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env })).toEqual([
+        { agentId: "ops", storePath },
+      ]);
+      expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "ops", { env })).toEqual([
+        { agentId: "ops", storePath },
+      ]);
+    });
+  });
+
   it("honors a registered owner over the configured default for a fixed-store collision", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");

@@ -88,7 +88,8 @@ The authenticated live catalog is authoritative. These rows keep setup and model
 | `baseten/zai-org/GLM-4.7`                          | text        |    200k |       200k |
 | `baseten/zai-org/GLM-5`                            | text        |    202k |       202k |
 | `baseten/zai-org/GLM-5.1`                          | text        |    202k |       202k |
-| `baseten/zai-org/GLM-5.2`                          | text        |    202k |       202k |
+| `baseten/zai-org/GLM-5.2`                          | text        |    524k |       262k |
+| `baseten/zai-org/GLM-5.2-Fast`                     | text        |    524k |       262k |
 | `baseten/thinkingmachines/inkling`                 | text, image |  1.048M |        32k |
 | `baseten/moonshotai/Kimi-K2.5`                     | text, image |    262k |       262k |
 | `baseten/moonshotai/Kimi-K2.6`                     | text, image |    262k |       262k |

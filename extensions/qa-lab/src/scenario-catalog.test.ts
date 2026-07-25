@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
+import { resolveQaRepoPath } from "./repo-path.js";
 import {
   listQaScenarioYamlPaths,
   readQaBootstrapScenarioCatalog,
@@ -89,6 +90,24 @@ describe("qa scenario catalog", () => {
     ).toBe(true);
     const recall = readQaScenarioById("memory-recall");
     expect(recall.coverage?.primary).toContain(`${memory}.memory-recall`);
+  });
+
+  it("keeps scenario documentation and code references backed by the repository", () => {
+    for (const scenario of readQaScenarioPack().scenarios) {
+      const referenceGroups = [
+        ["docsRefs", scenario.docsRefs],
+        ["codeRefs", scenario.codeRefs],
+      ] as const;
+
+      for (const [kind, references] of referenceGroups) {
+        for (const reference of references ?? []) {
+          const resolvedReference =
+            resolveQaRepoPath(import.meta.dirname, reference, "file") ??
+            resolveQaRepoPath(import.meta.dirname, reference, "directory");
+          expect(resolvedReference, `${scenario.id} ${kind} ${reference} exists`).not.toBeNull();
+        }
+      }
+    }
   });
 
   it("exposes bootstrap data from the YAML pack", () => {

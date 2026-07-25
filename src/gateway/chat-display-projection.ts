@@ -14,11 +14,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
-import {
-  isMeaningfulMediaFact,
-  projectPersistedMessageMediaFacts,
-  readPersistedMediaFactsWithLegacyFallback,
-} from "../media/media-facts.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -1507,7 +1503,7 @@ function isEmptyTextOnlyContent(content: unknown): boolean {
 }
 
 function hasTranscriptMediaFacts(message: Record<string, unknown>): boolean {
-  return (readPersistedMediaFactsWithLegacyFallback(message) ?? []).some(isMeaningfulMediaFact);
+  return (readPersistedMediaFacts(message) ?? []).some(isMeaningfulMediaFact);
 }
 
 function extractProjectedText(content: unknown): string {
@@ -2131,8 +2127,7 @@ export function projectChatDisplayMessagesWithState(
 ): ChatDisplayProjectionResult {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   const mirrored = mirrorMessageToolVisibleReplies(source);
-  const projectedMedia = toProjectedMessages(mirrored).map(projectPersistedMessageMediaFacts);
-  const projectedErrors = projectEmptyAssistantErrorMessages(projectedMedia);
+  const projectedErrors = projectEmptyAssistantErrorMessages(toProjectedMessages(mirrored));
   const filtered = filterVisibleProjectedHistoryMessages(
     projectSessionsSendInterSessionMessages(
       toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),

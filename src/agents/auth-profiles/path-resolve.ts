@@ -11,19 +11,14 @@ import {
   AUTH_STATE_FILENAME,
   LEGACY_AUTH_FILENAME,
 } from "./path-constants.js";
+import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
 function resolveAuthAgentDir(agentDir?: string): string {
   if (agentDir) {
     return resolveUserPath(agentDir);
   }
-  const configuredMainAgentDir = process.env.OPENCLAW_AGENT_DIR?.trim();
-  if (configuredMainAgentDir) {
-    return resolveUserPath(configuredMainAgentDir);
-  }
-  // The no-argument auth-store API names the shipped shared main store, not a
-  // configured-agent fallback. Roster-aware callers pass their resolved dir.
-  return path.join(resolveStateDir(), "agents", "main", "agent");
+  return resolveSharedMainAuthAgentDir();
 }
 
 /** Resolve the persisted auth profile store path for an agent dir. */

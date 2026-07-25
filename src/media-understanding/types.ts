@@ -118,6 +118,7 @@ export type AudioTranscriptionRequest = {
   prompt?: string;
   query?: Record<string, string | number | boolean>;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
 };
 
@@ -139,6 +140,7 @@ export type VideoDescriptionRequest = {
   model?: string;
   prompt?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
 };
 
@@ -154,6 +156,7 @@ export type ImageDescriptionRequest = {
   prompt?: string;
   maxTokens?: number;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
@@ -179,6 +182,7 @@ export type ImagesDescriptionRequest = {
   prompt?: string;
   maxTokens?: number;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
@@ -223,6 +227,7 @@ export type StructuredExtractionRequest = {
   jsonSchema?: unknown;
   jsonMode?: boolean;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;

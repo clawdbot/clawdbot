@@ -3,9 +3,22 @@ import { describe, expect, it } from "vitest";
 import {
   collectConfiguredModelRefs,
   collectConfiguredModelRefValues,
+  listModelRefsFromConfigValue,
 } from "./configured-model-refs.js";
 
 describe("configured model refs", () => {
+  it("lists raw refs from one model selector without normalizing them", () => {
+    expect(listModelRefsFromConfigValue("  openai/gpt-5.5  ")).toEqual(["  openai/gpt-5.5  "]);
+    expect(
+      listModelRefsFromConfigValue({
+        primary: " primary/model ",
+        fallbacks: ["", "fallback/model", 42, "fallback/model"],
+      }),
+    ).toEqual([" primary/model ", "", "fallback/model", "fallback/model"]);
+    expect(listModelRefsFromConfigValue(["openai/gpt-5.5"])).toEqual([]);
+    expect(listModelRefsFromConfigValue({ primary: 42, fallbacks: "openai/gpt-5.5" })).toEqual([]);
+  });
+
   it("collects agent, hook, message, and channel model refs with config paths", () => {
     expect(
       collectConfiguredModelRefs({

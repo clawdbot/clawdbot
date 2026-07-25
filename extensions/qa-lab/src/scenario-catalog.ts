@@ -85,6 +85,13 @@ const qaFlowScenarioExecutionSchema = z
     kind: z.literal("flow").default("flow"),
     summary: z.string().trim().min(1).optional(),
     channel: qaScenarioChannelSchema.optional(),
+    channels: z
+      .array(qaScenarioChannelSchema)
+      .min(1)
+      .refine((channels) => new Set(channels).size === channels.length, {
+        message: "scenario execution channel ids must be unique",
+      })
+      .optional(),
     profiles: z.record(qaScenarioProfileSchema, z.number().int().nonnegative()).optional(),
     suiteIsolation: z.literal("isolated").optional(),
     isolationReason: z.string().trim().min(1).optional(),

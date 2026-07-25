@@ -1849,7 +1849,7 @@ html.openclaw-native-macos
 }
 
 .sidebar-child-session-toggle--running {
-  color: var(--accent);
+  color: var(--run);
 }
 
 .sidebar-child-session-toggle--failed {
@@ -2001,7 +2001,7 @@ html.openclaw-native-macos
 
 .viewer-facepile-trigger:hover,
 .viewer-facepile-trigger:focus-visible {
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .sidebar-recent-session__name {
@@ -3004,7 +3004,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   stroke-linejoin: round;
 }
 
-/* Home carries the main session's unread/running state at the row's edge. */
+/* Home carries approval and outbox counts at the row's edge; run/unread state
+   rings the leading icon instead (see .session-glyph). */
 .nav-item__state {
   flex: none;
   margin-left: auto;

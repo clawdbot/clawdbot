@@ -403,11 +403,16 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).toContain(
       "Working",
     );
-    const spinner = sidebar.querySelector(".nav-item--home .session-run-spinner");
-    expect(spinner?.hasAttribute("title")).toBe(false);
+    // Run state rings the Home icon in the leading slot; the row edge keeps
+    // only approval/outbox counts.
+    const ring = sidebar.querySelector(
+      ".nav-item--home .session-glyph--running .session-glyph__ring",
+    );
+    expect(ring).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .nav-item__state")).toBeNull();
+    expect(ring?.hasAttribute("title")).toBe(false);
     expect(
-      (spinner?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
+      (ring?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
     ).toBe("Active run");
   });
 
@@ -539,7 +544,7 @@ describe("AppSidebar agent chip", () => {
     // the global row's unread state.
     expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
     expect(sidebar.querySelector('[data-session-key="agent:main:side-quest"]')).not.toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .session-unread-dot")).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
   it("promotes main-session children to top-level threads, including alias parent keys", async () => {

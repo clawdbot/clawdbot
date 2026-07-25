@@ -1,4 +1,6 @@
 // Matrix helper module supports idb persistence helpers behavior.
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+
 export async function clearAllIndexedDbState(params?: { databasePrefix?: string }): Promise<void> {
   const databases = await indexedDB.databases();
   const expectedPrefix = params?.databasePrefix ? `${params.databasePrefix}::` : null;
@@ -14,7 +16,7 @@ export async function clearAllIndexedDbState(params?: { databasePrefix?: string 
             req.addEventListener("success", () => resolve(), { once: true });
             req.addEventListener(
               "error",
-              () => reject(toLintErrorObject(req.error, "Non-Error rejection")),
+              () => reject(toErrorObject(req.error, "Non-Error rejection")),
               { once: true },
             );
             req.addEventListener("blocked", () => resolve(), { once: true });
@@ -48,17 +50,13 @@ export async function seedDatabase(params: {
         db.close();
         resolve();
       });
-      tx.addEventListener(
-        "error",
-        () => reject(toLintErrorObject(tx.error, "Non-Error rejection")),
-        { once: true },
-      );
+      tx.addEventListener("error", () => reject(toErrorObject(tx.error, "Non-Error rejection")), {
+        once: true,
+      });
     });
-    req.addEventListener(
-      "error",
-      () => reject(toLintErrorObject(req.error, "Non-Error rejection")),
-      { once: true },
-    );
+    req.addEventListener("error", () => reject(toErrorObject(req.error, "Non-Error rejection")), {
+      once: true,
+    });
   });
 }
 
@@ -97,33 +95,17 @@ export async function readDatabaseRecords(params: {
       });
       keysReq.addEventListener(
         "error",
-        () => reject(toLintErrorObject(keysReq.error, "Non-Error rejection")),
+        () => reject(toErrorObject(keysReq.error, "Non-Error rejection")),
         { once: true },
       );
       valuesReq.addEventListener(
         "error",
-        () => reject(toLintErrorObject(valuesReq.error, "Non-Error rejection")),
+        () => reject(toErrorObject(valuesReq.error, "Non-Error rejection")),
         { once: true },
       );
     });
-    req.addEventListener(
-      "error",
-      () => reject(toLintErrorObject(req.error, "Non-Error rejection")),
-      { once: true },
-    );
+    req.addEventListener("error", () => reject(toErrorObject(req.error, "Non-Error rejection")), {
+      once: true,
+    });
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

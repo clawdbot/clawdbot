@@ -653,6 +653,9 @@ methods. Treat this as feature discovery, not a full enumeration of
 - `session.approval`: sanitized pending and terminal approval truth for an
   explicitly opted-in exact-session subscriber. Child approvals use the
   persisted ancestor audience; events never mutate transcripts or wake agents.
+- `session.observer`: safe live session headline and status digest. A model-authored
+  preamble can update the headline immediately; utility-model assessments replace
+  it later when available. Web, iOS, and Android use the same run-scoped digest.
 - `sessions.changed`: session index or metadata changed.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive/liveness event.

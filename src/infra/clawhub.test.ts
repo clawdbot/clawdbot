@@ -471,6 +471,31 @@ describe("clawhub helpers", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("preserves skills-sh references in install telemetry", async () => {
+    let body: unknown;
+
+    await reportClawHubSkillInstallTelemetry({
+      token: "token-123",
+      slug: "weather",
+      version: "a".repeat(40),
+      requestedReference: "skills-sh:openclaw/skills/weather",
+      trustState: "not-scanned-by-clawhub",
+      fetchImpl: async (_input, init) => {
+        expect(typeof init?.body).toBe("string");
+        body = JSON.parse(init?.body as string);
+        return new Response(null, { status: 200 });
+      },
+    });
+
+    expect(body).toMatchObject({
+      event: "install",
+      slug: "weather",
+      version: "a".repeat(40),
+      reference: "skills-sh:openclaw/skills/weather",
+      trustState: "not-scanned-by-clawhub",
+    });
+  });
+
   it("preserves the configured ClawHub base URL path prefix", async () => {
     process.env.OPENCLAW_CLAWHUB_URL = "https://internal.example.com/clawhub";
     let requestedUrl = "";
@@ -579,6 +604,39 @@ describe("clawhub helpers", () => {
     const url = new URL(requestedUrl);
     expect(url.pathname).toBe("/api/v1/skills/weather/install");
     expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+  });
+
+  it("sends skills-sh references to the ClawHub install resolver", async () => {
+    let requestedUrl = "";
+    const reference = "skills-sh:openclaw/skills/weather";
+
+    await fetchClawHubSkillInstallResolution({
+      slug: "weather",
+      requestedReference: reference,
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            slug: "weather",
+            installKind: "github",
+            trust: { state: "not-scanned-by-clawhub" },
+            github: {
+              repo: "openclaw/skills",
+              path: "skills/weather",
+              commit: "a".repeat(40),
+              contentHash: "sha256:approved",
+              sourceUrl: "https://github.com/openclaw/skills",
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/weather/install");
+    expect(url.searchParams.get("reference")).toBe(reference);
   });
 
   it("fetches skill verification reports and lets version take precedence over tag", async () => {

@@ -346,7 +346,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         defaults: {
           model: "openai/gpt-5.5",
           workspace: home,
-          heartbeat: { ackMaxChars: 300 },
+          heartbeat: {},
         },
       },
       session: { store: storePath },
@@ -414,7 +414,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         defaults: {
           model: "openai/gpt-5.5",
           workspace: home,
-          heartbeat: { ackMaxChars: 300 },
+          heartbeat: {},
         },
       },
       session: { store: storePath },

@@ -6,7 +6,7 @@ read_when:
   - You need the Cerebras API key env var or CLI auth choice
 ---
 
-[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The plugin ships a static two-model catalog (no live discovery).
+[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The plugin ships a static three-model catalog (no live discovery).
 
 | Property        | Value                                                     |
 | --------------- | --------------------------------------------------------- |
@@ -57,7 +57,7 @@ export CEREBRAS_API_KEY=csk-...
     openclaw models list --provider cerebras
     ```
 
-    Lists both static models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    Lists all three static models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
@@ -73,12 +73,13 @@ openclaw onboard --non-interactive \
 
 ## Built-in catalog
 
-Both models share a 128k context window and 8,192 max output tokens.
+All three models have a 131,072-token context window and a 40,960-token max output.
 
-| Model ref               | Name         | Reasoning | Notes                                  |
-| ----------------------- | ------------ | --------- | -------------------------------------- |
-| `cerebras/zai-glm-4.7`  | Z.ai GLM 4.7 | yes       | Default model; preview reasoning model |
-| `cerebras/gpt-oss-120b` | GPT OSS 120B | yes       | Production reasoning model             |
+| Model ref               | Name         | Reasoning | Notes                                    |
+| ----------------------- | ------------ | --------- | ---------------------------------------- |
+| `cerebras/zai-glm-4.7`  | Z.ai GLM 4.7 | yes       | Default model; scheduled for deprecation |
+| `cerebras/gpt-oss-120b` | GPT OSS 120B | yes       | Production reasoning model               |
+| `cerebras/gemma-4-31b`  | Gemma 4 31B  | yes       | Text-and-image input; text output        |
 
 ## Manual config
 
@@ -102,6 +103,7 @@ Most setups only need the API key. Use explicit `models.providers.cerebras` conf
         models: [
           { id: "zai-glm-4.7", name: "Z.ai GLM 4.7" },
           { id: "gpt-oss-120b", name: "GPT OSS 120B" },
+          { id: "gemma-4-31b", name: "Gemma 4 31B" },
         ],
       },
     },
@@ -120,7 +122,7 @@ If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `CEREBRAS_
     Choosing providers, model refs, and failover behavior.
   </Card>
   <Card title="Thinking modes" href="/tools/thinking" icon="brain">
-    Reasoning effort levels for the two reasoning-capable Cerebras models.
+    Reasoning effort levels for the Cerebras models.
   </Card>
   <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
     Agent defaults and model configuration.

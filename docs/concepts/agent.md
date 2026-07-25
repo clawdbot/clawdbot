@@ -37,7 +37,6 @@ Inside the workspace, OpenClaw expects these user-editable files:
 | `TOOLS.md`     | User-maintained tool notes and conventions           |
 | `IDENTITY.md`  | Agent name/vibe/emoji                                |
 | `USER.md`      | User profile + preferred address                     |
-| `HEARTBEAT.md` | Heartbeat-specific instructions                      |
 | `BOOTSTRAP.md` | One-time first-run ritual (deleted after completion) |
 | `MEMORY.md`    | Root long-term memory file, if present               |
 

@@ -1,6 +1,7 @@
 // Control UI chat module implements realtime talk webrtc behavior.
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
+import { RealtimeTalkCameraController } from "./realtime-talk-camera-controller.ts";
 import { openRealtimeTalkCamera, openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import {
@@ -53,9 +54,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
   private media: MediaStream | null = null;
-  private cameraMedia: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
-  private captureVideo: HTMLVideoElement | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;
   private responseActive = false;
@@ -64,8 +63,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private toolBuffers = new Map<string, ToolBuffer>();
   private pendingOfferRequest: PendingOfferRequest | null = null;
   private mediaSetupController: AbortController | null = null;
-  private cameraSetupController: AbortController | null = null;
-  private readonly handleCameraTrackEnded = () => this.releaseCamera();
+  private readonly camera: RealtimeTalkCameraController;
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
 
@@ -74,6 +72,13 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     private readonly ctx: RealtimeTalkTransportContext,
   ) {
     this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
+    this.camera = new RealtimeTalkCameraController({
+      acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
+      getDeviceId: () => this.ctx.videoDeviceId,
+      setDeviceId: (deviceId) => (this.ctx.videoDeviceId = deviceId),
+      isClosed: () => this.closed,
+      onStream: (stream) => this.ctx.callbacks.onVideoStream?.(stream),
+    });
   }
 
   async start(): Promise<void> {
@@ -177,80 +182,11 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   async setVideoEnabled(enabled: boolean): Promise<void> {
-    if (!enabled) {
-      this.releaseCamera();
-      return;
-    }
-    if (this.closed) {
-      throw new Error("Realtime Talk session is closed");
-    }
-    if (this.cameraMedia?.getVideoTracks().some((track) => track.readyState === "live")) {
-      return;
-    }
-    this.cameraSetupController?.abort();
-    const controller = new AbortController();
-    this.cameraSetupController = controller;
-    let camera: MediaStream;
-    try {
-      camera = await openRealtimeTalkCamera(this.ctx.videoDeviceId, {
-        signal: controller.signal,
-      });
-    } catch (error) {
-      if (this.closed || controller.signal.aborted) {
-        return;
-      }
-      throw error;
-    } finally {
-      if (this.cameraSetupController === controller) {
-        this.cameraSetupController = null;
-      }
-    }
-    if (this.closed || controller.signal.aborted) {
-      camera.getTracks().forEach((track) => track.stop());
-      return;
-    }
-    this.cameraMedia = camera;
-    // External track loss clears preview state so the next toggle reacquires the camera.
-    camera
-      .getVideoTracks()
-      .forEach((track) =>
-        track.addEventListener("ended", this.handleCameraTrackEnded, { once: true }),
-      );
-    const captureVideo = document.createElement("video");
-    captureVideo.autoplay = true;
-    captureVideo.muted = true;
-    captureVideo.playsInline = true;
-    captureVideo.srcObject = camera;
-    this.captureVideo = captureVideo;
-    this.ctx.callbacks.onVideoStream?.(camera);
-    void captureVideo.play().catch(() => undefined);
+    await this.camera.setEnabled(enabled);
   }
 
   async switchCamera(videoDeviceId: string | undefined): Promise<void> {
-    const nextDeviceId = videoDeviceId?.trim() || undefined;
-    const previousDeviceId =
-      this.cameraMedia?.getVideoTracks()[0]?.getSettings?.().deviceId?.trim() ||
-      this.ctx.videoDeviceId;
-    const shouldReacquire = this.cameraMedia !== null || this.cameraSetupController !== null;
-    this.ctx.videoDeviceId = nextDeviceId;
-    if (!shouldReacquire) {
-      return;
-    }
-
-    this.releaseCamera();
-    try {
-      await this.setVideoEnabled(true);
-    } catch (error) {
-      if (!this.closed && previousDeviceId !== nextDeviceId) {
-        this.ctx.videoDeviceId = previousDeviceId;
-        try {
-          await this.setVideoEnabled(true);
-        } catch {
-          // The original switch failure is the actionable error for the user.
-        }
-      }
-      throw error;
-    }
+    await this.camera.switchDevice(videoDeviceId);
   }
 
   private async readOfferAnswer(
@@ -355,8 +291,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.closed = true;
     this.mediaSetupController?.abort();
     this.mediaSetupController = null;
-    this.cameraSetupController?.abort();
-    this.cameraSetupController = null;
     this.abortOfferRequest();
     this.channel?.close();
     this.channel = null;
@@ -364,7 +298,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.peer = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
-    this.releaseCamera();
+    this.camera.release();
     this.inputMeter?.stop();
     this.inputMeter = null;
     this.audio?.remove();
@@ -593,7 +527,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       itemId,
       payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME },
     });
-    if (!this.cameraMedia?.getVideoTracks().some((track) => track.readyState === "live")) {
+    if (!this.camera.hasLiveTrack()) {
       this.submitToolResult(callId, { ok: false, error: "camera is off" });
       this.emitTalkEvent({
         type: "tool.error",
@@ -606,7 +540,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     try {
       const frame = await captureRealtimeTalkVideoFrame(
-        this.captureVideo,
+        this.camera.video,
         realtimeTalkDataChannelMaxMessageSize(this.peer),
         realtimeTalkImageEvent,
       );
@@ -642,21 +576,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       },
     });
     this.requestResponseCreate();
-  }
-
-  private releaseCamera(): void {
-    this.cameraSetupController?.abort();
-    this.cameraSetupController = null;
-    this.cameraMedia?.getVideoTracks().forEach((track) => {
-      track.removeEventListener("ended", this.handleCameraTrackEnded);
-      track.stop();
-    });
-    this.cameraMedia = null;
-    if (this.captureVideo) {
-      this.captureVideo.srcObject = null;
-      this.captureVideo = null;
-    }
-    this.ctx.callbacks.onVideoStream?.(null);
   }
 
   private reportToolResultSubmissionError(error: unknown): void {

@@ -1,6 +1,5 @@
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { parseChatSideResult, type ChatSideResult } from "../../lib/chat/side-result.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
@@ -387,43 +386,16 @@ function handleChatEvent(
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
-  // A BTW run that fails before seeding context terminates with a plain chat
-  // event and never emits chat.side_result. Convert the failure into an error
-  // side-result card and swallow the event: detached BTW runs must not reach
-  // normal chat handling, where an idle pane would adopt them into the
-  // transcript. Successful runs clear pending via the side_result handler
-  // before their terminal chat event arrives.
-  if (
-    isTerminalChatState(payload?.state) &&
-    typeof payload?.runId === "string" &&
-    state.chatSideResultPending?.runId === payload.runId
-  ) {
-    appendChatSideChatTurn(state, {
-      kind: "btw",
-      runId: payload.runId,
-      sessionKey: payload.sessionKey ?? state.sessionKey,
-      question: state.chatSideResultPending.question,
-      text: extractBtwFailureText(payload) ?? "The side question ended without a result.",
-      isError: true,
-      ts: Date.now(),
-    });
-    state.chatSideResultPending = null;
-    return null;
-  }
-  if (
-    isTerminalChatState(payload?.state) &&
-    typeof payload?.runId === "string" &&
-    state.chatSideResultTerminalRuns?.has(payload.runId) === true
-  ) {
-    state.chatSideResultTerminalRuns.delete(payload.runId);
-    return null;
-  }
   const activeRunIdBeforeEvent = state.chatRunId;
   let terminalKeyedStreamStartIndex: number | undefined;
   if (
     isTerminalChatState(payload?.state) &&
     payload !== undefined &&
-    (chatEventSessionMatches(state, payload) || payload.runId === activeRunIdBeforeEvent) &&
+    // Unkeyed events must also carry a real run id: with no active run,
+    // `undefined === undefined` would let sessionless internal-run terminals
+    // (e.g. companion answers) materialize into the open main thread.
+    (chatEventSessionMatches(state, payload) ||
+      (typeof payload.runId === "string" && payload.runId === activeRunIdBeforeEvent)) &&
     !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)
   ) {
     // The active stream belongs to the user boundary that preceded any steer
@@ -441,63 +413,4 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
     keyedStreamStartIndex: terminalKeyedStreamStartIndex,
   });
   return result;
-}
-
-export function handleChatSideResultGatewayEvent(state: ChatState, payload: unknown): boolean {
-  const sideResult = parseChatSideResult(payload);
-  if (!sideResult) {
-    return false;
-  }
-  if (!chatScopedEventSessionMatches(state, sideResult.sessionKey, sideResult.agentId)) {
-    return false;
-  }
-  // Runs retired before display (superseded by a newer question or dismissed)
-  // enter chatSideResultTerminalRuns via retirePendingChatSideQuestion before
-  // their side_result can arrive; live runs only enter the set below. A
-  // retired run's late result must not replace the current card, and its
-  // entry stays so the trailing terminal chat event is still swallowed.
-  if (state.chatSideResultTerminalRuns?.has(sideResult.runId)) {
-    return true;
-  }
-  // A same-session result from another run (e.g. a split pane) must not
-  // replace this pane's live pending card — displaying it would also let the
-  // dismiss button retire the hidden pending run. Record it so its trailing
-  // terminal chat event is still swallowed here.
-  const pending = state.chatSideResultPending;
-  if (pending?.runId && pending.runId !== sideResult.runId) {
-    state.chatSideResultTerminalRuns?.add(sideResult.runId);
-    return true;
-  }
-  // Follow-up commands embed prior-turn context; the server echoes that whole
-  // blob as the question. The correlated pending record holds the user's
-  // typed question, so prefer it for display.
-  const question = pending?.runId === sideResult.runId ? pending.question : sideResult.question;
-  appendChatSideChatTurn(state, { ...sideResult, question });
-  state.chatSideResultPending = null;
-  state.chatSideResultTerminalRuns?.add(sideResult.runId);
-  return true;
-}
-
-/** An arriving answer appends a turn and reopens a panel hidden via X/Escape. */
-function appendChatSideChatTurn(state: ChatState, turn: ChatSideResult) {
-  state.chatSideChatTurns = [...(state.chatSideChatTurns ?? []), turn];
-  state.chatSideChatHidden = false;
-}
-
-function extractBtwFailureText(payload: ChatEventPayload): string | null {
-  if (typeof payload.errorMessage === "string" && payload.errorMessage.trim()) {
-    return payload.errorMessage;
-  }
-  const message = payload.message as { content?: unknown } | undefined;
-  const blocks = Array.isArray(message?.content) ? message.content : [];
-  const text = blocks
-    .map((block) =>
-      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
-        ? (block as { text?: unknown }).text
-        : null,
-    )
-    .filter((entry): entry is string => typeof entry === "string")
-    .join("\n")
-    .trim();
-  return text || null;
 }

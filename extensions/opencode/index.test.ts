@@ -318,17 +318,54 @@ describe("opencode provider plugin", () => {
       throw new Error("expected manifest opencode models");
     }
     expect(manifestModels.map((model) => requireRecord(model, "manifest model").id)).toEqual([
+      "claude-opus-5",
       "claude-opus-4-8",
+      "gpt-5.6-sol",
       "gpt-5.5",
+      "gemini-3.6-flash",
       "gemini-3.1-pro",
+      "minimax-m3",
       "minimax-m2.7",
+      "big-pickle",
+      "deepseek-v4-flash-free",
+      "mimo-v2.5-free",
+      "laguna-s-2.1-free",
+      "ling-3.0-flash-free",
+      "nemotron-3-ultra-free",
+      "north-mini-code-free",
     ]);
+    const manifestClaude48 = requireRecord(
+      manifestModels.find(
+        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-8",
+      ),
+      "manifest claude-opus-4-8",
+    );
+    expect(manifestClaude48).toMatchObject({
+      status: "deprecated",
+      replacedBy: "claude-opus-5",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+    const manifestGpt55 = requireRecord(
+      manifestModels.find((model) => requireRecord(model, "manifest model").id === "gpt-5.5"),
+      "manifest gpt-5.5",
+    );
+    expect(manifestGpt55).toMatchObject({
+      status: "deprecated",
+      replacedBy: "gpt-5.6-sol",
+      contextWindow: 1_050_000,
+    });
     const manifestMiniMax = requireRecord(
       manifestModels.find((model) => requireRecord(model, "manifest model").id === "minimax-m2.7"),
       "manifest minimax-m2.7",
     );
     expect(manifestMiniMax.api).toBe("openai-completions");
     expect(manifestMiniMax.baseUrl).toBe("https://opencode.ai/zen/v1");
+    expect(manifestMiniMax).toMatchObject({
+      status: "deprecated",
+      replacedBy: "minimax-m3",
+      cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
+    });
   });
 
   it("keeps documented OpenCode Zen example models resolvable", async () => {
@@ -435,7 +472,7 @@ describe("opencode provider plugin", () => {
       ["glm-5.2", { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 }],
       ["hy3-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
       ["kimi-k2.7-code", { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 }],
-      ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 }],
+      ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
       ["minimax-m3", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
     ] as const);
 

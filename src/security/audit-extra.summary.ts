@@ -59,7 +59,7 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
 }
 
 function extractAgentIdFromSource(source: string): string | null {
-  const match = source.match(/^agents\.list\.([^.]*)\./);
+  const match = source.match(/^agents\.entries\.([^.]*)\./);
   return match?.[1] ?? null;
 }
 

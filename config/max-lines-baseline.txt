@@ -20,7 +20,6 @@ extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
-extensions/browser/src/browser/pw-session.ts
 extensions/browser/src/browser/pw-tools-core.browser-ssrf-guard.test.ts
 extensions/browser/src/browser/pw-tools-core.interactions.navigation-guard.test.ts
 extensions/browser/src/browser/pw-tools-core.interactions.ts
@@ -39,7 +38,6 @@ extensions/codex/src/app-server/compact.ts
 extensions/codex/src/app-server/computer-use.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
-extensions/codex/src/app-server/config.ts
 extensions/codex/src/app-server/dynamic-tool-build.test.ts
 extensions/codex/src/app-server/dynamic-tool-build.ts
 extensions/codex/src/app-server/dynamic-tools.test.ts
@@ -141,7 +139,6 @@ extensions/line/src/bot-handlers.test.ts
 extensions/lmstudio/src/setup.test.ts
 extensions/lmstudio/src/setup.ts
 extensions/matrix/src/cli.test.ts
-extensions/matrix/src/cli.ts
 extensions/matrix/src/matrix/actions/verification.test.ts
 extensions/matrix/src/matrix/client/config.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
@@ -157,7 +154,6 @@ extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/monitor.ts
 extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
-extensions/memory-core/doctor-contract-api.ts
 extensions/memory-core/src/cli.runtime.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-narrative.test.ts
@@ -172,7 +168,6 @@ extensions/memory-core/src/memory/manager-search.test.ts
 extensions/memory-core/src/memory/manager-search.ts
 extensions/memory-core/src/memory/manager.ts
 extensions/memory-core/src/memory/qmd-manager.test.ts
-extensions/memory-core/src/memory/qmd-manager.ts
 extensions/memory-core/src/memory/search-manager.test.ts
 extensions/memory-core/src/memory/search-manager.ts
 extensions/memory-core/src/rem-evidence.ts
@@ -269,7 +264,6 @@ extensions/slack/src/monitor/events/interactions.block-actions.ts
 extensions/slack/src/monitor/events/interactions.test.ts
 extensions/slack/src/monitor/media.test.ts
 extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts
-extensions/slack/src/monitor/message-handler/dispatch.ts
 extensions/slack/src/monitor/message-handler/prepare.test.ts
 extensions/slack/src/monitor/message-handler/prepare.ts
 extensions/slack/src/monitor/provider.ts
@@ -344,7 +338,6 @@ packages/ai/src/providers/openai-responses-shared.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/ai/src/transports/anthropic-transport-stream.ts
 packages/ai/src/transports/openai-completions-transport.ts
-packages/ai/src/transports/openai-responses-transport.ts
 packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/index.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
@@ -401,12 +394,10 @@ src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner.ts
 src/agents/cli-runner/claude-live-session.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
-src/agents/cli-runner/execute.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
 src/agents/code-mode-namespaces.ts
 src/agents/code-mode.test.ts
-src/agents/code-mode.ts
 src/agents/command/attempt-execution.cli.test.ts
 src/agents/command/attempt-execution.test.ts
 src/agents/command/attempt-execution.ts
@@ -467,11 +458,9 @@ src/agents/embedded-agent-subscribe.ts
 src/agents/failover-error.test.ts
 src/agents/failover-error.ts
 src/agents/harness/native-hook-relay.test.ts
-src/agents/harness/native-hook-relay.ts
 src/agents/harness/selection.test.ts
 src/agents/harness/selection.ts
 src/agents/main-session-restart-recovery.test.ts
-src/agents/main-session-restart-recovery.ts
 src/agents/model-auth-availability.ts
 src/agents/model-auth.profiles.test.ts
 src/agents/model-auth.test.ts
@@ -517,7 +506,6 @@ src/agents/subagent-announce.format.e2e.test.ts
 src/agents/subagent-control.test.ts
 src/agents/subagent-control.ts
 src/agents/subagent-registry-lifecycle.test.ts
-src/agents/subagent-registry-lifecycle.ts
 src/agents/subagent-registry-run-manager.ts
 src/agents/subagent-registry.steer-restart.test.ts
 src/agents/subagent-registry.test.ts
@@ -672,7 +660,6 @@ src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-core-normalizers.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
-src/commands/doctor/shared/legacy-config-migrations.runtime.models.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/doctor/shared/missing-configured-plugin-install.ts
 src/commands/doctor/shared/preview-warnings.test.ts
@@ -822,7 +809,6 @@ src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
 src/gateway/server-reload-handlers.test.ts
-src/gateway/server-reload-handlers.ts
 src/gateway/server-restart-sentinel.test.ts
 src/gateway/server-startup-config.secrets.test.ts
 src/gateway/server-startup-post-attach.test.ts
@@ -832,7 +818,6 @@ src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts
 src/gateway/server.cron.test.ts
-src/gateway/server.impl.ts
 src/gateway/server.sessions.compaction.test.ts
 src/gateway/server.sessions.create.test.ts
 src/gateway/server.sessions.list-changed.test.ts
@@ -875,7 +860,6 @@ src/infra/exec-approvals-allowlist.ts
 src/infra/exec-approvals-store.test.ts
 src/infra/exec-authorization-plan.ts
 src/infra/heartbeat-runner.returns-default-unset.test.ts
-src/infra/heartbeat-runner.ts
 src/infra/host-env-security.test.ts
 src/infra/infra-runtime.test.ts
 src/infra/net/fetch-guard.ssrf.test.ts
@@ -894,7 +878,6 @@ src/infra/restart-stale-pids.test.ts
 src/infra/restart.ts
 src/infra/run-node.test.ts
 src/infra/session-cost-usage.test.ts
-src/infra/session-cost-usage.ts
 src/infra/state-migrations.doctor.ts
 src/infra/state-migrations.runtime-state.ts
 src/infra/state-migrations.session-store.ts
@@ -967,7 +950,6 @@ src/plugins/loader.test-harness.ts
 src/plugins/management-service.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/manifest-registry.ts
-src/plugins/manifest.ts
 src/plugins/marketplace.test.ts
 src/plugins/marketplace.ts
 src/plugins/official-external-plugin-catalog.test.ts
@@ -1075,7 +1057,6 @@ ui/src/pages/chat/chat-send.test.ts
 ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-state.ts
 ui/src/pages/chat/chat-thread.test.ts
-ui/src/pages/chat/chat-thread.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/components/chat-model-controls.ts
@@ -1089,7 +1070,6 @@ ui/src/pages/chat/realtime-talk-gateway-relay.test.ts
 ui/src/pages/chat/tool-stream.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
-ui/src/pages/config/view.ts
 ui/src/pages/cron/view.ts
 ui/src/pages/new-session/new-session-page.ts
 ui/src/pages/plugins/plugins-page.ts
@@ -1104,5 +1084,4 @@ ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts
 ui/src/pages/workboard/view.test.ts
-ui/src/pages/workboard/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

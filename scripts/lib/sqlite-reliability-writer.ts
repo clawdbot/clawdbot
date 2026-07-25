@@ -1,7 +1,7 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { setImmediate as delayImmediate, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
   COMMITTED_WAL_SENTINEL,
   STRESS_TABLE_SQL,
@@ -255,8 +255,7 @@ function parseWriterChildArgs(argv: string[]): {
 
 async function runWriterChild(argv: string[]): Promise<void> {
   const options = parseWriterChildArgs(argv);
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(options.databasePath);
+  const database = openNodeSqliteDatabase(options.databasePath);
   let nextBatch = 0;
   let batchesCommitted = 0;
   let rowsCommitted = 0;

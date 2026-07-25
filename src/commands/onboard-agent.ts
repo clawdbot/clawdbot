@@ -45,7 +45,18 @@ export async function ensureOnboardingAgent(params: {
   workspace: string;
   preserveCandidateRoster?: boolean;
   baseConfig?: OpenClawConfig;
-}): Promise<{ config: OpenClawConfig; agentId: string; bootstrapPending: boolean }> {
+}): Promise<{
+  config: OpenClawConfig;
+  agentId: string;
+  bootstrapPending: boolean;
+  /**
+   * Config hash observed after this helper created the first roster agent.
+   * Callers that captured a hash before calling must adopt it for their own
+   * commit: the create wrote the file, so their baseline is stale but not
+   * foreign, and the optimistic guard would otherwise reject their write.
+   */
+  configHash?: string;
+}> {
   const candidateRoster = listAgentEntries(params.config);
   if (
     candidateRoster.length > 0 &&
@@ -99,6 +110,7 @@ export async function ensureOnboardingAgent(params: {
     }),
     agentId: created.agentId,
     bootstrapPending: created.bootstrapPending,
+    ...(after.hash !== undefined ? { configHash: after.hash } : {}),
   };
 }
 

@@ -1,9 +1,9 @@
 // Stuck session recovery runtime tests cover recovery inspection and event output.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { saveCronStore } from "../cron/store.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn(),
@@ -289,10 +289,12 @@ describe("stuck session recovery", () => {
   });
 
   it("logs stopped cron context when aborting an active embedded run", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-context-"));
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-recovery-context-",
+    });
+    const tempDir = openClawState.stateDir;
     try {
-      process.env.OPENCLAW_STATE_DIR = tempDir;
       await saveCronStore(path.join(tempDir, "cron", "jobs.json"), {
         version: 1,
         jobs: [
@@ -330,12 +332,7 @@ describe("stuck session recovery", () => {
         allowActiveAbort: true,
       });
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
 
     expect(warnLogMessages()).toEqual([

@@ -1652,10 +1652,12 @@ export function createExecTool(
             contextParts.push(`session=${sessionKey}`);
           }
           if (!elevatedDefaults?.enabled) {
-            gates.push("enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)");
+            gates.push(
+              "enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)",
+            );
           } else {
             gates.push(
-              "allowFrom (tools.elevated.allowFrom.<provider> / agents.list[].tools.elevated.allowFrom.<provider>)",
+              "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
             );
           }
           throw new Error(
@@ -1666,8 +1668,8 @@ export function createExecTool(
               "Fix-it keys:",
               "- tools.elevated.enabled",
               "- tools.elevated.allowFrom.<provider>",
-              "- agents.list[].tools.elevated.enabled",
-              "- agents.list[].tools.elevated.allowFrom.<provider>",
+              "- agents.entries.*.tools.elevated.enabled",
+              "- agents.entries.*.tools.elevated.allowFrom.<provider>",
             ]
               .filter(Boolean)
               .join("\n"),

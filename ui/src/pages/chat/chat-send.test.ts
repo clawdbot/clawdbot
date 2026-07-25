@@ -363,8 +363,6 @@ function makeHost(overrides?: MakeHostOverrides): TestChatHost | TestChatHostWit
     chatAvatarSource: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
-    chatSideChatTurns: [],
-    chatSideResultTerminalRuns: new Set<string>(),
     sessionsLoading: false,
     sessionsResult: null,
     sessionsResultAgentId: null,
@@ -2919,29 +2917,18 @@ describe("handleSendChat", () => {
     ]);
   });
 
-  it("sends /btw immediately while a main run is active without queueing it", async () => {
+  it("routes /btw to the session companion while a main run is active", async () => {
+    const openSessionCompanion = vi.fn();
     const host = makeHost({
-      requestHandlers: {
-        "chat.send": {},
-      },
       chatRunId: "run-main",
       chatStream: "Working...",
       chatMessage: "/btw what changed?",
+      openSessionCompanion,
     });
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
-    expect(payload.sessionKey).toBe("agent:main");
-    expect(payload.message).toBe("/btw what changed?");
-    expect(payload.deliver).toBe(false);
-    const idempotencyKey = payload.idempotencyKey;
-    expect(typeof idempotencyKey).toBe("string");
-    expect(uuidPattern.test(idempotencyKey as string)).toBe(true);
+    expect(openSessionCompanion).toHaveBeenCalledWith("what changed?");
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
@@ -2981,46 +2968,32 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("/approve approval-123 allow-once");
   });
 
-  it("sends /side through the detached BTW path", async () => {
+  it("routes /side through the same session companion path", async () => {
+    const openSessionCompanion = vi.fn();
     const host = makeHost({
-      requestHandlers: {
-        "chat.send": {},
-      },
       chatRunId: "run-main",
       chatStream: "Working...",
       chatMessage: "/side what changed?",
+      openSessionCompanion,
     });
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
-    expect(payload.message).toBe("/side what changed?");
-    expect(payload.deliver).toBe(false);
+    expect(openSessionCompanion).toHaveBeenCalledWith("what changed?");
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
   });
 
-  it("sends /btw without adopting a main chat run when idle", async () => {
+  it("routes /btw without adopting a main chat run when idle", async () => {
+    const openSessionCompanion = vi.fn();
     const host = makeHost({
-      requestHandlers: {
-        "chat.send": {},
-      },
       chatMessage: "/btw summarize this",
+      openSessionCompanion,
     });
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
-    expect(payload.message).toBe("/btw summarize this");
-    expect(payload.deliver).toBe(false);
+    expect(openSessionCompanion).toHaveBeenCalledWith("summarize this");
     expect(host.chatRunId).toBeNull();
     expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatMessage).toBe("");
@@ -6459,77 +6432,7 @@ describe("handleSendChat", () => {
     });
   });
 
-  it.each([
-    {
-      name: "restores the BTW draft when detached send fails",
-      response: () => {
-        throw new Error("network down");
-      },
-      error: "network down",
-    },
-    {
-      name: "restores the BTW draft when detached send returns a terminal timeout ACK",
-      response: { runId: "btw-terminal", status: "timeout" },
-      error: "The active run ended before the detached message was accepted.",
-    },
-  ])("$name", async ({ response, error }) => {
-    const host = makeHost({
-      requestHandlers: { "chat.send": response },
-      chatRunId: "run-main",
-      chatStream: "Working...",
-      chatMessage: "/btw what changed?",
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatRunId).toBe("run-main");
-    expect(host.chatStream).toBe("Working...");
-    expect(host.chatMessage).toBe("/btw what changed?");
-    expect(host.lastError).toBe(error);
-  });
-
-  it("notifies side-chat rejection on failed sends and pre-send exits", async () => {
-    const onSideQuestionSendRejected = vi.fn();
-    const host = makeHost({
-      client: clientWithRequest(
-        makeRequestMock({
-          "chat.send": { runId: "btw-rejected", status: "timeout" },
-        }),
-      ),
-    });
-
-    await handleSendChat(host, "/btw and why?", {
-      sideQuestionDisplayText: "and why?",
-      onSideQuestionSendRejected,
-    });
-    expect(onSideQuestionSendRejected).toHaveBeenCalledTimes(1);
-    expect(host.chatSideResultPending).toBeNull();
-
-    // Pre-send exit (session switched away before the guarded send ran) must
-    // also notify: the panel cleared its input when it handed the command off.
-    const switchingHost = makeHost({
-      client: clientWithRequest(
-        vi.fn(async () => {
-          throw new Error("must not send");
-        }),
-      ),
-      chatSubmitGuards: new Map(),
-    });
-    const originalGuards = switchingHost.chatSubmitGuards;
-    // Simulate the session switching between submit and the guarded body.
-    Object.defineProperty(switchingHost, "sessionKey", {
-      configurable: true,
-      get: () => (originalGuards?.size ? "other-session" : "main"),
-    });
-    await handleSendChat(switchingHost, "/btw and why?", {
-      sideQuestionDisplayText: "and why?",
-      onSideQuestionSendRejected,
-    });
-    expect(onSideQuestionSendRejected).toHaveBeenCalledTimes(2);
-  });
-
-  it("clears BTW side results when /clear resets chat history", async () => {
+  it("clears chat state when /clear resets chat history", async () => {
     const host = makeHost({
       requestHandlers: {
         "sessions.reset": { ok: true },
@@ -6539,18 +6442,6 @@ describe("handleSendChat", () => {
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
       chatRunError: { summary: "Error: previous run failed" },
-      chatSideChatTurns: [
-        {
-          kind: "btw",
-          runId: "btw-run-clear",
-          sessionKey: "main",
-          question: "what changed?",
-          text: "Detached BTW result",
-          isError: false,
-          ts: 1,
-        },
-      ],
-      chatSideResultTerminalRuns: new Set(["btw-run-clear"]),
     });
 
     await handleSendChat(host);
@@ -6558,8 +6449,6 @@ describe("handleSendChat", () => {
     expect(host.request).toHaveBeenCalledWith("sessions.reset", { key: "main" });
     expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatRunError).toBeNull();
-    expect(host.chatSideChatTurns).toEqual([]);
-    expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
   });

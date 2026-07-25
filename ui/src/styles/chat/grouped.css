@@ -238,7 +238,7 @@
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
   border-radius: 50%;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--fg) 9%, transparent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 9%, transparent);
   vertical-align: middle;
 }
 
@@ -625,7 +625,7 @@ img.chat-avatar {
 
 .chat-group.user .chat-duplicate-count {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
-  color: color-mix(in srgb, var(--foreground) 80%, var(--primary) 20%);
+  color: color-mix(in srgb, var(--text) 80%, var(--primary) 20%);
 }
 
 .chat-reply-attribution {
@@ -858,7 +858,7 @@ img.chat-avatar {
 .msg-meta__summary:hover .chat-group-timestamp,
 .msg-meta__summary:focus-visible .chat-group-timestamp,
 .msg-meta[open] .msg-meta__summary .chat-group-timestamp {
-  color: var(--fg);
+  color: var(--text);
   opacity: 0.9;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
 }
@@ -963,7 +963,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   margin: 0 0 8px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--fg, #fff);
+  color: var(--text);
 }
 
 .chat-delete-confirm__remember {
