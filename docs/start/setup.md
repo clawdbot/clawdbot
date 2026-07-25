@@ -186,5 +186,5 @@ user service (no lingering needed). See [Gateway runbook](/gateway) for the syst
 > **Windows note:** If `corepack enable` fails with an `EPERM` error while creating the `pnpm` shim, install the repository's pinned pnpm version:
 >
 > ```bash
-> npm install -g pnpm@11.2.2
+> npm install -g pnpm@11.15.1
 > ```
