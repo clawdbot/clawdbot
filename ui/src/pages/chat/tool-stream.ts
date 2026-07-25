@@ -808,7 +808,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
       return true;
     }
     host.chatStreamSegments = host.chatStreamSegments.map((segment, index) =>
-      index === existingIndex ? { ...segment, text: progress.text } : segment,
+      index === existingIndex ? { ...segment, text: progress.text, runId: payload.runId } : segment,
     );
     return true;
   }
@@ -821,6 +821,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
     {
       text: progress.text,
       ts: Date.now(),
+      runId: payload.runId,
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
     },
   ];
@@ -990,7 +991,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     ) {
       host.chatStreamSegments = [
         ...host.chatStreamSegments,
-        { text: host.chatStream, ts: now, toolCallId },
+        { text: host.chatStream, ts: now, runId: payload.runId, toolCallId },
       ];
       host.chatStream = null;
       host.chatStreamStartedAt = null;

@@ -69,6 +69,7 @@ export type ChatItem =
 export type ChatStreamSegment = {
   text: string;
   ts: number;
+  runId?: string;
   toolCallId?: string;
   itemId?: string;
 };

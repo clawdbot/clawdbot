@@ -133,12 +133,18 @@ describe("assistant commentary grouping", () => {
     const user = { role: "user", content: "User prompt", timestamp: 2_000 };
     const tool = {
       role: "toolResult",
+      runId: "run-active",
       toolCallId: "call-clock-skew",
       toolName: "shell",
       content: "Tool output",
       timestamp: 1_000,
     };
-    const liveGroups = messageGroups({ paneId, messages: [user], toolMessages: [tool] });
+    const liveGroups = messageGroups({
+      paneId,
+      runId: "run-active",
+      messages: [user],
+      toolMessages: [tool],
+    });
     const stableGroups = messageGroups({ paneId, messages: [user, tool], toolMessages: [] });
 
     expect(liveGroups.map((group) => group.role)).toEqual(["user", "tool"]);
@@ -156,6 +162,7 @@ describe("assistant commentary grouping", () => {
     };
     const liveTool = {
       role: "toolResult",
+      runId: "run-active",
       toolCallId: "call-active",
       toolName: "shell",
       content: "Current tool output",
@@ -179,6 +186,7 @@ describe("assistant commentary grouping", () => {
     };
     const liveGroups = messageGroups({
       paneId,
+      runId: "run-active",
       queue: [activeSend, futureSend],
       toolMessages: [liveTool],
     });
@@ -242,6 +250,101 @@ describe("assistant commentary grouping", () => {
     expect(visibleKinds(liveItems)).toEqual(["user", "stream", "user"]);
     expect(visibleKinds(stableItems)).toEqual(["user", "assistant", "user"]);
     resetChatThreadState(paneId);
+  });
+
+  it("keeps current-run segments below their user boundary under clock skew", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-active",
+        messages: [{ role: "user", content: "Current prompt", timestamp: 2_000 }],
+        streamSegments: [{ text: "Current progress", ts: 1_000, runId: "run-active" }],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+    ]);
+  });
+
+  it("keeps replayed tool and commentary items inside their older turn", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-current",
+        messages: [
+          {
+            role: "user",
+            content: "Earlier prompt",
+            timestamp: 1_000,
+            __openclaw: { idempotencyKey: "run-earlier:user" },
+          },
+          { role: "assistant", content: "Earlier reply", timestamp: 1_300 },
+          {
+            role: "user",
+            content: "Current prompt",
+            timestamp: 2_000,
+            __openclaw: { idempotencyKey: "run-current:user" },
+          },
+        ],
+        streamSegments: [
+          { text: "Earlier commentary", ts: 500, runId: "run-earlier", itemId: "earlier" },
+          { text: "Current commentary", ts: 1_200, runId: "run-current", itemId: "current" },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            runId: "run-earlier",
+            toolCallId: "call-earlier",
+            toolName: "shell",
+            content: "Earlier tool output",
+            timestamp: 3_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+      "assistant",
+      "tool",
+      "user",
+      "stream",
+    ]);
+  });
+
+  it("keeps unmatched legacy replay rows timestamped across older turns", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-current",
+        messages: [
+          { role: "user", content: "First prompt", timestamp: 1_000 },
+          { role: "assistant", content: "First reply", timestamp: 1_300 },
+          { role: "user", content: "Second prompt", timestamp: 2_000 },
+          { role: "assistant", content: "Second reply", timestamp: 2_300 },
+          { role: "user", content: "Current prompt", timestamp: 3_000 },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            runId: "legacy-unmatched-run",
+            toolCallId: "call-legacy",
+            toolName: "shell",
+            content: "Legacy tool output",
+            timestamp: 1_100,
+          },
+        ],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "tool",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+    ]);
   });
 
   it("keeps a reconnecting current prompt above its retained stream", () => {

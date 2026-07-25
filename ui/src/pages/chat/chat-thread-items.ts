@@ -191,10 +191,11 @@ export function findNearestAssistantMessageIndex(
   items: ChatItem[],
   toolTimestamp: number | null,
   minimumIndex = 0,
+  maximumIndex = items.length,
 ): number | null {
   let currentTurnStart = minimumIndex;
-  let currentTurnEnd = items.length;
-  for (let index = minimumIndex; index < items.length; index += 1) {
+  let currentTurnEnd = maximumIndex;
+  for (let index = minimumIndex; index < maximumIndex; index += 1) {
     const item = items[index];
     if (item?.kind !== "message") {
       continue;
@@ -266,11 +267,12 @@ export function findCanvasInsertionIndex(
   items: ChatItem[],
   toolTimestamp: number | null,
   minimumIndex = 0,
+  maximumIndex = items.length,
 ): number {
   if (toolTimestamp == null) {
-    return items.length;
+    return maximumIndex;
   }
-  for (let index = minimumIndex; index < items.length; index += 1) {
+  for (let index = minimumIndex; index < maximumIndex; index += 1) {
     const item = items[index];
     if (item?.kind !== "message") {
       continue;
@@ -285,7 +287,7 @@ export function findCanvasInsertionIndex(
       return index;
     }
   }
-  return items.length;
+  return maximumIndex;
 }
 
 export function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
@@ -312,7 +314,7 @@ export function isPendingSendMessage(message: unknown): boolean {
 /** Every projection of one composer submit (pending queue row, locally
  * materialized turn, authoritative history) shares this identity so the
  * rendered bubble keeps one Lit key and never remounts mid-handoff. */
-function userTurnSendIdentity(message: unknown): string | null {
+export function userTurnSendIdentity(message: unknown): string | null {
   const record = asRecord(message);
   if (typeof record?.role !== "string" || record.role.toLowerCase() !== "user") {
     return null;
@@ -627,10 +629,28 @@ export function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: 
 // rows keep their relative order; only tool cards and stream segments are
 // repositioned. This avoids reordering optimistic user bubbles or final
 // assistant replies when their timestamps come from different clocks (#112943).
+export type TurnInsertionBounds = { afterKey?: string; beforeKey?: string };
+
+export function insertionIndexesForBounds(
+  items: ChatItem[],
+  bounds: TurnInsertionBounds | undefined,
+): { minimum: number; maximum: number } {
+  const afterIndex = bounds?.afterKey
+    ? items.findIndex((item) => item.key === bounds.afterKey)
+    : -1;
+  const beforeIndex = bounds?.beforeKey
+    ? items.findIndex((item) => item.key === bounds.beforeKey)
+    : -1;
+  return {
+    minimum: afterIndex + 1,
+    maximum: beforeIndex >= 0 ? beforeIndex : items.length,
+  };
+}
+
 export function insertChatItemsByTimestamp(
   items: ChatItem[],
   inserts: ChatItem[],
-  minimumInsertionIndex: number,
+  insertionBoundsByKey: ReadonlyMap<string, TurnInsertionBounds>,
   toolStreamPredecessors: ReadonlyMap<string, string>,
 ): void {
   const timestampsByKey = new Map<string, number>();
@@ -681,13 +701,16 @@ export function insertChatItemsByTimestamp(
     });
 
   for (const { item, effectiveTimestamp } of sortedInserts) {
+    const { minimum, maximum } = insertionIndexesForBounds(
+      items,
+      insertionBoundsByKey.get(item.key),
+    );
     if (effectiveTimestamp == null) {
-      items.push(item);
+      items.splice(maximum, 0, item);
       continue;
     }
-
     const insertionIndex = items.findIndex((existing, index) => {
-      if (index < minimumInsertionIndex) {
+      if (index < minimum || index >= maximum) {
         return false;
       }
       const existingTimestamp = chatItemTimestamp(existing);
@@ -699,7 +722,7 @@ export function insertChatItemsByTimestamp(
     });
 
     if (insertionIndex === -1) {
-      items.push(item);
+      items.splice(maximum, 0, item);
     } else {
       items.splice(insertionIndex, 0, item);
     }

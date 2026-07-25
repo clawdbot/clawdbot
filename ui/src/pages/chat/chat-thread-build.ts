@@ -37,6 +37,7 @@ import {
   findCanvasInsertionIndex,
   findNearestAssistantMessageIndex,
   hasRenderableNormalizedMessage,
+  insertionIndexesForBounds,
   messageKey,
   messageMatchesSearchQuery,
   queuedSendThreadMessage,
@@ -47,6 +48,8 @@ import {
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
   turnHasMatchingAssistant,
+  userTurnSendIdentity,
+  type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
 import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
@@ -80,17 +83,57 @@ export type BuildChatItemsProps = {
   searchQuery?: string;
 };
 
-function findCurrentTurnStartIndex(items: ChatItem[]): number {
+function isUserChatItem(item: ChatItem): boolean {
+  if (item.kind !== "message") {
+    return false;
+  }
+  const normalized = safeNormalizeMessage(item.message);
+  return normalized ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" : false;
+}
+
+function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
+  const index = items.findLastIndex(isUserChatItem);
+  const item = items[index];
+  return index >= 0 && item ? { afterKey: item.key } : null;
+}
+
+function findRunTurnBounds(items: ChatItem[], runId: string): TurnInsertionBounds | null {
+  const sendIdentity = `send:${runId}`;
+  const index = items.findIndex(
+    (item) =>
+      item.kind === "message" &&
+      isUserChatItem(item) &&
+      userTurnSendIdentity(item.message) === sendIdentity,
+  );
+  const item = items[index];
+  if (index < 0 || !item) {
+    return null;
+  }
+  const nextUser = items.slice(index + 1).find(isUserChatItem);
+  return { afterKey: item.key, ...(nextUser ? { beforeKey: nextUser.key } : {}) };
+}
+
+function resolveRunInsertionBounds(
+  items: ChatItem[],
+  runId: unknown,
+  currentRunId: string | null | undefined,
+  currentTurnBounds: TurnInsertionBounds | null,
+): TurnInsertionBounds | null {
+  if (typeof runId !== "string" || !runId.trim()) {
+    return currentRunId != null ? currentTurnBounds : null;
+  }
+  if (currentRunId == null) {
+    return findRunTurnBounds(items, runId);
+  }
+  if (runId === currentRunId) {
+    return currentTurnBounds;
+  }
+  // Legacy rows may lack the user-run identity needed for exact bounds. Keep
+  // their timestamp ordering across historical turns, but never cross the
+  // current prompt and become current-run output.
   return (
-    items.findLastIndex((item) => {
-      if (item.kind !== "message") {
-        return false;
-      }
-      const normalized = safeNormalizeMessage(item.message);
-      return normalized
-        ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user"
-        : false;
-    }) + 1
+    findRunTurnBounds(items, runId) ??
+    (currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null)
   );
 }
 
@@ -246,19 +289,28 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       : undefined;
     appendQueuedSend(queued, liveTerminal);
   }
-  const currentTurnStartIndex = findCurrentTurnStartIndex(items);
+  const currentTurnBounds = findCurrentTurnBounds(items);
   for (const liftedCanvasSource of liftedCanvasSources) {
     const baseIdentity = canvasPreviewBaseIdentity(liftedCanvasSource.message, liftedCanvasSource);
     if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
       continue;
     }
     const sourceRunId = asRecord(liftedCanvasSource.message)?.runId;
-    const canvasMinimumIndex =
-      props.runId != null && sourceRunId === props.runId ? currentTurnStartIndex : 0;
+    const canvasBounds = resolveRunInsertionBounds(
+      items,
+      sourceRunId,
+      props.runId,
+      currentTurnBounds,
+    );
+    const { minimum: canvasMinimumIndex, maximum: canvasMaximumIndex } = insertionIndexesForBounds(
+      items,
+      canvasBounds ?? undefined,
+    );
     const assistantIndex = findNearestAssistantMessageIndex(
       items,
       liftedCanvasSource.timestamp,
       canvasMinimumIndex,
+      canvasMaximumIndex,
     );
     if (assistantIndex == null) {
       if (searchFiltering) {
@@ -268,6 +320,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         items,
         liftedCanvasSource.timestamp,
         canvasMinimumIndex,
+        canvasMaximumIndex,
       );
       const nextItem = items[insertionIndex];
       const nextTimestamp =
@@ -328,6 +381,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const maxLen = Math.max(indexedSegments.length, tools.length);
   let previousAccumulatedStreamText: string | null = null;
   const toolStreamPredecessors = new Map<string, string>();
+  const toolStreamInsertionBounds = new Map<string, TurnInsertionBounds>();
+  const applyRunBounds = (key: string, runId: unknown) => {
+    const bounds = resolveRunInsertionBounds(items, runId, props.runId, currentTurnBounds);
+    if (bounds) {
+      toolStreamInsertionBounds.set(key, bounds);
+    }
+  };
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
@@ -352,6 +412,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           isStreaming: false,
         };
         toolStreamItems.push(streamItem);
+        applyRunBounds(streamItem.key, segment.runId);
         const toolCallId = segment.toolCallId?.trim();
         const toolKey = toolCallId ? toolKeysByCallId.get(toolCallId) : undefined;
         if (toolKey) {
@@ -369,6 +430,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         message: tool.message,
       };
       toolStreamItems.push(toolItem);
+      applyRunBounds(toolItem.key, asRecord(tool.message)?.runId);
     }
   }
   for (const segment of keyedSegments) {
@@ -384,12 +446,18 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       isStreaming: false,
     };
     toolStreamItems.push(commentaryItem);
+    applyRunBounds(commentaryItem.key, segment.runId);
   }
 
   // Merge collected live tool/stream rows into the stable transcript order.
   // The latest user row is a causal floor: current-run items must not jump
   // above it under clock skew, then jump back when history materializes them.
-  insertChatItemsByTimestamp(items, toolStreamItems, currentTurnStartIndex, toolStreamPredecessors);
+  insertChatItemsByTimestamp(
+    items,
+    toolStreamItems,
+    toolStreamInsertionBounds,
+    toolStreamPredecessors,
+  );
 
   // Working spark contract: whenever the agent works with nothing visibly
   // streaming (pre-first-token, or a queued send in flight), the thread shows

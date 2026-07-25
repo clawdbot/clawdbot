@@ -589,7 +589,12 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     });
 
     expect(host.chatStreamSegments).toEqual([
-      { text: "visible text before tool", ts: TOOL_STREAM_TEST_NOW, toolCallId: "call_1" },
+      {
+        text: "visible text before tool",
+        ts: TOOL_STREAM_TEST_NOW,
+        runId: "run-1",
+        toolCallId: "call_1",
+      },
     ]);
     expect(host.chatStream).toBeNull();
     vi.useRealTimers();
@@ -628,6 +633,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       {
         text: "Checking the app-server stream",
         ts: TOOL_STREAM_TEST_NOW,
+        runId: "run-1",
         itemId: "msg-preamble-1",
       },
     ]);
