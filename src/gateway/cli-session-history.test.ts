@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
   augmentChatHistoryWithCliSessionImports,
@@ -845,17 +845,25 @@ describe("cli session history", () => {
     expect(merged[1]).toBe(importedMessages[0]);
   });
 
-  it("dedupes a redacted local transcript against the full imported text", () => {
+  it("dedupes full and redacted transcript copies in either merge direction", () => {
     const fullText =
       "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me";
     const redactedText = redactSensitiveText(fullText);
-    expect(redactedText).not.toBe(fullText);
     const timestamp = Date.parse("2026-07-23T00:00:00Z");
-    const localMessages = [{ role: "user", content: redactedText, timestamp }];
-    const importedMessages = [{ role: "user", content: fullText, timestamp }];
 
-    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
-    expect(merged).toHaveLength(1);
+    expect(redactedText).not.toBe(fullText);
+    expect(redactSensitiveText(redactedText)).not.toBe(redactedText);
+    for (const [localText, importedText] of [
+      [redactedText, fullText],
+      [fullText, redactedText],
+    ]) {
+      const localMessage = { role: "user", content: localText, timestamp };
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [localMessage],
+        importedMessages: [{ role: "user", content: importedText, timestamp }],
+      });
+      expect(merged).toEqual([localMessage]);
+    }
   });
 
   it("keeps both messages when the imported text differs beyond redaction", () => {
@@ -868,6 +876,273 @@ describe("cli session history", () => {
 
     const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
     expect(merged).toHaveLength(2);
+  });
+
+  it("consumes a redaction mask once when distinct imports collide", () => {
+    const fullTexts: readonly [string, string] = [
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me",
+      "open https://host.example/chat?session=agent%3Amain%3Adifferent%3A123e4567-e89b-12d3-a456-426614174000 for me",
+    ];
+    const redactedText = redactSensitiveText(fullTexts[0]);
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const localMessage = { role: "user", content: redactedText, timestamp };
+
+    expect(redactSensitiveText(fullTexts[1])).toBe(redactedText);
+    for (const importedTexts of [
+      fullTexts,
+      fullTexts.toReversed(),
+      [redactedText, ...fullTexts],
+      [...fullTexts, redactedText],
+    ]) {
+      const importedMessages = importedTexts.map((content) => ({
+        role: "user",
+        content,
+        timestamp,
+      }));
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [localMessage],
+        importedMessages,
+      });
+      expect(merged).toEqual([
+        localMessage,
+        ...importedMessages.filter((message) => message.content !== redactedText),
+      ]);
+    }
+  });
+
+  it("scopes redaction collisions to the timestamp match window", () => {
+    const fullTexts: readonly [string, string] = [
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me",
+      "open https://host.example/chat?session=agent%3Amain%3Adifferent%3A123e4567-e89b-12d3-a456-426614174000 for me",
+    ];
+    const start = Date.parse("2026-07-23T00:00:00Z");
+    const cases = [
+      { text: fullTexts[0], timestamp: start },
+      { text: fullTexts[1], timestamp: start + 60 * 60 * 1000 },
+    ];
+    const localMessages = cases.map(({ text, timestamp }) => ({
+      role: "user",
+      content: redactSensitiveText(text),
+      timestamp,
+    }));
+    const importedMessages = cases.map(({ text: content, timestamp }) => ({
+      role: "user",
+      content,
+      timestamp,
+    }));
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toEqual(localMessages);
+  });
+
+  it("counts identity-matched full text when detecting redaction collisions", () => {
+    const fullTexts: readonly [string, string] = [
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me",
+      "open https://host.example/chat?session=agent%3Amain%3Adifferent%3A123e4567-e89b-12d3-a456-426614174000 for me",
+    ];
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const identity = (externalId: string) => ({
+      importedFrom: "claude-cli",
+      externalId,
+      cliSessionId: "session-1",
+    });
+    const localMessage = {
+      role: "user",
+      content: redactSensitiveText(fullTexts[0]),
+      timestamp,
+      __openclaw: identity("message-a"),
+    };
+    const importedMessages = [
+      {
+        role: "user",
+        content: fullTexts[1],
+        timestamp,
+        __openclaw: identity("message-b"),
+      },
+      {
+        role: "user",
+        content: fullTexts[0],
+        timestamp,
+        __openclaw: identity("message-a"),
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages,
+    });
+    expect(merged).toEqual([localMessage, importedMessages[0]]);
+  });
+
+  it("does not use redaction equivalence across conflicting external identities", () => {
+    const fullText =
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me";
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const identity = (externalId: string) => ({
+      importedFrom: "claude-cli",
+      externalId,
+      cliSessionId: "session-1",
+    });
+    const localMessage = {
+      role: "user",
+      content: fullText,
+      timestamp,
+      __openclaw: identity("message-a"),
+    };
+    const importedMessage = {
+      role: "user",
+      content: redactSensitiveText(fullText),
+      timestamp,
+      __openclaw: identity("message-b"),
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage],
+    });
+    expect(merged).toEqual([localMessage, importedMessage]);
+  });
+
+  it("keeps a consumed full import as an exact dedupe representative", () => {
+    const fullText =
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me";
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const localMessage = {
+      role: "user",
+      content: redactSensitiveText(fullText),
+      timestamp,
+    };
+    const importedMessage = { role: "user", content: fullText, timestamp };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage, importedMessage],
+    });
+    expect(merged).toEqual([localMessage]);
+  });
+
+  it("retains non-comparable imported messages", () => {
+    const importedMessage = {
+      role: "assistant",
+      content: [{ type: "toolcall", name: "read", arguments: {} }],
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [],
+      importedMessages: [importedMessage],
+    });
+    expect(merged).toEqual([importedMessage]);
+  });
+
+  it("dedupes imports only against retained timestamp representatives", () => {
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const fiveMinutes = 5 * 60 * 1000;
+    const importedMessages = [0, fiveMinutes, fiveMinutes * 2].map((offset) => ({
+      role: "user",
+      content: "repeated prompt",
+      timestamp: timestamp + offset,
+    }));
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages: [], importedMessages });
+    expect(merged).toEqual([importedMessages[0], importedMessages[2]]);
+  });
+
+  it("retains a later import outside the surviving local timestamp window", () => {
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const fiveMinutes = 5 * 60 * 1000;
+    const localMessage = { role: "user", content: "repeated prompt", timestamp };
+    const importedMessages = [fiveMinutes, fiveMinutes * 2].map((offset) => ({
+      role: "user",
+      content: "repeated prompt",
+      timestamp: timestamp + offset,
+    }));
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages,
+    });
+    expect(merged).toEqual([localMessage, importedMessages[1]]);
+  });
+
+  it("does not extend a retained local timestamp through a skipped lossy import", () => {
+    const fullText =
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me";
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const fiveMinutes = 5 * 60 * 1000;
+    const localMessage = {
+      role: "user",
+      content: redactSensitiveText(fullText),
+      timestamp,
+    };
+    const importedMessages = [fiveMinutes, fiveMinutes * 2].map((offset) => ({
+      role: "user",
+      content: fullText,
+      timestamp: timestamp + offset,
+    }));
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages,
+    });
+    expect(merged).toEqual([localMessage, importedMessages[1]]);
+  });
+
+  it("dedupes a full and redacted pair retained entirely from imports", () => {
+    const fullText =
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me";
+    const redactedText = redactSensitiveText(fullText);
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+
+    for (const contents of [
+      [redactedText, fullText],
+      [fullText, redactedText],
+      [redactedText, redactedText, fullText],
+      [redactedText, fullText, redactedText],
+    ]) {
+      const importedMessages = contents.map((content) => ({ role: "user", content, timestamp }));
+      const merged = mergeImportedChatHistoryMessages({ localMessages: [], importedMessages });
+      expect(merged).toEqual([importedMessages[0]]);
+    }
+  });
+
+  it("reserves exact local matches one-to-one before lossy matches", () => {
+    const fullText =
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me";
+    const redactedText = redactSensitiveText(fullText);
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const fiveMinutes = 5 * 60 * 1000;
+    const localMessages = [0, fiveMinutes * 2].map((offset) => ({
+      role: "user",
+      content: redactedText,
+      timestamp: timestamp + offset,
+    }));
+    const importedMessages = [
+      { role: "user", content: redactedText, timestamp: timestamp + fiveMinutes },
+      { role: "user", content: fullText, timestamp: timestamp + fiveMinutes * 3 },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toEqual(localMessages);
+  });
+
+  it("reassigns a flexible exact match away from a constrained lossy match", () => {
+    const fullText =
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me";
+    const redactedText = redactSensitiveText(fullText);
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const minute = 60 * 1000;
+    const localMessages = [0, 9].map((offset) => ({
+      role: "user",
+      content: redactedText,
+      timestamp: timestamp + offset * minute,
+    }));
+    const importedMessages = [
+      { role: "user", content: fullText, timestamp: timestamp - 2 * minute },
+      { role: "user", content: redactedText, timestamp: timestamp + 4 * minute },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toEqual(localMessages);
   });
 
   it("augments chat history when a session has a claude-cli binding", async () => {
