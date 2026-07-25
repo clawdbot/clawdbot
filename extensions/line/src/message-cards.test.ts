@@ -651,18 +651,40 @@ describe("action label/data surrogate-safe truncation", () => {
       label: "Open",
       data: "action=open",
       displayText: "d".repeat(301),
-      text: "t".repeat(301),
-      fillInText: "f".repeat(301),
     });
     expect(postback).toMatchObject({
       displayText: "d".repeat(300),
-      text: "t".repeat(300),
-      fillInText: "f".repeat(300),
     });
 
+    expect(normalizeLineAction({ type: "message", label: "Open", text: "x".repeat(301) })).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: message text exceeds LINE's limit.",
+    });
     expect(
-      normalizeLineAction({ type: "message", label: "Open", text: "x".repeat(301) }),
-    ).toMatchObject({ text: "x".repeat(300) });
+      normalizeLineAction({
+        type: "postback",
+        label: "Open",
+        data: "action=open",
+        fillInText: "x".repeat(301),
+      }),
+    ).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: message text exceeds LINE's limit.",
+    });
+    expect(
+      normalizeLineAction({
+        type: "postback",
+        label: "Open",
+        data: "action=open",
+        text: "x".repeat(301),
+      }),
+    ).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: message text exceeds LINE's limit.",
+    });
     const emojiText = "😀".repeat(300);
     expect(messageAction("Open", emojiText)).toMatchObject({ text: emojiText });
     expect(

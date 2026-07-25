@@ -146,6 +146,17 @@ export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LAB
       // whose identity changed merely to satisfy the transport cap.
       return unavailableAction("Action", "callback data exceeds LINE's limit.");
     }
+    const text =
+      action.text === undefined
+        ? undefined
+        : truncateLineActionText(action.text, LINE_ACTION_DATA_LIMIT);
+    const fillInText =
+      action.fillInText === undefined
+        ? undefined
+        : truncateLineActionText(action.fillInText, LINE_ACTION_DATA_LIMIT);
+    if (text !== action.text || fillInText !== action.fillInText) {
+      return unavailableAction("Action", "message text exceeds LINE's limit.");
+    }
     return {
       ...action,
       label,
@@ -154,14 +165,8 @@ export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LAB
         action.displayText === undefined
           ? undefined
           : truncateLineActionText(action.displayText, LINE_ACTION_DATA_LIMIT),
-      text:
-        action.text === undefined
-          ? undefined
-          : truncateLineActionText(action.text, LINE_ACTION_DATA_LIMIT),
-      fillInText:
-        action.fillInText === undefined
-          ? undefined
-          : truncateLineActionText(action.fillInText, LINE_ACTION_DATA_LIMIT),
+      text,
+      fillInText,
     };
   }
 
@@ -174,13 +179,17 @@ export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LAB
   }
 
   if (action.type === "message") {
+    const text =
+      action.text === undefined
+        ? undefined
+        : truncateLineActionText(action.text, LINE_ACTION_DATA_LIMIT);
+    if (text !== action.text) {
+      return unavailableAction("Action", "message text exceeds LINE's limit.");
+    }
     return {
       ...action,
       label,
-      text:
-        action.text === undefined
-          ? undefined
-          : truncateLineActionText(action.text, LINE_ACTION_DATA_LIMIT),
+      text,
     };
   }
 
