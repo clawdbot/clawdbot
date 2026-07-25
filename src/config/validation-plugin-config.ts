@@ -25,7 +25,7 @@ const LEGACY_REMOVED_PLUGIN_IDS = new Set([
 ]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
-export type ExplicitPluginReferences = {
+type ExplicitPluginReferences = {
   entries: Set<string>;
   allow: Set<string>;
   deny: Set<string>;
