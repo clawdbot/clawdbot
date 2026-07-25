@@ -10,7 +10,7 @@ type WindowsPrivatePlanFileDependencies = {
   run?: typeof runExec;
 };
 
-const WINDOWS_PLAN_FILE_EXISTS_MARKER = "OPENCLAW_PRIVATE_PLAN_FILE_EXISTS";
+const WINDOWS_PLAN_FILE_EXISTS_MARKER = "PRIVATE_PLAN_FILE_EXISTS";
 const WINDOWS_PRIVATE_PLAN_FILE_NATIVE_SOURCE = `
 using System;
 using System.Runtime.InteropServices;
