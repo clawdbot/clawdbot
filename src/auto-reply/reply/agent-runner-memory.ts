@@ -530,12 +530,12 @@ async function readSessionLogSnapshot(params: {
     return await readFileSessionLogSnapshot(logPath, params);
   }
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  if (params.sessionId && params.sessionKey && params.opts?.storePath && agentId) {
+  if (params.sessionId && params.opts?.storePath && agentId) {
     return readSqliteSessionLogSnapshot(
       {
         agentId,
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         storePath: params.opts.storePath,
       },
       params,
