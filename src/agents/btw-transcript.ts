@@ -153,7 +153,7 @@ export async function readBtwTranscriptMessages(params: {
         ? suppliedEntry?.sessionId === marker.sessionId
           ? params.sessionKey
           : (resolvePreferredSessionKeyForSessionIdMatches(
-              markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+              markerMatches.map(({ sessionKey: mappedKey, entry }) => [mappedKey, entry]),
               marker.sessionId,
             ) ?? (markerMatches.length === 0 ? params.sessionKey : undefined))
         : params.sessionKey;
