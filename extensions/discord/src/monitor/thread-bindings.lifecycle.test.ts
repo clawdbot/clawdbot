@@ -1249,6 +1249,9 @@ describe("thread binding lifecycle", () => {
   it("binds current Discord DMs as direct conversation bindings", async () => {
     createTestThreadBindingManager({
       accountId: "default",
+      cfg: {
+        agents: { list: [{ id: "codex", default: true }] },
+      },
       persist: false,
       enableSweeper: false,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
@@ -1285,7 +1288,7 @@ describe("thread binding lifecycle", () => {
       parentConversationId: "user:1177378744822943744",
     });
     expectFields(requireRecord(bound, "bound session").metadata, "bound metadata", {
-      agentId: "main",
+      agentId: "codex",
     });
     const resolved = requireRecord(
       getSessionBindingService().resolveByConversation({
