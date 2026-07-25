@@ -51,7 +51,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Plugin conversation binding agent scope:** resolve opaque plugin-owned session keys against the configured default agent in channel binding adapters, restoring current-conversation binds after implicit `main` fallback removal.
 - **Cron local-provider preflight:** report the guarded-fetch deadline as a bounded preflight timeout, preserve concrete nested non-timeout errors, and carry the failure reason into fallback warnings. Thanks @shakkernerd.
 - **ClickClack split-origin setup codes:** consume versioned exact claim endpoints without appending a second claim path, validate the returned canonical API base, preserve private API transport overrides, and keep legacy setup URLs working. Fixes #111919. Thanks @shakkernerd.
 - **Standalone plugin files:** let manifestless files explicitly listed in `plugins.load.paths` pass config validation and load independently when several files share a directory.
