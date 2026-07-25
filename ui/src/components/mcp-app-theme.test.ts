@@ -3,7 +3,9 @@ import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
 
 function rootWithTokens(tokens: Record<string, string>): HTMLElement {
   const element = document.createElement("div");
-  for (const [name, value] of Object.entries(tokens)) element.style.setProperty(name, value);
+  for (const [name, value] of Object.entries(tokens)) {
+    element.style.setProperty(name, value);
+  }
   document.body.append(element);
   return element;
 }
@@ -31,7 +33,28 @@ describe("collectMcpAppStyleVariables", () => {
     const variables = collectMcpAppStyleVariables(rootWithTokens({ "--card": "#161920" }));
 
     expect(variables).not.toHaveProperty("--color-text-primary");
-    expect(Object.values(variables ?? {}).every((value) => value.length > 0)).toBe(true);
+    expect(
+      Object.values(variables ?? {}).every(
+        (value) => typeof value === "string" && value.length > 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves text hierarchy and inverse-surface contrast", () => {
+    const variables = collectMcpAppStyleVariables(
+      rootWithTokens({
+        "--text": "#d4d4d8",
+        "--muted-strong": "#a1a1aa",
+        "--muted": "#71717a",
+        "--bg": "#0e1015",
+      }),
+    );
+
+    expect(variables?.["--color-text-secondary"]).toBe("#a1a1aa");
+    expect(variables?.["--color-text-tertiary"]).toBe("#71717a");
+    expect(variables?.["--color-background-inverse"]).toBe("#d4d4d8");
+    expect(variables?.["--color-text-inverse"]).toBe("#0e1015");
+    expect(variables?.["--color-border-inverse"]).toBe("#0e1015");
   });
 
   it("never publishes a font stack whose leading face the sandbox cannot load", () => {
@@ -61,7 +84,11 @@ describe("collectMcpAppStyleVariables", () => {
     // published values self-contained; jsdom does not implement that
     // substitution, so the guarantee is verified in a browser rather than here.
     expect(variables?.["--color-background-primary"]).toBe("#161920");
-    expect(Object.values(variables ?? {}).every((value) => value === value.trim())).toBe(true);
+    expect(
+      Object.values(variables ?? {}).every(
+        (value) => typeof value === "string" && value === value.trim(),
+      ),
+    ).toBe(true);
   });
 
   it("publishes only specification keys", () => {

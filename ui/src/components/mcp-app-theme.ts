@@ -1,8 +1,3 @@
-import type { HostContext } from "@modelcontextprotocol/ext-apps";
-
-type StyleVariables = NonNullable<NonNullable<HostContext["styles"]>["variables"]>;
-type StyleVariableKey = keyof StyleVariables;
-
 /**
  * Control UI custom properties published to embedded MCP apps, keyed by the
  * specification variable they satisfy. The key set is closed by the MCP Apps
@@ -24,8 +19,8 @@ const HOST_TOKEN_SOURCES = {
   "--color-background-danger": "--danger-subtle",
 
   "--color-text-primary": "--text",
-  "--color-text-secondary": "--muted",
-  "--color-text-tertiary": "--muted-strong",
+  "--color-text-secondary": "--muted-strong",
+  "--color-text-tertiary": "--muted",
   "--color-text-inverse": "--bg",
   "--color-text-success": "--ok",
   "--color-text-warning": "--warn",
@@ -34,7 +29,8 @@ const HOST_TOKEN_SOURCES = {
 
   "--color-border-primary": "--border",
   "--color-border-secondary": "--border-strong",
-  "--color-border-inverse": "--text",
+  // Inverse borders sit on the inverse background, so they use its foreground.
+  "--color-border-inverse": "--bg",
   "--color-ring-primary": "--ring",
 
   /*
@@ -63,7 +59,7 @@ const HOST_TOKEN_SOURCES = {
   "--shadow-sm": "--shadow-sm",
   "--shadow-md": "--shadow-md",
   "--shadow-lg": "--shadow-lg",
-} as const satisfies Partial<Record<StyleVariableKey, string>>;
+} as const;
 
 /** Values with no Control UI source, fixed by the specification's own scale. */
 const STATIC_VARIABLES = {
@@ -72,7 +68,10 @@ const STATIC_VARIABLES = {
   "--font-weight-medium": "500",
   "--font-weight-semibold": "600",
   "--font-weight-bold": "700",
-} as const satisfies Partial<Record<StyleVariableKey, string>>;
+} as const;
+
+type StyleVariableKey = keyof typeof HOST_TOKEN_SOURCES | keyof typeof STATIC_VARIABLES;
+type StyleVariables = Partial<Record<StyleVariableKey, string>>;
 
 /**
  * Snapshot the current theme as MCP Apps style variables.
@@ -85,12 +84,16 @@ const STATIC_VARIABLES = {
 export function collectMcpAppStyleVariables(
   root: HTMLElement | undefined = document.documentElement,
 ): StyleVariables | undefined {
-  if (!root) return undefined;
+  if (!root) {
+    return undefined;
+  }
   const computed = getComputedStyle(root);
   const variables: Record<string, string> = { ...STATIC_VARIABLES };
   for (const [specKey, hostToken] of Object.entries(HOST_TOKEN_SOURCES)) {
     const value = computed.getPropertyValue(hostToken).trim();
-    if (value) variables[specKey] = value;
+    if (value) {
+      variables[specKey] = value;
+    }
   }
   return variables as StyleVariables;
 }
