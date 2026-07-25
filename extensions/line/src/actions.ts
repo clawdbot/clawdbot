@@ -4,11 +4,14 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export type Action = messagingApi.Action;
 type Message = messagingApi.Message;
+type ImagemapAction = messagingApi.ImagemapAction;
 const LINE_ACTION_LABEL_LIMIT = 20;
 const LINE_ACTION_DATA_LIMIT = 300;
 const LINE_ACTION_URI_LIMIT = 1000;
 const LINE_CLIPBOARD_TEXT_LIMIT = 1000;
 const LINE_RICH_MENU_ALIAS_LIMIT = 32;
+const LINE_IMAGEMAP_ACTION_LABEL_LIMIT = 100;
+const LINE_IMAGEMAP_MESSAGE_TEXT_LIMIT = 400;
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function truncateLineActionText(text: string, limit: number): string {
@@ -158,6 +161,46 @@ function normalizeFlexContainerActions(value: unknown): unknown {
   return normalizeNestedActions(value, 40);
 }
 
+function unavailableImagemapAction(
+  kind: "Action" | "Link",
+  reason: string,
+  area: ImagemapAction["area"],
+): ImagemapAction {
+  return {
+    type: "message",
+    label: "Unavailable",
+    text: `${kind} unavailable: ${reason}`,
+    area,
+  };
+}
+
+function normalizeImagemapAction(action: ImagemapAction): ImagemapAction {
+  const label =
+    action.label === undefined
+      ? undefined
+      : truncateLineActionText(action.label, LINE_IMAGEMAP_ACTION_LABEL_LIMIT);
+
+  if (action.type === "uri") {
+    if (truncateUtf16Safe(action.linkUri, LINE_ACTION_URI_LIMIT) !== action.linkUri) {
+      return unavailableImagemapAction("Link", "URL exceeds LINE's limit.", action.area);
+    }
+    return { ...action, label };
+  }
+
+  if (action.type === "message") {
+    const text = truncateLineActionText(action.text, LINE_IMAGEMAP_MESSAGE_TEXT_LIMIT);
+    if (text !== action.text) {
+      return unavailableImagemapAction("Action", "message text exceeds LINE's limit.", action.area);
+    }
+    return { ...action, label, text };
+  }
+
+  if (truncateUtf16Safe(action.clipboardText, LINE_CLIPBOARD_TEXT_LIMIT) !== action.clipboardText) {
+    return unavailableImagemapAction("Action", "clipboard text exceeds LINE's limit.", action.area);
+  }
+  return { ...action, label };
+}
+
 export function normalizeLineMessageActions(message: Message): Message {
   let normalized: Message;
   if (message.type === "flex") {
@@ -170,6 +213,11 @@ export function normalizeLineMessageActions(message: Message): Message {
     normalized = {
       ...message,
       template: normalizeNestedActions(message.template, labelLimit) as messagingApi.Template,
+    };
+  } else if (message.type === "imagemap") {
+    normalized = {
+      ...message,
+      actions: message.actions.map(normalizeImagemapAction),
     };
   } else {
     normalized = { ...message };

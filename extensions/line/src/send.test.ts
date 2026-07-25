@@ -262,6 +262,44 @@ describe("LINE send helpers", () => {
     expect(message.contents.action).toBe(oversizedPostback);
   });
 
+  it("normalizes raw imagemap actions at both outbound API boundaries", async () => {
+    const area = { x: 0, y: 0, width: 520, height: 1040 };
+    const message = {
+      type: "imagemap",
+      baseUrl: "https://e.example/imagemap",
+      altText: "Map",
+      baseSize: { width: 1040, height: 1040 },
+      actions: [
+        {
+          type: "uri",
+          label: "Open",
+          linkUri: `https://e.example/?q=${"x".repeat(1200)}`,
+          area,
+        },
+      ],
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    const replied = replyMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    expect(pushed.messages[0]?.actions).toEqual(replied.messages[0]?.actions);
+    expect(pushed.messages[0]?.actions).toEqual([
+      {
+        type: "message",
+        label: "Unavailable",
+        text: "Link unavailable: URL exceeds LINE's limit.",
+        area,
+      },
+    ]);
+    expect(message.actions[0]?.type).toBe("uri");
+  });
+
   it("pushes images via normalized LINE target", async () => {
     const result = await sendModule.pushImageMessage(
       "line:user:U123",
