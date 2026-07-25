@@ -40,6 +40,7 @@ import type {
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
 import { canonicalizeRealtimeTranscriptionProviderId } from "../../realtime-transcription/provider-registry.js";
+import { listRealtimeVoiceBrowserSessionBrokers } from "../../talk/browser-session-broker-registry.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
   listRealtimeVoiceProviders,
@@ -350,11 +351,16 @@ function buildTalkCatalog(config: OpenClawConfig) {
         const providerConfig =
           provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
           rawConfigWithModel;
+        const browserSessionBrokers =
+          realtimeSurface === "browser-session"
+            ? listRealtimeVoiceBrowserSessionBrokers(provider.id)
+            : [];
         const capabilities = resolveRealtimeVoiceProviderCapabilities({
           provider,
           providerConfig,
           cfg: config,
           surface: realtimeSurface,
+          browserSessionBrokers,
         });
         const entry: Record<string, unknown> = {
           id: provider.id,
@@ -364,6 +370,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
               cfg: config,
               providerConfig,
               surface: realtimeSurface,
+              browserSessionBrokers,
             }),
           ),
           modes: ["realtime"],

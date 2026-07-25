@@ -4,6 +4,7 @@ import {
   registerAgentHarness as registerGlobalAgentHarness,
 } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import type { RealtimeVoiceBrowserSessionBroker } from "../talk/provider-types.js";
 import {
   getRegisteredEmbeddingProvider,
   registerEmbeddingProvider as registerGlobalEmbeddingProvider,
@@ -378,6 +379,46 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     }
   };
 
+  const registerRealtimeVoiceBrowserSessionBroker = (
+    record: PluginRecord,
+    broker: RealtimeVoiceBrowserSessionBroker,
+  ) => {
+    const id = broker.id.trim().toLowerCase();
+    const providerId = broker.providerId.trim().toLowerCase();
+    if (!id || !providerId) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "realtime voice browser-session broker registration requires id and providerId",
+      });
+      return;
+    }
+    const key = `${providerId}:${id}`;
+    const existing = registry.realtimeVoiceBrowserSessionBrokers.find(
+      (entry) =>
+        `${entry.broker.providerId.trim().toLowerCase()}:${entry.broker.id.trim().toLowerCase()}` ===
+        key,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `realtime voice browser-session broker already registered: ${key} (${existing.pluginId})`,
+      });
+      return;
+    }
+    registry.realtimeVoiceBrowserSessionBrokers.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      broker: { ...broker, id, providerId },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+    (record.realtimeVoiceBrowserSessionBrokerIds ??= []).push(key);
+  };
+
   const registerMediaUnderstandingProvider = (
     record: PluginRecord,
     provider: MediaUnderstandingProviderPlugin,
@@ -490,6 +531,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,
+    registerRealtimeVoiceBrowserSessionBroker,
     registerMediaUnderstandingProvider,
     registerTranscriptSourceProvider,
     registerImageGenerationProvider,

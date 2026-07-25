@@ -1,6 +1,10 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import type { RealtimeVoiceBridge, RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSessionBroker,
+  RealtimeVoiceTool,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -8,7 +12,6 @@ const {
   FakeWebSocket,
   execFileSyncMock,
   fetchWithSsrFGuardMock,
-  getRealtimeVoiceBrowserSessionBrokerMock,
   isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKeyMock,
 } = vi.hoisted(() => {
@@ -77,7 +80,6 @@ const {
     FakeWebSocket: MockWebSocket,
     execFileSyncMock: vi.fn(),
     fetchWithSsrFGuardMock: vi.fn(),
-    getRealtimeVoiceBrowserSessionBrokerMock: vi.fn(),
     isProviderAuthProfileConfiguredMock: vi.fn(),
     resolveProviderAuthProfileApiKeyMock: vi.fn(),
   };
@@ -103,14 +105,6 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: resolveProviderAuthProfileApiKeyMock,
 }));
-
-vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>();
-  return {
-    ...actual,
-    getRealtimeVoiceBrowserSessionBroker: getRealtimeVoiceBrowserSessionBrokerMock,
-  };
-});
 
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
 type SentRealtimeEvent = {
@@ -285,7 +279,6 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     execFileSyncMock.mockReset();
     fetchWithSsrFGuardMock.mockReset();
-    getRealtimeVoiceBrowserSessionBrokerMock.mockReset();
     isProviderAuthProfileConfiguredMock.mockReset();
     isProviderAuthProfileConfiguredMock.mockReturnValue(false);
     resolveProviderAuthProfileApiKeyMock.mockReset();
@@ -332,7 +325,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("uses broker-owned capabilities when Codex OAuth is the browser fallback", () => {
-    getRealtimeVoiceBrowserSessionBrokerMock.mockReturnValue({
+    const broker: RealtimeVoiceBrowserSessionBroker = {
       id: "codex-oauth",
       providerId: "openai",
       capabilities: {
@@ -343,13 +336,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       },
       isConfigured: () => true,
       createBrowserSession: vi.fn(),
-    });
+    };
     const provider = buildOpenAIRealtimeVoiceProvider();
 
     expect(
       provider.resolveCapabilities?.({
         providerConfig: {},
         surface: "browser-session",
+        browserSessionBrokers: [broker],
       }),
     ).toMatchObject({
       transports: ["webrtc"],
@@ -779,7 +773,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     }));
     const cancelBrowserSession = vi.fn();
     const isConfigured = vi.fn(() => true);
-    getRealtimeVoiceBrowserSessionBrokerMock.mockReturnValue({
+    const broker: RealtimeVoiceBrowserSessionBroker = {
       id: "codex-oauth",
       providerId: "openai",
       capabilities: {
@@ -791,13 +785,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       isConfigured,
       createBrowserSession,
       cancelBrowserSession,
-    });
+    };
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = { agents: { defaults: {} } } as never;
     const request = {
       cfg,
       providerConfig: {},
       model: "gpt-realtime-2",
+      browserSessionBrokers: [broker],
     };
 
     expect(provider.isConfigured({ ...request, surface: "browser-session" })).toBe(true);
@@ -822,12 +817,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
   it("prefers Platform auth over the Codex OAuth browser broker", async () => {
     const createBrowserSession = vi.fn();
-    getRealtimeVoiceBrowserSessionBrokerMock.mockReturnValue({
+    const broker: RealtimeVoiceBrowserSessionBroker = {
       id: "codex-oauth",
       providerId: "openai",
       isConfigured: () => true,
       createBrowserSession,
-    });
+    };
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: createJsonResponse({
         client_secret: { value: "client-secret-123" },
@@ -838,6 +833,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     await provider.createBrowserSession?.({
       providerConfig: { apiKey: "sk-platform" }, // pragma: allowlist secret
+      browserSessionBrokers: [broker],
     });
 
     expect(createBrowserSession).not.toHaveBeenCalled();
@@ -852,17 +848,18 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       throw new Error("keychain unavailable");
     });
     const createBrowserSession = vi.fn();
-    getRealtimeVoiceBrowserSessionBrokerMock.mockReturnValue({
+    const broker: RealtimeVoiceBrowserSessionBroker = {
       id: "codex-oauth",
       providerId: "openai",
       isConfigured: () => true,
       createBrowserSession,
-    });
+    };
     const provider = buildOpenAIRealtimeVoiceProvider();
 
     await expect(
       provider.createBrowserSession?.({
         providerConfig: {},
+        browserSessionBrokers: [broker],
       }),
     ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
     expect(createBrowserSession).not.toHaveBeenCalled();

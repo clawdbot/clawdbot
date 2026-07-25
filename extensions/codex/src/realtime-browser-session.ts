@@ -7,7 +7,6 @@ import type {
   RealtimeVoiceBrowserSessionBroker,
   RealtimeVoiceBrowserSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { getRealtimeVoiceBrowserSessionBroker } from "openclaw/plugin-sdk/realtime-voice";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -30,7 +29,6 @@ const CODEX_REALTIME_MAX_SESSIONS = 8;
 const CODEX_REALTIME_MAX_SDP_BYTES = 256 * 1024;
 const CODEX_REALTIME_START_TIMEOUT_MS = 60_000;
 const CODEX_REALTIME_PROBE_COOLDOWN_MS = 1_000;
-const CODEX_REALTIME_OFFER_HANDLER = Symbol.for("openclaw.codexRealtimeOfferHandler");
 
 type PendingOffer = {
   expiresAt: number;
@@ -49,10 +47,6 @@ type RealtimeNotificationParams = {
   threadId?: unknown;
   sdp?: unknown;
   message?: unknown;
-};
-
-type CodexRealtimeBrowserSessionBroker = RealtimeVoiceBrowserSessionBroker & {
-  [CODEX_REALTIME_OFFER_HANDLER]?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 };
 
 type ResponseDeliveryWaiter = {
@@ -594,22 +588,7 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
       inFlightHandlers.delete(handling);
     });
   };
-  (broker as CodexRealtimeBrowserSessionBroker)[CODEX_REALTIME_OFFER_HANDLER] = trackedHandleOffer;
-
-  // Provider discovery can evaluate plugin entries in a separate Jiti context from
-  // the Gateway HTTP registry. Always delegate to the currently registered broker
-  // so the one-time token and its offer handler share the same closure.
-  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const activeBroker = getRealtimeVoiceBrowserSessionBroker("openai", "codex-oauth") as
-      | CodexRealtimeBrowserSessionBroker
-      | undefined;
-    const activeHandler = activeBroker?.[CODEX_REALTIME_OFFER_HANDLER];
-    if (!activeHandler) {
-      respondText(res, 503, "Codex OAuth realtime voice is unavailable");
-      return true;
-    }
-    return await activeHandler(req, res);
-  };
+  const handler = trackedHandleOffer;
 
   const cleanup = async () => {
     if (cleanedUp) {

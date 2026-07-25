@@ -77,6 +77,8 @@ type MigrationProviderPlugin = import("./types.js").MigrationProviderPlugin;
 type ProviderPlugin = import("./types.js").ProviderPlugin;
 type RealtimeTranscriptionProviderPlugin = import("./types.js").RealtimeTranscriptionProviderPlugin;
 type RealtimeVoiceProviderPlugin = import("./types.js").RealtimeVoiceProviderPlugin;
+type RealtimeVoiceBrowserSessionBroker =
+  import("../talk/provider-types.js").RealtimeVoiceBrowserSessionBroker;
 type SpeechProviderPlugin = import("./types.js").SpeechProviderPlugin;
 type VideoGenerationProviderPlugin = import("./types.js").VideoGenerationProviderPlugin;
 type WebFetchProviderPlugin = import("./types.js").WebFetchProviderPlugin;
@@ -222,6 +224,13 @@ type PluginRealtimeTranscriptionProviderRegistration =
   PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>;
 type PluginRealtimeVoiceProviderRegistration =
   PluginOwnedProviderRegistration<RealtimeVoiceProviderPlugin>;
+type PluginRealtimeVoiceBrowserSessionBrokerRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  broker: RealtimeVoiceBrowserSessionBroker;
+  source: string;
+  rootDir?: string;
+};
 type PluginMediaUnderstandingProviderRegistration =
   PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
 type PluginTranscriptsSourceProviderRegistration =
@@ -448,6 +457,7 @@ export type PluginRecord = {
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];
+  realtimeVoiceBrowserSessionBrokerIds?: string[];
   mediaUnderstandingProviderIds: string[];
   transcriptSourceProviderIds: string[];
   imageGenerationProviderIds: string[];
@@ -491,6 +501,7 @@ export type PluginRegistry = {
   speechProviders: PluginSpeechProviderRegistration[];
   realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
   realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];
+  realtimeVoiceBrowserSessionBrokers: PluginRealtimeVoiceBrowserSessionBrokerRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   transcriptSourceProviders: PluginTranscriptsSourceProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];

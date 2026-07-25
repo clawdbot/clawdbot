@@ -46,6 +46,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerSpeechProvider() {},
     registerRealtimeTranscriptionProvider() {},
     registerRealtimeVoiceProvider() {},
+    registerRealtimeVoiceBrowserSessionBroker() {},
     registerMediaUnderstandingProvider() {},
     registerTranscriptSourceProvider() {},
     registerImageGenerationProvider() {},

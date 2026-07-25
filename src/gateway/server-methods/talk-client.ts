@@ -221,6 +221,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         providerConfig: resolution.providerConfig,
         cfg: runtimeConfig,
         surface: "browser-session",
+        browserSessionBrokers: resolution.browserSessionBrokers,
       });
       if (wantsCameraFrames && providerCapabilities?.supportsVideoFrames !== true) {
         respond(
@@ -286,6 +287,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           agentId,
           workspaceDir: resolveAgentWorkspaceDir(runtimeConfig, agentId),
           providerConfig: resolution.providerConfig,
+          browserSessionBrokers: resolution.browserSessionBrokers,
           instructions,
           initialItems,
           ...(tools.length > 0 ? { tools } : {}),

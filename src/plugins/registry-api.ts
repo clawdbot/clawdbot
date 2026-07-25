@@ -66,6 +66,7 @@ export function createPluginApiFactory(
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,
+    registerRealtimeVoiceBrowserSessionBroker,
     registerMediaUnderstandingProvider,
     registerTranscriptSourceProvider,
     registerImageGenerationProvider,
@@ -196,6 +197,8 @@ export function createPluginApiFactory(
                 registerRealtimeTranscriptionProvider(record, provider),
               registerRealtimeVoiceProvider: (provider) =>
                 registerRealtimeVoiceProvider(record, provider),
+              registerRealtimeVoiceBrowserSessionBroker: (broker) =>
+                registerRealtimeVoiceBrowserSessionBroker(record, broker),
               registerMediaUnderstandingProvider: (provider) =>
                 registerMediaUnderstandingProvider(record, provider),
               registerTranscriptSourceProvider: (provider) =>

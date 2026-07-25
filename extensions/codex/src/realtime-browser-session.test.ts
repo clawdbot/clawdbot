@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { registerRealtimeVoiceBrowserSessionBroker } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexServerNotification } from "./app-server/protocol.js";
@@ -230,7 +229,6 @@ describe("Codex OAuth realtime browser session", () => {
       getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
-    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
 
     try {
       await realtime.warmup();
@@ -257,7 +255,6 @@ describe("Codex OAuth realtime browser session", () => {
         expect.objectContaining({ authRequirement: "subscription" }),
       );
     } finally {
-      unregister();
       await realtime.cleanup();
     }
   });
@@ -269,7 +266,6 @@ describe("Codex OAuth realtime browser session", () => {
       getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
-    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
     expect(realtime.broker.capabilities).toEqual({
       transports: ["webrtc"],
       handlesAgentConsult: true,
@@ -370,7 +366,6 @@ describe("Codex OAuth realtime browser session", () => {
         "Codex OAuth realtime is stopping",
       );
     } finally {
-      unregister();
       await realtime.cleanup();
     }
   });
@@ -382,7 +377,6 @@ describe("Codex OAuth realtime browser session", () => {
       getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
-    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
     const reservation = await realtime.broker.createBrowserSession({ providerConfig: {} });
     if (reservation.transport !== "webrtc") {
       throw new Error("Expected Codex browser session to use WebRTC");
@@ -404,7 +398,6 @@ describe("Codex OAuth realtime browser session", () => {
       expect(sharedClientMocks.releaseClient).toHaveBeenCalledWith(fake.client);
       expect(response.end).not.toHaveBeenCalled();
     } finally {
-      unregister();
       await realtime.cleanup();
     }
   });
@@ -425,7 +418,6 @@ describe("Codex OAuth realtime browser session", () => {
       getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
-    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
     const reservation = await realtime.broker.createBrowserSession({ providerConfig: {} });
     if (reservation.transport !== "webrtc") {
       throw new Error("Expected Codex browser session to use WebRTC");
@@ -441,7 +433,6 @@ describe("Codex OAuth realtime browser session", () => {
       expect(fake.methods).toContain("thread/realtime/stop");
       expect(fake.methods).toContain("thread/unsubscribe");
     } finally {
-      unregister();
       await realtime.cleanup();
     }
   });
@@ -466,7 +457,6 @@ describe("Codex OAuth realtime browser session", () => {
       getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
-    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
     const reservation = await realtime.broker.createBrowserSession({ providerConfig: {} });
     if (reservation.transport !== "webrtc") {
       throw new Error("Expected Codex browser session to use WebRTC");
@@ -485,7 +475,6 @@ describe("Codex OAuth realtime browser session", () => {
       expect(fake.methods).toContain("thread/realtime/stop");
       expect(fake.methods).toContain("thread/unsubscribe");
     } finally {
-      unregister();
       await realtime.cleanup();
     }
   });
@@ -497,7 +486,6 @@ describe("Codex OAuth realtime browser session", () => {
       getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
-    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
     const reservation = await realtime.broker.createBrowserSession({ providerConfig: {} });
     if (reservation.transport !== "webrtc") {
       throw new Error("Expected Codex browser session to use WebRTC");
@@ -520,7 +508,6 @@ describe("Codex OAuth realtime browser session", () => {
       expect(fake.methods).toContain("thread/realtime/stop");
       expect(fake.methods).toContain("thread/unsubscribe");
     } finally {
-      unregister();
       await realtime.cleanup();
     }
   });
@@ -532,7 +519,6 @@ describe("Codex OAuth realtime browser session", () => {
       getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
-    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
     const reservation = await realtime.broker.createBrowserSession({ providerConfig: {} });
     if (reservation.transport !== "webrtc") {
       throw new Error("Expected Codex browser session to use WebRTC");
@@ -552,7 +538,6 @@ describe("Codex OAuth realtime browser session", () => {
       expect(fake.methods).toContain("thread/unsubscribe");
       expect(sharedClientMocks.releaseClient).toHaveBeenCalledWith(fake.client);
     } finally {
-      unregister();
       await realtime.cleanup();
     }
   });

@@ -1,52 +1,63 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getRealtimeVoiceBrowserSessionBroker,
-  registerRealtimeVoiceBrowserSessionBroker,
+  listRealtimeVoiceBrowserSessionBrokers,
 } from "./browser-session-broker-registry.js";
 import type { RealtimeVoiceBrowserSessionBroker } from "./provider-types.js";
 
-const unregisterCallbacks: Array<() => void> = [];
+const mocks = vi.hoisted(() => ({
+  registry: null as PluginRegistry | null,
+}));
 
-function registerBroker(label: string): RealtimeVoiceBrowserSessionBroker {
-  const broker: RealtimeVoiceBrowserSessionBroker = {
-    id: " Codex-OAuth ",
-    providerId: " OpenAI ",
-    isConfigured: vi.fn(() => true),
-    createBrowserSession: vi.fn(async () => ({
-      provider: "openai",
-      transport: "webrtc" as const,
-      clientSecret: label,
-    })),
+vi.mock("../plugins/runtime.js", () => ({
+  getActivePluginRegistry: () => mocks.registry,
+}));
+
+function createBroker(params: {
+  id: string;
+  providerId: string;
+}): RealtimeVoiceBrowserSessionBroker {
+  return {
+    ...params,
+    isConfigured: () => true,
+    createBrowserSession: async () => ({
+      provider: params.providerId,
+      transport: "webrtc",
+      clientSecret: params.id,
+    }),
   };
-  unregisterCallbacks.push(registerRealtimeVoiceBrowserSessionBroker(broker));
-  return broker;
 }
 
-afterEach(() => {
-  for (const unregister of unregisterCallbacks.splice(0).toReversed()) {
-    unregister();
-  }
+beforeEach(() => {
+  mocks.registry = {
+    realtimeVoiceBrowserSessionBrokers: [
+      {
+        pluginId: "codex",
+        broker: createBroker({ id: "codex-oauth", providerId: "openai" }),
+        source: "test",
+      },
+      {
+        pluginId: "other",
+        broker: createBroker({ id: "other", providerId: "google" }),
+        source: "test",
+      },
+    ],
+  } as PluginRegistry;
 });
 
 describe("realtime browser session broker registry", () => {
-  it("normalizes provider and auth-mode keys", () => {
-    registerBroker("first");
-
+  it("filters the active host registry by normalized provider id", () => {
+    expect(listRealtimeVoiceBrowserSessionBrokers(" OPENAI ")).toHaveLength(1);
     expect(getRealtimeVoiceBrowserSessionBroker("OPENAI", "CODEX-OAUTH")).toMatchObject({
       id: "codex-oauth",
       providerId: "openai",
     });
   });
 
-  it("does not let stale cleanup remove a replacement registration", () => {
-    registerBroker("first");
-    const unregisterFirst = unregisterCallbacks.at(-1);
-    const second = registerBroker("second");
+  it("returns no brokers before the host registry is active", () => {
+    mocks.registry = null;
 
-    unregisterFirst?.();
-
-    expect(getRealtimeVoiceBrowserSessionBroker("openai", "codex-oauth")).toMatchObject({
-      createBrowserSession: second.createBrowserSession,
-    });
+    expect(listRealtimeVoiceBrowserSessionBrokers("openai")).toEqual([]);
   });
 });

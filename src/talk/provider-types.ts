@@ -109,6 +109,8 @@ export type RealtimeVoiceProviderConfiguredContext = {
   providerConfig: RealtimeVoiceProviderConfig;
   /** Runtime surface being selected; browser-only routes must not make gateway bridges eligible. */
   surface?: "browser-session" | "bridge";
+  /** Host-selected alternate browser-session routes registered for this provider. */
+  browserSessionBrokers?: readonly RealtimeVoiceBrowserSessionBroker[];
 };
 
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
@@ -127,6 +129,8 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   agentId?: string;
   workspaceDir?: string;
   providerConfig: RealtimeVoiceProviderConfig;
+  /** Host-selected alternate browser-session routes registered for this provider. */
+  browserSessionBrokers?: readonly RealtimeVoiceBrowserSessionBroker[];
   instructions?: string;
   initialItems?: Array<{
     role: RealtimeVoiceInitialItemRole;

@@ -11,7 +11,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { registerRealtimeVoiceBrowserSessionBroker } from "openclaw/plugin-sdk/realtime-voice";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -95,9 +94,7 @@ export default definePluginEntry({
         getConfig: resolveCurrentConfig,
         getPluginConfig: resolveCurrentPluginConfig,
       });
-      const unregisterRealtimeBrowserSession = registerRealtimeVoiceBrowserSessionBroker(
-        realtimeBrowserSession.broker,
-      );
+      api.registerRealtimeVoiceBrowserSessionBroker(realtimeBrowserSession.broker);
       api.registerHttpRoute({
         path: CODEX_REALTIME_OFFER_PATH,
         auth: "plugin",
@@ -126,7 +123,6 @@ export default definePluginEntry({
           if (reason !== "disable") {
             return;
           }
-          unregisterRealtimeBrowserSession();
           await realtimeBrowserSession.cleanup();
         },
       });

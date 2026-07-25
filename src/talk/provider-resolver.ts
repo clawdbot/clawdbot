@@ -7,8 +7,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredCapabilityProvider } from "../plugin-sdk/provider-selection-runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import { listRealtimeVoiceBrowserSessionBrokers } from "./browser-session-broker-registry.js";
 import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
 import type {
+  RealtimeVoiceBrowserSessionBroker,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
 } from "./provider-types.js";
@@ -17,6 +19,7 @@ import type {
 export type ResolvedRealtimeVoiceProvider = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
+  browserSessionBrokers: readonly RealtimeVoiceBrowserSessionBroker[];
 };
 
 /** Inputs for resolving a configured or auto-selected realtime voice provider. */
@@ -34,6 +37,8 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   defaultModel?: string;
   /** Runtime surface being selected. Defaults to the provider bridge path. */
   surface?: "browser-session" | "bridge";
+  /** Test/runtime override for browser-session brokers. */
+  browserSessionBrokers?: readonly RealtimeVoiceBrowserSessionBroker[];
   noRegisteredProviderMessage?: string;
 };
 
@@ -42,12 +47,15 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   providerConfig: RealtimeVoiceProviderConfig;
   cfg?: OpenClawConfig;
   surface?: "browser-session" | "bridge";
+  browserSessionBrokers?: readonly RealtimeVoiceBrowserSessionBroker[];
 }): RealtimeVoiceProviderCapabilities | undefined {
   return (
     params.provider.resolveCapabilities?.({
       cfg: params.cfg,
       providerConfig: params.providerConfig,
       surface: params.surface,
+      browserSessionBrokers:
+        params.browserSessionBrokers ?? listRealtimeVoiceBrowserSessionBrokers(params.provider.id),
     }) ?? params.provider.capabilities
   );
 }
@@ -86,7 +94,13 @@ export function resolveConfiguredRealtimeVoiceProvider(
       );
     },
     isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-      provider.isConfigured({ cfg, providerConfig, surface: params.surface }),
+      provider.isConfigured({
+        cfg,
+        providerConfig,
+        surface: params.surface,
+        browserSessionBrokers:
+          params.browserSessionBrokers ?? listRealtimeVoiceBrowserSessionBrokers(provider.id),
+      }),
   });
 
   if (!resolution.ok && resolution.code === "missing-configured-provider") {
@@ -104,5 +118,8 @@ export function resolveConfiguredRealtimeVoiceProvider(
   return {
     provider: resolution.provider,
     providerConfig: resolution.providerConfig,
+    browserSessionBrokers:
+      params.browserSessionBrokers ??
+      listRealtimeVoiceBrowserSessionBrokers(resolution.provider.id),
   };
 }

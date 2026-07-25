@@ -162,10 +162,6 @@ export {
   normalizeRealtimeVoiceProviderId,
 } from "../talk/provider-registry.js";
 export {
-  getRealtimeVoiceBrowserSessionBroker,
-  registerRealtimeVoiceBrowserSessionBroker,
-} from "../talk/browser-session-broker-registry.js";
-export {
   resolveConfiguredRealtimeVoiceProvider,
   type ResolvedRealtimeVoiceProvider,
   type ResolveConfiguredRealtimeVoiceProviderParams,
