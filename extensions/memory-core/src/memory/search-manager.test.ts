@@ -791,7 +791,7 @@ describe("getMemorySearchManager caching", () => {
     expect(firstPrimary.close).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the existing cached full qmd manager when replacement creation fails", async () => {
+  it("retires the cached qmd manager before a replacement attempt", async () => {
     const agentId = "cached-qmd-failed-replacement";
     const firstCfg = createQmdCfg(agentId, "/tmp/workspace-a");
     const secondCfg = createQmdCfg(agentId, "/tmp/workspace-b");
@@ -814,12 +814,14 @@ describe("getMemorySearchManager caching", () => {
     const replacementAttempt = await getMemorySearchManager({ cfg: secondCfg, agentId });
 
     expect(replacementAttempt.manager).toBe(fallbackManager);
-    expect(firstPrimary.close).not.toHaveBeenCalled();
-    await expect(firstManager.search("hello")).resolves.toStrictEqual([]);
+    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
+    await expect(firstManager.search("hello")).rejects.toThrow(
+      "memory search manager was replaced by a newer qmd manager",
+    );
 
     const firstAgain = await getMemorySearchManager({ cfg: firstCfg, agentId });
-    expect(firstAgain.manager).toBe(firstManager);
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+    expect(firstAgain.manager).not.toBe(firstManager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
   it("dedupes concurrent full qmd manager creation for the same agent", async () => {

@@ -475,23 +475,14 @@ async function getMemorySearchManagerWithinLifecycle(
     const pendingCreate: PendingQmdManagerCreate = {
       identityKey,
       promise: (async () => {
+        if (cached) {
+          await closeQmdManagerForReplacement(cached.manager);
+        }
         const created = await createFullQmdManager(identityKey);
         if (!created.entry) {
           pendingFailureReason = created.failureReason ?? "qmd memory unavailable";
           recordQmdManagerOpenFailure(scopeKey, identityKey, pendingFailureReason);
           return null;
-        }
-        if (cached) {
-          try {
-            await closeQmdManagerForReplacement(cached.manager);
-          } catch (err) {
-            await created.entry.manager.close?.().catch((closeErr: unknown) => {
-              log.warn(
-                `failed to close unused qmd memory manager: ${formatErrorMessage(closeErr)}`,
-              );
-            });
-            throw err;
-          }
         }
         QMD_MANAGER_CACHE.set(scopeKey, created.entry);
         return created.entry.manager;
