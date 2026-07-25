@@ -178,6 +178,10 @@ iii. Eval Comparisons:
 (if Yes, one or more alert lines below:)
 - Alert — <short alert description> — <short action needed or taken>
 (if No, no alert lines follow — "Checks: No" means all clear/no issues)
+
+## D. Pipeline
+<one or more lines from memory/pipeline-status.md, exact Ship/Pull/Staging/Main shapes only>
+(omit section D entirely if no status file / no known checkpoint)
 ```
 
 ### Battery Monitoring Checks (item 7)

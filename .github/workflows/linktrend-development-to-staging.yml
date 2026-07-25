@@ -1,0 +1,15 @@
+name: LiNKtrend Development To Staging
+
+# Tue & Fri 08:00 Asia/Taipei = 00:00 UTC (Taiwan has no DST)
+on:
+  schedule:
+    - cron: "0 0 * * 2,5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote-development:
+    uses: linktrend/LiNKtrend-System/.github/workflows/reusable-development-to-staging.yml@main
+    secrets: inherit

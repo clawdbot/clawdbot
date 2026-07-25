@@ -1,0 +1,64 @@
+name: LiNKtrend Integrator Merge To Development
+
+# Merge-only Integrator: enable auto-merge when PR targets development and is ready.
+# Branch protection + Bugbot review remain the quality gates.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    branches: [development]
+  pull_request_review:
+    types: [submitted]
+  check_suite:
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+concurrency:
+  group: integrator-${{ github.event.pull_request.number || github.event.check_suite.head_sha || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  enable-auto-merge:
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == 'development'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge (squash)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Soft-enable; merge still waits for required checks + reviews.
+          gh pr merge "${PR}" --auto --squash || \
+            echo "Auto-merge not enabled yet (checks/reviews/policy). Integrator will retry on later events."
+
+  merge-when-ready:
+    if: >
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved' && github.event.pull_request.base.ref == 'development') ||
+      (github.event_name == 'check_suite' && github.event.check_suite.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge open development PRs that are green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # For check_suite events, scan open PRs into development from this head SHA when present.
+          mapfile -t prs < <(gh pr list --base development --state open --json number,isDraft,mergeable,url --jq '.[] | select(.isDraft==false) | .number')
+          for pr in "${prs[@]:-}"; do
+            [ -n "${pr}" ] || continue
+            echo "Evaluating PR #${pr}"
+            # Attempt merge; GitHub enforces branch protection (checks + Bugbot review when required).
+            if gh pr merge "${pr}" --squash --auto; then
+              echo "Auto-merge armed or completed for #${pr}"
+            else
+              # If already mergeable and approved path allows, try immediate merge.
+              gh pr merge "${pr}" --squash || echo "PR #${pr} not ready"
+            fi
+          done

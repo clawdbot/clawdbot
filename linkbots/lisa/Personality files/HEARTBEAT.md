@@ -50,6 +50,14 @@ If one allowed command is denied once: **stop retrying that check** for this cyc
 
 Quiet hours (`user/schedule.md`, 23:00–07:00) suppress only non-urgent proactive contact; Lisa keeps working and monitoring, and safety/compliance warnings still go out. Send the Heartbeat format regardless (Carlos opted into always-visible heartbeat output).
 
+## Pipeline checkpoints (Ship / Pull / Promote)
+
+**Primary clock:** Lisa Option A — crons `lisa-ship-a` / `lisa-pull-a` / `lisa-ship-b` / `lisa-pull-b` spawn Cursor ACP (see `agents/ship-pull-clock.md`). Mini must be awake. Cursor Automations are backup only.
+
+When this cycle’s wall-clock is near or after a checkpoint (06:00 Ship 06:00, 08:00 Pull 08:00, 16:00 Ship 16:00, 18:00 Pull 18:00, Tue/Fri 08:00 staging, Mon 08:00 main package), `read` `memory/pipeline-status.md` if present and include **section D** below. Full procedure: `agents/pipeline-status.md`. One line per checkpoint only — no lists/links. If the file is missing, omit section D rather than inventing Clear. Also verify the four ship/pull cron jobs are enabled when listing cron health.
+
+Monday ~08:30: if `Main ready (Mon): Clear`, ask Carlos on Telegram whether to Approve `staging`→`main` (see `agents/pipeline-status.md`).
+
 ## Battery Monitoring Oversight
 
 Each cycle: (1) verify `memory/battery-monitor.md` and `memory/battery-monitor-state.json` exist, are readable, and agree — use the `read` tool on both files directly (same approach as `agents/morning-digest.md`), **not** a shell `ls`/`cat` check. If a shell check is ever unavoidable, run it relative to the workspace with no `cd` and no pipe/redirect (e.g. `ls -la memory/battery-monitor.md memory/battery-monitor-state.json`) — `~/.openclaw-lisa/workspace` is already the default working directory; (2) verify `lisa-morning-digest` (06:45), `lisa-heartbeat-45`, `battery-selfie-1745`, and `battery-selfie-2145` are enabled and healthy; (3) **reconcile the event-driven 35% Telegram alert** with newest state — see **35% alert scheduling** below; **never** create 45% or 98% projected one-shot jobs (deleted); if `pendingAlert35.needed` is set by digest, fulfill or clear it here; skip scheduling if already plugged; if expected OR confirmed charge is already ≤35% and unplugged, send the Telegram alert now (or ensure a due one-shot exists) and clear pending; (4) after every new report or confirmed state change, recalculate in Asia/Taipei using learned rates or defaults of +30 pp/h charging and −6.5 discharging; (5) refresh Routine Changes from Carlos reports + Google Calendar named **Routine**.
@@ -117,6 +125,10 @@ Unanswered Messages: Yes/No.
 7. Checks: Yes/No
 (if Yes, one or more alert lines below:)
 - Alert — <short alert description> — <short action needed or taken>
+
+## D. Pipeline
+<one or more lines from memory/pipeline-status.md, exact Ship/Pull/Staging/Main shapes only>
+(omit section D entirely if no status file / no known checkpoint)
 ```
 
 Section B is **Yes** if there was any **new** Cursor coding work, local coding-model use, and/or eval comparison **since the last cycle** (after checking real records in the cycle window). Otherwise **No**. Stale/closed ACP sessions and already-fixed config issues (wired default model, unadvertised medium) do **not** count.

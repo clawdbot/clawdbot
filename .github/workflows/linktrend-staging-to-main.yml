@@ -1,0 +1,67 @@
+name: LiNKtrend Staging To Main
+
+# Mon 08:00 Asia/Taipei = 00:00 UTC — package only (open/refresh promote PR).
+# Merge runs only when Principal Approves via workflow_dispatch action=approve-merge
+# (Lisa asks on Telegram ~08:30).
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "package = open/refresh staging→main PR; approve-merge = merge after Principal Approve"
+        type: choice
+        options:
+          - package
+          - approve-merge
+        default: package
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  package:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.action == 'package')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open or refresh staging → main PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main staging
+          if git merge-base --is-ancestor origin/staging origin/main; then
+            echo "staging is already fully contained in main — nothing to package."
+            exit 0
+          fi
+          existing="$(gh pr list --base main --head staging --state open --json number --jq '.[0].number // empty')"
+          body="$(cat <<'EOF'
+          ## Main promote package (autonomous Git ops)
+
+          Scheduled Monday 08:00 Asia/Taipei package.
+
+          - **Do not merge** until Principal Approves via Lisa (Telegram) ~08:30.
+          - After Approve, run this workflow with `action=approve-merge` (or Lisa dispatches it).
+
+          See IDE Development `docs/AUTONOMOUS-GIT-OPERATIONS.md`.
+          EOF
+          )"
+          if [ -n "${existing}" ]; then
+            echo "PR #${existing} already open."
+            gh pr edit "${existing}" --body "${body}"
+          else
+            gh pr create --base main --head staging \
+              --title "chore(promote): staging → main (awaiting Principal Approve)" \
+              --body "${body}"
+          fi
+
+  merge-on-approve:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'approve-merge'
+    uses: linktrend/LiNKtrend-System/.github/workflows/reusable-staging-to-main.yml@main
+    secrets: inherit
