@@ -475,7 +475,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider: "openai",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
-        contextWindow: 1_000_000,
+        contextWindow: 1_050_000,
         contextTokens: 272_000,
         maxTokens: 128_000,
         mediaInput: {

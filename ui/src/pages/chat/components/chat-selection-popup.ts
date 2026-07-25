@@ -1,7 +1,6 @@
-// Floating toolbar over selected chat text: "More details" fires an implicit
-// /btw side question; "Ask in side chat" pre-fills the composer with a /btw
-// draft quoting the selection. Mirrors the imperative reply-context-menu
-// pattern in chat-thread.ts (body-portaled fixed div, document-level dismiss).
+// Floating toolbar over selected chat text: "More details" asks the session
+// companion immediately; "Ask in side chat" pre-fills the session rail.
+// Mirrors the imperative reply-context-menu pattern in chat-thread.ts.
 
 type ChatSelectionPopupActions = {
   onMoreDetails: (selection: string) => void;

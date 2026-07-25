@@ -6,10 +6,16 @@ const START_TIME_MS = Date.parse("2026-07-16T08:00:00.000Z");
 
 type SocketEvent = { data?: unknown };
 type SocketListener = (event: SocketEvent) => void;
+type RuntimeMessageListener = (
+  message: { type: string; tabId?: number },
+  sender: unknown,
+  sendResponse: (response: unknown) => void,
+) => boolean;
 
 async function loadBackground() {
   const sockets: FakeWebSocket[] = [];
   let alarmListener: ((alarm: { name: string }) => void) | undefined;
+  let messageListener: RuntimeMessageListener | undefined;
 
   class FakeWebSocket {
     static readonly CONNECTING = 0;
@@ -83,7 +89,11 @@ async function loadBackground() {
     runtime: {
       getManifest: vi.fn(() => ({ version: "1.0.0" })),
       onConnect: { addListener },
-      onMessage: { addListener },
+      onMessage: {
+        addListener: vi.fn((listener: RuntimeMessageListener) => {
+          messageListener = listener;
+        }),
+      },
       onStartup: { addListener },
       onInstalled: { addListener },
     },
@@ -136,12 +146,17 @@ async function loadBackground() {
   if (!alarmListener) {
     throw new Error("expected background worker to register an alarm listener");
   }
+  if (!messageListener) {
+    throw new Error("expected background worker to register a message listener");
+  }
   return {
     alarmListener,
     clearAlarm,
     createAlarm,
+    messageListener,
     setBadgeText,
     sockets,
+    tabsGet: chromeMock.tabs.get,
   };
 }
 
@@ -193,5 +208,52 @@ describe("relay opening deadline", () => {
     vi.setSystemTime(START_TIME_MS + 60_000);
     harness.alarmListener({ name: RELAY_OPENING_DEADLINE_ALARM });
     expect(socket?.close).not.toHaveBeenCalled();
+  });
+});
+
+describe("copilot panel messaging", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("responds exactly once when the tab cannot be retrieved", async () => {
+    const harness = await loadBackground();
+    harness.tabsGet.mockRejectedValueOnce(new Error("No tab with id: 44."));
+    const sendResponse = vi.fn();
+
+    expect(
+      harness.messageListener({ type: "prepareCopilotPanel", tabId: 44 }, {}, sendResponse),
+    ).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(sendResponse).toHaveBeenCalledOnce();
+    });
+    expect(harness.tabsGet).toHaveBeenCalledWith(44);
+    expect(sendResponse).toHaveBeenCalledWith({
+      ok: false,
+      error: "No tab with id: 44.",
+    });
+  });
+
+  it("responds exactly once with the prepared panel path", async () => {
+    const harness = await loadBackground();
+    const sendResponse = vi.fn();
+
+    expect(
+      harness.messageListener({ type: "prepareCopilotPanel", tabId: 44 }, {}, sendResponse),
+    ).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(sendResponse).toHaveBeenCalledOnce();
+    });
+    expect(harness.tabsGet).toHaveBeenCalledWith(44);
+    expect(sendResponse).toHaveBeenCalledWith({
+      ok: true,
+      path: expect.stringMatching(/^sidepanel\.html\?binding=/),
+    });
   });
 });

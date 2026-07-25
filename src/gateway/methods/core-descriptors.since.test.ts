@@ -70,6 +70,9 @@ const CURRENT_TRAIN_METHODS = [
   "sessions_list",
   "sessions_status",
   "sessions_history",
+  "sessions.companion.ask",
+  "sessions.companion.state",
+  "sessions.companion.reset",
   "channels.pairing.list",
   "channels.pairing.approve",
   "channels.pairing.dismiss",
@@ -117,9 +120,9 @@ describe("core gateway method release trains", () => {
     });
   });
 
-  it("appends Agentic OS runtime aliases after the existing core protocol table", () => {
+  it("appends Agentic OS runtime aliases and companion methods after the existing core protocol table", () => {
     const methods = listCoreGatewayMethodMetadata().map((method) => method.name);
-    expect(methods.slice(-7)).toEqual([
+    expect(methods.slice(-10)).toEqual([
       "subagents.allowLease.acquire",
       "subagents.allowLease.status",
       "subagents.allowLease.release",
@@ -127,6 +130,9 @@ describe("core gateway method release trains", () => {
       "sessions_list",
       "sessions_status",
       "sessions_history",
+      "sessions.companion.ask",
+      "sessions.companion.state",
+      "sessions.companion.reset",
     ]);
   });
 

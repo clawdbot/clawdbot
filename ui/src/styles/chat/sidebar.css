@@ -162,7 +162,7 @@
 }
 
 .chat-main {
-  /* Positioning context for floating overlays (scroll-to-bottom, side chat). */
+  /* Positioning context for floating overlays and the optional session rail. */
   position: relative;
   min-width: 312px;
   display: flex;
@@ -170,6 +170,28 @@
   overflow: hidden;
   /* Smooth transition when sidebar opens/closes */
   transition: flex 250ms ease-out;
+}
+
+.chat-main__conversation {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-main--rail-docked {
+  flex-direction: row;
+}
+
+.chat-main--rail-docked > openclaw-chat-session-rail {
+  display: block;
+  width: 400px;
+  min-width: 400px;
+  min-height: 0;
+  flex: 0 0 400px;
 }
 
 /* No border-left: the resizable divider rendered next to this panel draws

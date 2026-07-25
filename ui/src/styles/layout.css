@@ -2001,7 +2001,7 @@ html.openclaw-native-macos
 
 .viewer-facepile-trigger:hover,
 .viewer-facepile-trigger:focus-visible {
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .sidebar-recent-session__name {

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
@@ -14,7 +13,6 @@ import {
   resolveTrustedOnePasswordDirectoryPath,
 } from "../onepassword-op-path.js";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
-import { createPrivateWindowsPlanFile } from "./private-plan-file.js";
 
 type CommandLike = {
   command(name: string): CommandLike;
@@ -490,21 +488,6 @@ async function runStatus(
   }
 }
 
-async function verifyPosixPlanFilePermissions(
-  handle: Awaited<ReturnType<typeof fs.open>>,
-): Promise<void> {
-  await handle.chmod(0o600);
-  if (((await handle.stat()).mode & 0o777) !== 0o600) {
-    throw new Error("Unable to verify owner-only permissions for the generated plan file.");
-  }
-}
-
-async function closePlanHandle(
-  handle: Awaited<ReturnType<typeof fs.open>> | undefined,
-): Promise<void> {
-  await handle?.close().catch(() => undefined);
-}
-
 async function writePlanFile(
   plan: SecretsApplyPlan,
   requestedPath?: string,
@@ -525,75 +508,13 @@ async function writePlanFile(
   // Validate the exact canonical path before the exclusive write. Follow-up command rendering
   // must not fail after leaving a plan behind that the next setup attempt cannot overwrite.
   renderApplyCommands(planPath, platform);
-  if (platform === "win32") {
-    try {
-      await (dependencies.createPrivateWindowsFile ?? createPrivateWindowsPlanFile)(
-        planPath,
-        content,
-      );
-      return planPath;
-    } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-        throw new Error(`Plan path already exists; choose a new --plan-out path: ${planPath}`, {
-          cause: error,
-        });
-      }
-      throw error;
-    }
-  }
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  let identity: { dev: bigint; ino: bigint } | undefined;
-  try {
-    handle = await fs.open(planPath, "wx", 0o600);
-    identity = await handle.stat({ bigint: true });
-    await verifyPosixPlanFilePermissions(handle);
-    const pathStat = await fs.lstat(planPath, { bigint: true });
-    const handleStat = await handle.stat({ bigint: true });
-    if (
-      pathStat.isSymbolicLink() ||
-      !sameFileIdentity(identity, handleStat) ||
-      !sameFileIdentity(identity, pathStat)
-    ) {
-      throw new Error("Generated plan path changed during permission setup.");
-    }
-    await handle.writeFile(content, "utf8");
-    await handle.sync();
-  } catch (error) {
-    await closePlanHandle(handle);
-    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      throw new Error(`Plan path already exists; choose a new --plan-out path: ${planPath}`, {
-        cause: error,
-      });
-    }
-    if (identity) {
-      await removePlanFileIfUnchanged(planPath, identity);
-    }
-    throw error;
-  } finally {
-    await closePlanHandle(handle);
-  }
+  await pluginSecretRefSetup.writePlanFile({
+    planPath,
+    content,
+    platform,
+    createPrivateWindowsFile: dependencies.createPrivateWindowsFile,
+  });
   return planPath;
-}
-
-function sameFileIdentity(
-  left: { dev: number | bigint; ino: number | bigint },
-  right: { dev: number | bigint; ino: number | bigint },
-): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
-async function removePlanFileIfUnchanged(
-  filePath: string,
-  identity: { dev: number | bigint; ino: number | bigint },
-): Promise<void> {
-  try {
-    const current = await fs.lstat(filePath, { bigint: true });
-    if (!current.isSymbolicLink() && sameFileIdentity(current, identity)) {
-      await fs.rm(filePath, { force: true });
-    }
-  } catch {
-    // The original error is authoritative; cleanup is best effort.
-  }
 }
 
 async function runSetup(options: SetupOptions): Promise<void> {
@@ -667,6 +588,5 @@ export const testing = {
   quoteCliArg,
   renderApplyCommands,
   inspectSecretRefReadiness,
-  createPrivateWindowsPlanFile,
   writePlanFile,
 };

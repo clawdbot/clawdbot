@@ -6,12 +6,10 @@ import type {
   ChatQueueSkillWorkshopRevision,
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
-import { extractSideQuestionDisplayText } from "../../lib/chat/side-question.ts";
-import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
@@ -69,12 +67,6 @@ type ChatSendOptions = {
   confirmReset?: boolean;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
-  /** Side-chat follow-ups embed prior-turn context in the /btw command; the
-   * pending turn must display the user's typed question instead. */
-  sideQuestionDisplayText?: string;
-  /** Lets the side-chat panel restore its typed follow-up when the detached
-   * send is not accepted (the panel input is not a managed draft). */
-  onSideQuestionSendRejected?: () => void;
   /** Lets request-scoped UI actions recover when their local slash command
    * fails before the Gateway accepts it. */
   onLocalCommandSendRejected?: () => void;
@@ -254,16 +246,29 @@ export async function handleSendChat(
     }
 
     const parsed = parseSlashCommand(message);
+    if (isBtwCommand(message)) {
+      const question = extractCompanionCommandQuestion(message);
+      if (!question) {
+        return;
+      }
+      const submitKey = chatSubmitKey(host, "local", message, []);
+      await withChatSubmitGuard(host, submitKey, async () => {
+        if (messageOverride == null) {
+          recordNonTranscriptInputHistory(host, message);
+          if (host.chatMessage === previousDraft) {
+            host.chatMessage = "";
+            resetChatInputHistoryNavigation(host);
+          }
+        }
+        await host.openSessionCompanion?.(question);
+      });
+      return;
+    }
     // The backend resolves /approve before active-run admission. Send it now so
     // the approval command cannot queue behind the run that is waiting for it.
-    const shouldSendDetachedCommand =
-      isBtwCommand(message) || (parsed?.command.key === "approve" && isChatBusy(host));
+    const shouldSendDetachedCommand = parsed?.command.key === "approve" && isChatBusy(host);
     if (shouldSendDetachedCommand) {
       const submitKey = chatSubmitKey(host, "detached", message, attachmentsToSend);
-      // Covers every non-accepted path — early exits, guard dedupe, and
-      // rejected acks — so the side-chat panel can restore its typed
-      // follow-up even when no request was sent.
-      let detachedSendAccepted = false;
       await withChatSubmitGuard(host, submitKey, async () => {
         const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
         if (
@@ -282,44 +287,13 @@ export async function handleSendChat(
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, message);
         }
-        // BTW runs detached and delivers via chat.side_result only; show a
-        // pending turn immediately so the send has visible feedback. The run
-        // id is generated upfront so the turn is correlatable before the ack
-        // returns.
-        const btwPending = isBtwCommand(message)
-          ? {
-              question: opts?.sideQuestionDisplayText ?? extractSideQuestionDisplayText(message),
-              ts: Date.now(),
-              runId: generateUUID(),
-            }
-          : null;
-        if (btwPending) {
-          // The superseded run loses its pending record; retire it so its
-          // late side_result/terminal events cannot reach the panel or the
-          // transcript. Completed turns stay: the panel is a conversation.
-          retirePendingChatSideQuestion(host);
-          host.chatSideResultPending = btwPending;
-          host.chatSideChatHidden = false;
-          host.requestUpdate?.();
-        }
         const ack = await sendDetachedCommandMessage(host, message, {
           previousDraft: cleared.previousDraft,
           attachments: hasAttachments ? attachmentsToSend : undefined,
           previousAttachments: cleared.previousAttachments,
-          runId: btwPending?.runId,
         });
-        detachedSendAccepted =
-          ack?.status === "ok" || ack?.status === "started" || ack?.status === "in_flight";
-        // Touch only this send's card: a side_result (or a newer question)
-        // may already have replaced it while the ack was in flight.
-        if (btwPending && host.chatSideResultPending === btwPending && !detachedSendAccepted) {
-          host.chatSideResultPending = null;
-          host.requestUpdate?.();
-        }
+        void ack;
       });
-      if (!detachedSendAccepted) {
-        opts?.onSideQuestionSendRejected?.();
-      }
       return;
     }
 

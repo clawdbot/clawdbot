@@ -14,7 +14,7 @@
   justify-content: space-between;
   gap: 18px;
   padding-bottom: 16px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border);
 }
 
 .custodian__header-actions {
@@ -42,7 +42,7 @@
 
 .custodian__identity p {
   margin-top: 2px;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -107,7 +107,7 @@
   flex: 0 0 auto;
   place-items: center;
   border-radius: 50%;
-  color: var(--text-muted);
+  color: var(--muted);
   cursor: pointer;
 }
 
@@ -141,7 +141,7 @@
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--text-muted);
+  background: var(--muted);
   animation: custodian-thinking 900ms ease-in-out infinite alternate;
 }
 
@@ -192,7 +192,7 @@
 
 .custodian__history-heading span,
 .custodian__history-state {
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -207,7 +207,7 @@
 
 .custodian__change-card {
   padding: 11px 12px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg);
 }
@@ -222,7 +222,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -243,7 +243,7 @@
 .custodian__change-warning,
 .custodian__change-note {
   margin-top: 6px;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -254,7 +254,7 @@
 
 .custodian__change-paths {
   margin-top: 7px;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
 }
 

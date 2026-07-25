@@ -246,6 +246,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
       pageState.requestUpdate?.();
     };
     pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
+    pageState.openSessionCompanion = (question) => this.submitSessionCompanionQuestion(question);
     this.state = pageState;
     if (this.sessionKey) {
       const initialSessionKey = this.setPaneSessionKey(this.sessionKey);
@@ -395,30 +396,18 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
       areUiSessionKeysEquivalent(row.key, this.state?.sessionKey ?? ""),
     );
     // Active runs count even without a digest: a hidden observer generates
-    // none, and the HUD module owns the restore control for turning it back on.
+    // none, and the rail module owns the restore control for turning it back on.
     const observerRunId = resolveChatPaneObserverRunId({
       localRunId: this.state?.chatRunId ?? null,
       session: selectedSessionRow,
       digest: null,
     });
+    if (this.state?.sessionKey) {
+      this.hydrateSessionCompanion(this.state.sessionKey);
+    }
     if (this.state?.observerDigest || selectedSessionRow?.observerDigest || observerRunId) {
-      this.ensureObserverHud();
+      this.ensureSessionRail();
     }
-  }
-
-  protected ensureObserverHud() {
-    if (this.observerHudReady || this.observerHudLoad) {
-      return;
-    }
-    this.observerHudLoad = import("./components/chat-observer-hud.ts")
-      .then(() => {
-        if (this.isConnected) {
-          this.observerHudReady = true;
-        }
-      })
-      .finally(() => {
-        this.observerHudLoad = null;
-      });
   }
 
   override disconnectedCallback() {
@@ -428,6 +417,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
     this.connectionGeneration += 1;
+    this.sessionCompanionHydrationKey = "";
     this.taskSuggestionsRequestVersion += 1;
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();

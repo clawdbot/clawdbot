@@ -492,6 +492,16 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions_list", scope: "operator.read", since: "2026.7", nativeProtocol: false },
   { name: "sessions_status", scope: "operator.read", since: "2026.7", nativeProtocol: false },
   { name: "sessions_history", scope: "operator.read", since: "2026.7", nativeProtocol: false },
+  // Companion state is process-local and its runner is hard-restricted to
+  // read-only workspace and exact-session tools.
+  { name: "sessions.companion.ask", scope: "operator.read", since: "2026.7" },
+  { name: "sessions.companion.state", scope: "operator.read", since: "2026.7" },
+  {
+    name: "sessions.companion.reset",
+    scope: "operator.write",
+    since: "2026.7",
+    controlPlaneWrite: true,
+  },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

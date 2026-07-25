@@ -448,6 +448,7 @@ import {
   SessionPlacementStateSchema,
   isCloudWorkerPlacementState,
   SESSION_OBSERVER_HEALTH_VALUES,
+  SessionCompanionExchangeSchema,
   SessionObserverDigestSchema,
   SessionObserverHealthSchema,
   SessionObserverPlanProgressSchema,
@@ -468,6 +469,12 @@ import {
   SessionVisibilitySchema,
   SessionVisibilitySetParamsSchema,
   SessionVisibilitySetResultSchema,
+  SessionsCompanionAskParamsSchema,
+  SessionsCompanionAskResultSchema,
+  SessionsCompanionResetParamsSchema,
+  SessionsCompanionResetResultSchema,
+  SessionsCompanionStateParamsSchema,
+  SessionsCompanionStateResultSchema,
   SessionsObserverAskParamsSchema,
   SessionsObserverAskResultSchema,
   SessionsObserverVisibilityParamsSchema,
@@ -813,6 +820,9 @@ export const validateSessionsFilesGetParams = lazyCompile(SessionsFilesGetParams
 export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParamsSchema);
 export const validateSessionsFilesRevealParams = lazyCompile(SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
+export const validateSessionsCompanionAskParams = lazyCompile(SessionsCompanionAskParamsSchema);
+export const validateSessionsCompanionStateParams = lazyCompile(SessionsCompanionStateParamsSchema);
+export const validateSessionsCompanionResetParams = lazyCompile(SessionsCompanionResetParamsSchema);
 export const validateSessionsObserverAskParams = lazyCompile(SessionsObserverAskParamsSchema);
 export const validateSessionsObserverVisibilityParams = lazyCompile(
   SessionsObserverVisibilityParamsSchema,
@@ -1209,6 +1219,7 @@ export {
   SessionPlacementStateSchema,
   SessionPlacementSchema,
   SESSION_OBSERVER_HEALTH_VALUES,
+  SessionCompanionExchangeSchema,
   SessionObserverDigestSchema,
   SessionObserverHealthSchema,
   SessionObserverPlanProgressSchema,
@@ -1225,6 +1236,12 @@ export {
   SessionVisibilitySchema,
   SessionVisibilitySetParamsSchema,
   SessionVisibilitySetResultSchema,
+  SessionsCompanionAskParamsSchema,
+  SessionsCompanionAskResultSchema,
+  SessionsCompanionResetParamsSchema,
+  SessionsCompanionResetResultSchema,
+  SessionsCompanionStateParamsSchema,
+  SessionsCompanionStateResultSchema,
   SessionsObserverAskParamsSchema,
   SessionsObserverAskResultSchema,
   SessionsObserverVisibilityParamsSchema,
@@ -1897,6 +1914,7 @@ export type {
   SessionsDescribeParams,
   SessionsResolveParams,
   SessionOperationEvent,
+  SessionCompanionExchange,
   SessionObserverDigest,
   SessionObserverHealth,
   SessionObserverPlanProgress,
@@ -1913,6 +1931,12 @@ export type {
   SessionVisibility,
   SessionVisibilitySetParams,
   SessionVisibilitySetResult,
+  SessionsCompanionAskParams,
+  SessionsCompanionAskResult,
+  SessionsCompanionResetParams,
+  SessionsCompanionResetResult,
+  SessionsCompanionStateParams,
+  SessionsCompanionStateResult,
   SessionsObserverAskParams,
   SessionsObserverAskResult,
   SessionsObserverVisibilityParams,
