@@ -1,6 +1,7 @@
 /** Lifecycle-owned model catalog access. */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -10,6 +11,8 @@ import {
 } from "./agent-scope.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
+import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
+export type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -31,30 +34,54 @@ export type LoadPreparedModelCatalogParams = {
   env?: NodeJS.ProcessEnv;
 };
 
+class PublishedModelCatalogOwnerResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PublishedModelCatalogOwnerResolutionError";
+  }
+}
+
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
 
-function attachAuthoritativeAgentId(
+export function resolvePublishedModelCatalogOwner(
   snapshot: PreparedModelRuntimeSnapshot,
-  params: LoadPreparedModelCatalogParams,
-): PreparedModelRuntimeSnapshot {
-  if (snapshot.agentId) {
-    return snapshot;
-  }
-  const requestedAgentId =
-    params.agentId ??
-    (params.agentDir === undefined ? resolveDefaultAgentId(snapshot.config) : undefined);
-  if (
-    !requestedAgentId ||
-    resolveAgentDir(snapshot.config, requestedAgentId) !== snapshot.agentDir
-  ) {
-    return snapshot;
-  }
-  const matchingAgentIds = listAgentIds(snapshot.config).filter(
-    (agentId) => resolveAgentDir(snapshot.config, agentId) === snapshot.agentDir,
+): ResolvedPublishedModelCatalogOwner {
+  const configuredAgentIds = listAgentIds(snapshot.config);
+  const directoryAgentIds = configuredAgentIds.filter(
+    (candidate) => resolveAgentDir(snapshot.config, candidate) === snapshot.agentDir,
   );
-  return matchingAgentIds.length === 1
-    ? Object.freeze({ ...snapshot, agentId: matchingAgentIds[0] })
-    : snapshot;
+  const agentId = snapshot.agentId
+    ? configuredAgentIds.find(
+        (candidate) => normalizeAgentId(candidate) === normalizeAgentId(snapshot.agentId),
+      )
+    : directoryAgentIds.length === 1
+      ? directoryAgentIds[0]
+      : undefined;
+  if (!agentId || resolveAgentDir(snapshot.config, agentId) !== snapshot.agentDir) {
+    throw new PublishedModelCatalogOwnerResolutionError(
+      `published model catalog owner did not identify one configured agent (${snapshot.agentDir})`,
+    );
+  }
+  const workspaceDir = snapshot.workspaceDir ?? resolveAgentWorkspaceDir(snapshot.config, agentId);
+  if (!workspaceDir) {
+    throw new PublishedModelCatalogOwnerResolutionError(
+      `published model catalog owner did not identify a workspace (${agentId})`,
+    );
+  }
+  return Object.freeze({
+    agentId,
+    agentDir: snapshot.agentDir,
+    workspaceDir,
+    config: snapshot.config,
+    modelCatalog: snapshot.modelCatalog,
+  });
+}
+
+export function publishedModelCatalogOwnerMatchesAgent(
+  owner: Pick<ResolvedPublishedModelCatalogOwner, "agentId">,
+  agentId: string,
+): boolean {
+  return owner.agentId === normalizeAgentId(agentId);
 }
 
 function acceptsPreparedSnapshotConfig(
@@ -241,8 +268,16 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
 export async function loadPublishedPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
-  const snapshot = await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "published");
-  return attachAuthoritativeAgentId(snapshot, params);
+  return await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "published");
+}
+
+/** Resolves a complete published owner for long-lived runtime consumers. */
+export async function loadResolvedPublishedModelCatalogOwner(
+  params: LoadPreparedModelCatalogParams = {},
+): Promise<ResolvedPublishedModelCatalogOwner> {
+  return resolvePublishedModelCatalogOwner(
+    await loadPublishedPreparedModelCatalogOwnerSnapshot(params),
+  );
 }
 
 /** Reads one atomic catalog generation, activating a lifecycle owner when needed. */

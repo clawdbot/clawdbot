@@ -806,7 +806,7 @@ async function prepareCronRunContext(params: {
     };
   }
   const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-  const thinkingCatalog = modelOwner.catalog;
+  const thinkingCatalog = modelOwner.modelCatalog.entries;
   const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
   const matchesDefaultFallbackAgentStringModel =
     typeof ownerAgentConfig?.model === "string" &&
