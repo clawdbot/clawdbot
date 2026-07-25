@@ -6,6 +6,7 @@ import {
   messageAction,
   normalizeLineAction,
   postbackAction,
+  truncateLineActionLabel,
   uriAction,
   type Action,
 } from "./actions.js";
@@ -687,6 +688,16 @@ describe("action label/data surrogate-safe truncation", () => {
     });
     const emojiText = "😀".repeat(300);
     expect(messageAction("Open", emojiText)).toMatchObject({ text: emojiText });
+    const familyEmoji = "👨‍👩‍👧‍👦";
+    expect(truncateLineActionLabel(familyEmoji.repeat(3))).toBe(familyEmoji.repeat(2));
+    expect(messageAction("Open", familyEmoji.repeat(43))).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: message text exceeds LINE's limit.",
+    });
+    expect(messageAction("Open", familyEmoji.repeat(42))).toMatchObject({
+      text: familyEmoji.repeat(42),
+    });
     expect(
       normalizeLineAction({
         type: "clipboard",
