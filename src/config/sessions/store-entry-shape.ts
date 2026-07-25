@@ -54,20 +54,19 @@ export function normalizePersistedSessionEntryShape(value: unknown): SessionEntr
   if (value.sessionId !== undefined) {
     if (!isSafeSessionId(value.sessionId)) {
       return undefined;
-    } else {
-      const sessionId = value.sessionId.trim();
-      if (modelSelectionLocked && sessionId !== value.sessionId) {
-        // A harness lock protects the exact durable identity. Repairing it here
-        // would make a corrupted row look valid before ownership validation.
-        return undefined;
-      }
-      const transcriptSessionId = normalizeTranscriptSessionId(sessionId);
-      if (!transcriptSessionId) {
-        return undefined;
-      }
-      if (transcriptSessionId && sessionId !== value.sessionId) {
-        next = { ...next, sessionId };
-      }
+    }
+    const sessionId = value.sessionId.trim();
+    if (modelSelectionLocked && sessionId !== value.sessionId) {
+      // A harness lock protects the exact durable identity. Repairing it here
+      // would make a corrupted row look valid before ownership validation.
+      return undefined;
+    }
+    const transcriptSessionId = normalizeTranscriptSessionId(sessionId);
+    if (!transcriptSessionId) {
+      return undefined;
+    }
+    if (sessionId !== value.sessionId) {
+      next = { ...next, sessionId };
     }
   }
 
