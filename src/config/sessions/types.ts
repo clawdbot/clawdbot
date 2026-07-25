@@ -290,6 +290,8 @@ export type SessionGoal = {
   updatedAt: number;
   tokenStart: number;
   tokenStartFresh?: boolean;
+  /** Latest comparable prompt/context snapshot used for incremental budget accounting. */
+  tokenCursor?: number;
   tokensUsed: number;
   tokenBudget?: number;
   continuationTurns: number;

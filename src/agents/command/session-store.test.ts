@@ -1458,6 +1458,174 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("advances goal accounting from CLI context snapshots", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-goal-accounting";
+      const sessionId = "test-cli-goal-accounting-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          goal: {
+            schemaVersion: 1,
+            id: "goal-1",
+            objective: "Count only post-goal CLI usage",
+            status: "active",
+            createdAt: 1,
+            updatedAt: 1,
+            tokenStart: 0,
+            tokenStartFresh: false,
+            tokensUsed: 0,
+            tokenBudget: 30_000,
+            continuationTurns: 0,
+          },
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      const run = async (promptTokens: number) => {
+        await updateSessionStoreAfterAgentRun({
+          cfg,
+          contextTokensOverride: 1_000_000,
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "claude-cli",
+          defaultModel: "claude-opus-4-7",
+          result: {
+            meta: {
+              durationMs: 1,
+              executionTrace: { runner: "cli" },
+              agentMeta: {
+                sessionId,
+                provider: "claude-cli",
+                model: "claude-opus-4-7",
+                promptTokens,
+                usage: { input: promptTokens, output: 5 },
+                lastCallUsage: { input: promptTokens, output: 5 },
+              },
+            },
+          } as EmbeddedAgentRunResult,
+        });
+      };
+
+      await run(33_107);
+      expect(sessionStore[sessionKey]?.goal).toMatchObject({
+        tokenStart: 33_107,
+        tokenStartFresh: true,
+        tokenCursor: 33_107,
+        tokensUsed: 0,
+      });
+
+      await run(33_124);
+      expect(sessionStore[sessionKey]?.goal).toMatchObject({
+        tokenCursor: 33_124,
+        tokensUsed: 17,
+      });
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.goal).toMatchObject({
+        tokenCursor: 33_124,
+        tokensUsed: 17,
+      });
+    });
+  });
+
+  it("preserves a concurrently changed goal while projecting CLI token metadata", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-goal-race";
+      const sessionId = "test-cli-goal-race-session";
+      const staleGoal: NonNullable<SessionEntry["goal"]> = {
+        schemaVersion: 1,
+        id: "goal-1",
+        objective: "Original objective",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 100,
+        tokenStartFresh: true,
+        tokenCursor: 100,
+        tokensUsed: 0,
+        tokenBudget: 30_000,
+        continuationTurns: 0,
+      };
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 100,
+          totalTokensFresh: true,
+          goal: staleGoal,
+        },
+      };
+      const concurrentGoal: NonNullable<SessionEntry["goal"]> = {
+        ...staleGoal,
+        objective: "Changed while the CLI run was active",
+        status: "complete",
+        updatedAt: 2,
+        completedAt: 2,
+      };
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        {
+          ...sessionStore[sessionKey],
+          updatedAt: 2,
+          goal: concurrentGoal,
+        },
+      );
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              promptTokens: 125,
+              usage: { input: 125, output: 5 },
+              lastCallUsage: { input: 125, output: 5 },
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(125);
+      expect(sessionStore[sessionKey]?.goal).toEqual(concurrentGoal);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toMatchObject({
+        totalTokens: 125,
+        totalTokensFresh: true,
+        goal: concurrentGoal,
+      });
+    });
+  });
+
   it("persists compaction tokensAfter when provider usage is unavailable", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
