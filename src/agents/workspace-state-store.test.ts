@@ -103,16 +103,24 @@ describe("workspace state store", () => {
     },
   );
 
-  it.each(["../AGENTS.md", "nested\\AGENTS.md", "C:outside.md", "NUL.md", "com1.md", "CON.md"])(
-    "rejects an unsafe persisted attestation filename: %s",
-    (filename) => {
-      insertPersistedAttestationHash(filename, "a".repeat(64));
+  it.each([
+    "../AGENTS.md",
+    "nested\\AGENTS.md",
+    "C:outside.md",
+    "NUL.md",
+    "com1.md",
+    "CON.md",
+    "COM¹.md",
+    "CONIN$.md",
+    "CONOUT$.md",
+    ".hidden.md",
+  ])("rejects an unsafe persisted attestation filename: %s", (filename) => {
+    insertPersistedAttestationHash(filename, "a".repeat(64));
 
-      expect(() => readWorkspaceStateSnapshot(workspaceDir())).toThrow(
-        "workspace attestation hash row is invalid",
-      );
-    },
-  );
+    expect(() => readWorkspaceStateSnapshot(workspaceDir())).toThrow(
+      "workspace attestation hash row is invalid",
+    );
+  });
 
   it("rejects a malformed persisted attestation hash", () => {
     insertPersistedAttestationHash("AGENTS.md", "a".repeat(63));

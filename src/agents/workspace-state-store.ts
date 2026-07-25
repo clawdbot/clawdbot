@@ -20,23 +20,21 @@ export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
 const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
+// Attested names are joined onto the workspace dir and read back, so keep the
+// accepted set closed rather than denying unsafe forms one at a time: a plain
+// ASCII markdown basename excludes separators, traversal, colons, NUL, and the
+// Win32 superscript/`CONIN$` device aliases in one rule.
+const SAFE_ATTESTATION_BASENAME = /^[A-Za-z0-9._-]+\.md$/u;
 // Win32 keeps these stems special even with an extension, so `NUL.md` names a
-// device rather than a workspace file. Attested names are later joined onto the
-// workspace dir and read back, so reject them alongside separators/traversal.
+// device rather than a workspace file; the charset above cannot catch them.
 const WINDOWS_RESERVED_DEVICE_STEMS = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/iu;
 
 export function isSafeWorkspaceAttestationFilename(filename: string): boolean {
   return (
-    filename.length > 0 &&
     filename.length <= MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH &&
-    filename !== "." &&
-    filename !== ".." &&
-    !filename.includes("/") &&
-    !filename.includes("\\") &&
-    !filename.includes(":") &&
-    !filename.includes("\0") &&
-    !WINDOWS_RESERVED_DEVICE_STEMS.test(filename.split(".")[0] ?? "") &&
-    filename.endsWith(".md")
+    SAFE_ATTESTATION_BASENAME.test(filename) &&
+    !filename.startsWith(".") &&
+    !WINDOWS_RESERVED_DEVICE_STEMS.test(filename.split(".")[0] ?? "")
   );
 }
 
