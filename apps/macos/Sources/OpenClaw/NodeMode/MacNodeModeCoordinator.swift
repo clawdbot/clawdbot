@@ -552,6 +552,7 @@ final class MacNodeModeCoordinator: NSObject {
                     authorityGeneration: attempt.routeAuthorityGeneration) ?? true
                 guard workerRouteInstalled else { return }
                 await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
+                self.notificationCenter.post(name: .openclawMacNodeInventoryPublished, object: nil)
                 await self.cancelReconnectProbe()
                 self.logger.info("mac node connected to gateway")
                 // The node hello owns this route's session defaults. Reusing the operator

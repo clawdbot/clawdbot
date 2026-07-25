@@ -5,6 +5,7 @@ import OSLog
 
 extension Notification.Name {
     static let openclawNodeHostWorkerFailed = Notification.Name("openclaw.node-host-worker.failed")
+    static let openclawMacNodeInventoryPublished = Notification.Name("openclaw.macNode.inventoryPublished")
 }
 
 struct MacNodeHostManifest: Equatable, Sendable {

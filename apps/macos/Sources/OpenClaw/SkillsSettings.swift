@@ -771,7 +771,7 @@ final class SkillsSettingsModel {
             self.error = error.localizedDescription
         }
         self.isLoading = false
-    }
+    }    
 
     func acceptInstalledSkills(_ skills: [SkillStatus]) {
         self.skills = skills.sorted { $0.name < $1.name }
