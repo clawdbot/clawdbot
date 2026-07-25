@@ -143,6 +143,7 @@ function isWsBackedBrowserProxyPath(path: string): boolean {
   return (
     path === "/act" ||
     path === "/download" ||
+    path === "/extract" ||
     path === "/navigate" ||
     path === "/pdf" ||
     path === "/screenshot" ||

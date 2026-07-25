@@ -135,7 +135,19 @@ openclaw browser close t1
 
 Raw target ids are volatile diagnostic handles, not durable agent memory: when Chromium replaces the underlying raw target during a navigation or form submit, OpenClaw keeps the stable `tabId`/label attached to the replacement tab when it can prove the match. Prefer `suggestedTargetId`.
 
-## Snapshot / screenshot / actions
+## Extract / snapshot / screenshot / actions
+
+Answer a question from the current page without printing the page content:
+
+```bash
+openclaw browser extract "What is the main conclusion?"
+openclaw browser extract "Which deadline is listed?" --target-id docs --timeout-ms 90000
+```
+
+`extract` uses the selected agent model, returns only the wrapped answer, and
+reports `NOT_FOUND` when the answer is absent. Its overall timeout defaults to
+60 seconds and is clamped to 5–120 seconds. It requires a Playwright-backed
+profile; use `snapshot` when you need refs or when extraction is unavailable.
 
 Snapshot:
 
@@ -275,7 +287,7 @@ Current existing-session limits:
 - File uploads require `--ref` / `--input-ref`, do not support CSS `--element`, and support one file at a time.
 - Dialog hooks do not support `--timeout`.
 - Screenshots support page captures and `--ref`, but not CSS `--element`.
-- `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.
+- `extract`, `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.
 
 ## Remote browser control (node host proxy)
 

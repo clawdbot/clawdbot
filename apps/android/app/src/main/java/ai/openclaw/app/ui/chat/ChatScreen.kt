@@ -269,6 +269,7 @@ fun ChatScreen(
   val questions by viewModel.chatQuestions.collectAsState()
   val planSteps by viewModel.chatPlanSteps.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val swarmGroups by viewModel.chatSwarmGroups.collectAsState()
   val sessionBranches by viewModel.chatSessionBranches.collectAsState()
   val sessionBranchesLoading by viewModel.chatSessionBranchesLoading.collectAsState()
   val sessionBranchSwitching by viewModel.chatSessionBranchSwitching.collectAsState()
@@ -738,6 +739,8 @@ fun ChatScreen(
     if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
       PlanChecklistPill(steps = planSteps)
     }
+
+    ChatSwarmProgress(groups = swarmGroups)
 
     ChatComposer(
       value = input,
