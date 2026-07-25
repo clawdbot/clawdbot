@@ -259,6 +259,8 @@ export type ChannelTurnDeliveryAdapter =
 
 /** Options for recording inbound session route state around a turn. */
 export type ChannelTurnRecordOptions = {
+  /** Override the session receiving inbound metadata without changing dispatch routing. */
+  sessionKey?: string;
   groupResolution?: GroupKeyResolution | null;
   createIfMissing?: boolean;
   updateLastRoute?: InboundLastRouteUpdate;

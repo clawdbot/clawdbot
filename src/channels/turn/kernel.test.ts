@@ -1422,6 +1422,50 @@ describe("channel turn kernel", () => {
     expect(deliver).toHaveBeenCalledWith({ text: "reply" }, { kind: "final" });
   });
 
+  it("can record a target session without changing the command dispatch session", async () => {
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession();
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+    const commandSessionKey = "agent:main:command:telegram:42";
+    const targetSessionKey = "agent:main:telegram:group:42:topic:7";
+
+    const result = await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "telegram",
+      agentId: "main",
+      routeSessionKey: commandSessionKey,
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({
+        SessionKey: commandSessionKey,
+        CommandTargetSessionKey: targetSessionKey,
+      }),
+      recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver: async () => ({ visibleReplySent: true }) },
+      record: { sessionKey: targetSessionKey },
+      log,
+    });
+
+    expectDispatched(result);
+    expect(result.routeSessionKey).toBe(commandSessionKey);
+    expect(result.ctxPayload.SessionKey).toBe(commandSessionKey);
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: targetSessionKey }),
+    );
+    const recordEvents = log.mock.calls
+      .map(([event]) => event as TurnLogEvent)
+      .filter((event) => event.stage === "record");
+    expect(recordEvents).toEqual([
+      expect.objectContaining({ event: "start", sessionKey: targetSessionKey }),
+      expect.objectContaining({ event: "done", sessionKey: targetSessionKey }),
+    ]);
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({ SessionKey: commandSessionKey }),
+      }),
+    );
+  });
+
   it("runs prepared dispatches after recording session metadata", async () => {
     const events: string[] = [];
     const log = vi.fn();

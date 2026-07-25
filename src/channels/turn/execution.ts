@@ -217,13 +217,17 @@ async function runPreparedChannelTurnCoreInTrace<
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
   }
+  // Native commands can execute in an isolated command session while updating the
+  // provider-routed target session. Keep that record target separate from dispatch.
+  const recordSessionKey =
+    params.record?.sessionKey ?? params.ctxPayload.SessionKey ?? params.routeSessionKey;
   if (params.ctxPayload.SessionTranscriptContext) {
     const { mergeSessionTranscriptContext } =
       await import("../inbound-event/session-transcript-context.runtime.js");
     await mergeSessionTranscriptContext({
       agentId: params.ctxPayload.AgentId,
       ctx: params.ctxPayload,
-      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      sessionKey: recordSessionKey,
       storePath: params.storePath,
     });
   }
@@ -233,14 +237,14 @@ async function runPreparedChannelTurnCoreInTrace<
       stage: "record",
       event: "start",
       messageId: params.messageId,
-      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      sessionKey: recordSessionKey,
       admission: admission.kind,
     },
   });
   try {
     await params.recordInboundSession({
       storePath: params.storePath,
-      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      sessionKey: recordSessionKey,
       ctx: params.ctxPayload,
       groupResolution: params.record?.groupResolution,
       createIfMissing: params.record?.createIfMissing,
@@ -254,7 +258,7 @@ async function runPreparedChannelTurnCoreInTrace<
         stage: "record",
         event: "done",
         messageId: params.messageId,
-        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+        sessionKey: recordSessionKey,
         admission: admission.kind,
       },
     });
@@ -266,7 +270,7 @@ async function runPreparedChannelTurnCoreInTrace<
         stage: "record",
         event: "error",
         messageId: params.messageId,
-        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+        sessionKey: recordSessionKey,
         admission: admission.kind,
         error: err,
       },

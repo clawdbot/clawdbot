@@ -764,6 +764,74 @@ describe("Slack native command argument menus", () => {
     );
   });
 
+  it("batches accepted payloads in order while omitting a hook-cancelled payload", async () => {
+    const { deliverSlackSlashRepliesMock, turnPlanMock } = getSlackSlashMocks();
+    const asyncDispatchMock = dispatchMock as unknown as {
+      mockImplementation: (
+        implementation: (params: unknown) => Promise<unknown>,
+      ) => typeof dispatchMock;
+    };
+    asyncDispatchMock.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      const plan = turnPlanMock.mock.calls.at(-1)?.[0] as {
+        delivery: {
+          onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
+        };
+      };
+      await deliver({ text: "first" }, { kind: "final" });
+      await plan.delivery.onDelivered?.(
+        { text: "cancelled" },
+        { kind: "final" },
+        {
+          visibleReplySent: false,
+          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+        },
+      );
+      await deliver({ text: "third" }, { kind: "final" });
+      return { counts: { final: 2, tool: 0, block: 0 } };
+    });
+
+    await runCommandHandler(agentStatusHandler);
+
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ replies: [{ text: "first" }, { text: "third" }] }),
+    );
+  });
+
+  it("does not call the response URL when every payload is hook-cancelled", async () => {
+    const { deliverSlackSlashRepliesMock, turnPlanMock } = getSlackSlashMocks();
+    const asyncDispatchMock = dispatchMock as unknown as {
+      mockImplementation: (implementation: () => Promise<unknown>) => typeof dispatchMock;
+    };
+    asyncDispatchMock.mockImplementation(async () => {
+      const plan = turnPlanMock.mock.calls.at(-1)?.[0] as {
+        delivery: {
+          onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
+        };
+      };
+      await plan.delivery.onDelivered?.(
+        { text: "cancelled" },
+        { kind: "final" },
+        {
+          visibleReplySent: false,
+          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+        },
+      );
+      return { counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    await runCommandHandler(agentStatusHandler);
+
+    expect(deliverSlackSlashRepliesMock).not.toHaveBeenCalled();
+  });
+
   it("prefers the configured slash command over native commands", async () => {
     const configuredHarness = createArgMenusHarness();
     (
@@ -1759,7 +1827,7 @@ describe("slack slash command session metadata", () => {
     );
   });
 
-  it("awaits session metadata persistence before dispatch", async () => {
+  it("starts routed session metadata recording before dispatch without blocking delivery", async () => {
     const recordStarted = createDeferred<void>();
     const deferred = createDeferred<void>();
     recordSessionMetaFromInboundMock.mockClear().mockImplementation(() => {
@@ -1780,12 +1848,12 @@ describe("slack slash command session metadata", () => {
 
     await recordStarted.promise;
     expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+    });
 
     deferred.resolve();
     await runPromise;
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
