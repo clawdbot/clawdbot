@@ -174,16 +174,13 @@ export function registerTelegramMessageHandlers(
         storePath: sessionState.storePath,
       });
 
-      const dispatchDedupe = await claimMessageDispatchDedupe(event.msg);
+      const botUserId = event.ctx.me?.id ?? opts.botInfo?.id;
+      const dispatchDedupe = await claimMessageDispatchDedupe(event.msg, botUserId);
       if (!dispatchDedupe.process) {
         return;
       }
       dispatchDedupeClaims = dispatchDedupe.claims;
-      await recordMessageForReplyChain(
-        event.msg,
-        resolvedThreadId ?? dmThreadId,
-        event.ctx.me?.id ?? opts.botInfo?.id,
-      );
+      await recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId, botUserId);
       await processInboundMessage({
         authorizationCfg: gate.context.cfg,
         ctx: event.ctx,

@@ -1,7 +1,7 @@
 // Telegram dispatch dedupe, replay settlement, and synthetic-message helpers.
 import type { Message } from "grammy/types";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import type {
   TelegramAmbientTranscriptWatermark,
   TelegramMessageContextOptions,
@@ -36,6 +36,7 @@ export function createTelegramMessageLifecycleRuntime({
       runtime.error?.(danger(`[telegram] message dispatch dedupe store failed: ${String(error)}`));
     },
   });
+  let invalidDedupeIdentityWarningEmitted = false;
   const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
     typeof timestampMs === "number" && Number.isFinite(timestampMs) ? timestampMs : undefined;
   const promptContextBoundaryOptions = (
@@ -129,13 +130,30 @@ export function createTelegramMessageLifecycleRuntime({
     participants.length > 0 ? { spooledReplay: true } : {};
   const claimMessageDispatchDedupe = async (
     msg: Message,
+    botUserId?: number,
   ): Promise<
     { process: true; claims: TelegramMessageDispatchReplayClaim[] } | { process: false }
   > => {
-    const claim = await claimTelegramMessageDispatchReplay({ guard: replayGuard, accountId, msg });
+    const claim = await claimTelegramMessageDispatchReplay({
+      guard: replayGuard,
+      accountId,
+      botUserId,
+      msg,
+    });
     if (claim.kind === "duplicate") {
       logVerbose(`telegram dispatch dedupe: skipped message ${msg.chat.id}:${msg.message_id}`);
       return { process: false };
+    }
+    if (claim.kind === "invalid") {
+      const diagnostic =
+        `[telegram][diag] message dispatch dedupe bypassed ` +
+        `claim_kind=invalid_identity account=${accountId} ` +
+        `chat=${msg.chat.id} message=${msg.message_id}`;
+      logVerbose(diagnostic);
+      if (!invalidDedupeIdentityWarningEmitted) {
+        invalidDedupeIdentityWarningEmitted = true;
+        runtime.log?.(warn(diagnostic));
+      }
     }
     return { process: true, claims: claim.kind === "claimed" ? [claim.handle] : [] };
   };
