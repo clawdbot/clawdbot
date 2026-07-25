@@ -1,6 +1,6 @@
 export type DockPanelSide = "bottom" | "left" | "right";
 
-export type DockPanelLayout<TDock extends DockPanelSide> = {
+type DockPanelLayout<TDock extends DockPanelSide> = {
   open: boolean;
   dock: TDock;
   height: number;
