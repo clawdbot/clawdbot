@@ -13,6 +13,10 @@ const tempDirs: string[] = [];
 // The real smoke proof runs twice and can exceed Vitest's 120s default on fork CI runners.
 const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = 300_000;
 
+function reliabilitySmokeTest(name: string, test: () => void): void {
+  it(name, test, RELIABILITY_SMOKE_TEST_TIMEOUT_MS);
+}
+
 function makeTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-reliability-test-"));
   tempDirs.push(tempDir);
@@ -141,7 +145,7 @@ describe("scripts/bench-sqlite-reliability", () => {
     });
   });
 
-  it("reuses a state directory without stale rows or restore collisions", () => {
+  reliabilitySmokeTest("reuses a state directory without stale rows or restore collisions", () => {
     const stateDir = makeTempDir();
     const firstOutput = path.join(stateDir, "report-first.json");
     const firstResult = runProof([
@@ -373,7 +377,7 @@ describe("scripts/bench-sqlite-reliability", () => {
     };
     expect(secondReport.restoresVerified).toBe(7);
     expect(secondReport.paths.syncedRepository).not.toBe(firstReport.paths.syncedRepository);
-  }, RELIABILITY_SMOKE_TEST_TIMEOUT_MS);
+  });
 
   it("stops the writer when its parent IPC channel disconnects", async () => {
     const databasePath = path.join(makeTempDir(), "writer.sqlite");
