@@ -15,7 +15,7 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
+import { extractText, hasTranscriptMediaFacts } from "../../lib/chat/message-extract.ts";
 import {
   retirePendingChatSideQuestion,
   type ChatSideResult,
@@ -208,7 +208,7 @@ function isTextOnlyContent(content: unknown): boolean {
   return sawText;
 }
 
-function isEmptyUserTextOnlyMessage(message: unknown): boolean {
+export function isEmptyUserTextOnlyMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -216,12 +216,7 @@ function isEmptyUserTextOnlyMessage(message: unknown): boolean {
   if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
     return false;
   }
-  const mediaPaths = Array.isArray(entry.MediaPaths)
-    ? entry.MediaPaths
-    : typeof entry.MediaPath === "string"
-      ? [entry.MediaPath]
-      : [];
-  if (mediaPaths.some((value) => typeof value === "string" && value.trim())) {
+  if (hasTranscriptMediaFacts(entry)) {
     return false;
   }
   if (!isTextOnlyContent(entry.content ?? entry.text)) {
