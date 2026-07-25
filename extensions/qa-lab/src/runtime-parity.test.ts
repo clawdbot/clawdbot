@@ -2,13 +2,14 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import {
-  formatSqliteSessionFileMarker,
-  resolveStorePath,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  appendSqliteTrajectoryRuntimeEvents,
+  formatSqliteSessionFileMarker,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stableHash } from "./parity-shared.js";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
@@ -28,11 +29,18 @@ afterEach(async () => {
 });
 
 async function seedRuntimeParityTranscript(params: {
+  heartbeatIsolatedBaseSessionKey?: string;
   messages: Array<Record<string, unknown>>;
   sessionId: string;
   sessionKey: string;
+  tempRoot?: string;
+  trajectoryEvents?: Array<{
+    data?: Record<string, unknown>;
+    type: string;
+  }>;
+  updatedAt?: number;
 }) {
-  const tempRoot = await tempDirs.makeTempDir("openclaw-qa-runtime-parity-");
+  const tempRoot = params.tempRoot ?? (await tempDirs.makeTempDir("openclaw-qa-runtime-parity-"));
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "state") };
   const storePath = resolveStorePath(undefined, { agentId: "qa", env });
   await upsertSessionEntry({
@@ -47,7 +55,10 @@ async function seedRuntimeParityTranscript(params: {
         sessionId: params.sessionId,
         storePath,
       }),
-      updatedAt: 100,
+      updatedAt: params.updatedAt ?? 100,
+      ...(params.heartbeatIsolatedBaseSessionKey
+        ? { heartbeatIsolatedBaseSessionKey: params.heartbeatIsolatedBaseSessionKey }
+        : {}),
     },
   });
   for (const [index, message] of params.messages.entries()) {
@@ -61,6 +72,24 @@ async function seedRuntimeParityTranscript(params: {
       message: message as never,
     });
   }
+  if (params.trajectoryEvents?.length) {
+    appendSqliteTrajectoryRuntimeEvents(
+      { agentId: "qa", env, sessionId: params.sessionId, storePath },
+      params.trajectoryEvents.map((event, index) => ({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: params.sessionId,
+        source: "runtime",
+        type: event.type,
+        ts: new Date(index + 1).toISOString(),
+        seq: index + 1,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        runId: "run-1",
+        data: event.data,
+      })),
+    );
+  }
   return tempRoot;
 }
 
@@ -68,12 +97,17 @@ async function captureRuntimeParityWithMockRequests(params: {
   messages?: Array<Record<string, unknown>>;
   requests: Array<Record<string, unknown>>;
   scenarioResult?: Parameters<typeof captureRuntimeParityCell>[0]["scenarioResult"];
+  trajectoryEvents?: Array<{
+    data?: Record<string, unknown>;
+    type: string;
+  }>;
 }) {
   const parentPrompt = "Delegate one bounded QA task to a subagent.";
   const tempRoot = await seedRuntimeParityTranscript({
     sessionId: "mock-runtime-parity",
     sessionKey: "agent:qa:mock-runtime-parity",
     messages: params.messages ?? [{ role: "user", content: parentPrompt }],
+    trajectoryEvents: params.trajectoryEvents,
   });
   const requests = params.requests.map((request) => ({
     prompt: parentPrompt,
@@ -200,6 +234,272 @@ describe("runtime parity", () => {
     expect(cell.toolCalls).toHaveLength(1);
     expect(cell.toolCalls[0]).toMatchObject({ tool: "image_generate" });
     expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+  });
+
+  it("captures native tool execution from the canonical SQLite trajectory", async () => {
+    const cell = await captureRuntimeParityWithMockRequests({
+      messages: [],
+      requests: [],
+      trajectoryEvents: [
+        {
+          type: "tool.call",
+          data: {
+            toolCallId: "search-1",
+            name: "web_search",
+            arguments: { query: "OpenClaw runtime parity fixed query" },
+          },
+        },
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "search-1",
+            name: "web_search",
+            status: "completed",
+            isError: false,
+            result: {
+              status: "completed",
+              query: "OpenClaw runtime parity fixed query",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "web_search" })]);
+    expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+    expect(cell.providerPlanToolCalls).toEqual([]);
+  });
+
+  it("merges trajectory-only calls without duplicating transcript calls", async () => {
+    const tempRoot = await seedRuntimeParityTranscript({
+      sessionId: "mixed-runtime-tools",
+      sessionKey: "agent:qa:mixed-runtime-tools",
+      messages: [
+        { role: "user", content: "Read the file, run the command, then search." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "read-1",
+              name: "read",
+              arguments: { path: "README.md" },
+            },
+            {
+              type: "toolCall",
+              id: "exec-1",
+              name: "exec",
+              arguments: { command: "pwd" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "read-1",
+          toolName: "read",
+          content: [{ type: "text", text: "README contents" }],
+        },
+      ],
+      trajectoryEvents: [
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "exec-1",
+            name: "exec",
+            success: true,
+            contentItems: [{ type: "text", text: "/workspace" }],
+          },
+        },
+        {
+          type: "tool.call",
+          data: {
+            toolCallId: "search-1",
+            name: "web_search",
+            arguments: { query: "OpenClaw runtime parity fixed query" },
+          },
+        },
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "search-1",
+            name: "web_search",
+            status: "completed",
+            result: { status: "completed" },
+          },
+        },
+      ],
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.toolCalls.map((toolCall) => toolCall.tool)).toEqual(["read", "exec", "web_search"]);
+    expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+    expect(cell.toolCalls[1]?.errorClass).toBeUndefined();
+    expect(cell.toolCalls[1]?.argsHash).toBe(stableHash({ command: "pwd" }));
+  });
+
+  it("keeps distinct same-tool calls with identical arguments", async () => {
+    const tempRoot = await seedRuntimeParityTranscript({
+      sessionId: "distinct-web-searches",
+      sessionKey: "agent:qa:distinct-web-searches",
+      messages: [
+        { role: "user", content: "Search for both QA markers." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "web_search",
+              arguments: { query: "same marker" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolName: "web_search",
+          content: [{ type: "text", text: "result A" }],
+        },
+      ],
+      trajectoryEvents: [
+        {
+          type: "tool.call",
+          data: {
+            toolCallId: "search-b",
+            name: "web_search",
+            arguments: { query: "same marker" },
+          },
+        },
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "search-b",
+            name: "web_search",
+            status: "completed",
+            result: { status: "completed", query: "same marker" },
+          },
+        },
+      ],
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.toolCalls.map((toolCall) => toolCall.tool)).toEqual(["web_search", "web_search"]);
+    expect(cell.toolCalls[0]?.argsHash).toBe(cell.toolCalls[1]?.argsHash);
+  });
+
+  it("skips newer trajectory-only heartbeat sessions", async () => {
+    const now = Date.now();
+    const tempRoot = await seedRuntimeParityTranscript({
+      sessionId: "web-search-session",
+      sessionKey: "agent:qa:web-search-session",
+      messages: [],
+      updatedAt: now - 1_000,
+      trajectoryEvents: [
+        {
+          type: "tool.call",
+          data: {
+            toolCallId: "search-1",
+            name: "web_search",
+            arguments: { query: "release marker" },
+          },
+        },
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "search-1",
+            name: "web_search",
+            status: "completed",
+            result: { status: "completed" },
+          },
+        },
+      ],
+    });
+    await seedRuntimeParityTranscript({
+      tempRoot,
+      sessionId: "heartbeat-session",
+      sessionKey: "agent:qa:main:heartbeat",
+      heartbeatIsolatedBaseSessionKey: "agent:qa:main",
+      messages: [],
+      updatedAt: now,
+      trajectoryEvents: [
+        {
+          type: "tool.call",
+          data: {
+            toolCallId: "heartbeat-1",
+            name: "web_search",
+            arguments: { query: "heartbeat background search" },
+          },
+        },
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "heartbeat-1",
+            name: "web_search",
+            success: true,
+            result: { status: "completed" },
+          },
+        },
+      ],
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.toolCalls.map((toolCall) => toolCall.tool)).toEqual(["web_search"]);
+    expect(cell.toolCalls[0]?.argsHash).toBe(stableHash({ query: "release marker" }));
+  });
+
+  it("keeps an explicitly identified orphan result separate", async () => {
+    const tempRoot = await seedRuntimeParityTranscript({
+      sessionId: "orphan-trajectory-result",
+      sessionKey: "agent:qa:orphan-trajectory-result",
+      messages: [],
+      trajectoryEvents: [
+        {
+          type: "tool.call",
+          data: {
+            toolCallId: "read-pending",
+            name: "read",
+            arguments: { path: "README.md" },
+          },
+        },
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "read-orphan",
+            name: "read",
+            success: true,
+            contentItems: [{ type: "text", text: "orphan result" }],
+          },
+        },
+      ],
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.toolCalls.map((toolCall) => toolCall.errorClass)).toEqual([
+      "tool-result-missing",
+      undefined,
+    ]);
   });
 
   it("keeps a retry pass diagnostic from failing the captured cell", async () => {
