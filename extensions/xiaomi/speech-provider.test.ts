@@ -223,10 +223,10 @@ describe("buildXiaomiSpeechProvider", () => {
 
     it("rejects malformed base64 audio", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ choices: [{ message: { audio: { data: "ZE==" } } }] }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: "ZE==" } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
       );
 
       await expect(
