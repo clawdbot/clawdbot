@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -13,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
@@ -53,7 +54,8 @@ const WINDOWS_NODE_REQUIRED_ASSETS = [
   "OpenClawCompanion-Setup-arm64.exe",
 ];
 const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
-const RELEASE_CANDIDATE_STATE_VERSION = 1;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
+const RELEASE_CANDIDATE_STATE_VERSION = 2;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
 const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
 const RELEASE_CANDIDATE_STATE_KEYS = [
@@ -68,6 +70,7 @@ const RELEASE_CANDIDATE_STATE_KEYS = [
   "npmDistTag",
   "pluginPublishScope",
   "plugins",
+  "parallelsRegistryPackageArtifacts",
   "windowsNodeTag",
   "skipParallels",
   "skipTelegram",
@@ -91,6 +94,8 @@ Options:
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --skip-parallels                   Do not run local Parallels fresh/update candidate smoke.
+  --parallels-registry-package-artifact <dir>
+                                      Add a verified plugin npm preflight artifact directory. Repeatable.
   --skip-telegram                    Do not run NPM Telegram E2E against the prepared tarball.
   --telegram-provider-mode <mode>     mock-openai|live-frontier. Default: ${DEFAULT_TELEGRAM_PROVIDER_MODE}
   --provider <provider>               Full validation provider. Default: ${DEFAULT_PROVIDER}
@@ -132,6 +137,8 @@ export function parseArgs(argv) {
     npmDistTag: DEFAULT_NPM_DIST_TAG,
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
+    parallelsRegistryPackageArtifactDirs: [],
+    parallelsRegistryPackageArtifacts: [],
     skipDispatch: false,
     skipLocalGeneratedCheck: false,
     skipParallels: false,
@@ -184,6 +191,9 @@ export function parseArgs(argv) {
         break;
       case "--skip-parallels":
         setOnce(arg, "skipParallels", true);
+        break;
+      case "--parallels-registry-package-artifact":
+        options.parallelsRegistryPackageArtifactDirs.push(requireValue(args, ++index, arg));
         break;
       case "--skip-telegram":
         setOnce(arg, "skipTelegram", true);
@@ -297,6 +307,66 @@ function readJson(path, label) {
   }
 }
 
+export function validateParallelsRegistryPackageArtifact(artifactDir, params) {
+  const resolvedDir = resolve(artifactDir);
+  const manifestPath = join(resolvedDir, "plugin-publication-manifest.json");
+  const manifest = readJson(manifestPath, "plugin npm preflight manifest");
+  const artifactName = manifest.artifact?.name;
+  const tarballName = manifest.artifact?.tarball;
+  const tarballSha256 = manifest.artifact?.sha256;
+  const packageName = manifest.package?.name;
+  const packageVersion = manifest.package?.version;
+  if (
+    manifest.schema !== "openclaw.plugin-publication-artifact/v1" ||
+    manifest.schemaVersion !== 1 ||
+    manifest.targetSha !== params.targetSha ||
+    !artifactName ||
+    !packageName ||
+    packageVersion !== params.targetVersion ||
+    !tarballName ||
+    tarballName !== basename(tarballName) ||
+    !SHA256_HEX_PATTERN.test(tarballSha256)
+  ) {
+    throw new Error(`plugin npm preflight artifact identity is invalid: ${resolvedDir}`);
+  }
+  const tarballPath = join(resolvedDir, tarballName);
+  const files = readdirSync(resolvedDir).toSorted();
+  const expectedFiles = [basename(manifestPath), tarballName].toSorted();
+  if (!isDeepStrictEqual(files, expectedFiles) || !existsSync(tarballPath)) {
+    throw new Error(`plugin npm preflight artifact inventory is invalid: ${resolvedDir}`);
+  }
+  const actualSha256 = sha256(tarballPath);
+  if (actualSha256 !== tarballSha256) {
+    throw new Error(
+      `plugin npm preflight tarball digest mismatch for ${packageName}: expected ${tarballSha256}, got ${actualSha256}`,
+    );
+  }
+  let packedPackage;
+  try {
+    packedPackage = JSON.parse(
+      run("tar", ["-xOf", tarballPath, "package/package.json"], { capture: true }),
+    );
+  } catch (error) {
+    throw new Error(`plugin npm preflight tarball package metadata is invalid: ${tarballPath}`, {
+      cause: error,
+    });
+  }
+  if (packedPackage.name !== packageName || packedPackage.version !== packageVersion) {
+    throw new Error(
+      `plugin npm preflight tarball identity mismatch: manifest=${packageName}@${packageVersion} packed=${packedPackage.name ?? "<missing>"}@${packedPackage.version ?? "<missing>"}`,
+    );
+  }
+  return {
+    artifactDir: resolvedDir,
+    artifactName,
+    manifestPath,
+    packageName,
+    packageVersion,
+    tarballPath,
+    tarballSha256,
+  };
+}
+
 export function buildReleaseCandidateState(options, { targetSha, toolingSha }) {
   return {
     version: RELEASE_CANDIDATE_STATE_VERSION,
@@ -312,6 +382,7 @@ export function buildReleaseCandidateState(options, { targetSha, toolingSha }) {
     npmDistTag: options.npmDistTag,
     pluginPublishScope: options.pluginPublishScope,
     plugins: options.plugins,
+    parallelsRegistryPackageArtifacts: options.parallelsRegistryPackageArtifacts,
     windowsNodeTag: options.windowsNodeTag,
     skipParallels: options.skipParallels,
     skipTelegram: options.skipTelegram,
@@ -1288,6 +1359,7 @@ export function candidateParallelsArgs(
   tarballPath,
   dependencyTarballPaths = [],
   toolingRoot = TOOLING_ROOT,
+  registryPackageTarballPaths = [],
 ) {
   return [
     "exec",
@@ -1296,6 +1368,10 @@ export function candidateParallelsArgs(
     "--target-tarball",
     tarballPath,
     ...dependencyTarballPaths.flatMap((dependency) => ["--dependency-tarball", dependency]),
+    ...registryPackageTarballPaths.flatMap((registryPackage) => [
+      "--registry-package-tarball",
+      registryPackage,
+    ]),
     "--json",
   ];
 }
@@ -1304,6 +1380,7 @@ export function candidateParallelsShellCommand(
   tarballPath,
   timeoutBin,
   dependencyTarballPaths = [],
+  registryPackageTarballPaths = [],
 ) {
   // Login shells can replace the candidate's supported Node with ambient host Node.
   // Keep the invoking Node first so pnpm and npm use the validated runtime.
@@ -1316,11 +1393,21 @@ export function candidateParallelsShellCommand(
     "--foreground",
     "150m",
     "pnpm",
-    ...candidateParallelsArgs(tarballPath, dependencyTarballPaths).map(shellQuote),
+    ...candidateParallelsArgs(
+      tarballPath,
+      dependencyTarballPaths,
+      TOOLING_ROOT,
+      registryPackageTarballPaths,
+    ).map(shellQuote),
   ].join(" ");
 }
 
-async function runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths) {
+async function runParallelsIfNeeded(
+  options,
+  tarballPath,
+  dependencyTarballPaths,
+  registryPackageTarballPaths,
+) {
   if (options.skipParallels) {
     return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
@@ -1332,7 +1419,12 @@ async function runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths
   const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
     capture: true,
   }).trim();
-  const command = candidateParallelsShellCommand(tarballPath, timeoutBin, dependencyTarballPaths);
+  const command = candidateParallelsShellCommand(
+    tarballPath,
+    timeoutBin,
+    dependencyTarballPaths,
+    registryPackageTarballPaths,
+  );
   run("bash", ["-lc", command], {
     env: {
       OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(process.cwd(), ".artifacts", "parallels"),
@@ -1433,6 +1525,19 @@ async function main() {
     toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT),
     workflowRef: options.workflowRef,
   });
+  options.parallelsRegistryPackageArtifacts = options.parallelsRegistryPackageArtifactDirs.map(
+    (artifactDir) =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha,
+        targetVersion: options.tag.replace(/^v/u, ""),
+      }),
+  );
+  const registryPackageNames = new Set(
+    options.parallelsRegistryPackageArtifacts.map((artifact) => artifact.packageName),
+  );
+  if (registryPackageNames.size !== options.parallelsRegistryPackageArtifacts.length) {
+    throw new Error("Parallels registry package artifacts must have unique package names");
+  }
   const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
   const expectedState = buildReleaseCandidateState(options, { targetSha, toolingSha });
   let candidateState = reconcileReleaseCandidateState(
@@ -1597,7 +1702,22 @@ async function main() {
     return dependencyPath;
   });
 
-  const parallels = await runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths);
+  const revalidatedRegistryArtifacts = options.parallelsRegistryPackageArtifactDirs.map(
+    (artifactDir) =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha,
+        targetVersion: options.tag.replace(/^v/u, ""),
+      }),
+  );
+  if (!isDeepStrictEqual(revalidatedRegistryArtifacts, options.parallelsRegistryPackageArtifacts)) {
+    throw new Error("Parallels registry package artifacts changed during candidate validation");
+  }
+  const parallels = await runParallelsIfNeeded(
+    options,
+    tarballPath,
+    dependencyTarballPaths,
+    revalidatedRegistryArtifacts.map((artifact) => artifact.tarballPath),
+  );
   const npmTelegram = await runTelegramIfNeeded(
     options,
     npmArtifact,
@@ -1646,6 +1766,7 @@ async function main() {
       path: tarballPath,
     },
     parallels,
+    parallelsRegistryPackageArtifacts: revalidatedRegistryArtifacts,
     npmTelegram,
     pluginNpmPlan,
     pluginClawHubPlan,
