@@ -217,7 +217,8 @@ function normalizeImagemapVideo(video: ImagemapVideo): {
   const label =
     externalLink.label === undefined
       ? undefined
-      : truncateLineActionLabel(externalLink.label, LINE_IMAGEMAP_EXTERNAL_LINK_LABEL_LIMIT);
+      : truncateUtf16Safe(externalLink.label, LINE_IMAGEMAP_EXTERNAL_LINK_LABEL_LIMIT) ||
+        (externalLink.label ? "…" : "");
   if (
     externalLink.linkUri !== undefined &&
     truncateUtf16Safe(externalLink.linkUri, LINE_ACTION_URI_LIMIT) !== externalLink.linkUri

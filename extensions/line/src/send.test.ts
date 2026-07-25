@@ -324,6 +324,32 @@ describe("LINE send helpers", () => {
     expect(message.actions[0]?.type).toBe("uri");
   });
 
+  it("counts imagemap video-link labels in UTF-16 units", async () => {
+    const message = {
+      type: "imagemap",
+      baseUrl: "https://e.example/imagemap",
+      altText: "Map",
+      baseSize: { width: 1040, height: 1040 },
+      actions: [],
+      video: {
+        originalContentUrl: "https://e.example/video.mp4",
+        previewImageUrl: "https://e.example/preview.jpg",
+        area: { x: 0, y: 0, width: 1040, height: 1040 },
+        externalLink: {
+          linkUri: "https://e.example/video",
+          label: "😀".repeat(16),
+        },
+      },
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ video: { externalLink: { label: string } } }>;
+    };
+    expect(pushed.messages[0]?.video.externalLink.label).toBe("😀".repeat(15));
+  });
+
   it("pushes images via normalized LINE target", async () => {
     const result = await sendModule.pushImageMessage(
       "line:user:U123",
