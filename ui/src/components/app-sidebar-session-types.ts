@@ -52,7 +52,6 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
-  sessionId?: string;
   displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;

@@ -1,3 +1,4 @@
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
@@ -57,36 +58,24 @@ function isDefinitiveNoCreateHttpError(error: unknown): boolean {
 export function controlSessionUrl(
   baseUrl: string | undefined,
   sessionKey: string,
-  sessionId?: string,
+  fallbackAgentId: string,
   displayName?: string,
 ): string | undefined {
   if (!baseUrl) {
     return undefined;
   }
-  const keyParts = sessionKey.split(":");
-  const agentId = keyParts[0] === "agent" && keyParts[1] ? keyParts[1] : "main";
-  const rest = keyParts.slice(2).join(":").toLowerCase();
-  const isMain = sessionKey === "main" || sessionKey === "global" || rest === "main";
-  const normalizedSessionId = sessionId?.toLowerCase().replaceAll("-", "") ?? "";
-  if (!isMain && !/^[0-9a-f]{8,32}$/.test(normalizedSessionId)) {
+  const url = new URL(baseUrl);
+  const path = buildControlUiSessionPath({
+    namespace: "chat",
+    sessionKey,
+    fallbackAgentId,
+    basePath: url.pathname,
+    displayName,
+  });
+  if (!path) {
     return undefined;
   }
-  const slugTokens = (displayName ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .split("-")
-    .filter(Boolean);
-  while (slugTokens.length > 0 && /^[0-9a-f]+$/.test(slugTokens.at(-1) ?? "")) {
-    slugTokens.pop();
-  }
-  const slug = slugTokens.join("-").slice(0, 48).replace(/-+$/g, "");
-  const shortId = normalizedSessionId.slice(0, 8);
-  const sessionRef = slug ? `${slug}-${shortId}` : shortId;
-  const url = new URL(baseUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/u, "")}/chat/${encodeURIComponent(agentId)}${
-    isMain ? "" : `/${sessionRef}`
-  }`;
+  url.pathname = path;
   url.hash = "";
   return url.toString();
 }
@@ -228,7 +217,7 @@ export async function openClickClackDiscussionBinding(
   const externalUrl = controlSessionUrl(
     account.discussions.controlUrlBase,
     sessionKey,
-    entry.sessionId,
+    account.agentId ?? "main",
     label,
   );
   const archived = entry.archivedAt !== undefined;

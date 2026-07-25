@@ -56,7 +56,7 @@ import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
-function normalizeInitialApplicationLocation(
+export function normalizeInitialApplicationLocation(
   location: RouteLocation,
   basePath: string,
   sessionKey: string,
@@ -65,14 +65,18 @@ function normalizeInitialApplicationLocation(
     return location;
   }
 
+  const pathname = pathForSession(
+    "chat",
+    resolveAgentIdFromSessionKey(sessionKey),
+    sessionKey,
+    basePath,
+  );
+  if (!pathname) {
+    return location;
+  }
   return {
     ...location,
-    pathname: pathForSession(
-      "chat",
-      resolveAgentIdFromSessionKey(sessionKey),
-      sessionKey,
-      basePath,
-    ),
+    pathname,
   };
 }
 

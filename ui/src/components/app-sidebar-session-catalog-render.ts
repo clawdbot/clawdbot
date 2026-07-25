@@ -16,7 +16,7 @@ import {
   groupCatalogSessionsByProject,
   type CatalogProjectGrouping,
 } from "../lib/sessions/catalog-project-grouping.ts";
-import { tryPathForSessionKey } from "../lib/sessions/index.ts";
+import { pathForSessionKey } from "../lib/sessions/index.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import {
@@ -361,7 +361,7 @@ function renderCatalogSessionRow(
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
   const sessionPath = session.sessionKey
-    ? tryPathForSessionKey("chat", session.sessionKey, params.basePath)
+    ? pathForSessionKey("chat", session.sessionKey, params.basePath)
     : null;
   const routeId = sessionPath ? "chat" : "new-session";
   const navigation: ApplicationNavigationOptions = sessionPath

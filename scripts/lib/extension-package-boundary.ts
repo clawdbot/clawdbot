@@ -185,6 +185,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   ],
   "@openclaw/normalization-core/*": ["../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"],
   "@openclaw/retry": ["../dist/plugin-sdk/packages/retry/src/index.d.ts"],
+  "@openclaw/session-url-contract": ["../packages/session-url-contract/src/index.ts"],
   "@openclaw/workboard-contract": ["../packages/workboard-contract/src/index.ts"],
   ...buildPackageBoundaryDtsPaths({
     packageName: "@openclaw/acp-core",

@@ -4,15 +4,16 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadChatRoute, resolveSessionPrefix } from "./route.ts";
 
-const sessionId = "12345678-90ab-cdef-1234-567890abcdef";
+const keyUuid = "12345678-90ab-cdef-1234-567890abcdef";
+const sessionKey = `agent:main:dashboard:${keyUuid}`;
 
 function row(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return {
-    key: `agent:main:dashboard:${sessionId}`,
+    key: sessionKey,
     kind: "direct",
     updatedAt: 1,
     displayName: "Deploy Monitor",
-    sessionId,
+    sessionId: "fedcba98-7654-3210-fedc-ba9876543210",
     ...overrides,
   };
 }
@@ -47,29 +48,24 @@ function contextFor(listResult: SessionsListResult) {
 }
 
 describe("resolveSessionPrefix", () => {
-  it("returns unique, ambiguous, and not-found outcomes", () => {
+  it("matches the UUID suffix of the immutable session key", () => {
     expect(resolveSessionPrefix(result([row()]), "12345678")).toMatchObject({ kind: "unique" });
     expect(
       resolveSessionPrefix(
-        result([
-          row(),
-          row({
-            key: "agent:work:dashboard:12345678-ffff-ffff-ffff-ffffffffffff",
-            sessionId: "12345678-ffff-ffff-ffff-ffffffffffff",
-          }),
-        ]),
+        result([row(), row({ key: "agent:work:dashboard:12345678-ffff-ffff-ffff-ffffffffffff" })]),
         "12345678",
       ),
     ).toMatchObject({ kind: "ambiguous", truncated: false });
     expect(resolveSessionPrefix(result([]), "12345678")).toEqual({ kind: "not-found" });
   });
 
-  it("drops substring matches that do not start the UUID", () => {
+  it("drops substring matches and ignores the rotating sessionId", () => {
     expect(
       resolveSessionPrefix(
         result([
           row({
-            sessionId: "aaaaaaaa-1234-5678-90ab-cdef12345678",
+            key: "agent:main:dashboard:aaaaaaaa-1234-5678-90ab-cdef12345678",
+            sessionId: "12345678-90ab-cdef-1234-567890abcdef",
           }),
         ]),
         "12345678",
@@ -86,22 +82,21 @@ describe("resolveSessionPrefix", () => {
 });
 
 describe("loadChatRoute", () => {
-  it("ignores decorative agent and slug segments, then replaces with the canonical path", async () => {
+  it("survives sessionId rotation and canonicalizes decorative short-form segments", async () => {
     const { context, list } = contextFor(result([row()]));
+    list
+      .mockResolvedValueOnce(result([row({ sessionId: "before-compaction" })]))
+      .mockResolvedValueOnce(result([row({ sessionId: "after-compaction" })]));
     const signal = new AbortController().signal;
     const redirected = await loadChatRoute(
       context,
-      {
-        pathname: "/chat/wrong/not-the-name-12345678",
-        search: "?draft=ship",
-        hash: "",
-      },
+      { pathname: "/chat/wrong/not-the-name-12345678", search: "?draft=ship", hash: "" },
       "chat",
       signal,
     );
     expect(redirected).toEqual({
       kind: "session",
-      sessionKey: `agent:main:dashboard:${sessionId}`,
+      sessionKey,
       draft: "ship",
       face: "chat",
       canonicalLocation: {
@@ -111,26 +106,102 @@ describe("loadChatRoute", () => {
       },
     });
 
-    const loaded = await loadChatRoute(
-      context,
-      {
-        pathname: "/chat/main/deploy-monitor-12345678",
-        search: "?draft=ship",
-        hash: "",
-      },
-      "chat",
-      signal,
-    );
-    expect(loaded).toEqual({
-      kind: "session",
-      sessionKey: `agent:main:dashboard:${sessionId}`,
-      draft: "ship",
-      face: "chat",
-    });
-    expect(list).toHaveBeenCalledTimes(1);
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/deploy-monitor-12345678", search: "?draft=ship", hash: "" },
+        "chat",
+        signal,
+      ),
+    ).resolves.toEqual({ kind: "session", sessionKey, draft: "ship", face: "chat" });
+    expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ search: "12345678", limit: 20, archivedFilter: "all" }),
     );
+  });
+
+  it("round-trips literal channel, peer, and cron keys without searching", async () => {
+    const { context, list } = contextFor(result([]));
+    for (const [pathname, expectedKey] of [
+      ["/chat/main/telegram/12345", "agent:main:telegram:12345"],
+      ["/chat/ops/signal/direct/%2B15551212", "agent:ops:signal:direct:+15551212"],
+      ["/chat/main/cron/nightly/run/8821", "agent:main:cron:nightly:run:8821"],
+    ]) {
+      await expect(
+        loadChatRoute(
+          context,
+          { pathname, search: "", hash: "" },
+          "chat",
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({
+        kind: "session",
+        sessionKey: expectedKey,
+        draft: undefined,
+        face: "chat",
+      });
+    }
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("falls back from an unmatched short-looking segment to its literal key", async () => {
+    const { context } = contextFor(result([]));
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "agent:main:deadbeef",
+      draft: undefined,
+      face: "chat",
+    });
+  });
+
+  it("builds distinct working links for ambiguous prefixes", async () => {
+    const rows = [
+      row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" }),
+      row({
+        key: "agent:work:dashboard:12345678-0bbb-4000-8000-000000000002",
+        displayName: "Deploy Monitor Two",
+      }),
+    ];
+    const { context } = contextFor(result(rows));
+    const ambiguous = await loadChatRoute(
+      context,
+      { pathname: "/dashboard/ignored/deploy-12345678", search: "", hash: "" },
+      "dashboard",
+      new AbortController().signal,
+    );
+    expect(ambiguous).toMatchObject({ kind: "ambiguous", truncated: false });
+    if (!("kind" in ambiguous) || ambiguous.kind !== "ambiguous") {
+      throw new Error("expected an ambiguous route");
+    }
+    expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual([
+      "/dashboard/main/deploy-monitor-123456780a",
+      "/dashboard/work/deploy-monitor-two-123456780b",
+    ]);
+
+    for (const [candidate, expectedRow] of ambiguous.candidates.map(
+      (candidate, index) => [candidate, rows[index]] as const,
+    )) {
+      await expect(
+        loadChatRoute(
+          context,
+          { pathname: candidate.href, search: "", hash: "" },
+          "dashboard",
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({
+        kind: "session",
+        sessionKey: expectedRow?.key,
+        draft: undefined,
+        face: "dashboard",
+      });
+    }
   });
 
   it("loads an agent main session without a search request", async () => {

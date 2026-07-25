@@ -91,13 +91,7 @@ export function createHarness(
     agent: {
       session: {
         getSessionEntry: vi.fn(() =>
-          sessionEntry
-            ? {
-                sessionId: "12345678-90ab-cdef-1234-567890abcdef",
-                updatedAt: 1,
-                ...sessionEntry,
-              }
-            : undefined,
+          sessionEntry ? { sessionId: "session-id", updatedAt: 1, ...sessionEntry } : undefined,
         ),
       },
     },
@@ -183,10 +177,7 @@ export function createHarness(
   };
 }
 
-export function testExternalRef(
-  sessionKey: string,
-  sessionId = "12345678-90ab-cdef-1234-567890abcdef",
-): string {
+export function testExternalRef(sessionKey: string, sessionId = "session-id"): string {
   return discussionExternalRef(
     TEST_INSTALLATION_ID,
     sessionKey,

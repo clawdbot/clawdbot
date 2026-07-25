@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
-import { pathForSession } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { mobileNavLayoutMediaQuery, shouldMergeChatChrome } from "../../app/mobile-nav-layout.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
@@ -15,11 +14,8 @@ import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import {
-  areUiSessionKeysEquivalent,
-  resolveAgentIdFromSessionKey,
-} from "../../lib/sessions/session-key.ts";
+import { pathForSessionKey, resolveSessionKey } from "../../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
@@ -385,13 +381,14 @@ export class ChatPage extends OpenClawLightDomElement {
     const row = this.context.sessions?.state.result?.sessions.find((candidate) =>
       areUiSessionKeysEquivalent(candidate.key, sessionKey),
     );
-    const agentId = resolveAgentIdFromSessionKey(row?.key ?? sessionKey);
     const options = {
-      pathname: pathForSession(face, agentId, row?.key ?? sessionKey, this.context.basePath, {
-        displayName: row?.displayName,
-        mainKey: this.context.agents?.state.agentsList?.mainKey,
-        sessionId: row?.sessionId,
-      }),
+      pathname: pathForSessionKey(
+        face,
+        row?.key ?? sessionKey,
+        this.context.basePath,
+        row,
+        this.context.agents?.state.agentsList?.mainKey,
+      ),
     };
     if (replace) {
       this.context.replace(face, options);

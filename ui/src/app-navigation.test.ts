@@ -361,16 +361,20 @@ describe("routeIdFromPath", () => {
     expect(
       pathForSession("chat", "main", key, "", {
         displayName: "Deploy Monitor",
-        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
       }),
     ).toBe("/chat/main/deploy-monitor-12345678");
     expect(
       pathForSession("dashboard", "ops", key, "/ui", {
         displayName: "",
-        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
       }),
-    ).toBe("/ui/dashboard/ops/12345678");
+    ).toBe("/ui/dashboard/main/12345678");
     expect(pathForSession("chat", "main", "agent:main:main")).toBe("/chat/main");
+    expect(pathForSession("chat", "main", "agent:main:telegram:12345")).toBe(
+      "/chat/main/telegram/12345",
+    );
+    expect(pathForSession("chat", "main", "dashboard:12345678-90ab-cdef-1234-567890abcdef")).toBe(
+      "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+    );
   });
 
   it("keeps trailing hex tokens out of decorative slugs", () => {
@@ -382,33 +386,56 @@ describe("routeIdFromPath", () => {
         "",
         {
           displayName: "Deploy face deadbeef",
-          sessionId: "12345678-90ab-cdef-1234-567890abcdef",
         },
       ),
     ).toBe("/chat/main/deploy-12345678");
   });
 
-  it("parses both route namespaces and disambiguates one-segment forms", () => {
+  it("parses short refs and literal key segments in both namespaces", () => {
     expect(sessionRefFromPath("/chat/main")).toEqual({
-      face: "chat",
+      namespace: "chat",
       kind: "main",
       agentId: "main",
     });
-    expect(sessionRefFromPath("/dashboard/12345678")).toEqual({
-      face: "dashboard",
-      kind: "session",
+    expect(sessionRefFromPath("/dashboard/main/12345678")).toEqual({
+      namespace: "dashboard",
+      kind: "short",
+      agentId: "main",
       shortId: "12345678",
+      literalSessionKey: "agent:main:12345678",
     });
     expect(sessionRefFromPath("/chat/wrong/wrong-slug-1234567890ab")).toEqual({
-      face: "chat",
-      kind: "session",
+      namespace: "chat",
+      kind: "short",
       agentId: "wrong",
       shortId: "1234567890ab",
+      literalSessionKey: "agent:wrong:wrong-slug-1234567890ab",
     });
-    expect(sessionRefFromPath("/chat/12345678-90ab-cdef-1234-567890abcdef")).toEqual({
-      face: "chat",
-      kind: "session",
-      shortId: "1234567890abcdef1234567890abcdef",
+    expect(sessionRefFromPath("/chat/main/telegram/12345")).toEqual({
+      namespace: "chat",
+      kind: "literal",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:12345",
+    });
+    expect(sessionRefFromPath("/chat/ops/cron/nightly/run/8821")).toEqual({
+      namespace: "chat",
+      kind: "literal",
+      agentId: "ops",
+      sessionKey: "agent:ops:cron:nightly:run:8821",
+    });
+    expect(pathForSession("chat", "main", "agent:main:cron:..:run")).toBe(
+      "/chat/main/cron/~dotdot/run",
+    );
+    expect(sessionRefFromPath("/chat/main/cron/~dotdot/run")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:main:cron:..:run",
+    });
+    expect(pathForSession("chat", "main", "agent:main:channel:~dot")).toBe(
+      "/chat/main/channel/~~dot",
+    );
+    expect(sessionRefFromPath("/chat/main/channel/~~dot")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:main:channel:~dot",
     });
     expect(routeIdFromPath("/dashboard/main/deploy-12345678")).toBe("dashboard");
     expect(inferBasePathFromPathname("/ui/chat/main/deploy-12345678")).toBe("/ui");

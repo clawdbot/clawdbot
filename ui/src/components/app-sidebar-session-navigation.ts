@@ -11,7 +11,6 @@ import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
   pathForSessionKey,
-  tryPathForSessionKey,
   sessionMatchesArchivedFilter,
 } from "../lib/sessions/index.ts";
 import {
@@ -283,15 +282,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly selectSession = (sessionKey: string) => {
-    const pathname = tryPathForSessionKey(
+    const pathname = pathForSessionKey(
       "chat",
       sessionKey,
       this.basePath,
       this.findSidebarSessionByKey(sessionKey),
     );
-    if (!pathname) {
-      return;
-    }
     this.context?.gateway.setSessionKey(sessionKey);
     this.onNavigate?.("chat", {
       pathname,
@@ -424,15 +420,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly replaceCurrentSession = (sessionKey: string) => {
-    const pathname = tryPathForSessionKey(
+    const pathname = pathForSessionKey(
       "chat",
       sessionKey,
       this.basePath,
       this.findSidebarSessionByKey(sessionKey),
     );
-    if (!pathname) {
-      return;
-    }
     this.context?.gateway.setSessionKey(sessionKey);
     if (isSessionRouteId(this.activeRouteId)) {
       this.onNavigate?.("chat", { pathname });

@@ -155,9 +155,7 @@ describe("ClickClack discussion service contracts", () => {
     );
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({
-        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
-      }),
+      pending: expect.objectContaining({ sessionId: "session-id" }),
     });
   });
 
@@ -198,9 +196,7 @@ describe("ClickClack discussion service contracts", () => {
     );
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({
-        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
-      }),
+      pending: expect.objectContaining({ sessionId: "session-id" }),
     });
   });
 
@@ -517,9 +513,7 @@ describe("ClickClack discussion service contracts", () => {
     await expect(harness.service.open(sessionKey)).rejects.toThrow("SQLITE_FULL");
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({
-        sessionId: "12345678-90ab-cdef-1234-567890abcdef",
-      }),
+      pending: expect.objectContaining({ sessionId: "session-id" }),
     });
     expect(harness.revokedStore.entries()).toHaveLength(1);
   });
@@ -601,7 +595,7 @@ describe("ClickClack discussion service contracts", () => {
       "https://new-control.example";
     await harness.service.reconcile(sessionKey);
     expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
-      external_url: "https://new-control.example/chat/main/support-12345678",
+      external_url: "https://new-control.example/chat/main/control-link",
     });
   });
 

@@ -743,6 +743,9 @@
       "@openclaw/retry": [
         "../dist/plugin-sdk/packages/retry/src/index.d.ts"
       ],
+      "@openclaw/session-url-contract": [
+        "../packages/session-url-contract/src/index.ts"
+      ],
       "@openclaw/workboard-contract": [
         "../packages/workboard-contract/src/index.ts"
       ],

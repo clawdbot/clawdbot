@@ -1,17 +1,12 @@
+import {
+  buildControlUiSessionPath,
+  parseControlUiSessionPath,
+  type ControlUiSessionPathTarget,
+} from "@openclaw/session-url-contract";
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import type { BoardFace } from "./lib/board/settings.ts";
-import {
-  DEFAULT_MAIN_KEY,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "./lib/sessions/session-key.ts";
-
-const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SESSION_ID_PREFIX_RE = /^[0-9a-f]{8,32}$/i;
-const SESSION_REF_SUFFIX_RE = /(?:^|-)([0-9a-f]{8,32})$/i;
-const SESSION_SLUG_MAX_LENGTH = 48;
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 
 const APP_ROUTE_DEFINITIONS = {
@@ -87,43 +82,13 @@ export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
   return `${pathForRoute("workboard", basePath)}/${encodedBoardId}`;
 }
 
-export type SessionPathTarget =
-  | { face: BoardFace; kind: "main"; agentId: string }
-  | { face: BoardFace; kind: "session"; agentId?: string; shortId: string };
+export type SessionPathTarget = ControlUiSessionPathTarget;
 
 export type SessionPathDetails = {
-  sessionId?: string | null;
   displayName?: string | null;
   mainKey?: string | null;
+  shortIdLength?: number;
 };
-
-function normalizedSessionId(value: string | undefined | null): string | null {
-  const normalized = value?.trim().toLowerCase() ?? "";
-  if (SESSION_UUID_RE.test(normalized)) {
-    return normalized.replaceAll("-", "");
-  }
-  return SESSION_ID_PREFIX_RE.test(normalized) ? normalized : null;
-}
-
-function sessionIdFromKey(sessionKey: string): string | null {
-  const suffix = sessionKey.match(
-    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{8,32})$/i,
-  )?.[1];
-  return normalizedSessionId(suffix);
-}
-
-function slugForSession(displayName: string | undefined | null): string {
-  const tokens = (displayName ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .split("-")
-    .filter(Boolean);
-  while (tokens.length > 0 && /^[0-9a-f]+$/.test(tokens.at(-1) ?? "")) {
-    tokens.pop();
-  }
-  return tokens.join("-").slice(0, SESSION_SLUG_MAX_LENGTH).replace(/-+$/g, "");
-}
 
 export function pathForSession(
   face: BoardFace,
@@ -131,73 +96,20 @@ export function pathForSession(
   sessionKey: string,
   basePath = "",
   details: SessionPathDetails = {},
-): string {
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const parsed = parseAgentSessionKey(sessionKey);
-  const mainKey = details.mainKey?.trim().toLowerCase() || DEFAULT_MAIN_KEY;
-  const normalizedKey = sessionKey.trim().toLowerCase();
-  const isMain =
-    normalizedKey === "main" ||
-    normalizedKey === "global" ||
-    parsed?.rest === DEFAULT_MAIN_KEY ||
-    parsed?.rest === mainKey;
-  const namespace = pathForRoute(face, basePath);
-  if (isMain) {
-    return `${namespace}/${encodeURIComponent(normalizedAgentId)}`;
-  }
-  const sessionId = normalizedSessionId(details.sessionId) ?? sessionIdFromKey(sessionKey);
-  if (!sessionId) {
-    throw new Error("Session path requires a UUID-backed session.");
-  }
-  const shortId = sessionId.slice(0, 8);
-  const slug = slugForSession(details.displayName);
-  const sessionRef = slug ? `${slug}-${shortId}` : shortId;
-  return `${namespace}/${encodeURIComponent(normalizedAgentId)}/${sessionRef}`;
-}
-
-function decodePathSegment(segment: string): string | null {
-  try {
-    const decoded = decodeURIComponent(segment).trim();
-    return decoded && !decoded.includes("/") ? decoded : null;
-  } catch {
-    return null;
-  }
-}
-
-function shortIdFromSessionRef(sessionRef: string): string | null {
-  if (SESSION_UUID_RE.test(sessionRef)) {
-    return sessionRef.toLowerCase().replaceAll("-", "");
-  }
-  return sessionRef.match(SESSION_REF_SUFFIX_RE)?.[1]?.toLowerCase() ?? null;
+): string | null {
+  return buildControlUiSessionPath({
+    namespace: face,
+    sessionKey,
+    fallbackAgentId: agentId,
+    basePath,
+    displayName: details.displayName ?? undefined,
+    mainKey: details.mainKey ?? undefined,
+    shortIdLength: details.shortIdLength,
+  });
 }
 
 export function sessionRefFromPath(pathname: string, basePath = ""): SessionPathTarget | null {
-  const normalizedPath = normalizePath(pathname);
-  for (const face of ["chat", "dashboard"] as const) {
-    const namespace = pathForRoute(face, basePath);
-    const prefix = `${namespace}/`;
-    if (!normalizedPath.startsWith(prefix)) {
-      continue;
-    }
-    const segments = normalizedPath.slice(prefix.length).split("/");
-    if (segments.length > 2) {
-      return null;
-    }
-    const first = decodePathSegment(segments[0] ?? "");
-    if (!first) {
-      return null;
-    }
-    if (segments.length === 1) {
-      const shortId = shortIdFromSessionRef(first);
-      return shortId
-        ? { face, kind: "session", shortId }
-        : { face, kind: "main", agentId: normalizeAgentId(first) };
-    }
-    const sessionRef = decodePathSegment(segments[1] ?? "");
-    const shortId = sessionRef ? shortIdFromSessionRef(sessionRef) : null;
-    return shortId ? { face, kind: "session", agentId: normalizeAgentId(first), shortId } : null;
-  }
-  return null;
+  return parseControlUiSessionPath(pathname, basePath);
 }
 
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
@@ -241,7 +153,7 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   }
   const sessionRef = sessionRefFromPath(normalizedPath, normalizedBasePath);
   if (sessionRef) {
-    return sessionRef.face;
+    return sessionRef.namespace;
   }
   for (const routeId of APP_ROUTE_IDS) {
     const definition = APP_ROUTE_DEFINITIONS[routeId];

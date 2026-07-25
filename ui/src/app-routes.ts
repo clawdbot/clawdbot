@@ -116,7 +116,7 @@ function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, 
   search.set(INTERNAL_SESSION_PATH_PARAM, location.pathname);
   return {
     ...location,
-    pathname: pathForRoute(sessionRef.face, basePath),
+    pathname: pathForRoute(sessionRef.namespace, basePath),
     search: `?${search.toString()}`,
   };
 }
@@ -156,7 +156,7 @@ export async function startApplicationRouter(
         const sessionRef = sessionRefFromPath(next.pathname, basePath);
         if (sessionRef) {
           void router
-            .navigate(sessionRef.face, context, { history: "none" }, next)
+            .navigate(sessionRef.namespace, context, { history: "none" }, next)
             .catch((error: unknown) => {
               console.error("[openclaw] Session route navigation failed", error);
             });
@@ -172,7 +172,7 @@ export async function startApplicationRouter(
     await router.navigate("workboard", context, { history: "none", revalidate: true }, location);
   } else if (initialSessionRef) {
     await router.navigate(
-      initialSessionRef.face,
+      initialSessionRef.namespace,
       context,
       { history: "none", revalidate: true },
       location,

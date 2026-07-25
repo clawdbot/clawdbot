@@ -1,3 +1,7 @@
+import {
+  controlUiSessionKeyUuid,
+  controlUiUniqueShortIdPrefix,
+} from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage, notFound } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
@@ -24,7 +28,7 @@ type SessionCandidate = {
   agentId: string;
   displayName: string;
   href: string;
-  sessionId: string;
+  idPrefix: string;
 };
 
 export type ChatRouteData =
@@ -53,18 +57,14 @@ const resolutionCache = new WeakMap<
   Map<string, Promise<SessionPrefixResolution | null>>
 >();
 
-function normalizedId(value: string): string {
-  return value.toLowerCase().replaceAll("-", "");
-}
-
 export function resolveSessionPrefix(
   result: SessionsListResult,
   shortId: string,
 ): SessionPrefixResolution {
-  const prefix = normalizedId(shortId);
+  const prefix = shortId.toLowerCase().replaceAll("-", "");
   const sessions = result.sessions.filter((row) => {
-    const sessionId = row.sessionId?.trim();
-    return sessionId ? normalizedId(sessionId).startsWith(prefix) : false;
+    const keyUuid = controlUiSessionKeyUuid(row.key);
+    return keyUuid?.startsWith(prefix) === true;
   });
   if (result.hasMore === true || sessions.length > 1) {
     return { kind: "ambiguous", sessions, truncated: result.hasMore === true };
@@ -142,11 +142,16 @@ async function querySessionPrefix(
         .then((result) => (result ? resolveSessionPrefix(result, shortId) : null));
       cache.set(shortId, pending);
     }
-    const resolved = await pending;
-    if (resolved) {
-      return resolved;
+    try {
+      const resolved = await pending;
+      if (resolved) {
+        return resolved;
+      }
+    } finally {
+      if (cache.get(shortId) === pending) {
+        cache.delete(shortId);
+      }
     }
-    cache.delete(shortId);
   }
   throw abortError(signal);
 }
@@ -178,25 +183,37 @@ function mainSessionKey(
   });
 }
 
-function candidateForRow(
+function candidatesForResolution(
   context: ApplicationContext,
   face: BoardFace,
-  row: GatewaySessionRow,
-): SessionCandidate | null {
-  const sessionId = row.sessionId?.trim();
-  if (!sessionId) {
-    return null;
-  }
-  const agentId = resolveAgentIdFromSessionKey(row.key);
-  return {
-    agentId,
-    displayName: row.displayName?.trim() || row.key,
-    href: pathForSession(face, agentId, row.key, context.basePath, {
+  resolution: Extract<SessionPrefixResolution, { kind: "ambiguous" }>,
+): SessionCandidate[] {
+  const resolvedRows = resolution.sessions.flatMap((row) => {
+    const uuid = controlUiSessionKeyUuid(row.key);
+    return uuid ? [{ row, uuid }] : [];
+  });
+  const uuids = resolvedRows.map(({ uuid }) => uuid);
+  return resolvedRows.flatMap(({ row, uuid }) => {
+    const prefix = controlUiUniqueShortIdPrefix(uuid, uuids, resolution.truncated);
+    if (!prefix) {
+      return [];
+    }
+    const agentId = resolveAgentIdFromSessionKey(row.key);
+    const href = pathForSession(face, agentId, row.key, context.basePath, {
       displayName: row.displayName,
-      sessionId,
-    }),
-    sessionId,
-  };
+      shortIdLength: prefix.length,
+    });
+    return href
+      ? [
+          {
+            agentId,
+            displayName: row.displayName?.trim() || row.key,
+            href,
+            idPrefix: prefix,
+          },
+        ]
+      : [];
+  });
 }
 
 export async function loadChatRoute(
@@ -206,7 +223,7 @@ export async function loadChatRoute(
   signal: AbortSignal,
 ): Promise<ChatRouteData | ReturnType<typeof notFound>> {
   const resolvedTarget = targetFromLocation(location, context.basePath);
-  if (!resolvedTarget || resolvedTarget.target.face !== face) {
+  if (!resolvedTarget || resolvedTarget.target.namespace !== face) {
     return notFound({ routeId: face });
   }
   const { target } = resolvedTarget;
@@ -218,18 +235,28 @@ export async function loadChatRoute(
       face,
     };
   }
+  if (target.kind === "literal") {
+    return {
+      kind: "session",
+      sessionKey: target.sessionKey,
+      draft: draftFromLocation(location),
+      face,
+    };
+  }
   const resolution = await querySessionPrefix(context, target.shortId, signal);
   if (resolution.kind === "not-found") {
-    return notFound({ routeId: face });
+    return {
+      kind: "session",
+      sessionKey: target.literalSessionKey,
+      draft: draftFromLocation(location),
+      face,
+    };
   }
   if (resolution.kind === "ambiguous") {
     return {
       kind: "ambiguous",
       shortId: target.shortId,
-      candidates: resolution.sessions.flatMap((row) => {
-        const candidate = candidateForRow(context, face, row);
-        return candidate ? [candidate] : [];
-      }),
+      candidates: candidatesForResolution(context, face, resolution),
       truncated: resolution.truncated,
       face,
     };
@@ -238,8 +265,11 @@ export async function loadChatRoute(
   const agentId = resolveAgentIdFromSessionKey(row.key);
   const canonicalPath = pathForSession(face, agentId, row.key, context.basePath, {
     displayName: row.displayName,
-    sessionId: row.sessionId,
+    shortIdLength: target.shortId.length,
   });
+  if (!canonicalPath) {
+    return notFound({ routeId: face });
+  }
   return {
     kind: "session",
     sessionKey: row.key,
@@ -260,7 +290,7 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
         (candidate) => html`
           <p>
             <a href=${candidate.href}>${candidate.displayName}</a><br />
-            <small>${candidate.agentId} · ${candidate.sessionId.slice(0, 16)}</small>
+            <small>${candidate.agentId} · ${candidate.idPrefix}</small>
           </p>
         `,
       )}

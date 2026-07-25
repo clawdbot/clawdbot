@@ -1,6 +1,6 @@
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { pathForSession } from "../../app-route-paths.ts";
+import { pathForRoute, pathForSession } from "../../app-route-paths.ts";
 import type { BoardFace } from "../board/settings.ts";
 import { isCronSessionKey } from "../session-display.ts";
 import {
@@ -345,27 +345,14 @@ export function pathForSessionKey(
   face: BoardFace,
   sessionKey: string,
   basePath = "",
-  row?: Pick<GatewaySessionRow, "displayName" | "key" | "sessionId">,
+  row?: Pick<GatewaySessionRow, "displayName" | "key">,
   mainKey?: string | null,
 ): string {
   const key = row?.key ?? sessionKey;
-  return pathForSession(face, resolveAgentIdFromSessionKey(key), key, basePath, {
-    displayName: row?.displayName,
-    mainKey,
-    sessionId: row?.sessionId,
-  });
-}
-
-export function tryPathForSessionKey(
-  face: BoardFace,
-  sessionKey: string,
-  basePath = "",
-  row?: Pick<GatewaySessionRow, "displayName" | "key" | "sessionId">,
-  mainKey?: string | null,
-): string | null {
-  try {
-    return pathForSessionKey(face, sessionKey, basePath, row, mainKey);
-  } catch {
-    return null;
-  }
+  return (
+    pathForSession(face, resolveAgentIdFromSessionKey(key), key, basePath, {
+      displayName: row?.displayName,
+      mainKey,
+    }) ?? pathForRoute(face, basePath)
+  );
 }
