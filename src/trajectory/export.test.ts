@@ -7,6 +7,7 @@ import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
@@ -1888,6 +1889,113 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.manifest.transcriptEventCount).toBe(2);
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+  });
+
+  it("redactToolPayloadText does not corrupt valid JSON containing escaped quotes in secret-key values", () => {
+    // The text-pass regexes operate on plain text, not pre-serialized JSON.
+    // When a JSON value contains an escaped quote (\\"), the pattern
+    // "(?:token|apiKey|...)"\s*:\s*"([^"]+)" captures only the prefix
+    // before the backslash-escaped quote.  Replacing that prefix with ***
+    // leaves trailing content outside the string boundary, producing
+    // invalid JSON.
+    //
+    // Before the fix, the text pass runs via redactTrajectoryBundleFileContent
+    // on every serialized bundle file.  This test proves the mechanism
+    // exists so the removal of the vulnerable call site is justified.
+    const input = '{"token":"***\\"abc-12345","note":"safe"}';
+
+    // This input is valid JSON (tokens like sk-fake... are not real secrets)
+    expect(() => JSON.parse(input)).not.toThrow();
+
+    const output = redactToolPayloadText(input);
+
+    // The text pass must NOT make valid JSON unparseable.  If it does,
+    // the call to redactToolPayloadText on serialized JSON is unsafe.
+    expect(() => JSON.parse(output)).not.toThrow();
+  });
+
+  it("preserves JSON validity when bundle values contain escaped quotes (regression: text pass corrupts serialized JSON)", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    const header = {
+      type: "session",
+      version: 3,
+      id: "session-1",
+      timestamp: "2026-04-01T05:46:39.000Z",
+      cwd: tmpDir,
+    };
+    const userEntry = {
+      type: "message",
+      id: "entry-user",
+      parentId: null,
+      timestamp: "2026-04-01T05:46:40.000Z",
+      message: userMessage("keep-visible-marker"),
+    };
+    const assistantEntry = {
+      type: "message",
+      id: "entry-assistant",
+      parentId: "entry-user",
+      timestamp: "2026-04-01T05:46:41.000Z",
+      message: assistantMessage([{ type: "text", text: "done" }]),
+    };
+    fs.writeFileSync(
+      sessionFile,
+      `${[header, userEntry, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+
+    fs.writeFileSync(
+      runtimeFile,
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "context.compiled",
+        ts: "2026-04-01T05:46:40.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+        data: {
+          token: 'val"with-quote-inside',
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    // Every JSON/JSONL file in the bundle must be parseable
+    const files = fs
+      .readdirSync(outputDir)
+      .filter((f) => f.endsWith(".json") || f.endsWith(".jsonl"));
+    for (const f of files) {
+      const content = fs.readFileSync(path.join(outputDir, f), "utf8").trim();
+      if (f.endsWith(".jsonl")) {
+        const lines = content.split(/\r?\n/u).filter(Boolean);
+        for (const [index, line] of lines.entries()) {
+          expect(() => JSON.parse(line), `${f} line ${index + 1} must be valid JSON`).not.toThrow();
+        }
+      } else {
+        expect(() => JSON.parse(content), `${f} must be valid JSON`).not.toThrow();
+      }
+    }
+
+    // Secrets must still be masked by the structured pass
+    const allText = fs
+      .readdirSync(outputDir)
+      .map((file) => fs.readFileSync(path.join(outputDir, file), "utf8"))
+      .join("\n");
+    expect(allText).toContain("keep-visible-marker");
+    expect(allText).not.toContain("val-with-quote-inside");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
