@@ -12,3 +12,9 @@ export {
   resetFileLockStateForTest,
   withFileLock,
 } from "../plugin-sdk/file-lock.js";
+export {
+  acquireFileLock as acquireFsSafeFileLock,
+  withFileLock as withFsSafeFileLock,
+  type FileLockAcquireOptions as FsSafeFileLockAcquireOptions,
+  type FileLockHandle as FsSafeFileLockHandle,
+} from "@openclaw/fs-safe/file-lock";

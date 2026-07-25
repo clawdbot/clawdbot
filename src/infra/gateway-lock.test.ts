@@ -543,6 +543,39 @@ describe("gateway lock", () => {
     await nextLock.release();
   });
 
+  it("preserves a fresh gateway lock that replaces the stale reclaim candidate", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const { configPath, stateLockPath } = resolveLockPath(env);
+    await fs.mkdir(path.dirname(stateLockPath), { recursive: true });
+    await fs.writeFile(
+      stateLockPath,
+      JSON.stringify(createLockPayload({ configPath, startTime: 111 })),
+      "utf8",
+    );
+    const replacement = {
+      ...createLockPayload({ configPath, startTime: 333 }),
+      ownerId: "replacement-owner",
+    };
+    let startTimeReads = 0;
+
+    await expect(
+      acquireForTest(env, {
+        platform: "linux",
+        timeoutMs: 25,
+        readProcessStartTime: () => {
+          startTimeReads += 1;
+          if (startTimeReads === 2) {
+            fsSync.writeFileSync(stateLockPath, JSON.stringify(replacement), "utf8");
+          }
+          return startTimeReads >= 3 ? 333 : 222;
+        },
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
+
+    expect(JSON.parse(await fs.readFile(stateLockPath, "utf8"))).toMatchObject(replacement);
+  });
+
   it("keeps lock on linux when proc access fails unless stale", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
@@ -794,6 +827,7 @@ describe("gateway lock", () => {
         platform: "darwin",
         port: 18789,
         readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
+        readProcessStartTime: () => 111,
       });
       await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
     } finally {
@@ -822,6 +856,7 @@ describe("gateway lock", () => {
         },
         lockDir: resolveTestLockDir(),
         readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
+        readProcessStartTime: () => 111,
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
 
@@ -1036,6 +1071,7 @@ describe("gateway lock", () => {
       platform: "darwin",
       port: 18789,
       readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run", "--port", "18789"],
+      readProcessStartTime: () => 111,
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 

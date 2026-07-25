@@ -15,6 +15,7 @@ import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../co
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
+import { acquireFsSafeFileLock } from "./file-lock.js";
 import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
@@ -260,9 +261,87 @@ async function resolveGatewayOwnerStatus(
 async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
-    return safeParseJsonWithSchema(LockPayloadSchema, raw);
+    return parseGatewayLockPayload(raw);
   } catch {
     return null;
+  }
+}
+
+function parseGatewayLockPayload(raw: string): LockPayload | null {
+  return safeParseJsonWithSchema(LockPayloadSchema, raw);
+}
+
+async function shouldReclaimGatewayLock(params: {
+  lockPath: string;
+  payload: LockPayload | null;
+  staleMs: number;
+  now: () => number;
+  platform: NodeJS.Platform;
+  readProcessCmdline?: (pid: number) => string[] | null;
+  readProcessStartTime?: (pid: number) => number | null;
+}): Promise<boolean> {
+  const ownerPid = params.payload?.pid;
+  const ownerStatus = ownerPid
+    ? await resolveGatewayOwnerStatus(
+        ownerPid,
+        params.payload,
+        params.platform,
+        params.readProcessCmdline,
+        params.readProcessStartTime,
+      )
+    : "unknown";
+  if (ownerStatus === "dead" && ownerPid) {
+    return true;
+  }
+  if (ownerStatus === "alive") {
+    return false;
+  }
+  if (params.payload?.createdAt) {
+    const createdAt = Date.parse(params.payload.createdAt);
+    if (Number.isFinite(createdAt) && params.now() - createdAt > params.staleMs) {
+      return true;
+    }
+  }
+  try {
+    const stat = await fs.stat(params.lockPath);
+    return params.now() - stat.mtimeMs > params.staleMs;
+  } catch {
+    // An unreadable lock can still belong to a healthy gateway. Fail closed.
+    return false;
+  }
+}
+
+async function reclaimGatewayLockIfUnchanged(params: {
+  lockPath: string;
+  staleMs: number;
+  now: () => number;
+  platform: NodeJS.Platform;
+  readProcessCmdline?: (pid: number) => string[] | null;
+  readProcessStartTime?: (pid: number) => number | null;
+}): Promise<boolean> {
+  const shouldReclaim = (payload: LockPayload | null) =>
+    shouldReclaimGatewayLock({ ...params, payload });
+  try {
+    const lock = await acquireFsSafeFileLock(params.lockPath, {
+      managerKey: "openclaw.gateway-lock-reclaim",
+      lockPath: params.lockPath,
+      staleMs: params.staleMs,
+      timeoutMs: 0,
+      retry: { retries: 0 },
+      staleRecovery: "remove-if-unchanged",
+      payload: () => ({ pid: process.pid, createdAt: new Date(params.now()).toISOString() }),
+      parsePayload: parseGatewayLockPayload,
+      shouldReclaim: ({ payload }) => shouldReclaim(payload as LockPayload | null),
+      shouldRemoveStaleLock: ({ payload }) => shouldReclaim(payload as LockPayload | null),
+    });
+    await lock.release();
+    return true;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === "file_lock_timeout" || code === "file_lock_stale") {
+      return false;
+    }
+    throw error;
   }
 }
 
@@ -480,42 +559,17 @@ async function acquireLockFile(
             }
 
             lastPayload = await readLockPayload(lockPath);
-            const ownerPid = lastPayload?.pid;
-            const ownerStatus = ownerPid
-              ? await resolveGatewayOwnerStatus(
-                  ownerPid,
-                  lastPayload,
-                  platform,
-                  opts.readProcessCmdline,
-                  opts.readProcessStartTime,
-                )
-              : "unknown";
-            if (ownerStatus === "dead" && ownerPid) {
-              await fs.rm(lockPath, { force: true });
+            if (
+              await reclaimGatewayLockIfUnchanged({
+                lockPath,
+                staleMs,
+                now,
+                platform,
+                readProcessCmdline: opts.readProcessCmdline,
+                readProcessStartTime: opts.readProcessStartTime,
+              })
+            ) {
               continue;
-            }
-            if (ownerStatus !== "alive") {
-              let stale = false;
-              if (lastPayload?.createdAt) {
-                const createdAt = Date.parse(lastPayload.createdAt);
-                stale = Number.isFinite(createdAt) ? now() - createdAt > staleMs : false;
-              }
-              if (!stale) {
-                try {
-                  const st = await fs.stat(lockPath);
-                  stale = now() - st.mtimeMs > staleMs;
-                } catch {
-                  // On Windows or locked filesystems we may be unable to stat the
-                  // lock file even though the existing gateway is still healthy.
-                  // Treat the lock as non-stale so we keep waiting instead of
-                  // forcefully removing another gateway's lock.
-                  stale = false;
-                }
-              }
-              if (stale) {
-                await fs.rm(lockPath, { force: true });
-                continue;
-              }
             }
             waitForOwner = true;
             continue;
