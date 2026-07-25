@@ -17,6 +17,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Optional standard hosting profile selected by the current invocation. */
+  hostingProfileOverride?: HostingProfileId;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1

@@ -25,9 +25,11 @@ function assertSelectedProfile(profile) {
   assert.equal(body.profileContractVersion, 1);
   assert.equal(body.profile, profile);
   assert.ok(["argument", "environment", "config"].includes(body.profileSource));
-  assert.equal(body.activation?.profile, profile);
-  assert.equal(typeof body.activation?.runtimeId, "string");
-  assert.equal(typeof body.activation?.incarnationId, "string");
+  assert.equal(selected.subjectRef, "openclaw/hosting-profile/selected");
+  const subject = body.identity?.subjects?.find((entry) => entry.ref === selected.subjectRef);
+  assert.equal(subject?.kind, "openclaw.hosting-profile");
+  assert.equal(subject?.id, profile);
+  assert.equal(subject?.generation, "1");
 }
 
 if (scenario === "unprofiled") {
@@ -35,11 +37,9 @@ if (scenario === "unprofiled") {
   assert.equal(body.ready, true);
   assert.equal(findCondition("ProfileSelected"), undefined);
   assert.equal(findCondition("WorkspaceWritable"), undefined);
-  assert.equal(findCondition("RuntimeActivationIdentified"), undefined);
   assert.equal(body.profileContractVersion, undefined);
   assert.equal(body.profile, undefined);
   assert.equal(body.profileSource, undefined);
-  assert.equal(body.activation, undefined);
   assert.equal(findCondition("ConfigLoaded"), undefined);
   assert.equal(findCondition("GatewayResponding"), undefined);
   for (const type of ["GatewayStartupComplete", "GatewayAcceptingWork", "ChannelRuntimeReady"]) {
@@ -56,7 +56,6 @@ if (scenario === "unprofiled") {
   assert.equal(condition("GatewayResponding").requirement, "required");
   assert.equal(condition("WorkspaceWritable").status, "True");
   assert.equal(condition("WorkspaceWritable").requirement, "required");
-  assert.equal(condition("RuntimeActivationIdentified").status, "True");
   assert.equal(condition("PluginsLoaded").requirement, "required");
   assert.deepEqual(body.failures, []);
   assert.ok(Array.isArray(body.advisories));

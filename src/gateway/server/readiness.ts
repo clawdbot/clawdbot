@@ -1,7 +1,11 @@
 // Gateway readiness checker for channel health and startup sidecar state.
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ReadinessCondition, CanonicalReadinessResult } from "../../readiness/conditions.js";
+import type {
+  ReadinessCondition,
+  ReadinessContribution,
+  CanonicalReadinessResult,
+} from "../../readiness/conditions.js";
 import { applySelectedCanonicalRequirements } from "../../readiness/selection.js";
 import {
   CORE_READINESS_SUBJECT_REFS,
@@ -31,7 +35,15 @@ type ReadinessResult = {
   advisories?: string[];
 };
 
-export type CanonicalGatewayReadinessResult = ReadinessResult & CanonicalReadinessResult;
+export type HostingProfileReadinessMetadata = {
+  profileContractVersion: 1;
+  profile: string;
+  profileSource: "argument" | "environment" | "config";
+};
+
+export type CanonicalGatewayReadinessResult = ReadinessResult &
+  CanonicalReadinessResult &
+  Partial<HostingProfileReadinessMetadata>;
 
 /** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult | Promise<ReadinessResult>;
@@ -72,6 +84,7 @@ async function withReadinessEvaluationTimeout<T>(
 function buildReadinessEvaluationFailure(
   error: unknown,
   identity: ReadinessIdentity,
+  context?: ReadinessContribution,
 ): CanonicalReadinessResult {
   const timedOut = error instanceof ReadinessEvaluationTimeoutError;
   const reason = timedOut ? "ReadinessEvaluationTimedOut" : "ReadinessEvaluationFailed";
@@ -85,15 +98,17 @@ function buildReadinessEvaluationFailure(
       ? "Readiness evaluation did not complete within its bounded deadline."
       : "Readiness evaluation could not be completed.",
   };
+  const conditions = [condition, ...(context?.conditions ?? [])];
   return {
     contractVersion: 1,
     evaluatedAtMs: Date.now(),
     identity: reconcileReadinessIdentity({
       base: identity,
-      references: [condition as ReadinessCondition & { subjectRef: string }],
+      subjects: context?.subjects,
+      references: conditions as Array<ReadinessCondition & { subjectRef: string }>,
     }),
     ready: false,
-    conditions: [condition],
+    conditions,
     failures: [reason],
     advisories: [],
   };
@@ -371,7 +386,11 @@ function mergeReadinessResults(
   gateway: ReadinessResult,
   runtime: CanonicalReadinessResult,
   identity: ReadinessIdentity,
-  options?: { config?: OpenClawConfig; runtimeConditionsFirst?: boolean },
+  options?: {
+    config?: OpenClawConfig;
+    runtimeConditionsFirst?: boolean;
+    profileMetadata?: HostingProfileReadinessMetadata;
+  },
 ): CanonicalGatewayReadinessResult {
   const gatewayConditions: ReadinessCondition[] = [];
   for (const condition of gateway.conditions ?? []) {
@@ -418,6 +437,7 @@ function mergeReadinessResults(
   return {
     ...gateway,
     contractVersion: 1,
+    ...options?.profileMetadata,
     evaluatedAtMs: runtime.evaluatedAtMs,
     identity: reconcileReadinessIdentity({
       base: identity,
@@ -477,6 +497,8 @@ export async function evaluateConfiguredGatewayReadiness(params: {
   config: OpenClawConfig;
   identity: ReadinessIdentity;
   canonicalEvaluationEnabled?: boolean;
+  failureContext?: ReadinessContribution;
+  profileMetadata?: HostingProfileReadinessMetadata;
   evaluateGateway: ReadinessChecker;
   evaluateRuntime: () => Promise<CanonicalReadinessResult>;
   timeoutMs?: number;
@@ -508,6 +530,8 @@ async function evaluateCanonicalGatewayReadiness(params: {
   evaluateGateway: ReadinessChecker;
   evaluateRuntime: () => Promise<CanonicalReadinessResult>;
   timeoutMs?: number;
+  failureContext?: ReadinessContribution;
+  profileMetadata?: HostingProfileReadinessMetadata;
 }): Promise<CanonicalGatewayReadinessResult> {
   let gateway: ReadinessResult | undefined;
   try {
@@ -515,16 +539,23 @@ async function evaluateCanonicalGatewayReadiness(params: {
       Promise.resolve().then(async () => {
         gateway = await params.evaluateGateway();
         const runtime = await params.evaluateRuntime();
-        return mergeReadinessResults(gateway, runtime, params.identity, { config: params.config });
+        return mergeReadinessResults(gateway, runtime, params.identity, {
+          config: params.config,
+          profileMetadata: params.profileMetadata,
+        });
       }),
       params.timeoutMs,
     );
   } catch (error) {
     return mergeReadinessResults(
       gateway ?? { ready: false, failing: [], uptimeMs: 0 },
-      buildReadinessEvaluationFailure(error, params.identity),
+      buildReadinessEvaluationFailure(error, params.identity, params.failureContext),
       params.identity,
-      { config: params.config, runtimeConditionsFirst: true },
+      {
+        config: params.config,
+        runtimeConditionsFirst: true,
+        profileMetadata: params.profileMetadata,
+      },
     );
   }
 }

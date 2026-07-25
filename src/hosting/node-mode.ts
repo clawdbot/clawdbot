@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
 import type { NodeSession } from "../gateway/node-registry.js";
 import { listNodePairing } from "../infra/node-pairing.js";
+import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "../readiness/subjects.js";
 import type { NodeModeReadinessEvidence } from "./profiles.js";
 
 const DEFAULT_NODE_MODE_PAIRING_CACHE_TTL_MS = 1_000;
@@ -27,6 +28,17 @@ function commandSet(value: unknown): Set<string> {
   return new Set(
     Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [],
   );
+}
+
+function nodeReadinessSubject(nodeId: string, pairingGeneration?: string): ReadinessSubject {
+  const digest = createHash("sha256").update(nodeId).digest("hex").slice(0, 24);
+  return {
+    ref: `openclaw/node/${digest}`,
+    kind: "openclaw.node",
+    id: digest,
+    ...(pairingGeneration ? { generation: pairingGeneration } : {}),
+    parentRef: CORE_READINESS_SUBJECT_REFS.nodeController,
+  };
 }
 
 async function resolveNodeModeReadinessEvidenceWith(
@@ -72,6 +84,9 @@ async function resolveNodeModeReadinessEvidenceWith(
       controlChannel: {
         connectedCount,
       },
+      subjects: pairing.paired.map((node) =>
+        nodeReadinessSubject(node.nodeId, node.pairingGeneration),
+      ),
     };
   } catch {
     const connectedCount = 0;
@@ -180,3 +195,4 @@ export function createNodeModeReadinessEvidenceResolver(
     }
   };
 }
+import { createHash } from "node:crypto";

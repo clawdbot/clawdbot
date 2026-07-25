@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   advisoryCriteriaForHostingProfile,
   buildHostingProfileConditions,
+  buildHostingProfileSubjects,
   isReadinessCriterionSelectedByHostingProfile,
   requiredCriteriaForHostingProfile,
   resolveHostingProfileSelection,
@@ -40,6 +41,18 @@ describe("resolveHostingProfile", () => {
 });
 
 describe("buildHostingProfileConditions", () => {
+  it("publishes profile identity through the shared readiness subject package", () => {
+    expect(buildHostingProfileSubjects({ profile: "container", source: "config" })).toEqual([
+      {
+        ref: "openclaw/hosting-profile/selected",
+        kind: "openclaw.hosting-profile",
+        id: "container",
+        generation: "1",
+        parentRef: "openclaw/gateway/current",
+      },
+    ]);
+  });
+
   it("composes local from the shared readiness criteria", () => {
     expect(requiredCriteriaForHostingProfile("local")).toEqual([
       "openclaw.config-current",
