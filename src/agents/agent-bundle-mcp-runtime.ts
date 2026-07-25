@@ -533,7 +533,7 @@ export function createSessionMcpRuntime(params: {
 
       // A cooldown retry replaces only diagnostic-bearing servers. Healthy clients
       // keep their SDK tool-metadata snapshot and remain callable during recovery.
-      const servers: Record<string, McpServerCatalog> = { ...(retryBaseCatalog?.servers ?? {}) };
+      const servers: Record<string, McpServerCatalog> = { ...retryBaseCatalog?.servers };
       const tools: McpCatalogTool[] = [...(retryBaseCatalog?.tools ?? [])];
       const diagnostics: McpToolCatalogDiagnostic[] = [];
       // Prefer session-wide precomputed assignments; fall back only for isolated runtimes.
