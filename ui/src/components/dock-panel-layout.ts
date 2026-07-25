@@ -1,10 +1,20 @@
 export type DockPanelSide = "bottom" | "left" | "right";
 
-type DockPanelLayout<TDock extends DockPanelSide> = {
+export type DockPanelLayout<TDock extends DockPanelSide> = {
   open: boolean;
   dock: TDock;
   height: number;
   width: number;
+};
+
+export type DockPanelLayoutStore<TDock extends DockPanelSide> = {
+  defaults: DockPanelLayout<TDock>;
+  minHeight: number;
+  minWidth: number;
+  maxHeight(): number;
+  maxWidth(): number;
+  load(): DockPanelLayout<TDock>;
+  save(layout: DockPanelLayout<TDock>): void;
 };
 
 type DockPanelLayoutOptions<TDock extends DockPanelSide> = {
