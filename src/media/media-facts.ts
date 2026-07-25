@@ -58,6 +58,59 @@ export function readPersistedMediaFacts(message: object): MediaFact[] | undefine
   return Array.isArray(media) ? normalizeMediaFacts(media as MediaFactInput[]) : undefined;
 }
 
+/** Reads canonical persisted facts, falling back only for rows written before facts were universal. */
+export function readPersistedMediaFactsWithLegacyFallback(
+  message: object,
+): MediaFact[] | undefined {
+  const canonical = readPersistedMediaFacts(message);
+  if (canonical) {
+    return canonical;
+  }
+  const legacy = resolveMediaFacts(message as MediaFactSource);
+  return legacy.length > 0 ? legacy : undefined;
+}
+
+const LEGACY_MEDIA_CONTEXT_KEYS = [
+  "MediaPath",
+  "MediaPaths",
+  "MediaUrl",
+  "MediaUrls",
+  "MediaType",
+  "MediaTypes",
+  "MediaDir",
+  "MediaTranscribedIndexes",
+  "MediaStaged",
+  "MediaWorkspaceDir",
+] as const;
+export type LegacyMediaContextKey = (typeof LEGACY_MEDIA_CONTEXT_KEYS)[number];
+
+export function stripLegacyMediaContextFields(ctx: Record<string, unknown>): void {
+  for (const key of LEGACY_MEDIA_CONTEXT_KEYS) {
+    delete ctx[key];
+  }
+}
+
+export function projectPersistedMessageMediaFacts<T extends object>(message: T): T {
+  const media = readPersistedMediaFactsWithLegacyFallback(message);
+  const record = message as Record<string, unknown>;
+  const hasLegacyProjection = LEGACY_MEDIA_CONTEXT_KEYS.some((key) => Object.hasOwn(record, key));
+  if (media === undefined && !hasLegacyProjection && !Object.hasOwn(record, "media")) {
+    return message;
+  }
+  const next = { ...record };
+  delete next.media;
+  stripLegacyMediaContextFields(next);
+  if (media === undefined) {
+    return next as T;
+  }
+  const metadata = record["__openclaw"];
+  next["__openclaw"] = {
+    ...(metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {}),
+    media,
+  };
+  return next as T;
+}
+
 export function readRuntimePromptImageOrder(message: object): PromptImageOrderEntry[] | undefined {
   const imageOrder = (
     readRuntimePromptMediaFacts(message) as
@@ -151,28 +204,9 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
   return normalized;
 }
 
-/** True when media already carries staged workspace paths. */
-export function hasStagedMediaProjection(source: MediaFactSource): boolean {
-  // MediaWorkspaceDir is a whole-context SDK contract and applies to every
-  // fact through the workspace fallback in the positional resolver.
-  if (normalizeOptionalString(source.MediaWorkspaceDir)) {
-    return true;
-  }
-  if (source.MediaStaged === true) {
-    const legacy = resolveMediaFacts({ ...source, media: undefined });
-    if (!legacy.some((fact) => fact.path)) {
-      return true;
-    }
-    const merged = resolveStagedMediaFacts(source);
-    if (
-      merged.every(
-        (fact, index) => !normalizeOptionalString(fact.path) || Boolean(legacy[index]?.path),
-      )
-    ) {
-      return true;
-    }
-  }
-  const stageable = resolveMediaFacts(source).filter((fact) =>
+/** True when every path-bearing canonical fact has explicit staging proof. */
+export function hasStagedMediaFacts(media: readonly MediaFactInput[] | null | undefined): boolean {
+  const stageable = normalizeMediaFacts(media).filter((fact) =>
     Boolean(normalizeOptionalString(fact.path)),
   );
   return (
@@ -195,18 +229,13 @@ export function normalizeMediaFacts<TInput extends MediaFactInput>(
 // Empty slots exist only to keep legacy parallel-array positions aligned;
 // presence/counting sites must ignore them or blank projections ({MediaPaths: [""]})
 // route media-less messages into inbound-media handling.
-function isMeaningfulMediaFact(fact: MediaFact): boolean {
+export function isMeaningfulMediaFact(fact: MediaFact): boolean {
   return Boolean(
     fact.path?.trim() ||
     fact.url?.trim() ||
     fact.contentType ||
     (fact.kind && fact.kind !== "unknown"),
   );
-}
-
-/** Resolves facts and drops alignment-only empty slots for presence/count consumers. */
-export function resolveMeaningfulMediaFacts(source: MediaFactSource): MediaFact[] {
-  return resolveMediaFacts(source).filter(isMeaningfulMediaFact);
 }
 
 function resolveMediaFactsWithPrecedence(

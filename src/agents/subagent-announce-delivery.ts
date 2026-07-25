@@ -40,6 +40,7 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import {
   collectAutomaticDeliveredMediaUrls,
   collectDeliveredMediaUrls,
@@ -611,7 +612,7 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
 export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
-  const agentId = resolveAgentIdFromSessionKey(canonicalKey);
+  const agentId = resolveAgentIdFromSessionKey(canonicalKey, resolveDefaultAgentId(cfg));
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const entry = subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,
@@ -623,7 +624,7 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
 
 export function loadSessionEntryByKey(sessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const agentId = resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   return subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,
@@ -809,7 +810,10 @@ async function deliverGeneratedMediaCompletionDirect(params: {
     sourceTool: params.sourceTool,
     internalEvents: params.internalEvents,
   });
-  const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const agentId = resolveAgentIdFromSessionKey(
+    params.requesterSessionKey,
+    resolveDefaultAgentId(params.cfg),
+  );
   const idempotencyKey = `${params.directIdempotencyKey}:generated-media-direct`;
   try {
     await subagentAnnounceDeliveryDeps.sendMessage({
@@ -929,7 +933,10 @@ async function deliverTextCompletionDirect(params: {
   ) {
     return undefined;
   }
-  const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const agentId = resolveAgentIdFromSessionKey(
+    params.requesterSessionKey,
+    resolveDefaultAgentId(params.cfg),
+  );
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   try {
     await subagentAnnounceDeliveryDeps.sendMessage({

@@ -43,7 +43,7 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { isImageMediaFact, resolveMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { isImageMediaFact, normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -1525,7 +1525,7 @@ export async function runPreparedReply(
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
-  const ctxMediaForPersistence = resolveMediaFacts(ctx);
+  const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
   const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
   const mediaImageLayout = buildPersistedMediaImageLayout({
     ctx,

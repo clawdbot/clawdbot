@@ -1,3 +1,5 @@
+import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
+import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type {
@@ -15,7 +17,7 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
   workspaceDir?: string;
-}) => Promise<GatewayModelCatalogOwnerSnapshot>;
+}) => Promise<PublishedModelCatalogOwnerCandidate>;
 type LoadGatewayModelCatalogParams = {
   agentId?: string;
   agentDir?: string;
@@ -51,13 +53,15 @@ async function loadGatewayModelCatalogOwnerSnapshot(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelCatalogOwnerSnapshot> {
   const loadOwner = await resolveLoader(params);
-  return await loadOwner({
-    ...(params?.agentId ? { agentId: params.agentId } : {}),
-    ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
-    config: (params?.getConfig ?? getRuntimeConfig)(),
-    readOnly: params?.readOnly !== false,
-    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
+  return resolvePublishedModelCatalogOwner(
+    await loadOwner({
+      ...(params?.agentId ? { agentId: params.agentId } : {}),
+      ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
+      config: (params?.getConfig ?? getRuntimeConfig)(),
+      readOnly: params?.readOnly !== false,
+      ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    }),
+  );
 }
 
 export async function loadGatewayModelCatalogSnapshot(
@@ -66,9 +70,9 @@ export async function loadGatewayModelCatalogSnapshot(
   const owner = await loadGatewayModelCatalogOwnerSnapshot(params);
   return {
     ...owner.modelCatalog,
-    ...(owner.agentId ? { agentId: owner.agentId } : {}),
+    agentId: owner.agentId,
     agentDir: owner.agentDir,
-    ...(owner.workspaceDir ? { workspaceDir: owner.workspaceDir } : {}),
+    workspaceDir: owner.workspaceDir,
     config: owner.config,
   };
 }

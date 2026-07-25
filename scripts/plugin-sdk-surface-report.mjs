@@ -173,7 +173,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: canonical session delivery normalization, access, and projection helpers.
       // +5: focused media-local-roots helpers and typed hook media contracts.
       // +1: model-independent agent-harness preflight failure contract.
-      4717,
+      // +1: typed owner-required error for session store path resolution.
+      4718,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

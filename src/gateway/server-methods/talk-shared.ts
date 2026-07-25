@@ -72,11 +72,12 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
   warn: (message: string) => void;
 }): Promise<{ agentId: string; instructions: string; requestedSessionKey?: string }> {
   const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+  const defaultAgentId = resolveDefaultAgentId(params.config);
   // Older clients can prefetch without a key. Client-owned creates bind to the
   // default agent immediately, so its workspace profile stays consistent there.
   const agentId = requestedSessionKey
-    ? resolveAgentIdFromSessionKey(requestedSessionKey)
-    : resolveDefaultAgentId(params.config);
+    ? resolveAgentIdFromSessionKey(requestedSessionKey, defaultAgentId)
+    : defaultAgentId;
   const bootstrapContext =
     params.requireSessionKeyForProfile && !requestedSessionKey
       ? undefined

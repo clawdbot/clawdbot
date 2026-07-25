@@ -1,7 +1,18 @@
 // Covers config scanning for agent harness runtime requirements.
 import { describe, expect, it } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
+import { collectConfiguredAgentHarnessRuntimes as collectConfiguredAgentHarnessRuntimesBase } from "./harness-runtimes.js";
+
+function collectConfiguredAgentHarnessRuntimes(
+  config: OpenClawConfig,
+  options?: Parameters<typeof collectConfiguredAgentHarnessRuntimesBase>[1],
+) {
+  return collectConfiguredAgentHarnessRuntimesBase(
+    migratePersistedImplicitMainRoster(config).config as OpenClawConfig,
+    options,
+  );
+}
 
 describe("collectConfiguredAgentHarnessRuntimes", () => {
   it("requires Codex for selectable default OpenAI agent models", () => {
@@ -100,7 +111,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual([]);
   });
 
-  it("ignores malformed agents.list while scanning best-effort config", () => {
+  it("ignores a malformed legacy list when canonical entries are available", () => {
     // Runtime collection is diagnostic/setup support, so malformed optional
     // agent lists should not hide valid defaults-level runtime requirements.
     const config = {
@@ -112,6 +123,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
             },
           },
         },
+        entries: { main: { default: true } },
         list: {
           ops: {
             id: "ops",

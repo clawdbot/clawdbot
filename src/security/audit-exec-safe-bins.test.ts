@@ -39,6 +39,7 @@ describe("security audit exec safe-bin findings", () => {
           list: [
             {
               id: "ops",
+              default: true,
               tools: {
                 exec: {
                   safeBins: ["node"],
@@ -67,6 +68,7 @@ describe("security audit exec safe-bin findings", () => {
           list: [
             {
               id: "ops",
+              default: true,
               tools: {
                 exec: {
                   safeBins: ["node"],
@@ -99,6 +101,7 @@ describe("security audit exec safe-bin findings", () => {
     {
       name: "jq configured globally",
       cfg: {
+        agents: { list: [{ id: "main", default: true }] },
         tools: {
           exec: {
             safeBins: ["jq"],
@@ -110,6 +113,7 @@ describe("security audit exec safe-bin findings", () => {
     {
       name: "jq not configured",
       cfg: {
+        agents: { list: [{ id: "main", default: true }] },
         tools: {
           exec: {
             safeBins: ["cut"],
@@ -142,6 +146,7 @@ describe("security audit exec safe-bin findings", () => {
         list: [
           {
             id: "ops",
+            default: true,
             tools: {
               exec: {
                 safeBinTrustedDirs: ["./relative-bin-dir"],
@@ -164,6 +169,7 @@ describe("security audit exec safe-bin findings", () => {
       hasFinding(
         "tools.exec.safe_bin_trusted_dirs_risky",
         await collectSecurityAuditFindings({
+          agents: { list: [{ id: "main", default: true }] },
           tools: {
             exec: {
               safeBinTrustedDirs: ["/usr/libexec"],

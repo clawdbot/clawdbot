@@ -5,6 +5,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
+import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
 import {
@@ -85,14 +86,10 @@ function collectToolPolicySources(policy: unknown, label: string, out: ToolAllow
 function collectToolAllowlistSources(cfg: OpenClawConfig): ToolAllowlistSource[] {
   const sources: ToolAllowlistSource[] = [];
   collectToolPolicySources(cfg.tools, "tools", sources);
-  const agentList = cfg.agents?.list;
-  if (Array.isArray(agentList)) {
-    agentList.forEach((agent, index) => {
-      if (!hasRecord(agent)) {
-        return;
-      }
-      collectToolPolicySources(agent.tools, `agents.list[${index}].tools`, sources);
-    });
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const label =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list[${source.index}]`;
+    collectToolPolicySources(agent.tools, `${label}.tools`, sources);
   }
   return sources;
 }
@@ -281,35 +278,31 @@ function collectActiveSandboxToolPolicies(
     addGlobalPolicy();
   }
 
-  const agentList = cfg.agents?.list;
-  if (Array.isArray(agentList)) {
-    agentList.forEach((agent, index) => {
-      if (!hasRecord(agent)) {
-        return;
-      }
-      const agentSandbox = hasRecord(agent.sandbox) ? agent.sandbox : undefined;
-      const explicitMode = agentSandbox?.mode;
-      const agentSandboxActive =
-        explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
-      if (!agentSandboxActive) {
-        return;
-      }
-      const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
-      const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
-      const agentPolicy = hasRecord(agentToolsSandbox?.tools) ? agentToolsSandbox.tools : undefined;
-      addPolicy(
-        buildEffectiveSandboxToolPolicy({
-          agentPolicy,
-          agentLabel: `agents.list[${index}].tools.sandbox.tools`,
-          globalPolicy,
-          nonSandboxToolPolicyBlocksMcp: nonSandboxToolPoliciesBlockMcp({
-            cfg,
-            serverNames,
-            agent,
-          }),
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentSandbox = hasRecord(agent.sandbox) ? agent.sandbox : undefined;
+    const explicitMode = agentSandbox?.mode;
+    const agentSandboxActive =
+      explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
+    if (!agentSandboxActive) {
+      continue;
+    }
+    const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
+    const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
+    const agentPolicy = hasRecord(agentToolsSandbox?.tools) ? agentToolsSandbox.tools : undefined;
+    const label =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list[${source.index}]`;
+    addPolicy(
+      buildEffectiveSandboxToolPolicy({
+        agentPolicy,
+        agentLabel: `${label}.tools.sandbox.tools`,
+        globalPolicy,
+        nonSandboxToolPolicyBlocksMcp: nonSandboxToolPoliciesBlockMcp({
+          cfg,
+          serverNames,
+          agent,
         }),
-      );
-    });
+      }),
+    );
   }
 
   return [...out.values()];

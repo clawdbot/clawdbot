@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 // Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
@@ -197,10 +198,7 @@ export function collectSmallModelRiskFindings(params: {
       allowPluginNormalization: false,
     });
     const sandboxMode = resolveSandboxConfigForAgent(params.cfg, agentId ?? undefined).mode;
-    const agentTools =
-      agentId && params.cfg.agents?.list
-        ? params.cfg.agents.list.find((agent) => agent?.id === agentId)?.tools
-        : undefined;
+    const agentTools = agentId ? resolveAgentConfig(params.cfg, agentId)?.tools : undefined;
     const policies = resolveToolPolicies({
       cfg: params.cfg,
       agentTools,

@@ -3,7 +3,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "./tool-policy-diagnostic.js";
 
 function detect(config: OpenClawConfig, workshopEnabled = true) {
-  return detectSkillWorkshopToolPolicyDiagnostic({ config, workshopEnabled });
+  const agents = config.agents;
+  const hasRoster = Boolean(agents && ("entries" in agents || "list" in agents));
+  return detectSkillWorkshopToolPolicyDiagnostic({
+    config: {
+      ...config,
+      agents: hasRoster ? agents : { ...agents, entries: { main: { default: true } } },
+    },
+    workshopEnabled,
+  });
 }
 
 describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
@@ -35,7 +43,7 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
   it("names agent-scoped profile and allowlist sources", () => {
     expect(
       detect({
-        agents: { list: [{ id: "main", tools: { profile: "messaging" } }] },
+        agents: { list: [{ id: "main", default: true, tools: { profile: "messaging" } }] },
       }),
     ).toMatchObject({
       source: "agents.list[0].tools.profile",
@@ -44,7 +52,7 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
 
     expect(
       detect({
-        agents: { list: [{ id: "main", tools: { allow: ["read"] } }] },
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
       }),
     ).toMatchObject({
       source: "agents.list[0].tools.allow",
@@ -56,7 +64,7 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     expect(
       detect({
         tools: { profile: "messaging" },
-        agents: { list: [{ id: "main", tools: { alsoAllow: ["read"] } }] },
+        agents: { list: [{ id: "main", default: true, tools: { alsoAllow: ["read"] } }] },
       }),
     ).toMatchObject({
       source: "tools.profile",
@@ -84,6 +92,7 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
           list: [
             {
               id: "main",
+              default: true,
               tools: { byProvider: { openai: { alsoAllow: ["read"] } } },
             },
           ],
@@ -104,6 +113,7 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
           list: [
             {
               id: "main",
+              default: true,
               tools: { byProvider: { openai: { allow: ["read"] } } },
             },
           ],

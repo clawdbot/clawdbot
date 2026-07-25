@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 // Resolves filesystem policy for exec and sandbox tool use.
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
@@ -51,7 +52,7 @@ export function collectExecFilesystemPolicyDriftHits(
     tools?: AgentToolsConfig;
   }> = [{ scopeLabel: "tools" }];
 
-  for (const agent of cfg.agents?.list ?? []) {
+  for (const agent of listAgentEntries(cfg)) {
     if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
       continue;
     }

@@ -1,6 +1,7 @@
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
+import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 
 export type PairingQrExpiryNotice = {
@@ -192,27 +193,6 @@ function labelForMediaPath(mediaPath: string): string {
   return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
 }
 
-function extractTranscriptMediaEntries(message: unknown): Array<{
-  path: string;
-  mediaType: unknown;
-}> {
-  const m = message as Record<string, unknown>;
-  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
-    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
-    : typeof m.MediaPath === "string"
-      ? [m.MediaPath]
-      : [];
-  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
-    ? m.MediaTypes
-    : typeof m.MediaType === "string"
-      ? [m.MediaType]
-      : [];
-  return transcriptMediaPaths.map((mediaPath, index) => ({
-    path: mediaPath,
-    mediaType: transcriptMediaTypes[index],
-  }));
-}
-
 export function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -296,7 +276,7 @@ export function extractImages(message: unknown): ImageBlock[] {
     }
   }
 
-  for (const { path: mediaPath, mediaType } of extractTranscriptMediaEntries(message)) {
+  for (const { path: mediaPath, mediaType } of readTranscriptMediaEntries(message)) {
     if (!isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }
@@ -408,7 +388,7 @@ export function schedulePairingQrExpiryRefresh(
 
 export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   const attachments: AttachmentItem[] = [];
-  for (const { path: mediaPath, mediaType } of extractTranscriptMediaEntries(message)) {
+  for (const { path: mediaPath, mediaType } of readTranscriptMediaEntries(message)) {
     if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }

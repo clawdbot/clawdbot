@@ -49,6 +49,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -1305,9 +1306,7 @@ function resolveExecReviewerDefaults(params: { defaults?: ExecToolDefaults; agen
   }
   const cfg = params.defaults?.config;
   const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-  const agentExec = agentId
-    ? cfg?.agents?.list?.find((entry) => normalizeAgentId(entry.id) === agentId)?.tools?.exec
-    : undefined;
+  const agentExec = agentId && cfg ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
 }
 

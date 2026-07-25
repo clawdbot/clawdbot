@@ -267,6 +267,7 @@ function detectCompat(model: OpenAIModeModel) {
     openRouterRouting: {},
     vercelGatewayRouting: {},
     supportsStrictMode: defaults.supportsStrictMode,
+    supportsJsonSchemaResponseFormat: defaults.supportsJsonSchemaResponseFormat,
     requiresReasoningContentOnAssistantMessages:
       defaults.requiresReasoningContentOnAssistantMessages,
     requiresNonEmptyUserOrAssistantMessage: defaults.requiresNonEmptyUserOrAssistantMessage,
@@ -299,6 +300,8 @@ export function getCompat(model: OpenAIModeModel) {
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
       detected.vercelGatewayRouting,
     supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
+    supportsJsonSchemaResponseFormat:
+      compat.supportsJsonSchemaResponseFormat ?? detected.supportsJsonSchemaResponseFormat,
     supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
     supportsLongCacheRetention: compat.supportsLongCacheRetention !== false,
     requiresStringContent: compat.requiresStringContent ?? false,

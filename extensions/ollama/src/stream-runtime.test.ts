@@ -1830,6 +1830,7 @@ async function createOllamaTestStream(params: {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
   model?: Record<string, unknown>;
+  context?: Record<string, unknown>;
   options?: {
     apiKey?: string;
     maxTokens?: number;
@@ -1837,6 +1838,7 @@ async function createOllamaTestStream(params: {
     signal?: AbortSignal;
     timeoutMs?: number;
     headers?: Record<string, string>;
+    responseFormat?: Record<string, unknown>;
   };
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
@@ -1848,9 +1850,9 @@ async function createOllamaTestStream(params: {
       contextWindow: 131072,
       ...params.model,
     } as unknown as Parameters<typeof streamFn>[0],
-    {
+    (params.context ?? {
       messages: [{ role: "user", content: "hello" }],
-    } as unknown as Parameters<typeof streamFn>[1],
+    }) as unknown as Parameters<typeof streamFn>[1],
     (params.options ?? {}) as unknown as Parameters<typeof streamFn>[2],
   );
 }
@@ -2587,6 +2589,145 @@ describe("createOllamaStreamFn", () => {
         }
         expect(requestBody.options?.num_ctx).toBeUndefined();
         expect(requestBody.options.num_predict).toBe(123);
+      },
+    );
+  });
+
+  it("maps responseFormat JSON Schema to native Ollama format", async () => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const schema = {
+          type: "object",
+          properties: { reply: { type: "string" } },
+          required: ["reply"],
+          additionalProperties: false,
+        };
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: { responseFormat: schema },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        expect(JSON.parse(requestInit.body)).toMatchObject({ format: schema });
+      },
+    );
+  });
+
+  it("omits native Ollama format when responseFormat is absent", async () => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        expect(JSON.parse(requestInit.body)).not.toHaveProperty("format");
+      },
+    );
+  });
+
+  it("keeps provider-shaped text response formats off the native Ollama wire", async () => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: { responseFormat: { type: "text" } },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        expect(JSON.parse(requestInit.body)).not.toHaveProperty("format");
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "cloud model through a local daemon",
+      baseUrl: "http://ollama-host:11434",
+      id: "gemma4:cloud",
+    },
+    { name: "hosted Ollama Cloud", baseUrl: "https://ollama.com/v1", id: "gemma4" },
+  ])("omits native Ollama format for $name", async ({ baseUrl, id }) => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl,
+          model: { id },
+          options: {
+            responseFormat: {
+              type: "object",
+              properties: { reply: { type: "string" } },
+              required: ["reply"],
+              additionalProperties: false,
+            },
+          },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        expect(JSON.parse(requestInit.body)).not.toHaveProperty("format");
+      },
+    );
+  });
+
+  it("lets native Ollama tools win over responseFormat", async () => {
+    await withMockNdjsonFetch(
+      ['{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}'],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          context: {
+            messages: [{ role: "user", content: "weather" }],
+            tools: [
+              {
+                name: "weather",
+                description: "Get weather",
+                parameters: { type: "object", properties: {} },
+              },
+            ],
+          },
+          options: {
+            responseFormat: {
+              type: "object",
+              properties: { reply: { type: "string" } },
+              required: ["reply"],
+              additionalProperties: false,
+            },
+          },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const body = JSON.parse(requestInit.body);
+        expect(body.tools).toHaveLength(1);
+        expect(body).not.toHaveProperty("format");
       },
     );
   });

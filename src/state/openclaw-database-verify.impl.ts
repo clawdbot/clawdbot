@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  confirmOpenClawAgentDatabaseIntegrity,
   listOpenClawRegisteredAgentDatabases,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
@@ -12,7 +13,10 @@ import type {
   OpenClawDatabaseVerifyTarget,
 } from "./openclaw-database-verify.worker.js";
 import { recordOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
-import { recordOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db.js";
+import {
+  confirmOpenClawStateDatabaseIntegrity,
+  recordOpenClawStateDatabaseOpenFailure,
+} from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 export const OPENCLAW_DATABASE_VERIFY_INITIAL_DELAY_MS = 5 * 60_000;
@@ -126,15 +130,7 @@ export function collectOpenClawDatabaseVerifyTargets(options: {
   return [...targets.values()];
 }
 
-function createVerificationFailure(result: OpenClawDatabaseVerifyResult): Error {
-  const error = new Error(
-    result.error ?? `SQLite integrity verification failed for ${result.path}`,
-  );
-  error.name = "SqliteIntegrityError";
-  return error;
-}
-
-/** Quarantine terminal failures and log the worker batch. */
+/** Reconfirm worker failures on live owners before quarantine and latching. */
 export function applyOpenClawDatabaseVerificationResults(options: {
   env: NodeJS.ProcessEnv;
   results: readonly OpenClawDatabaseVerifyResult[];
@@ -164,11 +160,53 @@ export function applyOpenClawDatabaseVerificationResults(options: {
       });
       continue;
     }
+    const confirmation =
+      target.kind === "state"
+        ? confirmOpenClawStateDatabaseIntegrity(result.path)
+        : confirmOpenClawAgentDatabaseIntegrity(result.path);
+    if (confirmation.status === "healthy") {
+      log.info("discarding stale database integrity verification result", {
+        kind: target.kind,
+        label: target.label,
+        path: result.path,
+      });
+      continue;
+    }
+    if (!confirmation.terminal) {
+      log.warn("database integrity verification was inconclusive", {
+        kind: target.kind,
+        label: target.label,
+        path: result.path,
+        error: confirmation.error.message,
+      });
+      continue;
+    }
+    const latched =
+      target.kind === "state"
+        ? recordOpenClawStateDatabaseOpenFailure(
+            result.path,
+            confirmation.error,
+            confirmation.generation,
+          )
+        : recordOpenClawAgentDatabaseOpenFailure(
+            result.path,
+            confirmation.error,
+            confirmation.generation,
+          );
+    if (!latched) {
+      log.info("discarding database integrity result after database generation changed", {
+        kind: target.kind,
+        label: target.label,
+        path: result.path,
+      });
+      continue;
+    }
     const recorded = recordOpenClawDatabaseQuarantine({
       env: options.env,
+      generation: confirmation.generation,
       kind: target.kind,
       path: result.path,
-      reason: result.error ?? `SQLite integrity verification failed for ${result.path}`,
+      reason: confirmation.error.message,
     });
     if (!recorded) {
       // Store unavailable. Daily verification retries persistence.
@@ -177,17 +215,11 @@ export function applyOpenClawDatabaseVerificationResults(options: {
         path: result.path,
       });
     }
-    const error = createVerificationFailure(result);
-    if (target.kind === "state") {
-      recordOpenClawStateDatabaseOpenFailure(result.path, error);
-    } else {
-      recordOpenClawAgentDatabaseOpenFailure(result.path, error);
-    }
     log.error("database integrity verification failed", {
       kind: target.kind,
       label: target.label,
       path: result.path,
-      error: error.message,
+      error: confirmation.error.message,
     });
   }
 }

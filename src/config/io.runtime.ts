@@ -291,6 +291,7 @@ export async function writeConfigFile(
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
+    allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
     afterWrite: options.afterWrite,
     allowDestructiveWrite: options.allowDestructiveWrite,
     allowConfigSizeDrop: options.allowConfigSizeDrop,
@@ -490,5 +491,5 @@ async function finalizeCommittedConfigWrite(params: {
     }
     throw error;
   }
-  return { ...writeResult, persistedConfig: canonicalSourceConfig };
+  return writeResult;
 }

@@ -6,6 +6,8 @@ import {
   projectMediaFacts,
   resolveMediaFacts,
   resolveStagedMediaFacts,
+  stripLegacyMediaContextFields,
+  type LegacyMediaContextKey,
 } from "../../media/media-facts.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
 import type {
@@ -23,26 +25,7 @@ export type FinalizeInboundContextOptions = {
   forceConversationLabel?: boolean;
 };
 
-const LEGACY_MEDIA_CONTEXT_KEYS = [
-  "MediaPath",
-  "MediaUrl",
-  "MediaType",
-  "MediaPaths",
-  "MediaUrls",
-  "MediaTypes",
-  "MediaDir",
-  "MediaWorkspaceDir",
-  "MediaTranscribedIndexes",
-  "MediaStaged",
-] as const;
-type LegacyMediaContextKey = (typeof LEGACY_MEDIA_CONTEXT_KEYS)[number];
 const FINALIZED_INBOUND_CONTEXT = Symbol("openclaw.finalizedInboundContext");
-
-export function stripLegacyMediaContextFields(ctx: Record<string, unknown>): void {
-  for (const key of LEGACY_MEDIA_CONTEXT_KEYS) {
-    delete ctx[key];
-  }
-}
 
 function normalizeTextField(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -177,8 +160,7 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   }
 
   const mediaSource =
-    !preserveLegacyMedia &&
-    (normalized.MediaStaged === true || normalizeOptionalString(normalized.MediaWorkspaceDir))
+    normalized.MediaStaged === true || normalizeOptionalString(normalized.MediaWorkspaceDir)
       ? resolveStagedMediaFacts(normalized)
       : resolveMediaFacts(normalized);
   const media = mediaSource.map((fact) =>

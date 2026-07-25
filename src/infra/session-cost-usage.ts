@@ -117,7 +117,7 @@ const USAGE_COST_REFRESH_RETRY_MAX_MS = 5_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
-  agentId?: string;
+  agentId: string;
   config?: OpenClawConfig;
   databasePath: string;
   fullRefreshRequested: boolean;
@@ -132,7 +132,7 @@ type UsageCostRefreshResult = "refreshed" | "busy";
 
 const usageCostRefreshes = new Map<string, UsageCostRefreshState>();
 
-function resolveUsageCostCacheDatabasePath(agentId?: string): string {
+function resolveUsageCostCacheDatabasePath(agentId: string): string {
   return resolveOpenClawAgentSqlitePath({ agentId: normalizeAgentId(agentId) });
 }
 
@@ -183,24 +183,21 @@ type UsageCostTranscriptFile = {
   maxSeq?: number;
 };
 
-function resolveUsageCostAgentDir(
-  config: OpenClawConfig | undefined,
-  agentId: string | undefined,
-): string | undefined {
-  return agentId === undefined ? undefined : resolveAgentDir(config ?? {}, agentId);
+function resolveUsageCostAgentDir(config: OpenClawConfig | undefined, agentId: string): string {
+  return resolveAgentDir(config ?? {}, agentId);
 }
 
 function resolveUsageCostPricingFingerprint(config?: OpenClawConfig, agentDir?: string): string {
   return resolveModelCostConfigFingerprint(config, agentDir);
 }
 
-function resolveUsageCostSessionStorePath(params?: {
-  agentId?: string;
+function resolveUsageCostSessionStorePath(params: {
+  agentId: string;
   sessionsDir?: string;
 }): string {
-  return params?.sessionsDir
+  return params.sessionsDir
     ? path.join(params.sessionsDir, "sessions.json")
-    : resolveDefaultSessionStorePath(params?.agentId);
+    : resolveDefaultSessionStorePath(params.agentId);
 }
 
 function normalizeUsageCostRollup(
@@ -226,7 +223,7 @@ function normalizeUsageCostRollup(
 }
 
 function readUsageCostRollups(
-  agentId: string | undefined,
+  agentId: string,
   pricingFingerprint: string,
   databasePath?: string,
 ): Map<string, UsageCostStoredRollup> {
@@ -245,7 +242,7 @@ function readUsageCostRollups(
 }
 
 async function listUsageCountedTranscriptFileStats(
-  agentId?: string,
+  agentId: string,
   params?: { minMtimeMs?: number; sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
   const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
@@ -317,7 +314,7 @@ async function listUsageCountedTranscriptFileStats(
 }
 
 function listUsageCountedSqliteTranscriptStats(
-  agentId?: string,
+  agentId: string,
   params?: { minMtimeMs?: number; sessionsDir?: string },
 ): UsageCostTranscriptFile[] {
   const storePath = resolveUsageCostSessionStorePath({
@@ -362,14 +359,14 @@ function formatCanonicalUsageCostSqliteMarker(marker: SqliteSessionFileMarker): 
 }
 
 async function listUsageCountedTranscriptFiles(
-  agentId?: string,
+  agentId: string,
   params?: { sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
   return await listUsageCountedTranscriptStats(agentId, params);
 }
 
 async function listUsageCountedTranscriptStats(
-  agentId?: string,
+  agentId: string,
   params?: { minMtimeMs?: number; sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
   const fileBacked = await listUsageCountedTranscriptFileStats(agentId, params);
@@ -1154,7 +1151,7 @@ export function resolveExistingUsageSessionFile(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
 }): string | undefined {
   const sessionId = params.sessionId?.trim();
   const entryMarker = parseSqliteSessionFileMarker(params.sessionEntry?.sessionFile);
@@ -1222,39 +1219,39 @@ export function resolveExistingUsageSessionFile(params: {
   }
 }
 
-export async function loadCostUsageSummary(params?: {
+export async function loadCostUsageSummary(params: {
   startMs?: number;
   endMs?: number;
   dayBucket?: UsageDailyBucket;
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
 }): Promise<CostUsageSummary> {
   const now = Date.now();
   const defaultStart = new Date(now);
   defaultStart.setDate(defaultStart.getDate() - 29);
-  const startMs = params?.startMs ?? defaultStart.getTime();
-  const endMs = params?.endMs ?? now;
-  const agentDir = resolveUsageCostAgentDir(params?.config, params?.agentId);
-  const databasePath = resolveUsageCostCacheDatabasePath(params?.agentId);
+  const startMs = params.startMs ?? defaultStart.getTime();
+  const endMs = params.endMs ?? now;
+  const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
+  const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   const result = await refreshCostUsageCacheForAgent({
-    config: params?.config,
-    agentId: params?.agentId,
+    config: params.config,
+    agentId: params.agentId,
     agentDir,
     databasePath,
   });
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config, agentDir);
-  const rollups = readUsageCostRollups(params?.agentId, pricingFingerprint, databasePath);
-  const files = await listUsageCountedTranscriptFiles(params?.agentId);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
+  const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
+  const files = await listUsageCountedTranscriptFiles(params.agentId);
   return buildCostUsageSummaryFromRollups({
     rollups,
     files,
     startMs,
     endMs,
-    dayBucket: params?.dayBucket,
+    dayBucket: params.dayBucket,
     refreshing:
       result === "busy" ||
       usageCostRefreshes.has(databasePath) ||
-      isSessionCostUsageRefreshRunning(params?.agentId, databasePath),
+      isSessionCostUsageRefreshRunning(params.agentId, databasePath),
   });
 }
 
@@ -1530,9 +1527,9 @@ async function scanUsageFileForRollup(params: {
     : await scanJsonlUsageRollup(params);
 }
 
-async function refreshCostUsageCacheForAgent(params?: {
+async function refreshCostUsageCacheForAgent(params: {
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   agentDir?: string;
   databasePath?: string;
   maxFiles?: number;
@@ -1540,23 +1537,23 @@ async function refreshCostUsageCacheForAgent(params?: {
   sessionFiles?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
-  const databasePath = params?.databasePath ?? resolveUsageCostCacheDatabasePath(params?.agentId);
-  const lock = acquireSessionCostUsageRefreshLock(params?.agentId, databasePath);
+  const databasePath = params.databasePath ?? resolveUsageCostCacheDatabasePath(params.agentId);
+  const lock = acquireSessionCostUsageRefreshLock(params.agentId, databasePath);
   if (!lock.acquired) {
     return "busy";
   }
   try {
-    const agentDir = params?.agentDir ?? resolveUsageCostAgentDir(params?.config, params?.agentId);
-    const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config, agentDir);
-    const rows = readSessionCostUsageRollupRows(params?.agentId, databasePath);
+    const agentDir = params.agentDir ?? resolveUsageCostAgentDir(params.config, params.agentId);
+    const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
+    const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
-    const rollups = readUsageCostRollups(params?.agentId, pricingFingerprint, databasePath);
+    const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
     const discoveredFiles = await listUsageCountedTranscriptFiles(
-      params?.agentId,
-      params?.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
+      params.agentId,
+      params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
     );
     const requestedFiles: UsageCostTranscriptFile[] = [];
-    for (const requested of params?.sessionFiles ?? []) {
+    for (const requested of params.sessionFiles ?? []) {
       const resolved = await resolveUsageCostTranscriptFile(requested);
       if (resolved) {
         requestedFiles.push(resolved);
@@ -1568,7 +1565,7 @@ async function refreshCostUsageCacheForAgent(params?: {
     }
     const files = [...filesByPath.values()];
     deleteSessionCostUsageRollupsExcept({
-      agentId: params?.agentId,
+      agentId: params.agentId,
       databasePath,
       liveKeys: new Set(files.map((file) => file.filePath)),
     });
@@ -1580,17 +1577,17 @@ async function refreshCostUsageCacheForAgent(params?: {
     const refreshFiles =
       requestedPaths.size > 0
         ? files.filter((file) => requestedPaths.has(file.filePath))
-        : params?.startMs === undefined
+        : params.startMs === undefined
           ? files
           : files.filter((file) => file.mtimeMs >= params.startMs!);
     const maxFiles =
-      params?.maxFiles !== undefined && Number.isFinite(params.maxFiles) && params.maxFiles > 0
+      params.maxFiles !== undefined && Number.isFinite(params.maxFiles) && params.maxFiles > 0
         ? Math.floor(params.maxFiles)
         : undefined;
     const staleFiles = getUsageCostStaleRollupFiles({ rollups, files: refreshFiles })
       .toSorted((a, b) => a.size - b.size || a.filePath.localeCompare(b.filePath))
       .slice(0, maxFiles);
-    const resolveCost = createUsageCostResolver({ config: params?.config, agentDir });
+    const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
     for (const file of staleFiles) {
       const previous = rollups.get(file.filePath);
@@ -1602,7 +1599,7 @@ async function refreshCostUsageCacheForAgent(params?: {
       });
       const valueJson = JSON.stringify(entry);
       const written = writeSessionCostUsageRollup({
-        agentId: params?.agentId,
+        agentId: params.agentId,
         databasePath,
         rollupId: file.filePath,
         previousValueJson: rawValues.get(file.filePath) ?? null,
@@ -1623,9 +1620,9 @@ async function refreshCostUsageCacheForAgent(params?: {
 
 const usageCostRefreshRuntime = { refreshCostUsageCacheForAgent };
 
-async function refreshCostUsageCache(params?: {
+async function refreshCostUsageCache(params: {
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   agentDir?: string;
   maxFiles?: number;
   sessionFiles?: string[];
@@ -1639,7 +1636,7 @@ export async function loadCostUsageSummaryFromCache(params: {
   endMs: number;
   dayBucket?: UsageDailyBucket;
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   requestRefresh?: boolean;
   refreshMode?: "background" | "sync-when-empty";
 }): Promise<CostUsageSummary> {
@@ -1682,7 +1679,7 @@ export async function loadCostUsageSummaryFromCache(params: {
 export async function loadSessionCostSummariesFromCache(params: {
   sessions: Array<{ sessionId?: string; sessionFile: string }>;
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   startMs?: number;
   endMs?: number;
   includeUntimestamped?: boolean;
@@ -1752,12 +1749,12 @@ export async function loadSessionCostSummariesFromCache(params: {
   };
 }
 
-function requestCostUsageCacheRefresh(params?: {
+function requestCostUsageCacheRefresh(params: {
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   sessionFiles?: string[];
 }): void {
-  const databasePath = resolveUsageCostCacheDatabasePath(params?.agentId);
+  const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   const refreshKey = databasePath;
   const existing = usageCostRefreshes.get(refreshKey);
   if (existing) {
@@ -1766,13 +1763,13 @@ function requestCostUsageCacheRefresh(params?: {
   }
 
   const state: UsageCostRefreshState = {
-    agentId: params?.agentId,
-    config: params?.config,
+    agentId: params.agentId,
+    config: params.config,
     databasePath,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
     running: false,
-    sessionsDir: resolveSessionTranscriptsDirForAgent(params?.agentId),
+    sessionsDir: resolveSessionTranscriptsDirForAgent(params.agentId),
     busyRetryDelayMs: USAGE_COST_REFRESH_RETRY_MIN_MS,
   };
   mergeUsageCostRefreshRequest(state, params);
@@ -1782,19 +1779,17 @@ function requestCostUsageCacheRefresh(params?: {
 
 function mergeUsageCostRefreshRequest(
   state: UsageCostRefreshState,
-  params?: {
+  params: {
     config?: OpenClawConfig;
-    agentId?: string;
+    agentId: string;
     sessionFiles?: string[];
   },
 ): void {
-  if (params?.config) {
+  if (params.config) {
     state.config = params.config;
   }
-  if (params?.agentId) {
-    state.agentId = params.agentId;
-  }
-  if (!params?.sessionFiles) {
+  state.agentId = params.agentId;
+  if (!params.sessionFiles) {
     state.fullRefreshRequested = true;
     return;
   }
@@ -1891,14 +1886,14 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
  * Scan all transcript files to discover sessions not in the session store.
  * Returns basic metadata for each discovered session.
  */
-export async function discoverAllSessions(params?: {
-  agentId?: string;
+export async function discoverAllSessions(params: {
+  agentId: string;
   startMs?: number;
   endMs?: number;
   includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
-  const files = await listUsageCountedTranscriptStats(params?.agentId, {
-    minMtimeMs: params?.startMs,
+  const files = await listUsageCountedTranscriptStats(params.agentId, {
+    minMtimeMs: params.startMs,
   });
 
   const discovered = new Map<string, DiscoveredSession>();
@@ -1917,7 +1912,7 @@ export async function discoverAllSessions(params?: {
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
-    if (params?.includeFirstUserMessage !== false) {
+    if (params.includeFirstUserMessage !== false) {
       try {
         for await (const parsed of readTranscriptRecords(filePath)) {
           try {
@@ -1986,7 +1981,7 @@ export async function loadSessionCostSummary(params: {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   startMs?: number;
   endMs?: number;
   includeUntimestamped?: boolean;
@@ -2045,7 +2040,7 @@ export async function loadSessionUsageTimeSeries(params: {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
   const sessionFile = resolveExistingUsageSessionFile(params);
@@ -2159,7 +2154,7 @@ export async function loadSessionLogs(params: {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
   const sessionFile = resolveExistingUsageSessionFile(params);

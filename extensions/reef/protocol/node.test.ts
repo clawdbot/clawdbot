@@ -1,19 +1,56 @@
-import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import fsSync from "node:fs";
+import fs, { appendFile, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendAudit, verifyChain } from "./audit.js";
 import { generateIdentity } from "./identity.js";
 import { JsonlAuditStore, FileReplayStore } from "./node.js";
 import { signReceipt } from "./receipts.js";
+import { useReefTempDirs } from "./test-support.js";
+
+const durabilityTestState = vi.hoisted(() => ({
+  afterEnsure: undefined as ((receipt: { path: string }) => Promise<void> | void) | undefined,
+  parentSyncOutcome: undefined as
+    | { status: "synced" }
+    | { status: "unsupported"; code?: string }
+    | undefined,
+  syncOutcome: undefined as
+    | { status: "synced" }
+    | { status: "unsupported"; code?: string }
+    | undefined,
+}));
+
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
+  return {
+    ...actual,
+    ensureDurableDirectory: async (...args: Parameters<typeof actual.ensureDurableDirectory>) => {
+      const receipt = await actual.ensureDurableDirectory(...args);
+      await durabilityTestState.afterEnsure?.(receipt);
+      return durabilityTestState.parentSyncOutcome
+        ? { ...receipt, parentSync: durabilityTestState.parentSyncOutcome }
+        : receipt;
+    },
+    syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
+      durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
+  };
+});
 
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const replayBodyKey = Uint8Array.from({ length: 32 }, (_, index) => 255 - index);
 const receiptId = "01JZ0000000000000000000000";
+const tempDirs = useReefTempDirs(afterEach);
+
+afterEach(() => {
+  durabilityTestState.afterEnsure = undefined;
+  durabilityTestState.parentSyncOutcome = undefined;
+  durabilityTestState.syncOutcome = undefined;
+  vi.restoreAllMocks();
+});
 
 describe("Node stores", () => {
   it("persists serialized audit JSONL", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-audit-"));
+    const directory = tempDirs.make("reef-audit-");
     const path = join(directory, "audit.jsonl");
     const store = new JsonlAuditStore(path, auditKey);
     await Promise.all(
@@ -27,7 +64,7 @@ describe("Node stores", () => {
   });
 
   it("drops a torn final JSONL record and permits a durable append", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-audit-torn-"));
+    const directory = tempDirs.make("reef-audit-torn-");
     const path = join(directory, "audit.jsonl");
     const store = new JsonlAuditStore(path, auditKey);
     await store.appendEvent("one", { id: 1 }, 10);
@@ -39,8 +76,96 @@ describe("Node stores", () => {
     expect(await new JsonlAuditStore(path, auditKey).entries()).toHaveLength(3);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects an append when the journal directory cannot be synchronized",
+    async () => {
+      const directory = tempDirs.make("reef-audit-sync-failure-");
+      const path = join(directory, "nested", "audit.jsonl");
+      const parentPath = dirname(path);
+      const originalOpen = fs.open.bind(fs);
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        const handle = await originalOpen(filePath, flags, mode);
+        if (
+          typeof flags === "number" &&
+          (flags & fsSync.constants.O_DIRECTORY) !== 0 &&
+          resolve(String(filePath)) === (await fs.realpath(parentPath).catch(() => parentPath))
+        ) {
+          vi.spyOn(handle, "sync").mockRejectedValue(
+            Object.assign(new Error("journal directory sync failed"), { code: "EIO" }),
+          );
+        }
+        return handle;
+      });
+
+      try {
+        await expect(
+          new JsonlAuditStore(path, auditKey).appendEvent("one", { id: 1 }, 10),
+        ).rejects.toMatchObject({ code: "EIO" });
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["parent", "final"] as const)(
+    "rejects an append when %s journal directory synchronization is unsupported",
+    async (stage) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const directory = tempDirs.make(`reef-audit-${stage}-unsupported-`);
+      const path = join(directory, "nested", "audit.jsonl");
+      if (stage === "parent") {
+        durabilityTestState.parentSyncOutcome = { status: "unsupported", code: "ENOTSUP" };
+      } else {
+        durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
+      }
+
+      await expect(
+        new JsonlAuditStore(path, auditKey).appendEvent("one", { id: 1 }, 10),
+      ).rejects.toThrow(
+        /Reef journal directory does not support crash-durable synchronization \(ENOTSUP\)/u,
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "appends through the pinned canonical directory after a symlink retarget",
+    async () => {
+      const root = tempDirs.make("reef-audit-parent-retarget-");
+      const firstDirectory = join(root, "first");
+      const secondDirectory = join(root, "second");
+      const requestedDirectory = join(root, "requested");
+      await fs.mkdir(firstDirectory);
+      await fs.mkdir(secondDirectory);
+      await fs.symlink(firstDirectory, requestedDirectory);
+      const requestedPath = join(requestedDirectory, "nested", "audit.jsonl");
+      durabilityTestState.afterEnsure = async () => {
+        await fs.unlink(requestedDirectory);
+        await fs.symlink(secondDirectory, requestedDirectory);
+      };
+
+      await new JsonlAuditStore(requestedPath, auditKey).appendEvent("one", { id: 1 }, 10);
+
+      await expect(
+        readFile(join(firstDirectory, "nested", "audit.jsonl"), "utf8"),
+      ).resolves.toContain('"type":"one"');
+      await expect(fs.readdir(secondDirectory)).resolves.toEqual([]);
+    },
+  );
+
+  it("accepts unsupported journal directory synchronization on Windows", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const directory = tempDirs.make("reef-audit-windows-unsupported-");
+    const path = join(directory, "nested", "audit.jsonl");
+    durabilityTestState.parentSyncOutcome = { status: "unsupported", code: "EPERM" };
+    durabilityTestState.syncOutcome = { status: "unsupported", code: "EPERM" };
+
+    await expect(
+      new JsonlAuditStore(path, auditKey).appendEvent("one", { id: 1 }, 10),
+    ).resolves.toMatchObject({ event: { seq: 1, type: "one" } });
+  });
+
   it("rejects a corrupt middle JSONL record", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-audit-corrupt-"));
+    const directory = tempDirs.make("reef-audit-corrupt-");
     const path = join(directory, "audit.jsonl");
     const store = new JsonlAuditStore(path, auditKey);
     await store.appendEvent("one", { id: 1 }, 10);
@@ -51,7 +176,7 @@ describe("Node stores", () => {
   });
 
   it("persists replay bindings and completed receipts", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-replay-"));
+    const directory = tempDirs.make("reef-replay-");
     const path = join(directory, "replay.jsonl");
     const identity = generateIdentity();
     const receipt = signReceipt(
@@ -77,7 +202,7 @@ describe("Node stores", () => {
   });
 
   it("persists consumed replay bindings without receipts", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-replay-consumed-"));
+    const directory = tempDirs.make("reef-replay-consumed-");
     const path = join(directory, "replay.jsonl");
     const store = new FileReplayStore(path, replayBodyKey);
     expect(await store.claim("alice", receiptId, "c".repeat(64))).toBe("new");

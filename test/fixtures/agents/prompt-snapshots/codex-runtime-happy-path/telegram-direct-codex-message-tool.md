@@ -43,6 +43,11 @@
       "heartbeat": {
         "every": "30m"
       }
+    },
+    "entries": {
+      "main": {
+        "default": true
+      }
     }
   },
   "messages": {
