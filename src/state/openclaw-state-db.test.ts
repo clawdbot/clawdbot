@@ -2115,6 +2115,42 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
+  it("does not claim a legacy audit database with conflicting ownership", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createLegacyAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("UPDATE schema_meta SET role = 'agent', agent_id = 'worker-1';");
+    legacy.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("schema role agent; expected global")],
+    });
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(readSqliteNumberPragma(preserved, "user_version")).toBe(1);
+      expect(
+        preserved
+          .prepare(
+            "SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'",
+          )
+          .get(),
+      ).toEqual({ role: "agent", schema_version: 1, agent_id: "worker-1" });
+      expect(
+        preserved
+          .prepare(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'auth_profile_stores'",
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      preserved.close();
+    }
+  });
+
   it("refuses an audit sequence high-water mark outside the supported cursor range", () => {
     const stateDir = createTempStateDir();
     const databasePath = createLegacyAuditStateDatabase(stateDir);

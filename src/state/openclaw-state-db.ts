@@ -209,7 +209,9 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
             rebuiltIndexNames.add(name);
           }
         }
-        markCurrentStateSchemaVersion(db);
+        markCurrentStateSchemaVersion(db, {
+          createMetadataIfMissing: previousVersion < OPENCLAW_STATE_SCHEMA_VERSION,
+        });
         if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertOpenClawStateDatabaseForMaintenance(db, { pathname });
         }
