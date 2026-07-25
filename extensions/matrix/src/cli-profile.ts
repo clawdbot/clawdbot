@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import * as cli from "./cli-shared.js";
-import { applyMatrixProfileUpdate } from "./profile-update.js";
+import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
 
 export function registerMatrixProfileCommands(root: Command): void {
   const profile = root.command("profile").description("Manage Matrix bot profile");
@@ -30,7 +30,7 @@ export function registerMatrixProfileCommands(root: Command): void {
               displayName: options.name,
               avatarUrl: options.avatarUrl,
             }),
-          onText: (result) => {
+          onText: (result: MatrixProfileUpdateResult) => {
             cli.printAccountLabel(result.accountId);
             console.log(`Config path: ${result.configPath}`);
             console.log(
