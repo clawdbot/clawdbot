@@ -219,6 +219,7 @@ export type HostedOfficialExternalPluginCatalogSnapshotMonotonicState = {
   mode: "signed-feed";
   sequence: number;
   generatedAt?: string;
+  currentMaterializedFeedSha256?: string;
 };
 
 export type HostedOfficialExternalPluginCatalogLoadResult =
@@ -376,6 +377,51 @@ function normalizeHostedCatalogHeader(value: string | null): string | undefined 
 
 function sha256Hex(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function stableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableJsonValue);
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, stableJsonValue(child)]),
+    );
+  }
+  return value;
+}
+
+/** Hashes authenticated catalog content while excluding refresh-window metadata. */
+export function hashOfficialExternalPluginCatalogMaterializedFeed(
+  feed: OfficialExternalPluginCatalogFeed,
+): string {
+  const { generatedAt: _generatedAt, expiresAt: _expiresAt, entries, ...rest } = feed;
+  const content = {
+    ...rest,
+    entries: entries
+      .map((entry) => stableJsonValue(entry))
+      .toSorted((left, right) => {
+        const leftJson = JSON.stringify(left);
+        const rightJson = JSON.stringify(right);
+        return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
+      }),
+  };
+  return sha256Hex(JSON.stringify(stableJsonValue(content)));
+}
+
+function isLegacyCatalogSnapshotWithoutMaterializedDigest(body: string): boolean {
+  try {
+    const document = JSON.parse(body) as Record<string, unknown>;
+    return (
+      (document.kind === "official-external-plugin-catalog-changes-v1" ||
+        document.kind === "official-external-plugin-catalog-shards-v1") &&
+      typeof document.materializedFeedSha256 !== "string"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function resolveHostedCatalogFeedUrl(raw: string): URL {
@@ -737,13 +783,31 @@ async function parseHostedCatalogFeedBody(params: {
   expired?: boolean;
   snapshotBody?: string;
   wireBody?: string;
+  authenticatedMaterializedFeedSha256?: string;
 }> {
   const document = JSON.parse(params.body) as unknown;
   if (params.verification?.mode === "signed") {
     const {
       applyVerifiedOfficialExternalPluginCatalogChangeBodies,
       parseOfficialExternalPluginCatalogIncrementalSnapshot,
+      parseOfficialExternalPluginCatalogResetFloorSnapshot,
     } = await import("./official-external-plugin-catalog-changes.js");
+    const resetFloorSnapshot = parseOfficialExternalPluginCatalogResetFloorSnapshot(document);
+    if (resetFloorSnapshot) {
+      const base = await parseHostedCatalogFeedBody({
+        ...params,
+        body: resetFloorSnapshot.snapshotBody,
+      });
+      if (base.feed.sequence < resetFloorSnapshot.minimumSequence) {
+        throw new HostedCatalogSignedFeedMonotonicityError(
+          `hosted catalog signed feed sequence is older than reset floor ${resetFloorSnapshot.minimumSequence}`,
+        );
+      }
+      return {
+        ...base,
+        wireBody: base.wireBody ?? resetFloorSnapshot.snapshotBody,
+      };
+    }
     const incrementalSnapshot = parseOfficialExternalPluginCatalogIncrementalSnapshot(document);
     if (incrementalSnapshot) {
       const base = await parseHostedCatalogFeedBody({
@@ -762,6 +826,17 @@ async function parseHostedCatalogFeedBody(params: {
         threshold: params.verification.threshold,
         expectedFeedId: params.expectedFeedId,
       });
+      const authenticatedMaterializedFeedSha256 = hashOfficialExternalPluginCatalogMaterializedFeed(
+        applied.feed,
+      );
+      if (
+        incrementalSnapshot.materializedFeedSha256 !== undefined &&
+        incrementalSnapshot.materializedFeedSha256 !== authenticatedMaterializedFeedSha256
+      ) {
+        throw new Error(
+          "hosted catalog incremental snapshot materialized feed digest did not match",
+        );
+      }
       const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(applied.feed.generatedAt);
       const expiresAt = normalizeOptionalString(applied.feed.expiresAt);
       const expiresAtMs = expiresAt
@@ -788,6 +863,7 @@ async function parseHostedCatalogFeedBody(params: {
           verifiedAt: params.verifiedAt,
         },
         ...(expired ? { expired: true } : {}),
+        authenticatedMaterializedFeedSha256,
       };
     }
     const {
@@ -885,8 +961,15 @@ async function parseHostedCatalogFeedBody(params: {
           ? serializeOfficialExternalPluginCatalogShardedSnapshot({
               rootBody: params.body,
               shardBodies,
+              materializedFeedSha256: hashOfficialExternalPluginCatalogMaterializedFeed(feed),
             })
           : params.body;
+    }
+    if (
+      snapshot?.materializedFeedSha256 !== undefined &&
+      snapshot.materializedFeedSha256 !== hashOfficialExternalPluginCatalogMaterializedFeed(feed)
+    ) {
+      throw new Error("hosted catalog sharded snapshot materialized feed digest did not match");
     }
     if (params.expectedFeedId && feed.id !== params.expectedFeedId) {
       throw new Error(
@@ -933,6 +1016,7 @@ async function parseHostedCatalogFeedBody(params: {
       ...(expired ? { expired: true } : {}),
       ...(snapshotBody ? { snapshotBody } : {}),
       ...(snapshot ? { wireBody } : {}),
+      authenticatedMaterializedFeedSha256: hashOfficialExternalPluginCatalogMaterializedFeed(feed),
     };
   }
   if (!isOfficialExternalPluginCatalogFeed(document)) {
@@ -1003,6 +1087,7 @@ async function loadHostedCatalogSnapshotResult(params: {
   expectedFeedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
   now: Date;
+  minimumSignedSequence?: number;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   assertSnapshotMatchesRequestValidators({
     snapshot: params.snapshot,
@@ -1026,6 +1111,14 @@ async function loadHostedCatalogSnapshotResult(params: {
   const wireChecksum = sha256Hex(parsed.wireBody ?? params.snapshot.body);
   if (params.expectedSha256 && params.expectedSha256 !== wireChecksum) {
     throw new Error("hosted catalog snapshot checksum did not match expected checksum");
+  }
+  if (
+    params.minimumSignedSequence !== undefined &&
+    parsed.feed.sequence < params.minimumSignedSequence
+  ) {
+    throw new HostedCatalogSignedFeedMonotonicityError(
+      `hosted catalog signed feed sequence is older than reset floor ${params.minimumSignedSequence}`,
+    );
   }
   const entries = dedupeOfficialExternalPluginCatalogEntries(
     filterOfficialExternalPluginCatalogEntriesBySourceRefs(
@@ -1113,6 +1206,7 @@ async function snapshotOrBundledFallbackResult(params: {
   expectedFeedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
   now: Date;
+  minimumSignedSequence?: number;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   if (params.snapshotStore) {
     try {
@@ -1129,6 +1223,7 @@ async function snapshotOrBundledFallbackResult(params: {
           expectedFeedId: params.expectedFeedId,
           verification: params.verification,
           now: params.now,
+          minimumSignedSequence: params.minimumSignedSequence,
         });
       }
     } catch (snapshotErr) {
@@ -1269,9 +1364,9 @@ async function tryLoadHostedCatalogIncrementalRefresh(params: {
   fetchImpl?: FetchLike;
   timeoutMs: number;
   chunkTimeoutMs: number;
-  now: Date;
+  now: () => Date;
   requireSnapshotWrite?: boolean;
-}): Promise<HostedOfficialExternalPluginCatalogLoadResult | null> {
+}): Promise<HostedOfficialExternalPluginCatalogLoadResult | { resetSequenceFloor: number } | null> {
   if (!params.snapshotStore) {
     return null;
   }
@@ -1285,7 +1380,7 @@ async function tryLoadHostedCatalogIncrementalRefresh(params: {
     verification: params.verification,
     verifiedAt: snapshot.trust.verifiedAt,
     allowLegacyBetaEnvelope: true,
-    now: params.now,
+    now: params.now(),
     allowExpired: true,
     allowMissingExpiry: true,
   }).catch(() => null);
@@ -1293,7 +1388,9 @@ async function tryLoadHostedCatalogIncrementalRefresh(params: {
     return null;
   }
   const {
+    applyVerifiedOfficialExternalPluginCatalogChanges,
     parseOfficialExternalPluginCatalogIncrementalSnapshot,
+    serializeOfficialExternalPluginCatalogResetFloorSnapshot,
     serializeOfficialExternalPluginCatalogIncrementalSnapshot,
     verifyOfficialExternalPluginCatalogChangeEnvelopeBody,
   } = await import("./official-external-plugin-catalog-changes.js");
@@ -1305,13 +1402,13 @@ async function tryLoadHostedCatalogIncrementalRefresh(params: {
   changesUrl.search = "";
   changesUrl.hash = "";
   const newBodies: string[] = [];
+  const newVerifications: Array<
+    ReturnType<typeof verifyOfficialExternalPluginCatalogChangeEnvelopeBody>
+  > = [];
   let cursor: string | null = null;
   let downloadedBytes = 0;
   const consumedCursors = new Set<string>();
   let lastStatus = 200;
-  let lastVerification:
-    | ReturnType<typeof verifyOfficialExternalPluginCatalogChangeEnvelopeBody>
-    | undefined;
   const { fetchWithSsrFGuard } = await import("../infra/net/fetch-guard.js");
   for (let pageCount = 0; pageCount < 2048; pageCount += 1) {
     const requestUrl = new URL(changesUrl.href);
@@ -1369,7 +1466,6 @@ async function tryLoadHostedCatalogIncrementalRefresh(params: {
         trustedKeys: params.verification.keys,
         threshold: params.verification.threshold,
       });
-      lastVerification = verified;
       if (
         verified.payload.feedId !== current.feed.id ||
         verified.payload.fromSequence !== current.feed.sequence
@@ -1379,12 +1475,53 @@ async function tryLoadHostedCatalogIncrementalRefresh(params: {
       if ("resetRequired" in verified.payload) {
         // The signed reset URL is never followed here: the configured root
         // remains the authority. Cross-origin reset locations are ignored too.
-        return null;
+        const resetExpiresAtMs = parseOfficialExternalPluginCatalogTimestamp(
+          verified.payload.expiresAt,
+        );
+        const resetNow = params.now();
+        if (resetExpiresAtMs === undefined || resetExpiresAtMs <= resetNow.getTime()) {
+          return null;
+        }
+        const floorBody = serializeOfficialExternalPluginCatalogResetFloorSnapshot({
+          snapshotBody: snapshot.body,
+          minimumSequence: verified.payload.currentSequence,
+        });
+        await params.snapshotStore
+          .write({
+            body: floorBody,
+            metadata: {
+              ...snapshot.metadata,
+              status: response.status,
+              checksum: sha256Hex(floorBody),
+            },
+            savedAt: resetNow.toISOString(),
+            trust: {
+              mode: "signed",
+              signedBy: verified.signedBy,
+              signatureCount: verified.signatureCount,
+              threshold: verified.threshold,
+              verifiedAt: resetNow.toISOString(),
+            },
+            monotonic: {
+              mode: "signed-feed",
+              sequence: verified.payload.currentSequence,
+            },
+          })
+          .catch((error: unknown) => {
+            if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
+              throw error;
+            }
+            if (params.requireSnapshotWrite) {
+              throw new HostedCatalogSnapshotWriteError(error);
+            }
+          });
+        return { resetSequenceFloor: verified.payload.currentSequence };
       }
       if (response.status !== 200) {
         return null;
       }
       newBodies.push(body);
+      newVerifications.push(verified);
       cursor = verified.payload.nextCursor;
       if (cursor === null) {
         break;
@@ -1396,31 +1533,51 @@ async function tryLoadHostedCatalogIncrementalRefresh(params: {
       await release?.().catch(() => undefined);
     }
   }
-  if (cursor !== null || newBodies.length === 0 || !lastVerification) {
+  if (cursor !== null || newBodies.length === 0) {
     return null;
   }
   const existingBodies = storedWrapper?.changeBodies ?? [];
   if (existingBodies.length + newBodies.length > 2048) {
     return null;
   }
+  const applied = applyVerifiedOfficialExternalPluginCatalogChanges({
+    feed: current.feed,
+    changes: newVerifications,
+    expectedFeedId: params.expectedFeedId,
+  });
+  const terminalNow = params.now();
+  const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(applied.feed.generatedAt);
+  const expiresAt = normalizeOptionalString(applied.feed.expiresAt);
+  const expiresAtMs = expiresAt
+    ? parseOfficialExternalPluginCatalogTimestamp(expiresAt)
+    : undefined;
+  if (generatedAtMs === undefined || expiresAtMs === undefined || expiresAtMs <= generatedAtMs) {
+    throw new Error("hosted catalog incremental result has an invalid validity window");
+  }
+  if (expiresAtMs <= terminalNow.getTime()) {
+    throw new Error(`hosted catalog signed feed expired at ${expiresAt}`);
+  }
+  const materializedFeedSha256 = hashOfficialExternalPluginCatalogMaterializedFeed(applied.feed);
+  const feed = enforceHostedCatalogFeedInstallAuthority(applied.feed);
   const baseBody = storedWrapper?.baseBody ?? snapshot.body;
   const snapshotBody = serializeOfficialExternalPluginCatalogIncrementalSnapshot({
     baseBody,
     changeBodies: [...existingBodies, ...newBodies],
+    materializedFeedSha256,
   });
   if (Buffer.byteLength(snapshotBody, "utf8") > 256 * 1024 * 1024) {
     return null;
   }
-  const verifiedAt = params.now.toISOString();
-  const parsed = await parseHostedCatalogFeedBody({
-    body: snapshotBody,
-    expectedFeedId: params.expectedFeedId,
-    verification: params.verification,
+  const verifiedAt = terminalNow.toISOString();
+  const trust: HostedOfficialExternalPluginCatalogTrustState = {
+    mode: "signed",
+    signedBy: applied.signedBy,
+    signatureCount: applied.signatureCount,
+    threshold: applied.threshold,
     verifiedAt,
-    now: params.now,
-  });
+  };
   const entries = filterOfficialExternalPluginCatalogEntriesBySourceRefs(
-    parseOfficialExternalPluginCatalogEntries(parsed.feed),
+    parseOfficialExternalPluginCatalogEntries(feed),
     {
       catalogConfig: params.catalogConfig,
       requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
@@ -1431,36 +1588,35 @@ async function tryLoadHostedCatalogIncrementalRefresh(params: {
     status: lastStatus,
     checksum: sha256Hex(snapshotBody),
   };
-  // A signed empty range is useful as a live freshness proof, but persisting it
-  // would change the stored bytes without advancing the accepted sequence.
-  if (parsed.feed.sequence !== current.feed.sequence) {
-    await params.snapshotStore
-      .write({
-        body: snapshotBody,
-        metadata,
-        savedAt: verifiedAt,
-        trust: parsed.trust,
-        monotonic: {
-          mode: "signed-feed",
-          sequence: parsed.feed.sequence,
-          generatedAt: parsed.feed.generatedAt,
-        },
-      })
-      .catch((error: unknown) => {
-        if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
-          throw error;
-        }
-        if (params.requireSnapshotWrite) {
-          throw new HostedCatalogSnapshotWriteError(error);
-        }
-      });
-  }
+  await params.snapshotStore
+    .write({
+      body: snapshotBody,
+      metadata,
+      savedAt: verifiedAt,
+      trust,
+      monotonic: {
+        mode: "signed-feed",
+        sequence: feed.sequence,
+        generatedAt: feed.generatedAt,
+        currentMaterializedFeedSha256:
+          current.authenticatedMaterializedFeedSha256 ??
+          hashOfficialExternalPluginCatalogMaterializedFeed(current.feed),
+      },
+    })
+    .catch((error: unknown) => {
+      if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
+        throw error;
+      }
+      if (params.requireSnapshotWrite) {
+        throw new HostedCatalogSnapshotWriteError(error);
+      }
+    });
   return {
     source: "hosted",
     entries: dedupeOfficialExternalPluginCatalogEntries(entries),
-    feed: parsed.feed,
+    feed,
     metadata,
-    trust: parsed.trust,
+    trust,
   };
 }
 
@@ -1512,6 +1668,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     feedProfile: params?.feedProfile,
     catalogConfig: params?.catalogConfig,
   });
+  let incrementalResetSequenceFloor: number | undefined;
   if (params?.offline === true) {
     return await snapshotOrBundledFallbackResult({
       error: "hosted catalog feed offline mode",
@@ -1523,6 +1680,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       expectedFeedId: source.expectedFeedId,
       verification: source.verification,
       now: currentTime(),
+      minimumSignedSequence: incrementalResetSequenceFloor,
     });
   }
   if (
@@ -1545,11 +1703,15 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         chunkTimeoutMs:
           params?.chunkTimeoutMs ??
           DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
-        now: currentTime(),
+        now: currentTime,
         requireSnapshotWrite: params?.requireSnapshotWrite,
       });
       if (incremental) {
-        return incremental;
+        if ("resetSequenceFloor" in incremental) {
+          incrementalResetSequenceFloor = incremental.resetSequenceFloor;
+        } else {
+          return incremental;
+        }
       }
     } catch (error) {
       if (error instanceof HostedCatalogSnapshotWriteError) {
@@ -1565,6 +1727,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
           expectedFeedId: source.expectedFeedId,
           verification: source.verification,
           now: currentTime(),
+          minimumSignedSequence: incrementalResetSequenceFloor,
         });
       }
       // A missing, unavailable, or malformed changes route is compatible with
@@ -1628,6 +1791,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now: currentTime(),
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     }
     if (!response.ok) {
@@ -1644,6 +1808,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now: currentTime(),
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     }
     if (
@@ -1663,6 +1828,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now: currentTime(),
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     }
     const body = await readHostedCatalogResponseText({
@@ -1691,6 +1857,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now: currentTime(),
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     }
     const now = currentTime();
@@ -1727,36 +1894,54 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedFeedId: source.expectedFeedId,
         verification: source.verification,
         now,
+        minimumSignedSequence: incrementalResetSequenceFloor,
       });
     });
     if ("source" in parsed) {
       return parsed;
     }
+    if (
+      incrementalResetSequenceFloor !== undefined &&
+      parsed.trust?.mode === "signed" &&
+      parsed.feed.sequence < incrementalResetSequenceFloor
+    ) {
+      throw new HostedCatalogSignedFeedMonotonicityError(
+        `hosted catalog signed feed sequence is older than reset floor ${incrementalResetSequenceFloor}`,
+      );
+    }
+    let currentMaterializedFeedSha256: string | undefined;
+    let skipSameSequenceLegacySnapshotWrite = false;
     if (snapshotStore && parsed.trust?.mode === "signed") {
       const currentSnapshot = await snapshotStore.read(url.href);
       if (currentSnapshot?.trust?.mode === "signed") {
+        const parsedCurrent = await parseHostedCatalogFeedBody({
+          body: currentSnapshot.body,
+          expectedFeedId: source.expectedFeedId,
+          verification: source.verification,
+          verifiedAt: currentSnapshot.trust.verifiedAt,
+          allowLegacyBetaEnvelope: true,
+          now,
+          allowExpired: true,
+          allowMissingExpiry: true,
+        }).catch((err: unknown) => {
+          // Invalid timestamps remain repairable, and accepted monotonic metadata stays
+          // authoritative when configured signing keys rotate away from the stored signer.
+          if (err instanceof HostedCatalogFeedTimestampError) {
+            return { feed: { sequence: err.sequence } };
+          }
+          if (currentSnapshot.monotonic?.mode === "signed-feed") {
+            return undefined;
+          }
+          throw err;
+        });
         const current =
           currentSnapshot.monotonic?.mode === "signed-feed"
             ? currentSnapshot.monotonic
-            : (
-                await parseHostedCatalogFeedBody({
-                  body: currentSnapshot.body,
-                  expectedFeedId: source.expectedFeedId,
-                  verification: source.verification,
-                  verifiedAt: currentSnapshot.trust.verifiedAt,
-                  allowLegacyBetaEnvelope: true,
-                  now,
-                  allowExpired: true,
-                  allowMissingExpiry: true,
-                }).catch((err: unknown) => {
-                  // Only an authenticated invalid-timestamp payload is repairable. Signature
-                  // and trust failures must remain fail-closed so rollback checks cannot be bypassed.
-                  if (err instanceof HostedCatalogFeedTimestampError) {
-                    return { feed: { sequence: err.sequence } };
-                  }
-                  throw err;
-                })
-              ).feed;
+            : parsedCurrent!.feed;
+        currentMaterializedFeedSha256 =
+          parsedCurrent && "authenticatedMaterializedFeedSha256" in parsedCurrent
+            ? parsedCurrent.authenticatedMaterializedFeedSha256
+            : undefined;
         if (
           isHostedCatalogSignedFeedRollback({
             candidate: parsed.feed,
@@ -1767,6 +1952,10 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
             "hosted catalog signed feed sequence is older than current snapshot",
           );
         }
+        skipSameSequenceLegacySnapshotWrite =
+          parsed.feed.sequence === current.sequence &&
+          currentMaterializedFeedSha256 === undefined &&
+          isLegacyCatalogSnapshotWithoutMaterializedDigest(currentSnapshot.body);
       }
     }
     const entries = filterOfficialExternalPluginCatalogEntriesBySourceRefs(
@@ -1781,7 +1970,14 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       ...metadata,
       checksum: sha256Hex(snapshotBody),
     };
-    await snapshotStore
+    if (skipSameSequenceLegacySnapshotWrite && params?.requireSnapshotWrite) {
+      throw new HostedCatalogSnapshotWriteError(
+        new Error(
+          "cannot compact a same-sequence legacy catalog snapshot after its signing key rotated",
+        ),
+      );
+    }
+    await (skipSameSequenceLegacySnapshotWrite ? undefined : snapshotStore)
       ?.write({
         body: snapshotBody,
         metadata: snapshotMetadata,
@@ -1793,6 +1989,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
                 mode: "signed-feed",
                 sequence: parsed.feed.sequence,
                 generatedAt: parsed.feed.generatedAt,
+                ...(currentMaterializedFeedSha256 ? { currentMaterializedFeedSha256 } : {}),
               },
             }
           : {}),
@@ -1828,6 +2025,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       expectedFeedId: source.expectedFeedId,
       verification: source.verification,
       now: currentTime(),
+      minimumSignedSequence: incrementalResetSequenceFloor,
     });
   } finally {
     if (response?.bodyUsed !== true) {

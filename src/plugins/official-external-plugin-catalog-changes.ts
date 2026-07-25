@@ -13,6 +13,7 @@ export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHANGES_PAYLOAD_TYPE =
   "openclaw.official-external-plugin-catalog-changes.v1";
 
 const INCREMENTAL_SNAPSHOT_KIND = "official-external-plugin-catalog-changes-v1";
+const RESET_FLOOR_SNAPSHOT_KIND = "official-external-plugin-catalog-reset-floor-v1";
 const MAX_CHANGE_RECORDS_PER_PAGE = 500;
 const MAX_CHANGE_PAGES_PER_SNAPSHOT = 2048;
 const MAX_CURSOR_BYTES = 4096;
@@ -55,6 +56,13 @@ export type OfficialExternalPluginCatalogIncrementalSnapshot = {
   kind: typeof INCREMENTAL_SNAPSHOT_KIND;
   baseBody: string;
   changeBodies: readonly string[];
+  materializedFeedSha256?: string;
+};
+
+export type OfficialExternalPluginCatalogResetFloorSnapshot = {
+  kind: typeof RESET_FLOOR_SNAPSHOT_KIND;
+  snapshotBody: string;
+  minimumSequence: number;
 };
 
 export type VerifiedOfficialExternalPluginCatalogChangePayload = {
@@ -531,11 +539,9 @@ function applyChangePages(
   return materialized;
 }
 
-export function applyVerifiedOfficialExternalPluginCatalogChangeBodies(params: {
+export function applyVerifiedOfficialExternalPluginCatalogChanges(params: {
   feed: OfficialExternalPluginCatalogFeed;
-  changeBodies: readonly string[];
-  trustedKeys: readonly TrustedSigningKey[];
-  threshold?: number;
+  changes: readonly VerifiedOfficialExternalPluginCatalogChangePayload[];
   expectedFeedId?: string;
 }): {
   feed: OfficialExternalPluginCatalogFeed;
@@ -543,17 +549,13 @@ export function applyVerifiedOfficialExternalPluginCatalogChangeBodies(params: {
   signatureCount: number;
   threshold: number;
 } {
-  if (
-    params.changeBodies.length === 0 ||
-    params.changeBodies.length > MAX_CHANGE_PAGES_PER_SNAPSHOT
-  ) {
+  if (params.changes.length === 0 || params.changes.length > MAX_CHANGE_PAGES_PER_SNAPSHOT) {
     throw new Error("hosted catalog incremental snapshot has an invalid change page count");
   }
   let feed = params.feed;
   let range: OfficialExternalPluginCatalogChangePage[] = [];
   let lastVerification: VerifiedOfficialExternalPluginCatalogChangePayload | undefined;
-  for (const body of params.changeBodies) {
-    const verified = verifyOfficialExternalPluginCatalogChangeEnvelopeBody(body, params);
+  for (const verified of params.changes) {
     if ("resetRequired" in verified.payload) {
       throw new Error("hosted catalog incremental snapshot cannot contain a reset response");
     }
@@ -585,6 +587,27 @@ export function applyVerifiedOfficialExternalPluginCatalogChangeBodies(params: {
   };
 }
 
+export function applyVerifiedOfficialExternalPluginCatalogChangeBodies(params: {
+  feed: OfficialExternalPluginCatalogFeed;
+  changeBodies: readonly string[];
+  trustedKeys: readonly TrustedSigningKey[];
+  threshold?: number;
+  expectedFeedId?: string;
+}): {
+  feed: OfficialExternalPluginCatalogFeed;
+  signedBy: string;
+  signatureCount: number;
+  threshold: number;
+} {
+  return applyVerifiedOfficialExternalPluginCatalogChanges({
+    feed: params.feed,
+    changes: params.changeBodies.map((body) =>
+      verifyOfficialExternalPluginCatalogChangeEnvelopeBody(body, params),
+    ),
+    expectedFeedId: params.expectedFeedId,
+  });
+}
+
 export function parseOfficialExternalPluginCatalogIncrementalSnapshot(
   value: unknown,
 ): OfficialExternalPluginCatalogIncrementalSnapshot | null {
@@ -592,12 +615,16 @@ export function parseOfficialExternalPluginCatalogIncrementalSnapshot(
     return null;
   }
   if (
-    !hasExactKeys(value, ["kind", "baseBody", "changeBodies"]) ||
+    (!hasExactKeys(value, ["kind", "baseBody", "changeBodies"]) &&
+      !hasExactKeys(value, ["kind", "baseBody", "changeBodies", "materializedFeedSha256"])) ||
     typeof value.baseBody !== "string" ||
     !Array.isArray(value.changeBodies) ||
     !value.changeBodies.every((body): body is string => typeof body === "string") ||
     value.changeBodies.length === 0 ||
-    value.changeBodies.length > MAX_CHANGE_PAGES_PER_SNAPSHOT
+    value.changeBodies.length > MAX_CHANGE_PAGES_PER_SNAPSHOT ||
+    (value.materializedFeedSha256 !== undefined &&
+      (typeof value.materializedFeedSha256 !== "string" ||
+        !/^sha256:[a-f0-9]{64}$/u.test(value.materializedFeedSha256)))
   ) {
     throw new Error("hosted catalog incremental snapshot is malformed");
   }
@@ -605,12 +632,16 @@ export function parseOfficialExternalPluginCatalogIncrementalSnapshot(
     kind: INCREMENTAL_SNAPSHOT_KIND,
     baseBody: value.baseBody,
     changeBodies: value.changeBodies,
+    ...(typeof value.materializedFeedSha256 === "string"
+      ? { materializedFeedSha256: value.materializedFeedSha256 }
+      : {}),
   };
 }
 
 export function serializeOfficialExternalPluginCatalogIncrementalSnapshot(params: {
   baseBody: string;
   changeBodies: readonly string[];
+  materializedFeedSha256?: string;
 }): string {
   if (
     params.changeBodies.length === 0 ||
@@ -618,9 +649,48 @@ export function serializeOfficialExternalPluginCatalogIncrementalSnapshot(params
   ) {
     throw new Error("hosted catalog incremental snapshot has an invalid change page count");
   }
+  if (
+    params.materializedFeedSha256 !== undefined &&
+    !/^sha256:[a-f0-9]{64}$/u.test(params.materializedFeedSha256)
+  ) {
+    throw new Error("hosted catalog incremental snapshot materialized feed digest is invalid");
+  }
   return JSON.stringify({
     kind: INCREMENTAL_SNAPSHOT_KIND,
     baseBody: params.baseBody,
     changeBodies: params.changeBodies,
+    ...(params.materializedFeedSha256
+      ? { materializedFeedSha256: params.materializedFeedSha256 }
+      : {}),
   });
+}
+
+export function parseOfficialExternalPluginCatalogResetFloorSnapshot(
+  value: unknown,
+): OfficialExternalPluginCatalogResetFloorSnapshot | null {
+  if (!isRecord(value) || value.kind !== RESET_FLOOR_SNAPSHOT_KIND) {
+    return null;
+  }
+  if (
+    !hasExactKeys(value, ["kind", "snapshotBody", "minimumSequence"]) ||
+    typeof value.snapshotBody !== "string" ||
+    !isOfficialExternalPluginCatalogSequence(value.minimumSequence)
+  ) {
+    throw new Error("hosted catalog reset floor snapshot is malformed");
+  }
+  return {
+    kind: RESET_FLOOR_SNAPSHOT_KIND,
+    snapshotBody: value.snapshotBody,
+    minimumSequence: value.minimumSequence,
+  };
+}
+
+export function serializeOfficialExternalPluginCatalogResetFloorSnapshot(params: {
+  snapshotBody: string;
+  minimumSequence: number;
+}): string {
+  if (!isOfficialExternalPluginCatalogSequence(params.minimumSequence)) {
+    throw new Error("hosted catalog reset floor snapshot sequence is invalid");
+  }
+  return JSON.stringify({ kind: RESET_FLOOR_SNAPSHOT_KIND, ...params });
 }

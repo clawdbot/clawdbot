@@ -55,6 +55,7 @@ type OfficialExternalPluginCatalogShardedSnapshot = {
   kind: typeof SHARDED_SNAPSHOT_KIND;
   rootBody: string;
   shardBodies: readonly string[];
+  materializedFeedSha256?: string;
 };
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -356,23 +357,44 @@ export function parseOfficialExternalPluginCatalogShardedSnapshot(
     return null;
   }
   if (
-    !hasExactKeys(value, ["kind", "rootBody", "shardBodies"]) ||
+    (!hasExactKeys(value, ["kind", "rootBody", "shardBodies"]) &&
+      !hasExactKeys(value, ["kind", "rootBody", "shardBodies", "materializedFeedSha256"])) ||
     typeof value.rootBody !== "string" ||
     !Array.isArray(value.shardBodies) ||
-    !value.shardBodies.every((body): body is string => typeof body === "string")
+    !value.shardBodies.every((body): body is string => typeof body === "string") ||
+    (value.materializedFeedSha256 !== undefined &&
+      (typeof value.materializedFeedSha256 !== "string" ||
+        !/^sha256:[a-f0-9]{64}$/u.test(value.materializedFeedSha256)))
   ) {
     throw new Error("hosted catalog sharded snapshot is malformed");
   }
-  return { kind: SHARDED_SNAPSHOT_KIND, rootBody: value.rootBody, shardBodies: value.shardBodies };
+  return {
+    kind: SHARDED_SNAPSHOT_KIND,
+    rootBody: value.rootBody,
+    shardBodies: value.shardBodies,
+    ...(typeof value.materializedFeedSha256 === "string"
+      ? { materializedFeedSha256: value.materializedFeedSha256 }
+      : {}),
+  };
 }
 
 export function serializeOfficialExternalPluginCatalogShardedSnapshot(params: {
   rootBody: string;
   shardBodies: readonly string[];
+  materializedFeedSha256?: string;
 }): string {
+  if (
+    params.materializedFeedSha256 !== undefined &&
+    !/^sha256:[a-f0-9]{64}$/u.test(params.materializedFeedSha256)
+  ) {
+    throw new Error("hosted catalog sharded snapshot materialized feed digest is invalid");
+  }
   return JSON.stringify({
     kind: SHARDED_SNAPSHOT_KIND,
     rootBody: params.rootBody,
     shardBodies: params.shardBodies,
+    ...(params.materializedFeedSha256
+      ? { materializedFeedSha256: params.materializedFeedSha256 }
+      : {}),
   });
 }

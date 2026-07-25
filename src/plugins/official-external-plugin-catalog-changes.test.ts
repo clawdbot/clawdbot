@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHANGES_PAYLOAD_TYPE,
   applyVerifiedOfficialExternalPluginCatalogChangeBodies,
+  applyVerifiedOfficialExternalPluginCatalogChanges,
   parseOfficialExternalPluginCatalogChangePayload,
   parseOfficialExternalPluginCatalogIncrementalSnapshot,
   serializeOfficialExternalPluginCatalogIncrementalSnapshot,
@@ -193,5 +194,71 @@ describe("official external plugin catalog changes", () => {
       baseBody: "signed-base",
       changeBodies: [body],
     });
+  });
+
+  it("accepts producer-shaped upserts with presentation and GitHub source metadata", () => {
+    const entry = {
+      ...catalogEntry("producer-plugin"),
+      description: "Producer description",
+      icon: "https://clawhub.ai/icons/producer-plugin.png",
+      install: {
+        candidates: [
+          {
+            sourceRef: "public-clawhub",
+            package: "producer-plugin",
+            version: "1.0.0",
+            integrity: `sha256:${"a".repeat(64)}`,
+            github: {
+              repo: "openclaw/plugins",
+              path: "plugins/producer-plugin",
+              commit: "f".repeat(40),
+              contentHash: `sha256:${"b".repeat(64)}`,
+            },
+          },
+        ],
+      },
+    };
+    const parsed = parseOfficialExternalPluginCatalogChangePayload(
+      page({
+        toSequence: 2,
+        changeCount: 1,
+        changes: [{ sequence: 2, operation: "upsert", entry }],
+        nextCursor: null,
+      }),
+    );
+
+    expect(parsed).toMatchObject({ changes: [{ entry }] });
+  });
+
+  it("applies pages that the live path has already verified", () => {
+    const body = signChangePayload(
+      page({ toSequence: 2, changeCount: 1, changes: [page().changes[0]], nextCursor: null }),
+    );
+    const verified = verifyOfficialExternalPluginCatalogChangeEnvelopeBody(body, {
+      trustedKeys: [{ keyId: "catalog-root", publicKey: keys.publicKey }],
+    });
+
+    expect(
+      applyVerifiedOfficialExternalPluginCatalogChanges({
+        feed: baseFeed,
+        changes: [verified],
+        expectedFeedId: "clawhub-official",
+      }).feed,
+    ).toMatchObject({ sequence: 2, entries: [{ id: "alpha" }, { id: "beta" }] });
+  });
+
+  it("bounds persisted change history so the caller can compact through the full root", () => {
+    expect(() =>
+      serializeOfficialExternalPluginCatalogIncrementalSnapshot({
+        baseBody: "signed-base",
+        changeBodies: Array.from({ length: 2048 }, () => "signed-change"),
+      }),
+    ).not.toThrow();
+    expect(() =>
+      serializeOfficialExternalPluginCatalogIncrementalSnapshot({
+        baseBody: "signed-base",
+        changeBodies: Array.from({ length: 2049 }, () => "signed-change"),
+      }),
+    ).toThrow("invalid change page count");
   });
 });

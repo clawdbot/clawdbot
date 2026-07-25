@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { serializeOfficialExternalPluginCatalogIncrementalSnapshot } from "./official-external-plugin-catalog-changes.js";
+import { serializeOfficialExternalPluginCatalogShardedSnapshot } from "./official-external-plugin-catalog-shards.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   type HostedOfficialExternalPluginCatalogSnapshot,
@@ -14,6 +15,7 @@ import {
   type OfficialExternalPluginCatalogFeed,
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogManifest,
+  hashOfficialExternalPluginCatalogMaterializedFeed,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalPluginCatalogEntries,
   loadConfiguredHostedOfficialExternalPluginCatalogEntries,
@@ -116,6 +118,35 @@ function hostedCatalogFeed(params: {
         },
       },
     ],
+  };
+}
+
+function changeCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
+  return {
+    type: "plugin",
+    id,
+    title: id,
+    description: `${id} description`,
+    icon: "https://packages.acme.example/icons/plugin.png",
+    version: "1.0.0",
+    state: "available",
+    publisher: { id: "openclaw", trust: "official" },
+    install: {
+      candidates: [
+        {
+          sourceRef: "acme-npm",
+          package: id,
+          version: "1.0.0",
+          integrity: `sha256:${"a".repeat(64)}`,
+          github: {
+            repo: "openclaw/plugins",
+            path: `plugins/${id}`,
+            commit: "f".repeat(40),
+            contentHash: `sha256:${"b".repeat(64)}`,
+          },
+        },
+      ],
+    },
   };
 }
 
@@ -301,7 +332,11 @@ function signedCatalogConfig(publicKeyPem: string, keyId = "acme-root"): HostedC
 function signedHostedCatalogSnapshot(params: {
   body: string;
   savedAt?: string;
-  monotonic?: { sequence: number; generatedAt: string };
+  monotonic?: {
+    sequence: number;
+    generatedAt: string;
+    currentMaterializedFeedSha256?: string;
+  };
 }): HostedOfficialExternalPluginCatalogSnapshot {
   const savedAt = params.savedAt ?? "2026-06-22T00:00:10.000Z";
   return {
@@ -355,6 +390,24 @@ describe("official external plugin catalog", () => {
       sequence: 1,
     });
     expect(officialExternalPluginCatalog.entries.length).toBeGreaterThan(0);
+  });
+
+  it("hashes materialized feed entries independently of transport ordering", () => {
+    const feed = {
+      schemaVersion: 1,
+      id: "clawhub-official",
+      sequence: 1,
+      generatedAt: "2026-07-24T12:00:00.000Z",
+      expiresAt: "2026-07-24T12:05:00.000Z",
+      entries: [changeCatalogEntry("beta"), changeCatalogEntry("alpha")],
+    } satisfies OfficialExternalPluginCatalogFeed;
+
+    expect(hashOfficialExternalPluginCatalogMaterializedFeed(feed)).toBe(
+      hashOfficialExternalPluginCatalogMaterializedFeed({
+        ...feed,
+        entries: feed.entries.toReversed(),
+      }),
+    );
   });
 
   it("keeps Codex installable as a harness without declaring a model provider", () => {
@@ -1254,7 +1307,7 @@ describe("official external plugin catalog", () => {
     }
   });
 
-  it("enforces SQLite monotonicity across persisted signed change wrappers", async () => {
+  it("enforces monotonicity while compacting an incremental wrapper to an equivalent full feed", async () => {
     const initial = signedHostedCatalogFeed({
       feed: hostedCatalogFeed({ sequence: 1, pluginName: "@openclaw/initial" }),
     });
@@ -1282,9 +1335,23 @@ describe("official external plugin catalog", () => {
         nextCursor: null,
       },
     });
+    const materializedFeed = {
+      ...hostedCatalogFeed({ sequence: 1, pluginName: "@openclaw/initial" }),
+      sequence: 2,
+      generatedAt: "2026-07-24T12:00:00.000Z",
+      expiresAt: "2026-07-24T12:05:00.000Z",
+      description: "Current",
+    } satisfies OfficialExternalPluginCatalogFeed;
+    const legacyWrapperBody = serializeOfficialExternalPluginCatalogIncrementalSnapshot({
+      baseBody: initial.body,
+      changeBodies: [change.body],
+    });
+    const materializedFeedSha256 =
+      hashOfficialExternalPluginCatalogMaterializedFeed(materializedFeed);
     const wrapperBody = serializeOfficialExternalPluginCatalogIncrementalSnapshot({
       baseBody: initial.body,
       changeBodies: [change.body],
+      materializedFeedSha256,
     });
     const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-changes-store-"));
     const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
@@ -1300,13 +1367,69 @@ describe("official external plugin catalog", () => {
       );
       await snapshotStore.write(
         signedHostedCatalogSnapshot({
-          body: wrapperBody,
+          body: legacyWrapperBody,
           monotonic: { sequence: 2, generatedAt: "2026-07-24T12:00:00.000Z" },
+        }),
+      );
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: wrapperBody,
+          monotonic: {
+            sequence: 2,
+            generatedAt: "2026-07-24T12:00:00.000Z",
+            currentMaterializedFeedSha256: materializedFeedSha256,
+          },
         }),
       );
       await expect(
         snapshotStore.read("https://packages.acme.example/openclaw/feed"),
       ).resolves.toMatchObject({ body: wrapperBody, monotonic: { sequence: 2 } });
+
+      const compacted = signedHostedCatalogFeed({
+        feed: materializedFeed,
+        privateKeyPem: initial.privateKeyPem,
+      });
+      await expect(
+        snapshotStore.write(
+          signedHostedCatalogSnapshot({
+            body: compacted.body,
+            monotonic: { sequence: 2, generatedAt: materializedFeed.generatedAt },
+          }),
+        ),
+      ).resolves.toBeUndefined();
+      const resigned = signedHostedCatalogFeed({
+        feed: {
+          ...materializedFeed,
+          generatedAt: "2026-07-24T12:01:00.000Z",
+          expiresAt: "2026-07-24T12:06:00.000Z",
+        },
+        privateKeyPem: initial.privateKeyPem,
+      });
+      await expect(
+        snapshotStore.write(
+          signedHostedCatalogSnapshot({
+            body: resigned.body,
+            monotonic: { sequence: 2, generatedAt: "2026-07-24T12:01:00.000Z" },
+          }),
+        ),
+      ).resolves.toBeUndefined();
+      const conflicting = signedHostedCatalogFeed({
+        feed: {
+          ...materializedFeed,
+          description: "Conflicting",
+          generatedAt: "2026-07-24T12:02:00.000Z",
+          expiresAt: "2026-07-24T12:07:00.000Z",
+        },
+        privateKeyPem: initial.privateKeyPem,
+      });
+      await expect(
+        snapshotStore.write(
+          signedHostedCatalogSnapshot({
+            body: conflicting.body,
+            monotonic: { sequence: 2, generatedAt: "2026-07-24T12:02:00.000Z" },
+          }),
+        ),
+      ).rejects.toThrow("payload changed without a sequence increment");
 
       await expect(
         snapshotStore.write(
@@ -1316,6 +1439,71 @@ describe("official external plugin catalog", () => {
           }),
         ),
       ).rejects.toThrow("sequence is older");
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("compacts a legacy sharded wrapper using its already-verified materialized digest", async () => {
+    const fixture = shardedHostedCatalogFixture();
+    const entries = fixture.shardBodies.flatMap(
+      (body) => (JSON.parse(body) as { entries: OfficialExternalPluginCatalogEntry[] }).entries,
+    );
+    const feed: OfficialExternalPluginCatalogFeed = {
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      sequence: 12,
+      generatedAt: "2026-06-22T00:00:12.000Z",
+      expiresAt: "2026-06-29T00:00:12.000Z",
+      description: "Acme plugins",
+      entries,
+    };
+    const legacyBody = serializeOfficialExternalPluginCatalogShardedSnapshot({
+      rootBody: fixture.signedRoot.body,
+      shardBodies: fixture.shardBodies,
+    });
+    const compacted = signedHostedCatalogFeed({
+      feed,
+      privateKeyPem: fixture.signedRoot.privateKeyPem,
+    });
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-shards-store-"));
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir,
+    });
+
+    try {
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: legacyBody,
+          monotonic: { sequence: 12, generatedAt: feed.generatedAt },
+        }),
+      );
+      const rollback = signedHostedCatalogFeed({
+        feed: hostedCatalogFeed({ sequence: 11, pluginName: "@openclaw/rollback" }),
+        privateKeyPem: fixture.signedRoot.privateKeyPem,
+      });
+      await expect(
+        snapshotStore.write(
+          signedHostedCatalogSnapshot({
+            body: rollback.body,
+            monotonic: { sequence: 11, generatedAt: "2026-06-22T00:00:11.000Z" },
+          }),
+        ),
+      ).rejects.toThrow("sequence is older");
+      await expect(
+        snapshotStore.write(
+          signedHostedCatalogSnapshot({
+            body: compacted.body,
+            monotonic: {
+              sequence: 12,
+              generatedAt: feed.generatedAt,
+              currentMaterializedFeedSha256:
+                hashOfficialExternalPluginCatalogMaterializedFeed(feed),
+            },
+          }),
+        ),
+      ).resolves.toBeUndefined();
     } finally {
       closeOpenClawStateDatabaseForTest();
       rmSync(stateDir, { recursive: true, force: true });
@@ -1478,6 +1666,85 @@ describe("official external plugin catalog", () => {
       });
       expectHostedSnapshot(retainedCurrent);
       expect(retainedCurrent.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v9"]);
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains a same-sequence legacy wrapper when its signing key has rotated", async () => {
+    const previous = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/legacy" }),
+      keyId: "old-root",
+    });
+    const change = signedHostedCatalogDocument({
+      payloadType: HOSTED_CATALOG_CHANGES_PAYLOAD_TYPE,
+      privateKeyPem: previous.privateKeyPem,
+      document: {
+        schemaVersion: 1,
+        feedId: "openclaw-official-external-plugins",
+        fromSequence: 8,
+        toSequence: 9,
+        generatedAt: "2026-07-24T12:00:00.000Z",
+        expiresAt: "2026-07-24T12:05:00.000Z",
+        requestCursor: null,
+        pageIndex: 0,
+        startIndex: 0,
+        changeCount: 1,
+        changes: [{ sequence: 9, operation: "metadata", metadata: { description: "Current" } }],
+        nextCursor: null,
+      },
+    });
+    const legacyBody = serializeOfficialExternalPluginCatalogIncrementalSnapshot({
+      baseBody: previous.body,
+      changeBodies: [change.body],
+    });
+    const candidate = signedHostedCatalogFeed({
+      feed: {
+        ...hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/legacy" }),
+        sequence: 9,
+        generatedAt: "2026-07-24T12:00:00.000Z",
+        expiresAt: "2026-07-24T12:05:00.000Z",
+        description: "Current",
+      },
+      keyId: "new-root",
+    });
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-legacy-key-rotation-"));
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir,
+    });
+
+    try {
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: legacyBody,
+          monotonic: { sequence: 9, generatedAt: "2026-07-24T12:00:00.000Z" },
+        }),
+      );
+      const load = () =>
+        loadHostedCatalog({
+          feedProfile: "acme",
+          catalogConfig: signedCatalogConfig(candidate.publicKeyPem, "new-root"),
+          fetchImpl: vi.fn(async () => dsseResponse(candidate.body)),
+          now: () => new Date("2026-07-24T12:01:00.000Z"),
+          snapshotStore,
+        });
+
+      const result = await load();
+      expectHosted(result);
+      await expect(
+        snapshotStore.read("https://packages.acme.example/openclaw/feed"),
+      ).resolves.toMatchObject({ body: legacyBody });
+      await expect(
+        loadHostedCatalog({
+          feedProfile: "acme",
+          catalogConfig: signedCatalogConfig(candidate.publicKeyPem, "new-root"),
+          fetchImpl: vi.fn(async () => dsseResponse(candidate.body)),
+          now: () => new Date("2026-07-24T12:01:00.000Z"),
+          snapshotStore,
+          requireSnapshotWrite: true,
+        }),
+      ).rejects.toThrow("cannot compact a same-sequence legacy catalog snapshot");
     } finally {
       closeOpenClawStateDatabaseForTest();
       rmSync(stateDir, { recursive: true, force: true });
@@ -1773,6 +2040,322 @@ describe("official external plugin catalog", () => {
     });
     expectHostedSnapshot(offline);
     expect(offline.feed).toMatchObject({ sequence: 2, entries: [{ id: "beta" }] });
+  });
+
+  it("persists same-sequence signed freshness for later offline use", async () => {
+    const initial = signedHostedCatalogFeed({
+      feed: {
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        sequence: 1,
+        generatedAt: "2026-07-24T12:00:00.000Z",
+        expiresAt: "2026-07-24T12:01:00.000Z",
+        entries: [changeCatalogEntry("alpha")],
+      },
+    });
+    const freshness = signedHostedCatalogDocument({
+      payloadType: HOSTED_CATALOG_CHANGES_PAYLOAD_TYPE,
+      privateKeyPem: initial.privateKeyPem,
+      document: {
+        schemaVersion: 1,
+        feedId: "openclaw-official-external-plugins",
+        fromSequence: 1,
+        toSequence: 1,
+        generatedAt: "2026-07-24T12:00:30.000Z",
+        expiresAt: "2026-07-24T13:00:00.000Z",
+        requestCursor: null,
+        pageIndex: 0,
+        startIndex: 0,
+        changeCount: 0,
+        changes: [],
+        nextCursor: null,
+      },
+    });
+    const catalogConfig = signedCatalogConfig(initial.publicKeyPem);
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore();
+    await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      now: () => new Date("2026-07-24T12:00:10.000Z"),
+      fetchImpl: vi.fn(async () => dsseResponse(initial.body)),
+    });
+    const writeSpy = vi.spyOn(snapshotStore, "write");
+
+    const refreshed = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      now: () => new Date("2026-07-24T12:00:40.000Z"),
+      fetchImpl: vi.fn(async () => dsseResponse(freshness.body)),
+    });
+
+    expectHosted(refreshed);
+    expect(refreshed.feed).toMatchObject({ sequence: 1, expiresAt: "2026-07-24T13:00:00.000Z" });
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const offline = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      offline: true,
+      now: () => new Date("2026-07-24T12:30:00.000Z"),
+    });
+    expectHostedSnapshot(offline);
+    expect(offline.feed.expiresAt).toBe("2026-07-24T13:00:00.000Z");
+    expect(offline.entries[0]?.install).toBeDefined();
+  });
+
+  it("validates schema-v2 snapshot digests before stripping install authority", async () => {
+    const initial = signedHostedCatalogFeed({
+      feed: {
+        schemaVersion: 2,
+        id: "openclaw-official-external-plugins",
+        sequence: 1,
+        generatedAt: "2026-07-24T12:00:00.000Z",
+        expiresAt: "2026-07-24T12:01:00.000Z",
+        entries: [{ ...changeCatalogEntry("disabled"), state: "disabled" }],
+      },
+    });
+    const freshness = signedHostedCatalogDocument({
+      payloadType: HOSTED_CATALOG_CHANGES_PAYLOAD_TYPE,
+      privateKeyPem: initial.privateKeyPem,
+      document: {
+        schemaVersion: 1,
+        feedId: "openclaw-official-external-plugins",
+        fromSequence: 1,
+        toSequence: 1,
+        generatedAt: "2026-07-24T12:00:30.000Z",
+        expiresAt: "2026-07-24T13:00:00.000Z",
+        requestCursor: null,
+        pageIndex: 0,
+        startIndex: 0,
+        changeCount: 0,
+        changes: [],
+        nextCursor: null,
+      },
+    });
+    const catalogConfig = signedCatalogConfig(initial.publicKeyPem);
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore();
+    await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      now: () => new Date("2026-07-24T12:00:10.000Z"),
+      fetchImpl: vi.fn(async () => dsseResponse(initial.body)),
+    });
+
+    const refreshed = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      now: () => new Date("2026-07-24T12:00:40.000Z"),
+      fetchImpl: vi.fn(async () => dsseResponse(freshness.body)),
+    });
+    expectHosted(refreshed);
+    expect(refreshed.feed.entries[0]?.install).toBeUndefined();
+
+    const offline = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      offline: true,
+      now: () => new Date("2026-07-24T12:30:00.000Z"),
+    });
+    expectHostedSnapshot(offline);
+    expect(offline.feed.entries[0]?.install).toBeUndefined();
+  });
+
+  it("rechecks incremental expiry after the terminal page before persisting", async () => {
+    const initial = signedHostedCatalogFeed({
+      feed: {
+        ...hostedCatalogFeed({ sequence: 1, pluginName: "@openclaw/initial" }),
+        generatedAt: "2026-07-24T11:00:00.000Z",
+        expiresAt: "2026-07-24T12:10:00.000Z",
+      },
+    });
+    const page = (pageIndex: number, requestCursor: string | null, nextCursor: string | null) =>
+      signedHostedCatalogDocument({
+        payloadType: HOSTED_CATALOG_CHANGES_PAYLOAD_TYPE,
+        privateKeyPem: initial.privateKeyPem,
+        document: {
+          schemaVersion: 1,
+          feedId: "openclaw-official-external-plugins",
+          fromSequence: 1,
+          toSequence: 2,
+          generatedAt: "2026-07-24T12:00:00.000Z",
+          expiresAt: "2026-07-24T12:05:00.000Z",
+          requestCursor,
+          pageIndex,
+          startIndex: pageIndex,
+          changeCount: 2,
+          changes: [
+            {
+              sequence: 2,
+              operation: "metadata",
+              metadata: { description: pageIndex === 0 ? "First" : "Terminal" },
+            },
+          ],
+          nextCursor,
+        },
+      });
+    const first = page(0, null, "terminal");
+    const terminal = page(1, "terminal", null);
+    const catalogConfig = signedCatalogConfig(initial.publicKeyPem);
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore();
+    await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      now: () => new Date("2026-07-24T11:01:00.000Z"),
+      fetchImpl: vi.fn(async () => dsseResponse(initial.body)),
+    });
+    const writeSpy = vi.spyOn(snapshotStore, "write");
+    const now = vi
+      .fn<() => Date>()
+      .mockReturnValueOnce(new Date("2026-07-24T12:04:59.000Z"))
+      .mockReturnValue(new Date("2026-07-24T12:05:01.000Z"));
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = new URL(String(input));
+      if (requestUrl.pathname.endsWith("/changes")) {
+        return dsseResponse(requestUrl.searchParams.has("cursor") ? terminal.body : first.body);
+      }
+      return new Response(null, { status: 503 });
+    });
+
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      now,
+      fetchImpl,
+    });
+
+    expectHostedSnapshot(result);
+    expect(result.feed.sequence).toBe(1);
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(now.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("uses a signed reset sequence as the floor for the configured root", async () => {
+    const initial = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 10, pluginName: "@openclaw/initial" }),
+    });
+    const reset = signedHostedCatalogDocument({
+      payloadType: HOSTED_CATALOG_CHANGES_PAYLOAD_TYPE,
+      privateKeyPem: initial.privateKeyPem,
+      document: {
+        schemaVersion: 1,
+        feedId: "openclaw-official-external-plugins",
+        fromSequence: 10,
+        currentSequence: 20,
+        generatedAt: "2026-07-24T12:00:00.000Z",
+        expiresAt: "2026-07-24T12:05:00.000Z",
+        resetRequired: true,
+        snapshotUrl: "https://untrusted.example/ignored",
+      },
+    });
+    const expiredReset = signedHostedCatalogDocument({
+      payloadType: HOSTED_CATALOG_CHANGES_PAYLOAD_TYPE,
+      privateKeyPem: initial.privateKeyPem,
+      document: {
+        schemaVersion: 1,
+        feedId: "openclaw-official-external-plugins",
+        fromSequence: 10,
+        currentSequence: 99,
+        generatedAt: "2026-07-24T11:00:00.000Z",
+        expiresAt: "2026-07-24T11:05:00.000Z",
+        resetRequired: true,
+        snapshotUrl: "https://untrusted.example/ignored",
+      },
+    });
+    const staleRoot = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 15, pluginName: "@openclaw/stale-root" }),
+      privateKeyPem: initial.privateKeyPem,
+    });
+    const currentRoot = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 20, pluginName: "@openclaw/current-root" }),
+      privateKeyPem: initial.privateKeyPem,
+    });
+    const catalogConfig = signedCatalogConfig(initial.publicKeyPem);
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore();
+    await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      fetchImpl: vi.fn(async () => dsseResponse(initial.body)),
+    });
+    const refreshFrom = async (rootBody: string) =>
+      await loadHostedCatalog({
+        feedProfile: "acme",
+        catalogConfig,
+        snapshotStore,
+        now: () => new Date("2026-07-24T12:01:00.000Z"),
+        fetchImpl: vi.fn(async (input: RequestInfo | URL) => {
+          const requestUrl = new URL(String(input));
+          return requestUrl.pathname.endsWith("/changes")
+            ? dsseResponse(reset.body, { status: 409 })
+            : dsseResponse(rootBody);
+        }),
+      });
+
+    const rejected = await refreshFrom(staleRoot.body);
+    expectBundledFallback(rejected);
+    expect(rejected.entries).toEqual([]);
+    expect(rejected.error).toContain("reset floor 20");
+
+    const offlineAfterReset = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      offline: true,
+      now: () => new Date("2026-07-24T12:02:00.000Z"),
+    });
+    expectBundledFallback(offlineAfterReset);
+    expect(offlineAfterReset.entries).toEqual([]);
+    expect(offlineAfterReset.error).toContain("reset floor 20");
+
+    const outage = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore,
+      now: () => new Date("2026-07-24T12:01:00.000Z"),
+      fetchImpl: vi.fn(async (input: RequestInfo | URL) => {
+        const requestUrl = new URL(String(input));
+        return requestUrl.pathname.endsWith("/changes")
+          ? dsseResponse(reset.body, { status: 409 })
+          : new Response(null, { status: 503 });
+      }),
+    });
+    expectBundledFallback(outage);
+    expect(outage.entries).toEqual([]);
+    expect(outage.error).toContain("reset floor 20");
+
+    const replaySnapshotStore = createInMemoryHostedCatalogSnapshotStore([
+      signedHostedCatalogSnapshot({ body: initial.body }),
+    ]);
+    const replaySafe = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      snapshotStore: replaySnapshotStore,
+      now: () => new Date("2026-07-24T12:01:00.000Z"),
+      fetchImpl: vi.fn(async (input: RequestInfo | URL) => {
+        const requestUrl = new URL(String(input));
+        return requestUrl.pathname.endsWith("/changes")
+          ? dsseResponse(expiredReset.body, { status: 409 })
+          : dsseResponse(
+              signedHostedCatalogFeed({
+                feed: hostedCatalogFeed({ sequence: 11, pluginName: "@openclaw/replay-safe" }),
+                privateKeyPem: initial.privateKeyPem,
+              }).body,
+            );
+      }),
+    });
+    expectHosted(replaySafe);
+    expect(replaySafe.feed.sequence).toBe(11);
+
+    const accepted = await refreshFrom(currentRoot.body);
+    expectHosted(accepted);
+    expect(accepted.feed.sequence).toBe(20);
   });
 
   it("rejects expired signed feeds and keeps expired snapshots visible but not installable", async () => {
