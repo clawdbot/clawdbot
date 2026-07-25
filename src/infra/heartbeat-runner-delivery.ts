@@ -148,7 +148,7 @@ export function classifyHeartbeatAgentOutcome(params: {
   } as const;
 }
 
-export type ClassifiedHeartbeatOutcome = ReturnType<typeof classifyHeartbeatAgentOutcome>;
+type ClassifiedHeartbeatOutcome = ReturnType<typeof classifyHeartbeatAgentOutcome>;
 
 export async function finalizeHeartbeatOutcome(params: {
   opts: HeartbeatRunOptions;
@@ -476,10 +476,7 @@ async function clearSatisfiedPendingFinalDelivery(
   );
 }
 
-export function consumeInspectedSystemEvents(
-  wake: ReadyHeartbeatWake,
-  prepared: PreparedHeartbeatRun,
-) {
+function consumeInspectedSystemEvents(wake: ReadyHeartbeatWake, prepared: PreparedHeartbeatRun) {
   if (wake.preflight.shouldInspectPendingEvents && prepared.inspectedSystemEventsToConsume.length) {
     consumeSelectedSystemEventEntries(prepared.sessionKey, prepared.inspectedSystemEventsToConsume);
   }

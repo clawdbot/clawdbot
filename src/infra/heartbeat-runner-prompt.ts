@@ -103,7 +103,7 @@ Commitments:
 ${JSON.stringify(items)}`;
 }
 
-export type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
+type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
@@ -235,7 +235,7 @@ export async function resolveHeartbeatPreflight(params: {
   return basePreflight;
 }
 
-export type HeartbeatPromptResolution = {
+type HeartbeatPromptResolution = {
   prompt: string | null;
   hasExecCompletion: boolean;
   hasRelayableExecCompletion: boolean;
