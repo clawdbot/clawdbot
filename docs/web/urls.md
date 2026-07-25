@@ -18,7 +18,8 @@ Chat and dashboard views are parallel route namespaces:
 ```text
 /chat/main/deploy-monitor-6db92d48
 /dashboard/main/deploy-monitor-6db92d48
-/dashboard/6db92d48
+/chat/main/telegram/12345
+/chat/main/cron/nightly/run/8821
 /chat/main
 ```
 
@@ -26,33 +27,51 @@ The path grammar is:
 
 ```text
 /<namespace>/<agentId>
-/<namespace>/<sessionRef>
 /<namespace>/<agentId>/<sessionRef>
+/<namespace>/<agentId>/<restSegment>/<restSegment>...
 ```
 
 `<namespace>` is either `/chat` or `/dashboard`. The first form opens that
-agent's main session. In a one-segment form, a segment ending in at least eight
-hexadecimal characters is a session reference; every other value is an agent
-id. The two-segment form always treats the second segment as a session reference.
+agent's main session. The other forms encode one immutable session key in one of
+two ways.
 
-`<sessionRef>` is a short session id with an optional slug, such as
-`deploy-monitor-6db92d48`. The short id is the authoritative part. It is the
-first eight lowercase hexadecimal characters of the session UUID. Longer
-prefixes and the full UUID are also accepted.
+The short-id form applies when the session key's rest, everything after
+`agent:<agentId>:`, ends in a UUID. `<sessionRef>` is an optional display-name
+slug plus a short id, such as `deploy-monitor-6db92d48`. The short id is the
+authoritative part: at least eight lowercase hexadecimal characters from the
+start of the key's trailing UUID, with UUID dashes omitted. Longer prefixes up
+to all 32 hexadecimal characters are accepted. The row's rotating `sessionId`
+is not part of the URL identity.
+
+Every other key uses the literal-key form. Each colon-delimited segment after
+`agent:<agentId>:` becomes one URL-encoded path segment. For example,
+`agent:main:telegram:12345` becomes `/chat/main/telegram/12345`, and
+`agent:main:cron:nightly:run:8821` becomes
+`/chat/main/cron/nightly/run/8821`.
+
+Exactly one segment after the agent id matching an optional slug followed by 8
+to 32 hexadecimal characters is parsed as a short reference. Everything else
+is literal-key form. If that short reference has no UUID match, the same path is
+retried once as a literal key so a legitimate single-segment key remains
+reachable.
 
 ### Stability contract
 
 The following parts are stable URL contracts:
 
 - The `/chat` and `/dashboard` namespace words.
-- The short session id.
-- The one-segment and two-segment arity rules above.
+- The key UUID short id in short-id URLs.
+- The arity and short-versus-literal parsing rules above.
 
-The agent segment and slug are explicitly decorative. They may change without
-notice and must not be used to identify or validate a session. This lets agent
-renames and session-title changes preserve old bookmarks. After resolution, the
-Control UI replaces the address bar with the current agent id and current
-display-name slug without adding a browser-history entry.
+In short-id form, the agent segment and slug are explicitly decorative. They may
+change without notice and are not used to identify or validate the session.
+After resolution, the Control UI replaces the address bar with the current
+agent id and current display-name slug without adding a browser-history entry.
+
+In literal-key form, the agent segment is authoritative because it is part of
+the reconstructed session key. The remaining literal segments are authoritative
+too. A slug, when present, is always decorative; literal-key forms do not
+synthesize one.
 
 If one short id matches more than one session, the UI does not guess. It shows a
 small disambiguation view with the matching display names, agents, and longer id
@@ -71,8 +90,8 @@ no route-specific URL parameters.
 
 | Page                | Canonical path              | Aliases                   | Parameters or dynamic forms                      |
 | ------------------- | --------------------------- | ------------------------- | ------------------------------------------------ |
-| Chat                | `/chat`                     | -                         | Session forms above; `?draft=<text>`             |
-| Dashboard           | `/dashboard`                | -                         | Session forms above; `?draft=<text>`             |
+| Chat                | `/chat`                     | -                         | Key-backed session forms above; `?draft=<text>`  |
+| Dashboard           | `/dashboard`                | -                         | Key-backed session forms above; `?draft=<text>`  |
 | Ask OpenClaw        | `/custodian`                | -                         | `?intent=new-agent`, `?onboarding=1`             |
 | New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`       |
 | Activity            | `/activity`                 | -                         | -                                                |
