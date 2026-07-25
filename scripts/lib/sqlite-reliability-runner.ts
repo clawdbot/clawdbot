@@ -27,6 +27,7 @@ import {
   type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
+import { runPublicationInterruptionProof } from "./sqlite-reliability-publication.js";
 import { monitorSqliteWalDuring } from "./sqlite-reliability-wal-monitor.js";
 import {
   crashWriter,
@@ -580,6 +581,25 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       throw new Error("SQLite reliability stress did not execute its crash recovery proof.");
     }
     const writerResult = await stopWriter(writer);
+    const stableState = verifyRestoredDatabase({
+      identity: target.identity,
+      path: target.path,
+      rowsPerBatch: profile.rowsPerBatch,
+      uncommittedBatch: null,
+    });
+    const publicationInterruptionProof = await runPublicationInterruptionProof({
+      expectedState: stableState,
+      scratchPath: path.join(runScratch, "publication-interruptions"),
+      sourcePath: target.path,
+      verifyDatabase: (databasePath) =>
+        verifyRestoredDatabase({
+          expectedState: stableState,
+          identity: target.identity,
+          path: databasePath,
+          rowsPerBatch: profile.rowsPerBatch,
+          uncommittedBatch: null,
+        }),
+    });
     const maintenanceProof = await runMaintenanceRoundTrip({
       env,
       repositoryProvider,
@@ -613,6 +633,7 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       },
       platform: process.platform,
       profile: options.profile,
+      publicationInterruptionProof,
       retainedBatches: profile.retainedBatches,
       restoresVerified: metrics.length + 1,
       rowsPerBatch: profile.rowsPerBatch,

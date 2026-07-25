@@ -78,6 +78,32 @@ export type ReliabilityReport = {
   };
   platform: NodeJS.Platform;
   profile: ProfileId;
+  publicationInterruptionProof: {
+    afterPublish: {
+      existingTargetPreserved: true;
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      recoveryVerified: true;
+      sourceStatePreserved: true;
+      stagingEntries: number;
+      targetVerifiedAfterCrash: true;
+      targetVisibleAfterCrash: true;
+    };
+    beforePublish: {
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      recoveryVerified: true;
+      retryPublished: true;
+      sourceStatePreserved: true;
+      stagingEntries: number;
+      targetVerifiedAfterCrash: false;
+      targetVisibleAfterCrash: false;
+    };
+  };
   retainedBatches: number;
   restoresVerified: number;
   rowsPerBatch: number;
