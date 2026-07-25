@@ -143,6 +143,8 @@ const widgetFrameRegistry = new Set<HTMLIFrameElement>();
 // binding, so the template must read the reported height back or it resets.
 const widgetFrameHeightsBySrc = new Map<string, number>();
 const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
+const widgetFrameSrcByDocumentId = new Map<string, string>();
+const WIDGET_FRAME_SRCS_MAX_ENTRIES = 100;
 // Keyed by window, not a module boolean: non-isolated test workers swap the
 // global window between files while module state persists.
 const widgetSizeListenerWindows = new WeakSet<Window>();
@@ -158,6 +160,36 @@ function rememberWidgetFrameHeight(src: string, height: number) {
     }
   }
   widgetFrameHeightsBySrc.set(src, height);
+}
+
+function resolveWidgetFrameSrc(preview: ToolPreview, options?: WidgetCardOptions) {
+  const resolve = () =>
+    resolveCanvasIframeUrl(
+      preview.url,
+      options?.canvasPluginSurfaceUrl,
+      options?.allowExternalEmbedUrls ?? false,
+    );
+  const documentId = preview.viewId?.trim();
+  if (!documentId || !isManagedCanvasDocumentPreview(preview)) {
+    return resolve();
+  }
+  if (widgetFrameSrcByDocumentId.has(documentId)) {
+    return widgetFrameSrcByDocumentId.get(documentId);
+  }
+  const src = resolve();
+  if (!src) {
+    return undefined;
+  }
+  // A document keeps its first capability URL so lease rotation cannot re-key
+  // and reload a mounted frame, which would flash and discard widget state.
+  if (widgetFrameSrcByDocumentId.size >= WIDGET_FRAME_SRCS_MAX_ENTRIES) {
+    const oldest = widgetFrameSrcByDocumentId.keys().next().value;
+    if (oldest !== undefined) {
+      widgetFrameSrcByDocumentId.delete(oldest);
+    }
+  }
+  widgetFrameSrcByDocumentId.set(documentId, src);
+  return src;
 }
 
 function registerWidgetFrame(event: Event) {
@@ -364,11 +396,7 @@ function renderWidgetContent(
     case "canvas-html":
       return renderPreviewFrame({
         title: preview.title?.trim() || t("chat.toolCards.canvas"),
-        src: resolveCanvasIframeUrl(
-          preview.url,
-          options?.canvasPluginSurfaceUrl,
-          options?.allowExternalEmbedUrls ?? false,
-        ),
+        src: resolveWidgetFrameSrc(preview, options),
         height: preview.preferredHeight,
         sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
         // Only hosted Canvas documents may drive the chat; externally

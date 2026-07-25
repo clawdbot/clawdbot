@@ -6,6 +6,53 @@ import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/boar
 import { renderToolPreview } from "./widget-card.ts";
 
 describe("widget-card", () => {
+  it("keeps a mounted document on its original surface URL while new documents use rotations", () => {
+    const firstPreview = {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "cv_surface_lease_one",
+      url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
+      sandbox: "scripts",
+    } as const;
+    const host = document.createElement("div");
+    render(
+      renderToolPreview(firstPreview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+      }),
+      host,
+    );
+    const originalFrame = host.querySelector<HTMLIFrameElement>("iframe");
+    const originalSrc = originalFrame?.getAttribute("src");
+    expect(originalSrc).toContain("/__openclaw__/cap/one/");
+
+    render(
+      renderToolPreview(firstPreview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
+      }),
+      host,
+    );
+    expect(host.querySelector("iframe")).toBe(originalFrame);
+    expect(host.querySelector("iframe")?.getAttribute("src")).toBe(originalSrc);
+
+    const nextHost = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          ...firstPreview,
+          viewId: "cv_surface_lease_two",
+          url: "/__openclaw__/canvas/documents/cv_surface_lease_two/index.html",
+        },
+        "chat_message",
+        { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two" },
+      ),
+      nextHost,
+    );
+    expect(nextHost.querySelector("iframe")?.getAttribute("src")).toContain(
+      "/__openclaw__/cap/two/",
+    );
+  });
+
   it("dispatches canvas HTML and MCP App content and ignores unknown kinds", () => {
     const canvas = document.createElement("div");
     render(

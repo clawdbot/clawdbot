@@ -11,6 +11,7 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import { createCanvasSurfaceLease } from "./canvas-surface-lease.ts";
 import type {
   ApplicationGateway,
   ApplicationGatewayConnectOptions,
@@ -58,6 +59,7 @@ export function createApplicationGateway(
     phase: "stopped",
     offlineStable: false,
     hello: null,
+    canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
     sessionKey: settings.sessionKey,
     lastError: null,
@@ -65,6 +67,7 @@ export function createApplicationGateway(
     selfUser: null,
   };
   let client: GatewayBrowserClient | null = null;
+  let canvasSurfaceLeaseClient: GatewayBrowserClient | null = null;
   // Session lineage for this page lifetime: once a hello succeeded, later
   // transport drops render as "reconnecting" (shell + banner) instead of
   // kicking the operator back to the login gate.
@@ -126,6 +129,21 @@ export function createApplicationGateway(
     }
     notify();
   };
+  const canvasSurfaceLease = createCanvasSurfaceLease({
+    request: (method, params) => {
+      const requestClient = canvasSurfaceLeaseClient;
+      if (!requestClient || client !== requestClient) {
+        return Promise.reject(new Error("canvas surface lease has no current gateway client"));
+      }
+      return requestClient.request(method, params);
+    },
+    onChange: (canvasPluginSurfaceUrl) => {
+      if (!canvasSurfaceLeaseClient || client !== canvasSurfaceLeaseClient) {
+        return;
+      }
+      setSnapshot({ ...snapshot, canvasPluginSurfaceUrl });
+    },
+  });
   const publishEventLog = () => {
     for (const listener of eventLogListeners) {
       listener(eventLog);
@@ -194,6 +212,8 @@ export function createApplicationGateway(
       },
       persistConnectionSettings || gatewayUrlChanged,
     );
+    canvasSurfaceLease.stop();
+    canvasSurfaceLeaseClient = null;
     client?.stop();
     stopClientEvents?.();
     stopClientEvents = undefined;
@@ -230,6 +250,8 @@ export function createApplicationGateway(
           });
         }
         everConnected = true;
+        canvasSurfaceLeaseClient = nextClient;
+        canvasSurfaceLease.start(hello.pluginSurfaceUrls?.canvas);
         setSnapshot({
           ...snapshot,
           client: nextClient,
@@ -255,6 +277,8 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        canvasSurfaceLease.stop();
+        canvasSurfaceLeaseClient = null;
         setSnapshot({
           ...snapshot,
           client: nextClient,
@@ -266,6 +290,7 @@ export function createApplicationGateway(
               ? "connecting"
               : "stopped",
           hello: null,
+          canvasPluginSurfaceUrl: null,
           selfUser: null,
           lastError: error?.message ?? `disconnected (${code}): ${reason || "no reason"}`,
           lastErrorCode: error?.code ?? null,
@@ -293,6 +318,7 @@ export function createApplicationGateway(
       // recovery or a manual retry when a session already existed.
       phase: everConnected ? "reconnecting" : "connecting",
       hello: null,
+      canvasPluginSurfaceUrl: null,
       selfUser: null,
       sessionKey: nextSessionKey,
       lastError: null,
@@ -327,6 +353,8 @@ export function createApplicationGateway(
     stop: () => {
       stopped = true;
       clearOfflineIndicatorTimer();
+      canvasSurfaceLease.stop();
+      canvasSurfaceLeaseClient = null;
       stopClientEvents?.();
       stopClientEvents = undefined;
       client?.stop();
@@ -338,6 +366,7 @@ export function createApplicationGateway(
         phase: "stopped",
         offlineStable: false,
         hello: null,
+        canvasPluginSurfaceUrl: null,
         selfUser: null,
         lastError: null,
         lastErrorCode: null,

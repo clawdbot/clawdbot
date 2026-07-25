@@ -44,6 +44,10 @@ class FakeGatewayClient {
     this.stopped += 1;
   }
 
+  request() {
+    return Promise.reject(new Error("unexpected gateway request"));
+  }
+
   addEventListener() {
     return () => {};
   }
@@ -114,6 +118,24 @@ describe("createApplicationGateway connection phase", () => {
 
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
     expect(gateway.snapshot.phase).toBe("offline");
+  });
+
+  it("publishes the canvas surface lease URL and clears it on disconnect", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.({
+      ...HELLO,
+      pluginSurfaceUrls: {
+        canvas: "https://canvas.test/__openclaw__/cap/hello",
+      },
+    });
+
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(
+      "https://canvas.test/__openclaw__/cap/hello",
+    );
+
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBeNull();
   });
 
   it("stays on the gate when the first connect fails, even with auto-retry pending", () => {

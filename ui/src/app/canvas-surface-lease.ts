@@ -1,0 +1,172 @@
+import { DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS } from "../../../src/gateway/plugin-node-capability.js";
+
+const RENEWAL_LEAD_MS = 15_000;
+const MIN_RENEWAL_DELAY_MS = 1_000;
+const RETRY_START_MS = 1_000;
+const RETRY_MAX_MS = 30_000;
+const MAX_CONSECUTIVE_FAILURES = 3;
+
+type CanvasSurfaceRefresh = {
+  surface: "canvas";
+  canvasUrl: string;
+  expiresAtMs?: number;
+};
+
+export type CanvasSurfaceLease = {
+  start: (helloUrl: string | undefined) => void;
+  stop: () => void;
+};
+
+export function createCanvasSurfaceLease<
+  TimerHandle = ReturnType<typeof globalThis.setTimeout>,
+>(params: {
+  request: (method: string, params: unknown) => Promise<unknown>;
+  onChange: (url: string | null) => void;
+  now?: () => number;
+  setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
+  clearTimer?: (timer: TimerHandle) => void;
+}): CanvasSurfaceLease {
+  const now = params.now ?? Date.now;
+  const setTimer =
+    params.setTimer ??
+    ((callback: () => void, delayMs: number) =>
+      globalThis.setTimeout(callback, delayMs) as TimerHandle);
+  const clearTimer =
+    params.clearTimer ??
+    ((timer: TimerHandle) =>
+      globalThis.clearTimeout(timer as ReturnType<typeof globalThis.setTimeout>));
+  let currentUrl: string | null = null;
+  let timer: TimerHandle | null = null;
+  let inFlight: { generation: number; promise: Promise<void> } | null = null;
+  let consecutiveFailures = 0;
+  let generation = 0;
+  let started = false;
+
+  const clearScheduledRenewal = () => {
+    if (timer !== null) {
+      clearTimer(timer);
+      timer = null;
+    }
+  };
+
+  const schedule = (delayMs: number, expectedGeneration: number) => {
+    clearScheduledRenewal();
+    timer = setTimer(() => {
+      timer = null;
+      if (started && generation === expectedGeneration) {
+        renew(expectedGeneration);
+      }
+    }, delayMs);
+  };
+
+  const handleFailure = (expectedGeneration: number) => {
+    if (!started || generation !== expectedGeneration) {
+      return;
+    }
+    consecutiveFailures += 1;
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      return;
+    }
+    const retryDelayMs = Math.min(RETRY_START_MS * 2 ** (consecutiveFailures - 1), RETRY_MAX_MS);
+    schedule(retryDelayMs, expectedGeneration);
+  };
+
+  const renew = (expectedGeneration: number) => {
+    if (
+      inFlight?.generation === expectedGeneration ||
+      !started ||
+      generation !== expectedGeneration ||
+      !currentUrl
+    ) {
+      return;
+    }
+    const observedUrl = currentUrl;
+    const request = Promise.resolve()
+      .then(() => params.request("plugin.surface.refresh", { surface: "canvas", observedUrl }))
+      .then((response) => {
+        if (!started || generation !== expectedGeneration || currentUrl !== observedUrl) {
+          return;
+        }
+        const refreshed = parseCanvasSurfaceRefresh(response);
+        if (!refreshed) {
+          handleFailure(expectedGeneration);
+          return;
+        }
+        consecutiveFailures = 0;
+        currentUrl = refreshed.canvasUrl;
+        params.onChange(currentUrl);
+        const delayMs =
+          refreshed.expiresAtMs === undefined
+            ? DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS / 2
+            : Math.max(MIN_RENEWAL_DELAY_MS, refreshed.expiresAtMs - now() - RENEWAL_LEAD_MS);
+        schedule(delayMs, expectedGeneration);
+      })
+      .catch(() => handleFailure(expectedGeneration))
+      .finally(() => {
+        if (inFlight?.promise === request) {
+          inFlight = null;
+        }
+      });
+    inFlight = { generation: expectedGeneration, promise: request };
+  };
+
+  return {
+    start(helloUrl) {
+      generation += 1;
+      started = true;
+      consecutiveFailures = 0;
+      clearScheduledRenewal();
+      const trimmedUrl = helloUrl?.trim();
+      currentUrl = trimmedUrl ? trimmedUrl : null;
+      params.onChange(currentUrl);
+      if (currentUrl) {
+        schedule(DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS / 2, generation);
+      }
+    },
+    stop() {
+      if (!started && currentUrl === null && timer === null) {
+        return;
+      }
+      generation += 1;
+      started = false;
+      consecutiveFailures = 0;
+      clearScheduledRenewal();
+      currentUrl = null;
+      params.onChange(null);
+    },
+  };
+}
+
+function parseCanvasSurfaceRefresh(value: unknown): CanvasSurfaceRefresh | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const response = value as {
+    surface?: unknown;
+    pluginSurfaceUrls?: unknown;
+    expiresAtMs?: unknown;
+  };
+  if (response.surface !== "canvas") {
+    return undefined;
+  }
+  const urls = response.pluginSurfaceUrls;
+  if (!urls || typeof urls !== "object" || Array.isArray(urls)) {
+    return undefined;
+  }
+  const canvasUrl = (urls as Record<string, unknown>).canvas;
+  if (typeof canvasUrl !== "string" || !canvasUrl.trim()) {
+    return undefined;
+  }
+  const expiresAtMs = response.expiresAtMs;
+  if (
+    expiresAtMs !== undefined &&
+    (typeof expiresAtMs !== "number" || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= 0)
+  ) {
+    return undefined;
+  }
+  return {
+    surface: "canvas",
+    canvasUrl: canvasUrl.trim(),
+    ...(expiresAtMs === undefined ? {} : { expiresAtMs }),
+  };
+}
