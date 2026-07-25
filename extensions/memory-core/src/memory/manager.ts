@@ -551,6 +551,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private applyProviderResult(providerResult: EmbeddingProviderResult): void {
+    if (this.provider?.close) {
+      this.provider.close().catch((err: unknown) => {
+        log.warn(`memory embeddings: failed to close previous provider: ${formatErrorMessage(err)}`);
+      });
+    }
     const providerState = resolveMemoryProviderState(providerResult);
     this.provider = providerState.provider;
     this.fallbackFrom = providerState.fallbackFrom;
@@ -603,6 +608,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   protected resetProviderInitializationForRetry(): void {
+    if (this.provider?.close) {
+      this.provider.close().catch(() => {});
+    }
     this.providerInitialized = false;
     this.providerInitPromise = null;
     this.providerUnavailableReason = undefined;
