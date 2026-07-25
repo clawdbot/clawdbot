@@ -138,14 +138,31 @@ describe("network guard profile", () => {
     },
     {
       dispatcherPolicy: { mode: "env-proxy" as const },
-      expected: { routeMode: "environment-proxy", resolutionMode: "proxy" },
+      expected: { routeMode: "environment-proxy", resolutionMode: "pinned" },
     },
     {
       dispatcherPolicy: { mode: "explicit-proxy" as const },
-      expected: { routeMode: "explicit-proxy", resolutionMode: "proxy" },
+      expected: { routeMode: "explicit-proxy", resolutionMode: "pinned" },
     },
   ])("derives pinned route ownership for $expected.routeMode", ({ dispatcherPolicy, expected }) => {
     expect(resolvePinnedNetworkGuardRouteV1(dispatcherPolicy)).toEqual(expected);
+  });
+
+  it("accepts proxy routing with locally pinned target resolution", () => {
+    const profile = buildNetworkGuardProfileV1({
+      url: new URL("https://api.example.com/v1"),
+      routeMode: "explicit-proxy",
+      resolutionMode: "pinned",
+    });
+
+    expect(() => assertNetworkGuardProfileV1(profile)).not.toThrow();
+    expect(() =>
+      assertLocalNetworkGuardPrepared({
+        profile,
+        requestUrl: "https://api.example.com/v1",
+        hasDispatcher: true,
+      }),
+    ).not.toThrow();
   });
 
   it("binds the profile to the exact request origin and normalized hostname", () => {
@@ -180,7 +197,7 @@ describe("network guard profile", () => {
     {
       name: "route and resolution mismatch",
       mutate: (profile: Record<string, unknown>) => {
-        (profile.route as Record<string, unknown>).mode = "explicit-proxy";
+        (profile.route as Record<string, unknown>).resolution = "proxy";
       },
       expected: /resolution is inconsistent with the route/i,
     },

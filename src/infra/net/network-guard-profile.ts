@@ -161,7 +161,10 @@ export function assertNetworkGuardProfileV1(
     throw new Error("Network guard route TLS posture is inconsistent with the target");
   }
   const usesProxyRoute = profile.route.mode !== "direct";
-  if ((profile.route.resolution === "proxy") !== usesProxyRoute) {
+  if (
+    (profile.route.resolution === "proxy" && !usesProxyRoute) ||
+    (profile.route.resolution === "caller" && usesProxyRoute)
+  ) {
     throw new Error("Network guard resolution is inconsistent with the route");
   }
 

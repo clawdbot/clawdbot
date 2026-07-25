@@ -25,10 +25,10 @@ export function resolvePinnedNetworkGuardRouteV1(
   resolutionMode: NetworkGuardResolutionMode;
 } {
   if (dispatcherPolicy?.mode === "env-proxy") {
-    return { routeMode: "environment-proxy", resolutionMode: "proxy" };
+    return { routeMode: "environment-proxy", resolutionMode: "pinned" };
   }
   if (dispatcherPolicy?.mode === "explicit-proxy") {
-    return { routeMode: "explicit-proxy", resolutionMode: "proxy" };
+    return { routeMode: "explicit-proxy", resolutionMode: "pinned" };
   }
   return { routeMode: "direct", resolutionMode: "pinned" };
 }
