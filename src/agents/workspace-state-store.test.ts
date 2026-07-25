@@ -103,7 +103,7 @@ describe("workspace state store", () => {
     },
   );
 
-  it.each(["../AGENTS.md", "nested\\AGENTS.md", "C:outside.md"])(
+  it.each(["../AGENTS.md", "nested\\AGENTS.md", "C:outside.md", "NUL.md", "com1.md", "CON.md"])(
     "rejects an unsafe persisted attestation filename: %s",
     (filename) => {
       insertPersistedAttestationHash(filename, "a".repeat(64));
