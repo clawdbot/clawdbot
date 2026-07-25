@@ -347,7 +347,7 @@ export function createBuzzSetupWizard(
         );
         return {
           cfg: patchBuzzConfig(next, { enabled: false }),
-          accountId: DEFAULT_ACCOUNT_ID,
+          completion: "paused",
         };
       }
 

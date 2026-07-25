@@ -379,10 +379,18 @@ export type ChannelOnboardingPostWriteHook = {
   run: (ctx: { cfg: OpenClawConfig; runtime: RuntimeEnv }) => Promise<void> | void;
 };
 
-export type ChannelSetupResult = {
-  cfg: OpenClawConfig;
-  accountId?: string;
-};
+export type ChannelSetupResult =
+  | {
+      cfg: OpenClawConfig;
+      accountId?: string;
+      completion?: "configured";
+    }
+  | {
+      cfg: OpenClawConfig;
+      /** Paused setup is persisted without configured-account hooks or routing. */
+      completion: "paused";
+      accountId?: never;
+    };
 
 export type ChannelSetupConfiguredResult = ChannelSetupResult | "skip";
 

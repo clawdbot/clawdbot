@@ -218,6 +218,8 @@ describe("Buzz guided setup", () => {
 
     expect(result.cfg.channels?.buzz?.enabled).toBe(false);
     expect(result.cfg.channels?.buzz?.privateKey).toBe("11".repeat(32));
+    expect(result.completion).toBe("paused");
+    expect(result.accountId).toBeUndefined();
     expect(
       vi
         .mocked(prompter.select)
