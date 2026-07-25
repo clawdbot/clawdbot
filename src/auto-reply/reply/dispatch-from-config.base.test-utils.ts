@@ -1428,7 +1428,9 @@ describe("dispatchReplyFromConfig", () => {
         dispatcher: secondDispatcher,
         replyResolver: secondReplyResolver,
       });
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
       expect(recoveryOperation?.result).toBeNull();
       expect(secondReplyResolver).not.toHaveBeenCalled();
 

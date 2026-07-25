@@ -76,7 +76,7 @@ export function createSessionConversationTestRegistry() {
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
           resolveSessionConversation: resolveGenericSessionConversation,
-          resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
+          resolveSessionTarget: ({ id: targetId }: { id: string }) => `channel:${targetId}`,
         },
         config: {
           listAccountIds: () => ["default"],
