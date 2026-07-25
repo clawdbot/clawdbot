@@ -80,7 +80,7 @@ export type CliSessionBinding = {
   reseedReceipt?: CliSessionReseedReceipt;
 };
 
-export type AcpSessionBinding = {
+type AcpSessionBinding = {
   acpBackendId: string;
   acpAgentId: string;
   agentSessionId: string;

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 
@@ -12,7 +12,9 @@ export async function createPiStoreFixture(
   toolArguments: unknown = { command: "pwd" },
   acpResolvable = false,
 ): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-catalog-"));
+  const root = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-pi-catalog-"),
+  );
   temporaryDirectories.push(root);
   const directory = acpResolvable ? path.join(root, "sessions", "project") : root;
   if (acpResolvable) {
@@ -86,7 +88,9 @@ export async function installFakePiFixture(
   temporaryDirectories: string[],
   originalPath: string | undefined,
 ): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-cli-"));
+  const directory = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-pi-cli-"),
+  );
   temporaryDirectories.push(directory);
   const executable = path.join(directory, "pi");
   await fs.writeFile(executable, "#!/bin/sh\nexit 0\n");
