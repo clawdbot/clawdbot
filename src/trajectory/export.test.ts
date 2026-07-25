@@ -81,7 +81,7 @@ function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] 
 
 function writeSimpleSessionFile(
   sessionFile: string,
-  params: { userEntryTimestamp?: string | number } = {},
+  params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
 ): void {
   const header = {
     type: "session",
@@ -95,7 +95,7 @@ function writeSimpleSessionFile(
     id: "entry-user",
     parentId: null,
     timestamp: params.userEntryTimestamp ?? "2026-04-01T05:46:40.000Z",
-    message: userMessage("hello"),
+    message: params.userMessage ?? userMessage("hello"),
   };
   const assistantEntry = {
     type: "message",
@@ -326,7 +326,7 @@ describe("exportTrajectoryBundle", () => {
         },
       ],
     );
-    appendSqliteTrajectoryRuntimeEvents({ sessionId, storePath }, [
+    appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId, storePath }, [
       {
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,
@@ -432,6 +432,56 @@ describe("exportTrajectoryBundle", () => {
     expect(artifacts.promptCache).toEqual(promptCache);
   });
 
+  it("projects legacy media in existing runtime message snapshots", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvent: TrajectoryEvent = {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type: "model.completed",
+      ts: "2026-04-22T08:00:02.000Z",
+      seq: 1,
+      sessionId: "session-1",
+      data: {
+        messagesSnapshot: [
+          {
+            role: "user",
+            content: "",
+            MediaPath: "media/legacy.png",
+            MediaType: "image/png",
+          },
+        ],
+      },
+    };
+    fs.writeFileSync(runtimeFile, `${JSON.stringify(runtimeEvent)}\n`, "utf8");
+
+    await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    const exportedEvents = fs
+      .readFileSync(path.join(outputDir, "events.jsonl"), "utf8")
+      .trim()
+      .split(/\r?\n/u)
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const snapshot = exportedEvents.find((event) => event.type === "model.completed")?.data
+      ?.messagesSnapshot as Array<Record<string, unknown>> | undefined;
+    expect(snapshot?.[0]).not.toHaveProperty("MediaPath");
+    expect(snapshot?.[0]).not.toHaveProperty("MediaType");
+    expect(snapshot?.[0]?.["__openclaw"]).toMatchObject({
+      media: [{ path: "media/legacy.png", contentType: "image/png" }],
+    });
+  });
+
   it("preserves numeric transcript timestamps", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -454,6 +504,77 @@ describe("exportTrajectoryBundle", () => {
       .map((line) => JSON.parse(line) as TrajectoryEvent);
     expect(exportedEvents.find((event) => event.type === "user.message")?.ts).toBe(
       "2026-04-01T05:46:40.000Z",
+    );
+  });
+
+  it.each([
+    {
+      name: "legacy-only",
+      message: { MediaPath: "media/legacy.png", MediaType: "image/png" },
+      expectedPath: "media/legacy.png",
+    },
+    {
+      name: "facts-only",
+      message: { __openclaw: { media: [{ path: "media/fact.png", contentType: "image/png" }] } },
+      expectedPath: "media/fact.png",
+    },
+    {
+      name: "both-equal",
+      message: {
+        MediaPath: "media/equal.png",
+        __openclaw: { media: [{ path: "media/equal.png", contentType: "image/png" }] },
+      },
+      expectedPath: "media/equal.png",
+    },
+    {
+      name: "both-conflict",
+      message: {
+        MediaPath: "media/legacy-conflict.png",
+        __openclaw: { media: [{ path: "media/canonical.png", contentType: "image/png" }] },
+      },
+      expectedPath: "media/canonical.png",
+    },
+    {
+      name: "sparse",
+      message: { __openclaw: { media: [{}, { path: "media/sparse.png" }] } },
+      expectedPath: "media/sparse.png",
+      expectedIndex: 1,
+    },
+    {
+      name: "type-only",
+      message: { __openclaw: { media: [{ contentType: "image/png" }] } },
+      expectedPath: undefined,
+    },
+    {
+      name: "media-only",
+      message: { content: "", __openclaw: { media: [{ path: "media/media-only.png" }] } },
+      expectedPath: "media/media-only.png",
+    },
+  ])("exports $name transcript rows as facts only", async (testCase) => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile, {
+      userMessage: { ...userMessage(""), ...testCase.message } as unknown as Message,
+    });
+
+    await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    const sessionBranch = JSON.parse(
+      fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8"),
+    ) as { entries?: Array<{ type?: string; message?: Record<string, unknown> }> };
+    const exported = sessionBranch.entries?.find((entry) => entry.type === "message")?.message;
+    const media = (exported?.["__openclaw"] as { media?: Array<{ path?: string }> })?.media;
+    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
+    expect(media?.[expectedIndex]?.path).toBe(testCase.expectedPath);
+    expect(exported).not.toHaveProperty("MediaPath");
+    expect(fs.readFileSync(path.join(outputDir, "events.jsonl"), "utf8")).not.toContain(
+      '"MediaPath"',
     );
   });
 

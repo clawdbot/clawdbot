@@ -348,6 +348,7 @@ export function resolveReplySessionPreprocessingState(
     ),
   });
   const sessionEntry = loadReplySessionInitializationSnapshot({
+    agentId: attemptContext.agentId,
     storePath: attemptContext.storePath,
     sessionKey,
   }).currentEntry;
@@ -566,12 +567,10 @@ async function initSessionStateAttemptLocked(
   }
 
   // Canonicalize so the written key matches what all read paths produce.
-  // resolveSessionKey uses DEFAULT_AGENT_ID="main"; the configured default
-  // agent may differ, causing key mismatch and orphaned sessions (#29683).
   const sessionKey: string = canonicalizeMainSessionAlias({
     cfg,
     agentId,
-    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
+    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey, agentId),
   });
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
   // Stale cache (especially with multiple gateway processes or on Windows where
@@ -579,6 +578,7 @@ async function initSessionStateAttemptLocked(
   // generation, leading to orphaned transcript files. See #17971.
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
   const initializationSnapshot = loadReplySessionInitializationSnapshot({
+    agentId,
     storePath,
     sessionKey,
   });

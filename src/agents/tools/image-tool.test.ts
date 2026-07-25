@@ -3163,8 +3163,8 @@ describe("image compression policy", () => {
       testing.resolveImageCompressionPolicy({
         cfg: {},
         imageModelConfig: {
-          primary: "anthropic/claude-opus-4-7",
-          fallbacks: ["anthropic/claude-sonnet-4-6"],
+          primary: "anthropic/claude-opus-4-8",
+          fallbacks: ["anthropic/claude-haiku-4-5"],
         },
         imageCount: 1,
       }),

@@ -26,19 +26,24 @@ import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filt
 import { resolveUserPath } from "../utils.js";
 import {
   listAgentIds,
+  resolveMutableAgentEntry,
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope-config.js";
 export {
   listAgentEntries,
+  listAgentEntriesWithSource,
   listAgentIds,
+  resolveMutableAgentEntry,
+  toAgentEntriesRecord,
   resolveAgentConfig,
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 
@@ -367,20 +372,6 @@ export function resolveAgentEffectiveModelPrimary(
   );
 }
 
-function findMutableAgentEntry(
-  cfg: OpenClawConfig,
-  agentId: string,
-): Pick<AgentConfig, "model"> | undefined {
-  const id = normalizeAgentId(agentId);
-  const entryKey = Object.keys(cfg.agents?.entries ?? {}).find(
-    (key) => normalizeAgentId(key) === id,
-  );
-  if (entryKey) {
-    return cfg.agents?.entries?.[entryKey];
-  }
-  return cfg.agents?.list?.find((entry) => normalizeAgentId(entry?.id) === id);
-}
-
 function updateAgentModelPrimary(
   existing: AgentModelConfig | undefined,
   primary: string,
@@ -403,7 +394,7 @@ export function setAgentEffectiveModelPrimary(
   // forceAgent pins the write to the agent entry even without an explicit
   // model, so a per-agent override never rewrites the shared default route.
   if (options.forceAgent || resolveAgentExplicitModelPrimary(cfg, id)) {
-    const entry = findMutableAgentEntry(cfg, id);
+    const entry = resolveMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);
       return "agent";
@@ -543,10 +534,12 @@ export function resolveRunModelFallbacksOverride(params: {
   if (!params.cfg) {
     return undefined;
   }
-  return resolveAgentModelFallbacksOverride(
-    params.cfg,
-    resolveFallbackAgentId({ agentId: params.agentId, sessionKey: params.sessionKey }),
-  );
+  const explicitAgentId = normalizeOptionalString(params.agentId);
+  const agentId = explicitAgentId
+    ? normalizeAgentId(explicitAgentId)
+    : (parseAgentSessionKey(params.sessionKey)?.agentId ??
+      (listAgentIds(params.cfg).length > 0 ? resolveDefaultAgentId(params.cfg) : undefined));
+  return agentId ? resolveAgentModelFallbacksOverride(params.cfg, agentId) : undefined;
 }
 
 export function hasConfiguredModelFallbacks(params: {

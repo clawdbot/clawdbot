@@ -367,6 +367,32 @@ describe("registerPreActionHooks", () => {
     );
   });
 
+  it("allows invalid config for update migration commands", async () => {
+    await runPreAction({
+      parseArgv: ["update"],
+      processArgv: ["node", "openclaw", "update", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["update"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["update", "status"],
+      processArgv: ["node", "openclaw", "update", "status", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["update", "status"],
+      allowInvalid: true,
+      suppressDoctorStdout: true,
+    });
+  });
+
   it("loads plugins for text local agent runs", async () => {
     await runPreAction({
       parseArgv: ["agent"],
@@ -620,6 +646,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["update", "status"],
+      allowInvalid: true,
       suppressDoctorStdout: true,
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();

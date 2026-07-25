@@ -17,6 +17,7 @@ import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "../shell-
 import {
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
 } from "../shell-wrapper-resolution.js";
 import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "./inline-eval.js";
 
@@ -182,7 +183,7 @@ function detectShellPositionalCarrierInlineEvalArgvInternal(
   if (!isShellWrapperExecutable(executable)) {
     return null;
   }
-  if (!["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"].includes(executable)) {
+  if (!POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable)) {
     return null;
   }
   const key = commandArgvKey(executableArgv);

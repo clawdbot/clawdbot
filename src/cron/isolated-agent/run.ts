@@ -806,7 +806,7 @@ async function prepareCronRunContext(params: {
     };
   }
   const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-  const thinkingCatalog = modelOwner.catalog;
+  const thinkingCatalog = modelOwner.modelCatalog.entries;
   const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
   const matchesDefaultFallbackAgentStringModel =
     typeof ownerAgentConfig?.model === "string" &&
@@ -879,7 +879,7 @@ async function prepareCronRunContext(params: {
   if (selectedPreflightCandidate && modelFallbacksOverride) {
     if (firstUnavailablePreflight?.status === "unavailable") {
       logWarn(
-        `[cron:${input.job.id}] Local provider preflight failed for ${firstUnavailablePreflight.provider}/${firstUnavailablePreflight.model} at ${firstUnavailablePreflight.baseUrl}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
+        `[cron:${input.job.id}] ${firstUnavailablePreflight.reason}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
       );
     }
     provider = selectedPreflightCandidate.provider;

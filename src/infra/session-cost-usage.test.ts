@@ -24,15 +24,51 @@ import {
   writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
 import {
-  discoverAllSessions,
-  loadCostUsageSummary,
-  loadCostUsageSummaryFromCache,
-  loadSessionCostSummary,
-  loadSessionCostSummariesFromCache,
-  loadSessionLogs,
-  loadSessionUsageTimeSeries,
-  resolveExistingUsageSessionFile,
+  discoverAllSessions as discoverAllSessionsForAgent,
+  loadCostUsageSummary as loadCostUsageSummaryForAgent,
+  loadCostUsageSummaryFromCache as loadCostUsageSummaryFromCacheForAgent,
+  loadSessionCostSummary as loadSessionCostSummaryForAgent,
+  loadSessionCostSummariesFromCache as loadSessionCostSummariesFromCacheForAgent,
+  loadSessionLogs as loadSessionLogsForAgent,
+  loadSessionUsageTimeSeries as loadSessionUsageTimeSeriesForAgent,
+  resolveExistingUsageSessionFile as resolveExistingUsageSessionFileForAgent,
 } from "./session-cost-usage.js";
+
+type WithOptionalAgentId<T> = T extends (params: infer P) => unknown
+  ? Omit<P, "agentId"> & { agentId?: string }
+  : never;
+
+const withMainAgent = <T extends object>(params: T): T & { agentId: string } => ({
+  ...params,
+  agentId:
+    typeof (params as { agentId?: unknown }).agentId === "string"
+      ? (params as { agentId: string }).agentId
+      : "main",
+});
+
+const discoverAllSessions = (
+  params: WithOptionalAgentId<typeof discoverAllSessionsForAgent> = {},
+) => discoverAllSessionsForAgent(withMainAgent(params));
+const loadCostUsageSummary = (
+  params: WithOptionalAgentId<typeof loadCostUsageSummaryForAgent> = {},
+) => loadCostUsageSummaryForAgent(withMainAgent(params));
+const loadCostUsageSummaryFromCache = (
+  params: WithOptionalAgentId<typeof loadCostUsageSummaryFromCacheForAgent>,
+) => loadCostUsageSummaryFromCacheForAgent(withMainAgent(params));
+const loadSessionCostSummary = (
+  params: WithOptionalAgentId<typeof loadSessionCostSummaryForAgent>,
+) => loadSessionCostSummaryForAgent(withMainAgent(params));
+const loadSessionCostSummariesFromCache = (
+  params: WithOptionalAgentId<typeof loadSessionCostSummariesFromCacheForAgent>,
+) => loadSessionCostSummariesFromCacheForAgent(withMainAgent(params));
+const loadSessionLogs = (params: WithOptionalAgentId<typeof loadSessionLogsForAgent>) =>
+  loadSessionLogsForAgent(withMainAgent(params));
+const loadSessionUsageTimeSeries = (
+  params: WithOptionalAgentId<typeof loadSessionUsageTimeSeriesForAgent>,
+) => loadSessionUsageTimeSeriesForAgent(withMainAgent(params));
+const resolveExistingUsageSessionFile = (
+  params: WithOptionalAgentId<typeof resolveExistingUsageSessionFileForAgent>,
+) => resolveExistingUsageSessionFileForAgent(withMainAgent(params));
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,

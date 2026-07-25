@@ -51,19 +51,6 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "kimi-k2.6",
-            "name": "Kimi K2.6",
-            "input": ["text", "image"],
-            "contextWindow": 262144,
-            "maxTokens": 262144,
-            "cost": {
-              "input": 0.95,
-              "output": 4,
-              "cacheRead": 0.16,
-              "cacheWrite": 0
-            }
-          },
-          {
             "id": "kimi-k3",
             "name": "Kimi K3",
             "reasoning": true,
@@ -115,19 +102,6 @@
               "input": 1.9,
               "output": 8,
               "cacheRead": 0.38,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2.5",
-            "name": "Kimi K2.5",
-            "input": ["text", "image"],
-            "contextWindow": 262144,
-            "maxTokens": 262144,
-            "cost": {
-              "input": 0.6,
-              "output": 3,
-              "cacheRead": 0.1,
               "cacheWrite": 0
             }
           }

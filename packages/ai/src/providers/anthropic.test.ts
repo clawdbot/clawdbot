@@ -1504,6 +1504,8 @@ describe("Anthropic provider", () => {
     ["claude-fable-5", "Claude Fable 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic-vertex", "vertex-token"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic", "sk-ant-provider"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic-vertex", "vertex-token"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic", "sk-ant-provider"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic-vertex", "vertex-token"],
   ])("surfaces structured %s streaming refusals for %s", async (id, name, provider, apiKey) => {
@@ -2034,6 +2036,52 @@ describe("Anthropic provider", () => {
     },
   );
 
+  it("uses the Claude Opus 5 adaptive-thinking request contract", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "prod-opus",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-opus-5" },
+        reasoning: false,
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        maxTokens: 128_000,
+      }),
+      {
+        messages: [
+          { role: "user", content: "hello", timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text: "prefill" }], timestamp: 0 },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "sk-ant-provider",
+        temperature: 0.2,
+        onPayload: (payload) => {
+          capturedPayload = {
+            ...(payload as Record<string, unknown>),
+            service_tier: "auto",
+            top_p: 0.9,
+            top_k: 40,
+          };
+          return capturedPayload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      messages: [{ role: "user" }],
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
+    });
+    expect(capturedPayload).not.toHaveProperty("temperature");
+    expect(capturedPayload).not.toHaveProperty("top_p");
+    expect(capturedPayload).not.toHaveProperty("top_k");
+    expect(capturedPayload).not.toHaveProperty("service_tier");
+  });
+
   it("uses always-on adaptive thinking for Claude Fable 5", async () => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(
@@ -2321,7 +2369,7 @@ describe("Anthropic provider", () => {
     },
   );
 
-  it.each(["claude-opus-4-8", "claude-mythos-preview"])(
+  it.each(["claude-opus-5", "claude-opus-4-8", "claude-mythos-preview"])(
     "restores default sampling for %s after payload hooks",
     async (modelId) => {
       let capturedPayload: unknown;
@@ -2417,6 +2465,7 @@ describe("Anthropic provider", () => {
   });
 
   it.each([
+    { canonicalModelId: "claude-opus-5", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-8", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-6", expectedTemperature: 0.2 },
   ] as const)(

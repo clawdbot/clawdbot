@@ -248,6 +248,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
         entries: [entry],
         routeVariants: [entry],
@@ -255,6 +256,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
         entries: [entry],
         routeVariants: [entry],
@@ -273,6 +275,46 @@ describe("models.list OpenAI routes", () => {
     ]);
   });
 
+  it("rejects a full-discovery snapshot from a different owner", async () => {
+    const initialConfig = {
+      agents: { defaults: {}, list: [{ id: "main" }, { id: "worker", default: true }] },
+    } as OpenClawConfig;
+    const replacementConfig = {
+      agents: {
+        defaults: { models: { "openai/*": {} } },
+        list: [{ id: "main", default: true }, { id: "worker" }],
+      },
+    } as OpenClawConfig;
+    const entry = catalogEntry("gpt-owner", "openai-responses");
+    const loadGatewayModelCatalogSnapshot = vi
+      .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+      .mockResolvedValueOnce({
+        agentId: "main",
+        agentDir: "/tmp/models-list-main-agent",
+        workspaceDir: "/tmp/models-list-main-workspace",
+        config: replacementConfig,
+        entries: [entry],
+        routeVariants: [entry],
+      })
+      .mockResolvedValueOnce({
+        agentId: "worker",
+        agentDir: "/tmp/models-list-worker-agent",
+        workspaceDir: "/tmp/models-list-worker-workspace",
+        config: replacementConfig,
+        entries: [entry],
+        routeVariants: [entry],
+      });
+    const context = {
+      getRuntimeConfig: () => initialConfig,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    await expect(
+      buildModelsListResult({ context, params: { view: "configured" } }),
+    ).resolves.toEqual({ models: [] });
+  });
+
   it("passes the resolved default agent to catalog loads", async () => {
     const config = {
       agents: { defaults: {}, list: [{ id: "main", default: true }] },
@@ -282,6 +324,7 @@ describe("models.list OpenAI routes", () => {
         Promise.resolve({
           agentId: params.agentId,
           agentDir: "/tmp/models-list-openai-agent",
+          workspaceDir: "/tmp/models-list-openai-workspace",
           config,
           entries: [],
           routeVariants: [],

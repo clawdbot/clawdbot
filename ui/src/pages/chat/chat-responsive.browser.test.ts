@@ -1092,7 +1092,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
             {
               content: "Encoded transcript video",
-              MediaPath: videoUrl,
+              __openclaw: { media: [{ url: videoUrl, contentType: "video/mp4" }] },
               role: "user",
               timestamp: Date.UTC(2026, 6, 9, 10, 1),
             },

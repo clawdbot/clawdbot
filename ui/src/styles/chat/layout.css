@@ -1536,6 +1536,124 @@ openclaw-chat-page {
   }
 }
 
+.chat-swarm {
+  display: grid;
+  gap: 6px;
+  width: calc(100% - 36px);
+  max-width: var(--chat-thread-max-width, 48rem);
+  /* Completed phases stay visible while any child runs; bound large swarms so
+     their retained dots cannot displace the composer. */
+  max-height: clamp(160px, 32vh, 260px);
+  margin: 0 auto;
+  padding: 0 2px 8px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-swarm__group {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 3%, var(--panel));
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.chat-swarm__header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-swarm__header strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-swarm__header span,
+.chat-swarm__narrator,
+.chat-swarm__phase {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chat-swarm__narrator {
+  overflow: hidden;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-swarm__phase-row {
+  display: grid;
+  grid-template-columns: minmax(56px, auto) 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-swarm__phase {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-swarm__dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-swarm__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.chat-swarm__dot--queued {
+  border: 1px solid var(--muted);
+  background: transparent;
+}
+
+.chat-swarm__dot--running {
+  animation: chat-swarm-pulse 1.25s ease-in-out infinite;
+  background: var(--accent);
+}
+
+.chat-swarm__dot--done {
+  background: var(--ok);
+}
+
+.chat-swarm__dot--failed {
+  border-radius: 3px;
+  background: var(--danger);
+  transform: rotate(45deg) scale(0.82);
+}
+
+.chat-swarm__more {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 9px;
+}
+
+@keyframes chat-swarm-pulse {
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent);
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-swarm__dot--running {
+    animation: none;
+  }
+}
+
 .chat-prs {
   display: grid;
   gap: 6px;

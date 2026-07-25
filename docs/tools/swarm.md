@@ -6,7 +6,7 @@ read_when:
   - You want a Code Mode script to fan out work across several agents
   - You need structured child results, decision gates, or first-completion pipelines
   - You are enabling or tuning tools.swarm limits
-  - You want to observe collector children in the session dashboard
+  - You want to observe collector children in chat
 ---
 
 Swarm is an experimental, opt-in way to orchestrate many sub-agents from a
@@ -311,14 +311,15 @@ is rejected with the relevant config key in the error.
 
 ## Observe a Swarm
 
-Open the parent session's dashboard in the Control UI while a swarm is active.
-The Swarm widget renders each active collector group as one dot per child with
-queued, running, done, or failed state. Labels appear in dot tooltips, so short
-stable labels make larger swarms easier to read.
+Keep the parent session open in the Control UI while a swarm is active. A compact
+Swarm progress widget appears between the chat transcript and composer, rendering
+each active collector group as one dot per child with queued, running, done, or
+failed state. Labels appear in dot tooltips, so short stable labels make larger
+swarms easier to read. The widget disappears after every group child reaches a
+terminal state.
 
-The session sidebar keeps the normal parent/child tree. Expand the parent row
-to inspect a collector child or open its transcript without losing the swarm
-hierarchy.
+The session sidebar keeps the normal parent/child tree. Expand the parent row to
+inspect a collector child or open its transcript without losing the swarm hierarchy.
 
 Collector results remain waitable until their group is archived. After every
 member reaches its retention deadline, OpenClaw archives the group's children

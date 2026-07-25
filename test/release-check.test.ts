@@ -43,6 +43,7 @@ import {
   resolveMissingPackBuildHint,
   runReleaseCheckCommand,
 } from "../scripts/release-check.ts";
+import { listStaticExtensionAssetOutputs } from "../scripts/runtime-postbuild.mjs";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { withEnv } from "../src/test-utils/env.js";
 
@@ -63,6 +64,7 @@ const requiredPluginSdkPackPaths = listPluginSdkDistArtifacts();
 const packagedPrivatePluginSdkRuntimePaths = listPackagedPrivatePluginSdkRuntimeArtifacts();
 const unpackagedPrivatePluginSdkPaths = listUnpackagedPrivatePluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const requiredStaticExtensionAssetPaths = listStaticExtensionAssetOutputs();
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -743,6 +745,7 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
         ...requiredBundledPluginPackPaths,
+        ...requiredStaticExtensionAssetPaths,
         ...requiredPluginSdkPackPaths,
         ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,

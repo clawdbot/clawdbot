@@ -163,14 +163,20 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     const routeSessionKey = params.routeSessionKey as string;
     const storePath = params.storePath as string;
     const sourceDelivery = params.delivery as {
-      deliver: (payload: unknown, info: unknown) => Promise<unknown>;
+      deliver?: (payload: unknown, info: unknown) => Promise<unknown>;
+      deliverWithProviderMessageSending?: (payload: unknown, info: unknown) => Promise<unknown>;
       onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
       onError?: (err: unknown, info: unknown) => void;
     };
+    const sourceDeliver =
+      sourceDelivery.deliverWithProviderMessageSending ?? sourceDelivery.deliver;
+    if (admission.kind !== "observeOnly" && !sourceDeliver) {
+      throw new Error("channel delivery mock requires a delivery callback");
+    }
     const delivery =
       admission.kind === "observeOnly"
         ? { deliver: async () => ({ visibleReplySent: false }) }
-        : sourceDelivery;
+        : { ...sourceDelivery, deliver: sourceDeliver! };
     const ctxSessionKey = ctxPayload.SessionKey;
     const sessionKey = typeof ctxSessionKey === "string" ? ctxSessionKey : routeSessionKey;
     const dispatchReplyWithBufferedBlockDispatcher =

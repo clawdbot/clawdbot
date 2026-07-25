@@ -15,6 +15,11 @@ import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/hea
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import {
+  isMeaningfulMediaFact,
+  projectPersistedMessageMediaFacts,
+  readPersistedMediaFactsWithLegacyFallback,
+} from "../media/media-facts.js";
+import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
@@ -1501,13 +1506,8 @@ function isEmptyTextOnlyContent(content: unknown): boolean {
   return sawText;
 }
 
-function hasTranscriptMediaPaths(message: Record<string, unknown>): boolean {
-  const mediaPaths = Array.isArray(message.MediaPaths)
-    ? message.MediaPaths
-    : typeof message.MediaPath === "string"
-      ? [message.MediaPath]
-      : [];
-  return mediaPaths.some((value) => typeof value === "string" && value.trim());
+function hasTranscriptMediaFacts(message: Record<string, unknown>): boolean {
+  return (readPersistedMediaFactsWithLegacyFallback(message) ?? []).some(isMeaningfulMediaFact);
 }
 
 function extractProjectedText(content: unknown): string {
@@ -1783,7 +1783,7 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (
     roleContent.role === "user" &&
     isEmptyTextOnlyContent(message.content ?? message.text) &&
-    !hasTranscriptMediaPaths(message)
+    !hasTranscriptMediaFacts(message)
   ) {
     return true;
   }
@@ -2131,7 +2131,8 @@ export function projectChatDisplayMessagesWithState(
 ): ChatDisplayProjectionResult {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   const mirrored = mirrorMessageToolVisibleReplies(source);
-  const projectedErrors = projectEmptyAssistantErrorMessages(toProjectedMessages(mirrored));
+  const projectedMedia = toProjectedMessages(mirrored).map(projectPersistedMessageMediaFacts);
+  const projectedErrors = projectEmptyAssistantErrorMessages(projectedMedia);
   const filtered = filterVisibleProjectedHistoryMessages(
     projectSessionsSendInterSessionMessages(
       toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),

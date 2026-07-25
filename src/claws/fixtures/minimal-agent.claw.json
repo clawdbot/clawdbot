@@ -6,15 +6,9 @@
     "description": "Triages internal work without changing operator runtime settings.",
     "identity": {
       "name": "Triage"
-    },
-    "tools": {
-      "deny": [
-        "exec",
-        "browser"
-      ]
-    },
-    "humanDelay": {
-      "mode": "natural"
     }
+  },
+  "metadata": {
+    "openclaw.config": "profiles/minimal-agent.openclaw.yml"
   }
 }

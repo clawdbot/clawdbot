@@ -1,7 +1,7 @@
 /** Prepares prompt-lock ownership and prompt-local images for submission. */
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OwnedSessionTranscriptCacheSnapshot } from "../../../config/sessions/transcript-write-context.js";
-import { resolveMediaFacts } from "../../../media/media-facts.js";
+import { readPersistedMediaFactsWithLegacyFallback } from "../../../media/media-facts.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -10,10 +10,7 @@ import {
   installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import {
-  readPersistedMediaImageLayout,
-  readPersistedPromptMediaFacts,
-} from "./prompt-image-metadata.js";
+import { readPersistedMediaImageLayout } from "./prompt-image-metadata.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptExecutionAttempt = Pick<
@@ -75,8 +72,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     attempt.userTurnTranscriptRecorder?.message ??
     (await attempt.userTurnTranscriptRecorder?.resolveMessage());
   const persistedMedia = persistedMessage
-    ? (readPersistedPromptMediaFacts(persistedMessage) ??
-      resolveMediaFacts(persistedMessage as unknown as Parameters<typeof resolveMediaFacts>[0]))
+    ? (readPersistedMediaFactsWithLegacyFallback(persistedMessage) ?? [])
     : [];
 
   return await detectAndLoadPromptImages({

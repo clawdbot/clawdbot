@@ -15,7 +15,6 @@ import {
   type SessionListHost,
 } from "./app-sidebar-session-row-render.ts";
 import {
-  limitSidebarSessionRows,
   rowDemandsVisibility,
   RowVisibilityReason,
   SIDEBAR_SESSION_PAGE_SIZE,
@@ -26,6 +25,9 @@ import { icons } from "./icons.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
+  visibleRowCount: number;
+  visibleLimit: number;
+  collapsedVisibleRowCount: number;
 };
 
 type SessionCatalogRenderSnapshot = {
@@ -235,7 +237,7 @@ function renderSessionSection(params: {
                   ${section.rows.map((session) => renderSessionTree({ host, session }))}
                 </div>`
               : nothing}
-            ${trailing}
+            ${renderSessionPagination({ host, section })} ${trailing}
           `}
     </div>
   `;
@@ -258,13 +260,13 @@ function renderDraftSessionRow() {
 
 function renderSessionPagination(params: {
   host: SessionListHost;
-  rows: SidebarRecentSession[];
-  visible: number;
+  section: RenderableSessionSection;
 }) {
-  const { host, rows, visible } = params;
-  const canShowMore = visible < rows.length;
-  const collapsedVisible = limitSidebarSessionRows(rows, SIDEBAR_SESSION_PAGE_SIZE).length;
-  const canShowLess = visible > SIDEBAR_SESSION_SEE_LESS_THRESHOLD && visible > collapsedVisible;
+  const { host, section } = params;
+  const canShowMore = section.visibleRowCount < section.totalRowCount;
+  const canShowLess =
+    section.visibleRowCount > SIDEBAR_SESSION_SEE_LESS_THRESHOLD &&
+    section.visibleRowCount > section.collapsedVisibleRowCount;
   if (!canShowMore && !canShowLess) {
     return nothing;
   }
@@ -276,7 +278,10 @@ function renderSessionPagination(params: {
             class="sidebar-session-pagination__button"
             aria-label=${t("chat.selectors.loadMoreSessions")}
             @click=${() => {
-              host.setVisibleSessionLimit(visible + SIDEBAR_SESSION_PAGE_SIZE);
+              host.setVisibleSessionLimit(
+                section.id,
+                section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
+              );
             }}
           >
             ${t("chat.selectors.loadMoreSessions")}
@@ -289,7 +294,7 @@ function renderSessionPagination(params: {
             aria-label=${t("usage.details.collapse")}
             @click=${() => {
               host.clearSessionSelection();
-              host.setVisibleSessionLimit(SIDEBAR_SESSION_PAGE_SIZE);
+              host.setVisibleSessionLimit(section.id, SIDEBAR_SESSION_PAGE_SIZE);
             }}
           >
             ${t("usage.details.collapse")}
@@ -336,8 +341,6 @@ function renderSessionCatalogs(params: {
 function renderSessionListBody(params: {
   host: SessionListHost;
   sections: RenderableSessionSection[];
-  expandedRows: SidebarRecentSession[];
-  visibleRowCount: number;
   showDraft: boolean;
   codingTrailing?: TemplateResult | typeof nothing;
   codingTrailingPresent?: boolean;
@@ -372,11 +375,6 @@ function renderSessionListBody(params: {
       }
       return renderSessionSection({ host, section, showDraft });
     })}
-    ${renderSessionPagination({
-      host,
-      rows: params.expandedRows,
-      visible: params.visibleRowCount,
-    })}
   `;
 }
 
@@ -384,8 +382,6 @@ export function renderSessionList(params: {
   host: SessionListHost;
   empty: boolean;
   sections: RenderableSessionSection[];
-  expandedRows: SidebarRecentSession[];
-  visibleRowCount: number;
   showDraft: boolean;
   catalogs: SessionCatalogRenderSnapshot;
 }) {
@@ -424,8 +420,6 @@ export function renderSessionList(params: {
         ${renderSessionListBody({
           host,
           sections: params.sections,
-          expandedRows: params.expandedRows,
-          visibleRowCount: params.visibleRowCount,
           showDraft: params.showDraft,
           codingTrailing:
             host.sessionsStatusFilter === "archived"

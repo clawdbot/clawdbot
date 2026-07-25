@@ -5,7 +5,11 @@ import {
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
-import { projectMediaFacts, resolveMediaFacts, type MediaFact } from "../media/media-facts.js";
+import {
+  projectMediaFacts,
+  readPersistedMediaFactsWithLegacyFallback,
+  type MediaFact,
+} from "../media/media-facts.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
 import {
   normalizeMediaEntryForTranscript,
@@ -87,7 +91,7 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     return [];
   }
 
-  const facts = resolveMediaFacts(fields as unknown as Parameters<typeof resolveMediaFacts>[0]);
+  const facts = readPersistedMediaFactsWithLegacyFallback(fields) ?? [];
   const normalizedMedia = facts.map((fact) => {
     const rawPath = normalizeOptionalText(fact.path);
     const mediaPath = rawPath
@@ -122,20 +126,13 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
   media: MediaFact[];
 } {
   const isLateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
-  const entries = isLateMedia
-    ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
-    : [];
-  const text = entries
-    .flatMap((entry) => {
-      const mediaRef = entry.path ?? entry.url;
+  const media = isLateMedia ? (readPersistedMediaFactsWithLegacyFallback(message) ?? []) : [];
+  const text = media
+    .flatMap((fact) => {
+      const mediaRef = fact.path ?? fact.url;
       return mediaRef ? [`[media attached: ${mediaRef}]`] : [];
     })
     .join("\n");
-  const media = isLateMedia
-    ? resolveMediaFacts(message as unknown as Parameters<typeof resolveMediaFacts>[0]).filter(
-        (entry) => entry.path || entry.url,
-      )
-    : [];
   return { ...(text ? { text } : {}), media };
 }
 

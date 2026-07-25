@@ -207,13 +207,11 @@ describe("legacy MCP server config migrate", () => {
       command: "example-mcp",
       cwd: "/node-legacy",
     });
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Canonicalized legacy aliases in mcp.servers.legacy.",
-        "Canonicalized legacy aliases in mcp.servers.canonical.",
-        "Canonicalized legacy aliases in nodeHost.mcp.servers.legacy.",
-      ]),
-    );
+    expect(res.changes).toEqual([
+      "Canonicalized legacy aliases in mcp.servers.legacy.",
+      "Canonicalized legacy aliases in mcp.servers.canonical.",
+      "Canonicalized legacy aliases in nodeHost.mcp.servers.legacy.",
+    ]);
     expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
   });
 });
@@ -1878,7 +1876,7 @@ describe("legacy migrate audio transcription", () => {
       {
         type: "cli",
         command: "whisper-cli",
-        args: ["--model", "small", "{{MediaPath}}", "--input={{MediaPath}}"],
+        args: ["--model", "small", "{{AttachmentPath}}", "--input={{AttachmentPath}}"],
         timeoutSeconds: 30,
         capabilities: ["audio"],
       },
@@ -1904,7 +1902,7 @@ describe("legacy migrate audio transcription", () => {
       {
         type: "cli",
         command: "whisper-cli",
-        args: ["{{MediaPath}}"],
+        args: ["{{AttachmentPath}}"],
         capabilities: ["audio"],
       },
     ]);
@@ -1925,7 +1923,7 @@ describe("legacy migrate audio transcription", () => {
     expect(res.config?.tools?.media?.models).toContainEqual({
       type: "cli",
       command: "whisper-cli",
-      args: ["{{MediaPath}}"],
+      args: ["{{AttachmentPath}}"],
       capabilities: ["audio"],
     });
   });

@@ -10,6 +10,9 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -103,7 +106,12 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
 }
 
-async function postResponses(port: number, body: unknown, headers?: Record<string, string>) {
+async function postResponses(
+  port: number,
+  body: unknown,
+  headers?: Record<string, string>,
+  signal?: AbortSignal,
+) {
   const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
     method: "POST",
     headers: {
@@ -112,6 +120,7 @@ async function postResponses(port: number, body: unknown, headers?: Record<strin
       ...headers,
     },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
   return res;
 }
@@ -192,6 +201,36 @@ const WEATHER_TOOL = [
     type: "function",
     name: "get_weather",
     description: "Get weather",
+  },
+] as const;
+
+const STREAM_FAILURE_CASES = [
+  {
+    name: "a reserved client tool",
+    createError: () => createClientToolNameConflictError(["read"]),
+    tools: [{ type: "function", name: "read" }],
+    expectedCode: "invalid_request_error",
+    expectedMessage: "invalid tool configuration",
+  },
+  {
+    name: "a mapped provider failure",
+    createError: () =>
+      new FailoverError("The provider rejected the request.", {
+        reason: "format",
+        status: 400,
+        code: "decimal_above_max_value",
+        rawError: "Invalid top_p: expected a value less than or equal to 1.",
+      }),
+    tools: [],
+    expectedCode: "invalid_request_error",
+    expectedMessage: "Invalid top_p",
+  },
+  {
+    name: "an unmapped provider failure",
+    createError: () => new Error("provider failed"),
+    tools: [],
+    expectedCode: "api_error",
+    expectedMessage: "internal error",
   },
 ] as const;
 
@@ -1025,6 +1064,67 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
+  it.each(
+    STREAM_FAILURE_CASES.flatMap((failure) =>
+      [false, true].map((emitErrorLifecycle) => ({
+        name: failure.name,
+        createError: failure.createError,
+        tools: failure.tools,
+        expectedCode: failure.expectedCode,
+        expectedMessage: failure.expectedMessage,
+        emitErrorLifecycle,
+        label: `${failure.name} ${emitErrorLifecycle ? "after" : "without"} an error lifecycle`,
+      })),
+    ),
+  )(
+    "closes the response stream for $label without reporting completion",
+    async ({ createError, emitErrorLifecycle, expectedCode, expectedMessage, tools }) => {
+      const idleRootCount = getActiveGatewayRootWorkCount();
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        if (emitErrorLifecycle) {
+          const runId = (opts as { runId?: string }).runId;
+          if (!runId) {
+            throw new Error("expected a streaming response run ID");
+          }
+          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "error" } });
+        }
+        throw createError();
+      }) as never);
+
+      const res = await postResponses(
+        enabledPort,
+        {
+          stream: true,
+          model: "openclaw",
+          input: "hi",
+          tools,
+        },
+        undefined,
+        AbortSignal.timeout(5_000),
+      );
+      expect(res.status).toBe(200);
+
+      const events = parseSseEvents(await res.text());
+      const failedEvents = events.filter((event) => event.event === "response.failed");
+      expect(failedEvents).toHaveLength(1);
+      expect(events.filter((event) => event.event === "response.completed")).toHaveLength(0);
+      expect(events.filter((event) => event.data === "[DONE]")).toHaveLength(1);
+      expect(events.at(-1)?.data).toBe("[DONE]");
+
+      const failedResponse = (
+        parseSseData(findSseEvent(events, "response.failed")) as {
+          response?: { status?: string; error?: { code?: string; message?: string } };
+        }
+      ).response;
+      expect(failedResponse?.status).toBe("failed");
+      expect(failedResponse?.error?.code).toBe(expectedCode);
+      expect(failedResponse?.error?.message).toContain(expectedMessage);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+    },
+  );
+
   it("accepts write-scoped and admin-scoped HTTP callers", async () => {
     const port = enabledPort;
 
@@ -1093,6 +1193,36 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       await server.close({ reason: "openresponses token auth owner test done" });
     }
+  });
+
+  it("keeps streamed agent work admitted after the HTTP handler returns", async () => {
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const continueAgent = createDeferred();
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async () => {
+      await continueAgent.promise;
+      const queued = await enqueueCommandInLane(
+        "openresponses-http-admission-probe",
+        async () => true,
+      );
+      return { payloads: [{ text: queued ? "answer queued" : "unreachable" }] };
+    }) as never);
+
+    const res = await postResponses(enabledPort, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    continueAgent.resolve();
+
+    const events = parseSseEvents(await res.text());
+    expect(collectSseEventTypes(events)).toContain("response.completed");
+    expect(collectSseEventTypes(events)).not.toContain("response.failed");
+    expect(findSseEvent(events, "response.completed").data).toContain("answer queued");
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
   });
 
   it("preserves assistant text alongside non-stream function_call output", async () => {

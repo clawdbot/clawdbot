@@ -276,6 +276,121 @@ describe("retired runtime config migrations", () => {
     );
   });
 
+  it("preserves wildcard entries while pruning emptied named descendants", () => {
+    const result = applyAll({
+      cloudWorkers: {
+        profiles: {
+          keep: { lifetime: "1h", region: "eu" },
+          prune: { lifetime: "1h" },
+          malformed: "keep",
+        },
+      },
+      agents: {
+        defaults: {
+          cliBackends: {
+            keep: { reliability: { outputLimits: { maxChars: 1 }, enabled: true } },
+            prune: { reliability: { outputLimits: { maxChars: 1 } } },
+            malformed: null,
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toMatchObject({
+      cloudWorkers: {
+        profiles: {
+          keep: { region: "eu" },
+          prune: {},
+          malformed: "keep",
+        },
+      },
+      agents: {
+        defaults: {
+          cliBackends: {
+            keep: { reliability: { enabled: true } },
+            prune: {},
+            malformed: null,
+          },
+        },
+      },
+    });
+    expect(result.changes).toEqual([
+      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    ]);
+  });
+
+  it("visits channel roots before ordered object-shaped accounts", () => {
+    const result = applyAll({
+      channels: {
+        googlechat: {
+          serviceAccountRef: "root-google",
+          accounts: {
+            z: { serviceAccountRef: "z-google" },
+            malformed: "keep-google",
+            a: { serviceAccountRef: "a-google" },
+          },
+        },
+        slack: {
+          identity: "root-slack",
+          accounts: {
+            z: { identity: "z-slack", postAs: "canonical-z" },
+            malformed: 42,
+            a: { identity: "a-slack" },
+          },
+        },
+        imessage: {
+          coalesceSameSenderDms: true,
+          accounts: {
+            z: { coalesceSameSenderDms: true },
+            malformed: false,
+            a: { coalesceSameSenderDms: true },
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toMatchObject({
+      channels: {
+        googlechat: {
+          serviceAccount: "root-google",
+          accounts: {
+            z: { serviceAccount: "z-google" },
+            malformed: "keep-google",
+            a: { serviceAccount: "a-google" },
+          },
+        },
+        slack: {
+          postAs: "root-slack",
+          accounts: {
+            z: { postAs: "canonical-z" },
+            malformed: 42,
+            a: { postAs: "a-slack" },
+          },
+        },
+        imessage: {
+          accounts: {
+            z: {},
+            malformed: false,
+            a: {},
+          },
+        },
+      },
+    });
+    expect(result.changes).toEqual([
+      "Moved channels.googlechat.serviceAccountRef → channels.googlechat.serviceAccount.",
+      "Moved channels.googlechat.accounts.z.serviceAccountRef → channels.googlechat.accounts.z.serviceAccount.",
+      "Moved channels.googlechat.accounts.a.serviceAccountRef → channels.googlechat.accounts.a.serviceAccount.",
+      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+      "Moved channels.slack.identity → channels.slack.postAs.",
+      "Removed channels.slack.accounts.z.identity (channels.slack.accounts.z.postAs already set).",
+      "Moved channels.slack.accounts.a.identity → channels.slack.accounts.a.postAs.",
+      "Removed channels.imessage.coalesceSameSenderDms.",
+      "Removed channels.imessage.accounts.z.coalesceSameSenderDms.",
+      "Removed channels.imessage.accounts.a.coalesceSameSenderDms.",
+    ]);
+  });
+
   it("migrates the config tranche while preserving canonical settings", () => {
     const result = applyAll({
       ui: {

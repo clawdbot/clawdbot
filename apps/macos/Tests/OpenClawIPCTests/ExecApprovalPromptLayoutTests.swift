@@ -76,7 +76,7 @@ struct ExecApprovalPromptLayoutTests {
         func evaluation(
             security: ExecSecurity,
             boundCommand: [String]?,
-            patterns: [String]) -> ExecApprovalEvaluation
+            patterns: [ExecAllowAlwaysPattern]) -> ExecApprovalEvaluation
         {
             ExecApprovalEvaluation(
                 displayCommand: "/usr/bin/printf ok",
@@ -105,15 +105,15 @@ struct ExecApprovalPromptLayoutTests {
         #expect(evaluation(
             security: .allowlist,
             boundCommand: ["/usr/bin/printf", "ok"],
-            patterns: ["/usr/bin/printf"]).canPersistAllowAlways)
+            patterns: [ExecAllowAlwaysPattern(pattern: "/usr/bin/printf")]).canPersistAllowAlways)
         #expect(!evaluation(
             security: .full,
             boundCommand: ["/usr/bin/printf", "ok"],
-            patterns: ["/usr/bin/printf"]).canPersistAllowAlways)
+            patterns: [ExecAllowAlwaysPattern(pattern: "/usr/bin/printf")]).canPersistAllowAlways)
         #expect(!evaluation(
             security: .allowlist,
             boundCommand: nil,
-            patterns: ["/usr/bin/printf"]).canPersistAllowAlways)
+            patterns: [ExecAllowAlwaysPattern(pattern: "/usr/bin/printf")]).canPersistAllowAlways)
     }
 
     @Test func `legacy prompts keep durable approval when policy fields are omitted`() {

@@ -1,6 +1,6 @@
 // Fixtures Workspace tests cover shared E2E workspace fixture assertions.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -19,7 +19,39 @@ function runAgentsDeleteAssert(root: string, outputPath: string, env: Record<str
   });
 }
 
+function runOpenWebUiWorkspace(workspaceDir: string) {
+  return spawnSync(process.execPath, [FIXTURE_SCRIPT, "openwebui-workspace"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+    },
+  });
+}
+
 describe("workspace fixture assertions", () => {
+  it("prepares Open WebUI without retired workspace setup state", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-fixture-workspace-"));
+    const workspaceDir = path.join(root, "workspace");
+    const nestedStatePath = path.join(workspaceDir, ".openclaw", "workspace-state.json");
+    const rootStatePath = path.join(workspaceDir, "openclaw-workspace-state.json");
+    try {
+      mkdirSync(path.dirname(nestedStatePath), { recursive: true });
+      writeFileSync(nestedStatePath, "{}\n");
+      writeFileSync(rootStatePath, "{}\n");
+      const result = runOpenWebUiWorkspace(workspaceDir);
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(path.join(workspaceDir, "IDENTITY.md"), "utf8")).toContain(
+        "Open WebUI Docker compatibility smoke test assistant.",
+      );
+      expect(existsSync(nestedStatePath)).toBe(false);
+      expect(existsSync(rootStatePath)).toBe(false);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("rejects oversized agents delete output before parsing it", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-fixture-workspace-"));
     const outputPath = path.join(root, "agents-delete.json");

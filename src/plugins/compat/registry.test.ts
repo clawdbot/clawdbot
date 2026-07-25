@@ -21,6 +21,7 @@ const deprecatedTargetParserCompatFiles = new Set([
   "src/infra/outbound/outbound-session.test-helpers.ts",
   "src/plugins/compat/registry.test.ts",
 ]);
+const removalDatePendingCompatCodes = new Set<string>();
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
   for (const value of values) {
@@ -50,7 +51,11 @@ describe("plugin compatibility registry", () => {
       if (record.status === "deprecated") {
         expect(record.deprecated, record.code).toMatch(datePattern);
         expect(record.warningStarts, record.code).toMatch(datePattern);
-        expect(record.removeAfter, record.code).toMatch(datePattern);
+        if (removalDatePendingCompatCodes.has(record.code)) {
+          expect(record.removeAfter, record.code).toBeUndefined();
+        } else {
+          expect(record.removeAfter, record.code).toMatch(datePattern);
+        }
         expect(record.replacement, record.code).toMatch(/\S/u);
       }
       expectNonEmptyStringList(record.surfaces, `${record.code}: surfaces`);
@@ -71,7 +76,6 @@ describe("plugin compatibility registry", () => {
     );
 
     expect(records.map((record) => record.code)).toEqual([
-      "plugin-sdk-agent-media-payload-public-demotion",
       "plugin-sdk-media-understanding-public-demotion",
       "plugin-sdk-memory-host-core-public-demotion",
       "plugin-sdk-plugin-config-runtime-public-demotion",
