@@ -24,8 +24,12 @@ function conditionMark(condition: ReadinessCondition): string {
 function formatReadyResult(result: CanonicalReadinessResult): string {
   const required = result.conditions.filter((condition) => condition.requirement === "required");
   const requiredPassing = required.filter((condition) => condition.status === "True").length;
+  const producer = result.identity.subjects.find(
+    (subject) => subject.ref === result.identity.producerRef,
+  );
   const lines = [
     `Ready: ${result.ready ? "yes" : "no"}`,
+    `Producer: ${result.identity.producerRef}${producer?.id ? ` (${producer.id})` : ""}`,
     `Required: ${requiredPassing}/${required.length}`,
     `Advisories: ${result.advisories.length}`,
   ];
@@ -40,6 +44,7 @@ function formatReadyResult(result: CanonicalReadinessResult): string {
           { key: "result", header: "RESULT", minWidth: 4 },
           { key: "requirement", header: "CLASS", minWidth: 8 },
           { key: "condition", header: "CONDITION", minWidth: 16 },
+          { key: "subject", header: "SUBJECT", minWidth: 16 },
           { key: "reason", header: "REASON", minWidth: 16 },
           { key: "message", header: "DETAIL", flex: true, minWidth: 20 },
         ],
@@ -47,6 +52,7 @@ function formatReadyResult(result: CanonicalReadinessResult): string {
           result: conditionMark(condition),
           requirement: condition.requirement,
           condition: condition.type,
+          subject: condition.subjectRef ?? "legacy",
           reason: condition.reason,
           message: condition.message,
         })),

@@ -3,6 +3,13 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReadinessCondition, CanonicalReadinessResult } from "../../readiness/conditions.js";
 import {
+  CORE_READINESS_SUBJECT_REFS,
+  createGatewayReadinessIdentity,
+  normalizeRelatedSubjectRefs,
+  reconcileReadinessIdentity,
+  type ReadinessIdentity,
+} from "../../readiness/subjects.js";
+import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
@@ -24,7 +31,9 @@ type ReadinessResult = {
   advisories?: string[];
 };
 
-export type CanonicalGatewayReadinessResult = ReadinessResult & CanonicalReadinessResult;
+export type CanonicalGatewayReadinessResult = ReadinessResult &
+  Omit<CanonicalReadinessResult, "evaluatedAtMs" | "identity"> &
+  Partial<Pick<CanonicalReadinessResult, "evaluatedAtMs" | "identity">>;
 
 /** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult | Promise<ReadinessResult>;
@@ -62,22 +71,30 @@ async function withReadinessEvaluationTimeout<T>(
   }
 }
 
-function buildReadinessEvaluationFailure(error: unknown): CanonicalReadinessResult {
+function buildReadinessEvaluationFailure(
+  error: unknown,
+  identity: ReadinessIdentity,
+): CanonicalReadinessResult {
   const timedOut = error instanceof ReadinessEvaluationTimeoutError;
   const reason = timedOut ? "ReadinessEvaluationTimedOut" : "ReadinessEvaluationFailed";
+  const condition: ReadinessCondition = {
+    type: "ReadinessEvaluationComplete",
+    subjectRef: identity.producerRef,
+    status: "Unknown",
+    requirement: "required",
+    reason,
+    message: timedOut
+      ? "Readiness evaluation did not complete within its bounded deadline."
+      : "Readiness evaluation could not be completed.",
+  };
   return {
+    evaluatedAtMs: Date.now(),
+    identity: reconcileReadinessIdentity({
+      base: identity,
+      references: [condition as ReadinessCondition & { subjectRef: string }],
+    }),
     ready: false,
-    conditions: [
-      {
-        type: "ReadinessEvaluationComplete",
-        status: "Unknown",
-        requirement: "required",
-        reason,
-        message: timedOut
-          ? "Readiness evaluation did not complete within its bounded deadline."
-          : "Readiness evaluation could not be completed.",
-      },
-    ],
+    conditions: [condition],
     failures: [reason],
     advisories: [],
   };
@@ -356,9 +373,31 @@ function mergeReadinessResults(
   runtime: CanonicalReadinessResult,
   options?: { runtimeConditionsFirst?: boolean },
 ): CanonicalGatewayReadinessResult {
+  const gatewayConditions: ReadinessCondition[] = [];
+  for (const condition of gateway.conditions ?? []) {
+    gatewayConditions.push({
+      ...condition,
+      subjectRef: condition.subjectRef ?? CORE_READINESS_SUBJECT_REFS.gateway,
+    });
+  }
   const conditions = options?.runtimeConditionsFirst
-    ? [...runtime.conditions, ...(gateway.conditions ?? [])]
-    : [...(gateway.conditions ?? []), ...runtime.conditions];
+    ? [...runtime.conditions, ...gatewayConditions]
+    : [...gatewayConditions, ...runtime.conditions];
+  const conditionKeys = new Set<string>();
+  for (const condition of conditions) {
+    const relatedSubjectRefs = normalizeRelatedSubjectRefs(condition.relatedSubjectRefs);
+    if (relatedSubjectRefs) {
+      condition.relatedSubjectRefs = relatedSubjectRefs;
+    }
+    if (!condition.subjectRef) {
+      throw new Error("canonical readiness condition is missing a subject reference");
+    }
+    const key = `${condition.subjectRef}\u0000${condition.type}`;
+    if (conditionKeys.has(key)) {
+      throw new Error("duplicate canonical readiness condition");
+    }
+    conditionKeys.add(key);
+  }
   const failures = Array.from(
     new Set(
       conditions
@@ -375,6 +414,11 @@ function mergeReadinessResults(
   );
   return {
     ...gateway,
+    evaluatedAtMs: runtime.evaluatedAtMs,
+    identity: reconcileReadinessIdentity({
+      base: runtime.identity,
+      references: conditions as Array<ReadinessCondition & { subjectRef: string }>,
+    }),
     ready: failures.length === 0,
     failing: Array.from(new Set([...gateway.failing, ...runtime.failures])),
     conditions,
@@ -411,6 +455,7 @@ function projectLegacyGatewayReadiness(gateway: ReadinessResult): CanonicalGatew
 
 export async function evaluateConfiguredGatewayReadiness(params: {
   config: OpenClawConfig;
+  identity?: ReadinessIdentity;
   evaluateGateway: ReadinessChecker;
   evaluateRuntime: () => Promise<CanonicalReadinessResult>;
   timeoutMs?: number;
@@ -418,10 +463,14 @@ export async function evaluateConfiguredGatewayReadiness(params: {
   if (params.config.gateway?.readiness === undefined) {
     return projectLegacyGatewayReadiness(await params.evaluateGateway());
   }
-  return evaluateCanonicalGatewayReadiness(params);
+  return evaluateCanonicalGatewayReadiness({
+    ...params,
+    identity: params.identity ?? createGatewayReadinessIdentity(),
+  });
 }
 
 async function evaluateCanonicalGatewayReadiness(params: {
+  identity: ReadinessIdentity;
   evaluateGateway: ReadinessChecker;
   evaluateRuntime: () => Promise<CanonicalReadinessResult>;
   timeoutMs?: number;
@@ -439,7 +488,7 @@ async function evaluateCanonicalGatewayReadiness(params: {
   } catch (error) {
     return mergeReadinessResults(
       gateway ?? { ready: false, failing: [], uptimeMs: 0 },
-      buildReadinessEvaluationFailure(error),
+      buildReadinessEvaluationFailure(error, params.identity),
       { runtimeConditionsFirst: true },
     );
   }

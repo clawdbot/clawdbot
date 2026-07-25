@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ReadinessCondition } from "./conditions.js";
+import { CORE_READINESS_SUBJECT_REFS } from "./subjects.js";
 
 type WorkspaceReadinessEvidence = {
   writable: boolean | null;
@@ -59,6 +60,7 @@ export function buildWorkspaceReadinessCondition(
   if (!evidence) {
     return {
       type: "WorkspaceWritable",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.workspace,
       status: "Unknown",
       requirement: "advisory",
       reason: "WorkspaceNotChecked",
@@ -67,6 +69,7 @@ export function buildWorkspaceReadinessCondition(
   }
   return {
     type: "WorkspaceWritable",
+    subjectRef: CORE_READINESS_SUBJECT_REFS.workspace,
     status: evidence.writable === null ? "Unknown" : evidence.writable ? "True" : "False",
     requirement: "advisory",
     reason: evidence.reason,

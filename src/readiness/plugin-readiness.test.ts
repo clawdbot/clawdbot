@@ -32,13 +32,19 @@ describe("createPluginReadinessResolver", () => {
     const first = await resolve({ registry, config });
     const second = await resolve({ registry, config });
 
-    expect(first).toEqual([
+    expect(first.conditions).toEqual([
       expect.objectContaining({
         type: "plugin.storage.backend",
+        subjectRef: "plugin.storage/criterion/backend",
         status: "True",
         requirement: "advisory",
       }),
     ]);
+    expect(first.subjects).toContainEqual({
+      ref: "plugin.storage/criterion/backend",
+      kind: "plugin.storage.criterion",
+      id: "backend",
+    });
     expect(second).toEqual(first);
     expect(check).toHaveBeenCalledTimes(1);
   });
@@ -46,7 +52,9 @@ describe("createPluginReadinessResolver", () => {
   it("turns timeout and thrown errors into stable unknown evidence", async () => {
     const timeoutCriterion = registration(() => new Promise(() => {}));
     const resolveTimeout = createPluginReadinessResolver({ timeoutMs: 5, cacheTtlMs: 0 });
-    const [timedOut] = await resolveTimeout({
+    const {
+      conditions: [timedOut],
+    } = await resolveTimeout({
       registry: { readinessCriteria: [timeoutCriterion] },
       config: {},
     });
@@ -56,7 +64,9 @@ describe("createPluginReadinessResolver", () => {
       throw new Error("backend offline");
     });
     const resolveFailure = createPluginReadinessResolver({ cacheTtlMs: 0 });
-    const [failed] = await resolveFailure({
+    const {
+      conditions: [failed],
+    } = await resolveFailure({
       registry: { readinessCriteria: [failedCriterion] },
       config: {},
     });
@@ -75,9 +85,13 @@ describe("createPluginReadinessResolver", () => {
       now: () => currentTime,
     });
 
-    const [first] = await resolve({ registry, config });
+    const {
+      conditions: [first],
+    } = await resolve({ registry, config });
     currentTime = 20;
-    const [afterCacheExpiry] = await resolve({
+    const {
+      conditions: [afterCacheExpiry],
+    } = await resolve({
       registry,
       config,
     });
@@ -131,14 +145,18 @@ describe("createPluginReadinessResolver", () => {
 
     await expect(
       resolve({ registry: { readinessCriteria: [malformed] }, config: {} }),
-    ).resolves.toEqual([
-      expect.objectContaining({ status: "Unknown", reason: "CriterionInvalidResult" }),
-    ]);
+    ).resolves.toMatchObject({
+      conditions: [
+        expect.objectContaining({ status: "Unknown", reason: "CriterionInvalidResult" }),
+      ],
+    });
     await expect(
       resolve({ registry: { readinessCriteria: [oversized] }, config: {} }),
-    ).resolves.toEqual([
-      expect.objectContaining({ status: "Unknown", reason: "CriterionInvalidResult" }),
-    ]);
+    ).resolves.toMatchObject({
+      conditions: [
+        expect.objectContaining({ status: "Unknown", reason: "CriterionInvalidResult" }),
+      ],
+    });
   });
 
   it("redacts secrets from otherwise valid provider messages", async () => {
@@ -149,9 +167,63 @@ describe("createPluginReadinessResolver", () => {
     }));
     const resolve = createPluginReadinessResolver({ cacheTtlMs: 0 });
 
-    const [condition] = await resolve({ registry: { readinessCriteria: [criterion] }, config: {} });
+    const {
+      conditions: [condition],
+    } = await resolve({
+      registry: { readinessCriteria: [criterion] },
+      config: {},
+    });
 
     expect(condition).toMatchObject({ status: "False", reason: "StorageUnavailable" });
     expect(condition?.message).not.toContain("super-secret-value-that-must-not-escape");
+  });
+
+  it("reconciles provider-declared subjects and rejects unresolved references", async () => {
+    const declared = registration(({ subjects }) => {
+      const backend = subjects.declare({
+        kind: "backend",
+        key: "primary",
+        identity: { id: "account-7", generation: "config-42" },
+      });
+      return {
+        subjectRef: backend,
+        relatedSubjectRefs: ["openclaw/config/active"],
+        status: "True",
+        reason: "StorageReady",
+        message: "Storage is ready.",
+      };
+    });
+    const unresolved = registration(() => ({
+      subjectRef: "plugin.storage/backend/missing",
+      status: "True",
+      reason: "StorageReady",
+      message: "Storage is ready.",
+    }));
+    const resolve = createPluginReadinessResolver({ cacheTtlMs: 0 });
+
+    const declaredResult = await resolve({
+      registry: { readinessCriteria: [declared] },
+      config: {},
+    });
+    expect(declaredResult.conditions[0]).toMatchObject({
+      subjectRef: "plugin.storage/backend/primary",
+      relatedSubjectRefs: ["openclaw/config/active"],
+    });
+    expect(declaredResult.subjects).toContainEqual({
+      ref: "plugin.storage/backend/primary",
+      kind: "plugin.storage.backend",
+      id: "account-7",
+      generation: "config-42",
+    });
+
+    const invalidResult = await resolve({
+      registry: { readinessCriteria: [unresolved] },
+      config: {},
+    });
+    expect(invalidResult.conditions[0]).toMatchObject({
+      subjectRef: "plugin.storage/criterion/backend",
+      status: "Unknown",
+      reason: "CriterionInvalidResult",
+    });
   });
 });

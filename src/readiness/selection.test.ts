@@ -29,7 +29,7 @@ describe("createSelectedReadinessResolver", () => {
 
     await expect(
       resolve({ config: {}, registry: { readinessCriteria: [criterion] } }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ conditions: [], subjects: [] });
     expect(criterion.criterion.check).not.toHaveBeenCalled();
   });
 
@@ -49,14 +49,16 @@ describe("createSelectedReadinessResolver", () => {
         },
         registry: { readinessCriteria: [criterion] },
       }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        type: "plugin.storage.backend",
-        status: "False",
-        requirement: "required",
-        reason: "StorageUnavailable",
-      }),
-    ]);
+    ).resolves.toMatchObject({
+      conditions: [
+        expect.objectContaining({
+          type: "plugin.storage.backend",
+          status: "False",
+          requirement: "required",
+          reason: "StorageUnavailable",
+        }),
+      ],
+    });
   });
 
   it("maps the core selector id to its canonical condition type", async () => {
@@ -72,13 +74,15 @@ describe("createSelectedReadinessResolver", () => {
           },
           registry: { readinessCriteria: [] },
         }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          type: "WorkspaceWritable",
-          status: "True",
-          requirement: "required",
-        }),
-      ]);
+      ).resolves.toMatchObject({
+        conditions: [
+          expect.objectContaining({
+            type: "WorkspaceWritable",
+            status: "True",
+            requirement: "required",
+          }),
+        ],
+      });
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -92,13 +96,15 @@ describe("createSelectedReadinessResolver", () => {
         config: { gateway: { readiness: { requiredCriteria: ["plugin.missing.backend"] } } },
         registry: { readinessCriteria: [] },
       }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        type: "plugin.missing.backend",
-        status: "Unknown",
-        requirement: "required",
-        reason: "CriterionNotRegistered",
-      }),
-    ]);
+    ).resolves.toMatchObject({
+      conditions: [
+        expect.objectContaining({
+          type: "plugin.missing.backend",
+          status: "Unknown",
+          requirement: "required",
+          reason: "CriterionNotRegistered",
+        }),
+      ],
+    });
   });
 });

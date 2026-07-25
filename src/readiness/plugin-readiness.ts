@@ -3,25 +3,38 @@ import type {
   PluginReadinessCriterionRegistration,
   PluginRegistry,
 } from "../plugins/registry-types.js";
-import type { ReadinessCondition } from "./conditions.js";
+import type { ReadinessCondition, ReadinessContribution } from "./conditions.js";
 import { READINESS_REASON_PATTERN, sanitizeProviderReadinessMessage } from "./sanitize.js";
+import {
+  createPluginReadinessSubjectCollection,
+  InvalidReadinessSubjectError,
+  normalizeRelatedSubjectRefs,
+  type ReadinessSubject,
+} from "./subjects.js";
 
 const DEFAULT_TIMEOUT_MS = 1_000;
 const DEFAULT_CACHE_TTL_MS = 5_000;
 
 type CachedEvaluation = {
   expiresAt: number;
-  value: Promise<ReadinessCondition>;
+  value: Promise<PluginReadinessEvaluation>;
   rawPending: boolean;
+};
+
+type PluginReadinessEvaluation = {
+  condition: ReadinessCondition;
+  subjects: ReadinessSubject[];
 };
 
 function unavailableCondition(
   registration: PluginReadinessCriterionRegistration,
   reason: string,
   message: string,
+  subjectRef: string,
 ): ReadinessCondition {
   return {
     type: registration.id,
+    subjectRef,
     status: "Unknown",
     requirement: "advisory",
     reason,
@@ -34,7 +47,8 @@ async function evaluateRegistration(params: {
   raw: Promise<Awaited<ReturnType<PluginReadinessCriterionRegistration["criterion"]["check"]>>>;
   controller: AbortController;
   timeoutMs: number;
-}): Promise<ReadinessCondition> {
+  subjectCollection: ReturnType<typeof createPluginReadinessSubjectCollection>;
+}): Promise<PluginReadinessEvaluation> {
   const { registration } = params;
   let timeout: NodeJS.Timeout | undefined;
   let timedOut = false;
@@ -58,35 +72,77 @@ async function evaluateRegistration(params: {
       typeof result.message !== "string" ||
       !sanitizeProviderReadinessMessage(result.message)
     ) {
-      return unavailableCondition(
-        registration,
-        "CriterionInvalidResult",
-        `Readiness criterion ${registration.id} returned an invalid result.`,
-      );
+      return {
+        condition: unavailableCondition(
+          registration,
+          "CriterionInvalidResult",
+          `Readiness criterion ${registration.id} returned an invalid result.`,
+          params.subjectCollection.defaultRef,
+        ),
+        subjects: params.subjectCollection.subjects,
+      };
     }
     const message = sanitizeProviderReadinessMessage(result.message);
     if (!message) {
-      return unavailableCondition(
-        registration,
-        "CriterionInvalidResult",
-        `Readiness criterion ${registration.id} returned an invalid result.`,
-      );
+      return {
+        condition: unavailableCondition(
+          registration,
+          "CriterionInvalidResult",
+          `Readiness criterion ${registration.id} returned an invalid result.`,
+          params.subjectCollection.defaultRef,
+        ),
+        subjects: params.subjectCollection.subjects,
+      };
+    }
+    const subjectRef = result.subjectRef ?? params.subjectCollection.defaultRef;
+    const relatedSubjectRefs = normalizeRelatedSubjectRefs(result.relatedSubjectRefs);
+    const observedAtMs = result.observedAtMs;
+    if (
+      !params.subjectCollection.validateReferences(subjectRef, relatedSubjectRefs) ||
+      (observedAtMs !== undefined && (!Number.isSafeInteger(observedAtMs) || observedAtMs < 0))
+    ) {
+      return {
+        condition: unavailableCondition(
+          registration,
+          "CriterionInvalidResult",
+          `Readiness criterion ${registration.id} returned an invalid result.`,
+          params.subjectCollection.defaultRef,
+        ),
+        subjects: params.subjectCollection.subjects,
+      };
     }
     return {
-      type: registration.id,
-      status: result.status,
-      requirement: "advisory",
-      reason: result.reason,
-      message,
+      condition: {
+        type: registration.id,
+        subjectRef,
+        ...(relatedSubjectRefs ? { relatedSubjectRefs } : {}),
+        ...(observedAtMs !== undefined ? { observedAtMs } : {}),
+        status: result.status,
+        requirement: "advisory",
+        reason: result.reason,
+        message,
+      },
+      subjects: params.subjectCollection.subjects,
     };
-  } catch {
-    return unavailableCondition(
-      registration,
-      timedOut ? "CriterionTimedOut" : "CriterionCheckFailed",
-      timedOut
-        ? `Readiness criterion ${registration.id} exceeded ${params.timeoutMs}ms.`
-        : `Readiness criterion ${registration.id} could not be evaluated.`,
-    );
+  } catch (error) {
+    const invalid = error instanceof InvalidReadinessSubjectError;
+    return {
+      condition: unavailableCondition(
+        registration,
+        invalid
+          ? "CriterionInvalidResult"
+          : timedOut
+            ? "CriterionTimedOut"
+            : "CriterionCheckFailed",
+        invalid
+          ? `Readiness criterion ${registration.id} returned an invalid result.`
+          : timedOut
+            ? `Readiness criterion ${registration.id} exceeded ${params.timeoutMs}ms.`
+            : `Readiness criterion ${registration.id} could not be evaluated.`,
+        params.subjectCollection.defaultRef,
+      ),
+      subjects: params.subjectCollection.subjects,
+    };
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -111,7 +167,7 @@ export function createPluginReadinessResolver(options?: {
     registry: Pick<PluginRegistry, "readinessCriteria">;
     config: OpenClawConfig;
     criterionIds?: ReadonlySet<string>;
-  }): Promise<ReadinessCondition[]> => {
+  }): Promise<ReadinessContribution> => {
     if (params.registry !== activeRegistry || params.config !== activeConfig) {
       for (const controller of activeControllers) {
         controller.abort();
@@ -137,14 +193,25 @@ export function createPluginReadinessResolver(options?: {
       }
       const controller = new AbortController();
       activeControllers.add(controller);
+      const subjectCollection = createPluginReadinessSubjectCollection({
+        pluginId: registration.pluginId,
+        criterionId: registration.criterion.id,
+      });
       const raw = Promise.resolve().then(() =>
         registration.criterion.check({
           config: params.config,
           pluginConfig: registration.pluginConfig,
           signal: controller.signal,
+          subjects: subjectCollection.collector,
         }),
       );
-      const value = evaluateRegistration({ registration, raw, controller, timeoutMs });
+      const value = evaluateRegistration({
+        registration,
+        raw,
+        controller,
+        timeoutMs,
+        subjectCollection,
+      });
       const entry: CachedEvaluation = {
         expiresAt: currentTime + cacheTtlMs,
         value,
@@ -163,6 +230,10 @@ export function createPluginReadinessResolver(options?: {
       );
       return value;
     });
-    return Promise.all(evaluated);
+    const evaluations = await Promise.all(evaluated);
+    return {
+      conditions: evaluations.map((entry) => entry.condition),
+      subjects: evaluations.flatMap((entry) => entry.subjects),
+    };
   };
 }

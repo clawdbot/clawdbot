@@ -88,6 +88,14 @@ example, selecting `openclaw.workspace-writable` emits the canonical
 `WorkspaceWritable` condition; plugin criteria use their namespaced ID as the
 condition type.
 
+Canonical results declare observed runtime subjects once under `identity` and
+each condition references its primary `subjectRef`. This distinguishes, for
+example, a stable process from a restarted Gateway or a changed config
+generation. Set `OPENCLAW_INSTANCE_ID` before Gateway startup when a host needs
+to supply the opaque Gateway lifecycle ID; otherwise OpenClaw generates one.
+The value must remain unchanged for that serving lifecycle and unique after a
+restart.
+
 - **DO use:** `GET /health` - instant response, no session created, no LLM call, returns `{"ok":true,"status":"live"}`
 - **DON'T use:** `/v1/chat/completions` for health checks - each request creates a full agent session with skill snapshot, context assembly, and LLM calls
 
