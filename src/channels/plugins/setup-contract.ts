@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Option } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
@@ -251,10 +252,6 @@ export function resolveChannelSetupExecutionAdapter(plugin: {
     namedAccountPromotionKeys: legacy.namedAccountPromotionKeys,
     resolveSingleAccountPromotionTarget: legacy.resolveSingleAccountPromotionTarget,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseStringList(value: unknown): string[] | undefined {

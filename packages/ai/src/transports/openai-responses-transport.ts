@@ -51,6 +51,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "../internal/shared.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { shortHash } from "../utils/hash.js";
 import {
   buildGuardedModelFetch,
   resolveOpenAIStrictToolSetting,
@@ -97,7 +98,7 @@ import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
-import { redactIdentifier, redactSensitiveText, sha256HexPrefix } from "./transport-utils.js";
+import { redactIdentifier, redactSensitiveText } from "./transport-utils.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -858,10 +859,6 @@ async function createResponsesStreamWithEncryptedContentRetry(params: {
 
 function resolveAzureOpenAIApiVersion(env = process.env): string {
   return env.AZURE_OPENAI_API_VERSION?.trim() || DEFAULT_AZURE_OPENAI_API_VERSION;
-}
-
-function shortHash(value: string): string {
-  return sha256HexPrefix(value, 16);
 }
 
 function normalizeResponsesReplayItemId(
