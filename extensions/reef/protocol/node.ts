@@ -1,7 +1,9 @@
-import { mkdir, open as openFile, readFile } from "node:fs/promises";
+import { open as openFile, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
+import { canonicalPathFromExistingAncestor } from "@openclaw/fs-safe/advanced";
+import { ensureDurableDirectory, syncDirectory } from "@openclaw/fs-safe/durability";
 import { createAuditEntry, verifyChain, type AuditEntry, type AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, decodeUtf8, fromBase64 } from "./encoding.js";
@@ -274,7 +276,9 @@ function replayKey(peer: string, id: string): string {
 }
 
 async function appendDurably(path: string, contents: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
+  const parent = await ensureDurableDirectory({
+    directoryPath: await canonicalPathFromExistingAncestor(dirname(path)),
+  });
   const handle = await openFile(path, "a", 0o600);
   try {
     await handle.writeFile(contents, "utf8");
@@ -282,6 +286,7 @@ async function appendDurably(path: string, contents: string): Promise<void> {
   } finally {
     await handle.close();
   }
+  await syncDirectory(parent, { label: "Reef replay journal directory" });
 }
 
 function encryptReplayBody(

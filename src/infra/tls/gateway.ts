@@ -1,13 +1,20 @@
 // Gateway TLS runtime loads configured certificates or generates a local
 // self-signed pair, returning server-ready options plus client fingerprint.
 import { X509Certificate } from "node:crypto";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
+import {
+  ensureDurableDirectory,
+  syncDirectory,
+  type DirectoryReceipt,
+} from "@openclaw/fs-safe/durability";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { runExec } from "../../process/exec.js";
-import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
-import { pathExists } from "../fs-safe.js";
+import { CONFIG_DIR, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { sameFileIdentity } from "../fs-safe-advanced.js";
+import { canonicalPathFromExistingAncestor, pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 
@@ -22,48 +29,99 @@ type GatewayTlsDegradation = {
   event: "gateway.tls.degraded";
   ownerKind: "gateway";
   ownerId: "tls";
-  reason: "atomic hard-link publication unavailable";
+  reason: "atomic hard-link publication unavailable" | "directory durability unavailable";
   state: "best-effort";
 };
 
-const GATEWAY_TLS_DEGRADATION: GatewayTlsDegradation = {
-  event: "gateway.tls.degraded",
-  ownerKind: "gateway",
-  ownerId: "tls",
-  reason: "atomic hard-link publication unavailable",
-  state: "best-effort",
-};
+function gatewayTlsDegradation(reason: GatewayTlsDegradation["reason"]): GatewayTlsDegradation {
+  return {
+    event: "gateway.tls.degraded",
+    ownerKind: "gateway",
+    ownerId: "tls",
+    reason,
+    state: "best-effort",
+  };
+}
 
 function isHardLinkUnsupportedError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM";
 }
 
+type PublishedGeneratedTlsOutput = {
+  degradationReasons: GatewayTlsDegradation["reason"][];
+  identity: Stats;
+};
+
+function removeGeneratedTlsOutputIfOwned(finalPath: string, expectedIdentity: Stats): boolean {
+  try {
+    const currentIdentity = fsSync.lstatSync(finalPath);
+    if (!currentIdentity.isFile() || !sameFileIdentity(currentIdentity, expectedIdentity)) {
+      return false;
+    }
+    fsSync.unlinkSync(finalPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function publishGeneratedTlsOutput(
   stagedPath: string,
   finalPath: string,
   contents: string,
-): Promise<boolean> {
+  parentReceipt: DirectoryReceipt,
+): Promise<PublishedGeneratedTlsOutput> {
+  const degradationReasons: GatewayTlsDegradation["reason"][] = [];
+  const stagedHandle = await fs.open(stagedPath, "r+");
+  let stagedIdentity: Stats;
   try {
-    await fs.link(stagedPath, finalPath);
-    return false;
-  } catch (error) {
-    if (!isHardLinkUnsupportedError(error)) {
-      throw error;
-    }
-  }
-
-  // Some supported filesystems cannot publish with hard links. An exclusive handle keeps
-  // no-overwrite semantics without pathname cleanup that could delete concurrent output;
-  // a failed best-effort write may leave this attempt's partial file for operator cleanup.
-  const handle = await fs.open(finalPath, "wx", 0o600);
-  try {
-    await handle.writeFile(contents, "utf8");
-    await handle.sync();
+    await stagedHandle.sync();
+    stagedIdentity = await stagedHandle.stat();
   } finally {
-    await handle.close();
+    await stagedHandle.close();
   }
-  return true;
+  let publishedIdentity: Stats | undefined;
+  try {
+    try {
+      await fs.link(stagedPath, finalPath);
+      const linkedIdentity = await fs.lstat(finalPath);
+      if (!linkedIdentity.isFile() || !sameFileIdentity(stagedIdentity, linkedIdentity)) {
+        throw new Error(`Generated TLS output changed during publication: ${finalPath}`);
+      }
+      publishedIdentity = linkedIdentity;
+    } catch (error) {
+      if (!isHardLinkUnsupportedError(error)) {
+        throw error;
+      }
+      degradationReasons.push("atomic hard-link publication unavailable");
+      // Some supported filesystems cannot publish with hard links. An exclusive handle keeps
+      // no-overwrite semantics without pathname cleanup that could delete concurrent output.
+      const handle = await fs.open(finalPath, "wx", 0o600);
+      try {
+        publishedIdentity = await handle.stat();
+        await handle.writeFile(contents, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    }
+    if (!publishedIdentity) {
+      throw new Error(`Generated TLS output was not published: ${finalPath}`);
+    }
+    const directorySync = await syncDirectory(parentReceipt, {
+      label: "gateway TLS publication directory",
+    });
+    if (directorySync.status === "unsupported") {
+      degradationReasons.push("directory durability unavailable");
+    }
+    return { degradationReasons, identity: publishedIdentity };
+  } catch (error) {
+    if (publishedIdentity && removeGeneratedTlsOutputIfOwned(finalPath, publishedIdentity)) {
+      await syncDirectory(parentReceipt).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
@@ -84,12 +142,11 @@ async function generateSelfSignedCert(params: {
   keyPath: string;
   log?: GatewayTlsLog;
 }): Promise<void> {
-  const certDir = path.dirname(params.certPath);
-  const keyDir = path.dirname(params.keyPath);
-  await ensureDir(certDir);
-  if (keyDir !== certDir) {
-    await ensureDir(keyDir);
-  }
+  const certDir = await canonicalPathFromExistingAncestor(path.dirname(params.certPath));
+  const keyDir = await canonicalPathFromExistingAncestor(path.dirname(params.keyPath));
+  const certDirectory = await ensureDurableDirectory({ directoryPath: certDir });
+  const keyDirectory =
+    keyDir === certDir ? certDirectory : await ensureDurableDirectory({ directoryPath: keyDir });
   const opensslBin = resolveSystemBin("openssl");
   if (!opensslBin) {
     throw new Error(
@@ -134,18 +191,40 @@ async function generateSelfSignedCert(params: {
       fs.readFile(stagedKeyPath, "utf8"),
     ]);
     tls.createSecureContext({ cert, key, minVersion: "TLSv1.3" });
-    let usedBestEffortPublication = await publishGeneratedTlsOutput(
+    const degradationReasons = new Set<GatewayTlsDegradation["reason"]>();
+    if (
+      certDirectory.parentSync.status === "unsupported" ||
+      keyDirectory.parentSync.status === "unsupported"
+    ) {
+      degradationReasons.add("directory durability unavailable");
+    }
+    const certPublication = await publishGeneratedTlsOutput(
       stagedCertPath,
       params.certPath,
       cert,
+      certDirectory,
     );
-    usedBestEffortPublication =
-      (await publishGeneratedTlsOutput(stagedKeyPath, params.keyPath, key)) ||
-      usedBestEffortPublication;
-    if (usedBestEffortPublication) {
+    certPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
+    let keyPublication: PublishedGeneratedTlsOutput;
+    try {
+      keyPublication = await publishGeneratedTlsOutput(
+        stagedKeyPath,
+        params.keyPath,
+        key,
+        keyDirectory,
+      );
+    } catch (error) {
+      if (removeGeneratedTlsOutputIfOwned(params.certPath, certPublication.identity)) {
+        await syncDirectory(certDirectory).catch(() => undefined);
+      }
+      throw error;
+    }
+    keyPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
+    for (const reason of degradationReasons) {
+      const degradation = gatewayTlsDegradation(reason);
       params.log?.warn?.(
-        `[GATEWAY_TLS_DEGRADED] best-effort gateway:tls: ${GATEWAY_TLS_DEGRADATION.reason}.`,
-        GATEWAY_TLS_DEGRADATION,
+        `[GATEWAY_TLS_DEGRADED] best-effort gateway:tls: ${degradation.reason}.`,
+        degradation,
       );
     }
     params.log?.info?.(

@@ -1,7 +1,8 @@
-import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import fsSync from "node:fs";
+import fs, { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { dirname, join, resolve } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { appendAudit, verifyChain } from "./audit.js";
 import { generateIdentity } from "./identity.js";
 import { JsonlAuditStore, FileReplayStore } from "./node.js";
@@ -38,6 +39,37 @@ describe("Node stores", () => {
     await recovered.appendEvent("three", { id: 3 }, 12);
     expect(await new JsonlAuditStore(path, auditKey).entries()).toHaveLength(3);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects an append when the journal directory cannot be synchronized",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "reef-audit-sync-failure-"));
+      const path = join(directory, "nested", "audit.jsonl");
+      const parentPath = dirname(path);
+      const originalOpen = fs.open.bind(fs);
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        const handle = await originalOpen(filePath, flags, mode);
+        if (
+          typeof flags === "number" &&
+          (flags & fsSync.constants.O_DIRECTORY) !== 0 &&
+          resolve(String(filePath)) === (await fs.realpath(parentPath).catch(() => parentPath))
+        ) {
+          vi.spyOn(handle, "sync").mockRejectedValue(
+            Object.assign(new Error("journal directory sync failed"), { code: "EIO" }),
+          );
+        }
+        return handle;
+      });
+
+      try {
+        await expect(
+          new JsonlAuditStore(path, auditKey).appendEvent("one", { id: 1 }, 10),
+        ).rejects.toMatchObject({ code: "EIO" });
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
 
   it("rejects a corrupt middle JSONL record", async () => {
     const directory = await mkdtemp(join(tmpdir(), "reef-audit-corrupt-"));

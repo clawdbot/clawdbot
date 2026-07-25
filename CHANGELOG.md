@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Filesystem publication durability:** use the shared `fs-safe` directory primitive for SQLite snapshots and restores, backup archives, migration archives, memory exports, session transcript archives, generated Gateway TLS material, and Reef audit/replay journals so parent links are identity-checked and synchronized without maintaining divergent filesystem implementations.
 - **Cron local-provider preflight:** report the guarded-fetch deadline as a bounded preflight timeout, preserve concrete nested non-timeout errors, and carry the failure reason into fallback warnings. Thanks @shakkernerd.
 - **ClickClack split-origin setup codes:** consume versioned exact claim endpoints without appending a second claim path, validate the returned canonical API base, preserve private API transport overrides, and keep legacy setup URLs working. Fixes #111919. Thanks @shakkernerd.
 - **Standalone plugin files:** let manifestless files explicitly listed in `plugins.load.paths` pass config validation and load independently when several files share a directory.

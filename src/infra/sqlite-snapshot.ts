@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pinDirectory, syncDirectory } from "@openclaw/fs-safe/durability";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
@@ -14,11 +15,6 @@ import {
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
-import {
-  openSqliteDirectoryForDurability,
-  syncSqliteDirectoryForDurability,
-  type SqlitePathIdentityReceipt,
-} from "./sqlite-path-durability.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
@@ -385,37 +381,6 @@ function assertSynchronousCallbackResult(result: unknown, label: string): void {
   }
 }
 
-function isUnsupportedDirectorySyncError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EINVAL" ||
-    code === "ENOTSUP" ||
-    code === "ENOSYS" ||
-    (process.platform === "win32" && (code === "EISDIR" || code === "EPERM" || code === "EACCES"))
-  );
-}
-
-export async function syncDirectoryBestEffort(directoryPath: string): Promise<void> {
-  const handle = await fs.open(directoryPath, "r").catch((error: unknown) => {
-    if (isUnsupportedDirectorySyncError(error)) {
-      return undefined;
-    }
-    throw error;
-  });
-  if (!handle) {
-    return;
-  }
-  try {
-    await handle.sync();
-  } catch (error) {
-    if (!isUnsupportedDirectorySyncError(error)) {
-      throw error;
-    }
-  } finally {
-    await handle.close();
-  }
-}
-
 function isLinkFallbackError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
   return (
@@ -436,14 +401,10 @@ export async function publishVerifiedSqliteFile(
 ): Promise<void> {
   await assertTargetAbsent(options.targetPath);
   const targetDirectory = path.resolve(path.dirname(options.targetPath));
-  const targetDirectoryReceipt: SqlitePathIdentityReceipt = {
-    path: targetDirectory,
-    identity: await fs.lstat(targetDirectory),
-  };
-  const targetDirectoryPin = await openSqliteDirectoryForDurability(
-    targetDirectoryReceipt,
-    "SQLite publication directory",
-  );
+  const targetDirectoryPin = await pinDirectory(targetDirectory, {
+    label: "SQLite publication directory",
+  });
+  const targetDirectoryReceipt = targetDirectoryPin.receipt;
   let stagingDir: string;
   try {
     stagingDir = await createPrivateSqliteTempDirectory(
@@ -537,12 +498,12 @@ export async function publishVerifiedSqliteFile(
     target ??= await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
     ownershipPinned = true;
-    await syncSqliteDirectoryForDurability(targetDirectoryReceipt);
+    await syncDirectory(targetDirectoryReceipt);
     await fs.unlink(stagedPath);
     const expectedIdentity = await target.stat();
     publishedIdentity = expectedIdentity;
     await fs.rmdir(stagingDir);
-    await syncSqliteDirectoryForDurability(targetDirectoryReceipt);
+    await syncDirectory(targetDirectoryReceipt);
     const linkedContent = await hashOpenPublishedFile(target, options.targetPath, expectedIdentity);
     assertExpectedContent(linkedContent, expectedContent, options.targetPath);
     await target.close();
@@ -619,7 +580,7 @@ export async function publishVerifiedSqliteFile(
         !ownershipPinned,
       );
       if (removed) {
-        await syncSqliteDirectoryForDurability(targetDirectoryReceipt).catch(() => undefined);
+        await syncDirectory(targetDirectoryReceipt).catch(() => undefined);
       }
     }
     if (stagingIdentity) {

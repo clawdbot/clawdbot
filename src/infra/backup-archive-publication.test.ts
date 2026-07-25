@@ -184,6 +184,7 @@ describe("backup archive publication", () => {
         if (path.resolve(String(target)) === path.resolve(plan.canonicalParentPath)) {
           return {
             close: vi.fn().mockResolvedValue(undefined),
+            stat: vi.fn().mockResolvedValue(plan.parentReceipt.identity),
             sync: vi.fn().mockRejectedValue(Object.assign(new Error("sync failed"), { code })),
           } as unknown as FileHandle;
         }
