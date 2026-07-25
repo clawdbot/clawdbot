@@ -1,4 +1,5 @@
 // Core root-command descriptor catalog used for help placeholders and lazy registration.
+import { isExperimentalClawsEnabled } from "../../claws/experimental.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
@@ -32,6 +33,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description:
       "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     hasSubcommands: true,
+  },
+  {
+    name: "claws",
+    description: "Inspect and add experimental OpenClaw Claws",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "backup",
@@ -124,22 +131,32 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
 /** Static root-command descriptors for the core CLI surface. */
 export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;
 
+function visibleCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
+  return isExperimentalClawsEnabled()
+    ? CORE_CLI_COMMAND_DESCRIPTORS
+    : CORE_CLI_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.name !== "claws");
+}
+
 /** Return core root-command descriptors in help/registration order. */
 export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
-  return coreCliCommandCatalog.getDescriptors();
+  return visibleCoreCliCommandDescriptors();
 }
 
 /** Return names for all core root commands. */
 export function getCoreCliCommandNames(): string[] {
-  return coreCliCommandCatalog.getNames();
+  return visibleCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
 }
 
 /** Return core root commands that own child subcommands. */
 export function getCoreCliCommandsWithSubcommands(): string[] {
-  return coreCliCommandCatalog.getCommandsWithSubcommands();
+  return visibleCoreCliCommandDescriptors()
+    .filter((descriptor) => descriptor.hasSubcommands)
+    .map((descriptor) => descriptor.name);
 }
 
 /** Return core root commands whose parent action should default to help. */
 export function getCoreCliParentDefaultHelpCommands(): string[] {
-  return coreCliCommandCatalog.getParentDefaultHelpCommands();
+  return visibleCoreCliCommandDescriptors()
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name);
 }

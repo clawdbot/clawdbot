@@ -479,10 +479,9 @@ describe("sendMessageIMessage receipts", () => {
       resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
       runCliJson,
     });
-
     expect(result.messageId).toBe("p:0/media-guid");
-    expect(result.sentText).toBe("");
-    expect(result.echoText).toBe("<media:image>");
+    expect(result.echoText).toBeUndefined();
+    expect(result.echoMedia).toEqual({ contentType: "image/png", kind: "image" });
     expect(result.receipt.primaryPlatformMessageId).toBe("p:0/media-guid");
     expect(result.receipt.platformMessageIds).toEqual(["p:0/media-guid"]);
     expect(client["request"]).not.toHaveBeenCalled();
@@ -920,10 +919,11 @@ describe("sendMessageIMessage receipts", () => {
         runCliJson,
       }),
     ).rejects.toThrow("caption failed");
-
     const scope = "default:imessage:+15550004567";
     expect(hasPersistedIMessageEcho({ scope, text: "caption" })).toBe(false);
-    expect(hasPersistedIMessageEcho({ scope, text: "<media:image>" })).toBe(true);
+    expect(
+      hasPersistedIMessageEcho({ scope, media: { contentType: "image/png", kind: "image" } }),
+    ).toBe(true);
     expect(hasPersistedIMessageEcho({ scope, messageId: "p:0/dm-media-guid" })).toBe(true);
   });
 

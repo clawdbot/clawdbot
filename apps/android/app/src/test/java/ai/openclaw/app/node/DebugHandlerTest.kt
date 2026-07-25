@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.testDeviceIdentityStore
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -26,7 +26,7 @@ class DebugHandlerTest : NodeHandlerRobolectricTest() {
     val context = appContext()
     File(context.cacheDir, "camera_debug.log").writeText(raw)
 
-    val result = DebugHandler(context, DeviceIdentityStore(context)).handleLogs()
+    val result = DebugHandler(context, testDeviceIdentityStore(context)).handleLogs()
 
     assertTrue(result.ok)
     val logs =

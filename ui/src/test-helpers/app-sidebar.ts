@@ -1,16 +1,25 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
-  SessionCatalog,
+  SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
+import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
+import type { ExecApprovalRequest } from "../app/exec-approval.ts";
+import type { ApplicationOverlays } from "../app/overlays.ts";
+import type {
+  SidebarWorkboardBoard,
+  SidebarWorkboardRenderers,
+} from "../components/app-sidebar-workboard.ts";
+import type { SessionDataController } from "../components/session-data-controller.ts";
+import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
@@ -24,25 +33,35 @@ type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
 type SessionState = SessionCapability["state"];
 
 export type SidebarLifecycleState = HTMLElement & {
+  activeRouteId?: string;
+  activeWorkboardBoardId: string;
+  enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
+  offline: boolean;
+  outboxCountForSession: (sessionKey: string) => number;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
+  workboardBoards: readonly SidebarWorkboardBoard[];
+  workboardBoardsReady: boolean;
+  workboardRenderers?: SidebarWorkboardRenderers;
+  sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
-  onNavigate: (routeId: string, options?: { search?: string }) => void;
-  sessionCatalogs: SessionCatalog[];
-  sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
-  sessionCreatedOrder: Map<string, number>;
-  sessionsAgentId: string | null;
-  sessionsResult: SessionsListResult | null;
+  onNavigate: (
+    routeId: string,
+    options?: { pathname?: string; search?: string; hash?: string },
+  ) => void;
+  readonly sessionData: SessionDataController;
+  readonly sessionOrganizer: SessionOrganizerController;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  onRetryConnect?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
@@ -60,8 +79,8 @@ export type TestSessionMenu = HTMLElement & {
 export function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -82,6 +101,17 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     subscribeEvents(listener: (event: { event: string; payload: unknown }) => void) {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
+    },
+    updateSelfUser(
+      patch: Partial<Omit<NonNullable<ApplicationGatewaySnapshot["selfUser"]>, "id">>,
+    ) {
+      if (!snapshot.selfUser) {
+        return;
+      }
+      snapshot = { ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
     },
   } as unknown as ApplicationGateway;
   return {
@@ -150,6 +180,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
+  const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const groupsPut = vi.fn(() => Promise.resolve());
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
@@ -169,6 +200,13 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   );
   const refresh = vi.fn(() => Promise.resolve());
   const refreshReplacement = vi.fn(() => Promise.resolve());
+  const setCreatorFilter = vi.fn(() => Promise.resolve());
+  const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
+    Promise.resolve({ key, agentId: options?.agentId ?? null }),
+  );
+  const unsubscribeMessages = vi.fn(
+    (_subscription: Parameters<SessionCapability["unsubscribeMessages"]>[0]) => Promise.resolve(),
+  );
   const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
     Promise.resolve<SessionsListResult | null>(null),
   );
@@ -184,6 +222,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
+    setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
+      if (summary) {
+        pullRequestSummaries.set(key, summary);
+      } else {
+        pullRequestSummaries.delete(key);
+      }
+      for (const listener of listeners) {
+        listener(state);
+      }
+    },
     groupsLoad: () => Promise.resolve(),
     groupsPut,
     groupsRename,
@@ -193,8 +242,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     delete: deleteSession,
     deleteMany,
     list,
+    setCreatorFilter,
     refresh,
     refreshReplacement,
+    subscribeMessages,
+    unsubscribeMessages,
   } as unknown as SessionCapability;
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -212,8 +264,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteSession,
     deleteMany,
     list,
+    setCreatorFilter,
     refresh,
     refreshReplacement,
+    subscribeMessages,
+    unsubscribeMessages,
     publish,
     publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;
@@ -234,6 +289,7 @@ export function createContext(
   gateway: ApplicationGateway,
   sessions: SessionCapability,
   agentsList: AgentsListResult | null = null,
+  approvalQueue: readonly ExecApprovalRequest[] = [],
 ): ApplicationContext<RouteId> {
   const selectedAgentId = sessions.state.agentId ?? "main";
   return {
@@ -249,6 +305,10 @@ export function createContext(
       setScope: () => undefined,
       subscribe: () => () => undefined,
     },
+    overlays: {
+      snapshot: { approvalQueue },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationOverlays,
   } as unknown as ApplicationContext<RouteId>;
 }
 
@@ -257,8 +317,9 @@ export async function mountSidebar(
   sessions: SessionCapability,
   variant: SidebarLifecycleState["variant"] = "panel",
   agentsList: AgentsListResult | null = null,
+  approvalQueue: readonly ExecApprovalRequest[] = [],
 ) {
-  const context = createContext(gateway, sessions, agentsList);
+  const context = createContext(gateway, sessions, agentsList, approvalQueue);
   const provider = createApplicationContextProvider(context);
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
@@ -266,6 +327,12 @@ export async function mountSidebar(
   sidebar.variant = variant;
   provider.append(sidebar);
   document.body.append(provider);
+  await sidebar.updateComplete;
+  await (
+    sidebar as unknown as {
+      sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
+    }
+  ).sidebarMenus.preloadMenuRenderer();
   await sidebar.updateComplete;
   return { provider, sidebar, context };
 }

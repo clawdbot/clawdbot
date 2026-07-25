@@ -5,6 +5,7 @@ import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/n
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   buildRealtimeVoiceAgentConsultWorkingResponse,
@@ -16,13 +17,14 @@ import {
   shouldAutoControlRealtimeVoiceAgentText,
   type RealtimeVoiceAgentControlResult,
 } from "../talk/agent-run-control.js";
-import { readSpeakableRealtimeVoiceToolResult } from "../talk/consult-question.js";
 import {
-  createRealtimeVoiceForcedConsultCoordinator,
-  type RealtimeVoiceForcedConsultCoordinator,
-  type RealtimeVoiceForcedConsultHandle,
-} from "../talk/forced-consult-coordinator.js";
-import { recordTalkObservabilityEvent } from "../talk/observability.js";
+  appendRelayVoiceTranscript,
+  closeClientVoiceSession,
+  createOrResumeClientVoiceSession,
+  registerClientVoiceConsultRun,
+} from "../talk/client-voice-session.js";
+import { readSpeakableRealtimeVoiceToolResult } from "../talk/consult-question.js";
+import type { RealtimeVoiceForcedConsultHandle } from "../talk/forced-consult-coordinator.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBrowserAudioContract,
@@ -32,32 +34,23 @@ import {
   type RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
 import {
-  isLikelyRealtimeVoiceAssistantEchoTranscript,
-  recordRealtimeVoiceTranscript,
-  type RealtimeVoiceTranscriptEntry,
-} from "../talk/session-log-runtime.js";
-import {
-  createRealtimeVoiceBridgeSession,
-  type RealtimeVoiceBridgeSession,
-} from "../talk/session-runtime.js";
-import {
-  type TalkEvent,
-  type TalkEventInput,
-  type TalkSessionController,
-  createTalkSessionController,
-} from "../talk/talk-session-controller.js";
+  createRealtimeVoiceSessionHarness,
+  type RealtimeVoiceSessionHarness,
+} from "../talk/realtime-session-harness.js";
+import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
+import type { TalkEvent, TalkEventInput } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import {
   buildTalkRealtimeRelayIssuePayload as relayIssuePayload,
   createTalkRealtimeRelayIssue as realtimeRelayIssue,
 } from "./talk-realtime-relay-issues.js";
+import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
-
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
@@ -66,6 +59,7 @@ const RELAY_EVENT = "talk.event";
 const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
+const noFallbackRelayOutputFlush = () => {};
 
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
@@ -129,11 +123,12 @@ type RelaySession = {
   connId: string;
   context: GatewayRequestContext;
   bridge: RealtimeVoiceBridgeSession;
-  talk: TalkSessionController;
+  harness: RealtimeVoiceSessionHarness;
   sessionKey?: string;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
   activeAgentRuns: Map<string, string>;
+  provider: string;
   activeAgentToolCalls: Map<string, string>;
   completedAgentToolCalls: Set<string>;
   // Cancelled calls retain their original turn long enough to terminally satisfy
@@ -152,8 +147,11 @@ type RelaySession = {
   forcedTerminalProviderResults: Map<string, ForcedTerminalProviderResult>;
   // Turn cancellation invalidates async acceptance callbacks from the prior turn.
   toolResultEpoch: number;
-  forcedConsults: RealtimeVoiceForcedConsultCoordinator;
-  transcript: RealtimeVoiceTranscriptEntry[];
+  voiceConfig?: OpenClawConfig;
+  voiceSessionCreated: boolean;
+  voiceTranscriptSeq: number;
+  voiceTranscriptWrites: Promise<void>;
+  pendingVoiceTranscripts: Array<{ role: "user" | "assistant"; text: string }>;
 };
 
 type CreateTalkRealtimeRelaySessionParams = {
@@ -182,6 +180,128 @@ type TalkRealtimeRelaySessionResult = {
 };
 
 const relaySessions = new Map<string, RelaySession>();
+const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
+
+function logRelayVoiceFailure(session: RelaySession, message: string, error: unknown): void {
+  session.context.logGateway?.warn(`${message}: ${formatErrorMessage(error)}`);
+}
+
+function ensureRelayVoiceSession(session: RelaySession): boolean {
+  if (session.voiceSessionCreated) {
+    return true;
+  }
+  if (!session.sessionKey) {
+    return false;
+  }
+  try {
+    createOrResumeClientVoiceSession({
+      agentId: resolveAgentIdFromSessionKey(session.sessionKey),
+      sessionKey: session.sessionKey,
+      provider: session.provider,
+      origin: "relay",
+      voiceSessionId: session.id,
+    });
+    session.voiceSessionCreated = true;
+    return true;
+  } catch (error) {
+    logRelayVoiceFailure(session, "realtime relay voice session create failed", error);
+    return false;
+  }
+}
+
+const MAX_PENDING_VOICE_TRANSCRIPTS = 40;
+
+function enqueueRelayVoiceTranscript(
+  session: RelaySession,
+  role: "user" | "assistant",
+  text: string,
+): void {
+  if (!session.sessionKey) {
+    // Lazy-bound relays hear audio before talk.client.toolCall supplies the session
+    // key; buffer bounded finals so the call's opening turns survive the binding.
+    // Never-binding callers accept best-effort loss: they had no persistence before.
+    session.pendingVoiceTranscripts.push({ role, text });
+    if (session.pendingVoiceTranscripts.length > MAX_PENDING_VOICE_TRANSCRIPTS) {
+      session.pendingVoiceTranscripts.shift();
+    }
+    return;
+  }
+  if (!ensureRelayVoiceSession(session)) {
+    return;
+  }
+  session.voiceTranscriptSeq += 1;
+  const entryId = String(session.voiceTranscriptSeq);
+  const sessionKey = session.sessionKey;
+  session.voiceTranscriptWrites = session.voiceTranscriptWrites
+    .then(async () => {
+      let lastError: unknown;
+      for (const delayMs of RELAY_TRANSCRIPT_RETRY_DELAYS_MS) {
+        if (delayMs > 0) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
+        }
+        try {
+          await appendRelayVoiceTranscript({
+            agentId: resolveAgentIdFromSessionKey(sessionKey),
+            sessionKey,
+            voiceSessionId: session.id,
+            entryId,
+            role,
+            text,
+            ...(session.voiceConfig ? { config: session.voiceConfig } : {}),
+          });
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError;
+    })
+    .catch((error: unknown) => {
+      logRelayVoiceFailure(session, "realtime relay transcript append failed", error);
+    });
+}
+
+function closeRelayVoiceSession(session: RelaySession): void {
+  if (!session.sessionKey || !ensureRelayVoiceSession(session)) {
+    return;
+  }
+  const sessionKey = session.sessionKey;
+  void session.voiceTranscriptWrites
+    .then(async () => {
+      const config = session.voiceConfig ?? session.context.getRuntimeConfig();
+      await closeClientVoiceSession({
+        agentId: resolveAgentIdFromSessionKey(sessionKey),
+        sessionKey,
+        voiceSessionId: session.id,
+        config,
+      });
+    })
+    .catch((error: unknown) => {
+      logRelayVoiceFailure(session, "realtime relay voice session close failed", error);
+    });
+}
+
+/** Ensure a gateway-relay call has its durable record before transcript-free RPCs. */
+export function ensureTalkRealtimeRelayVoiceSession(params: {
+  relaySessionId: string;
+  connId: string;
+  sessionKey: string;
+}): void {
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  if (session.sessionKey && session.sessionKey !== params.sessionKey) {
+    throw new Error("Realtime relay session belongs to another agent session");
+  }
+  session.sessionKey = params.sessionKey;
+  if (!ensureRelayVoiceSession(session)) {
+    throw new Error("Realtime relay voice session could not be created");
+  }
+  const buffered = session.pendingVoiceTranscripts.splice(0);
+  for (const entry of buffered) {
+    enqueueRelayVoiceTranscript(session, entry.role, entry.text);
+  }
+}
 
 function isWorkingToolResult(result: unknown): boolean {
   return (
@@ -193,14 +313,7 @@ function isWorkingToolResult(result: unknown): boolean {
 }
 
 function isRelayAssistantEchoTranscript(session: RelaySession | undefined, text: string): boolean {
-  if (!session) {
-    return false;
-  }
-  return isLikelyRealtimeVoiceAssistantEchoTranscript({
-    transcript: session.transcript,
-    text,
-    lookbackMs: RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
-  });
+  return session?.harness.isLikelyAssistantEchoTranscript(text) ?? false;
 }
 function buildForcedConsultCheckingPrompt(): string {
   return [
@@ -234,8 +347,8 @@ function suppressedToolResultOptions(
 }
 
 function cancelForcedConsults(session: RelaySession): void {
-  for (const handle of session.forcedConsults.handles()) {
-    session.forcedConsults.markCancelled(handle);
+  for (const handle of session.harness.forcedConsults.handles()) {
+    session.harness.forcedConsults.markCancelled(handle);
   }
 }
 
@@ -302,7 +415,7 @@ function broadcastToolResultToOwner(
     relaySessionId: session.id,
     type: "toolResult",
     callId: params.callId,
-    talkEvent: session.talk.emit({
+    talkEvent: session.harness.talk.emit({
       type: "tool.result",
       callId: params.callId,
       turnId: params.turnId,
@@ -473,7 +586,7 @@ function submitRelayAgentControlProviderResults(
       return;
     }
     if (forcedConsult) {
-      session.forcedConsults.markCancelled(forcedConsult);
+      session.harness.forcedConsults.markCancelled(forcedConsult);
     }
     broadcastToolResultToOwner(session, {
       callId,
@@ -485,9 +598,11 @@ function submitRelayAgentControlProviderResults(
     session.completedAgentToolCalls.add(callId);
   };
   for (const callId of activeCallIds) {
-    const forcedConsult = session.forcedConsults.handles().find((handle) => handle.id === callId);
+    const forcedConsult = session.harness.forcedConsults
+      .handles()
+      .find((handle) => handle.id === callId);
     if (forcedConsult) {
-      const nativeCallIds = session.forcedConsults.nativeCallIds(forcedConsult);
+      const nativeCallIds = session.harness.forcedConsults.nativeCallIds(forcedConsult);
       providerResponseStarted ||= toolResultOptions === undefined && nativeCallIds.length > 0;
       const terminal: ForcedTerminalProviderResult = {
         result: providerResult,
@@ -532,17 +647,18 @@ function submitRelayAgentControlProviderResults(
 }
 
 function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
-  session.forcedConsults.clear();
+  session.harness.close();
   relaySessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
   abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
   session.bridge.close();
+  closeRelayVoiceSession(session);
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "close",
     reason,
-    talkEvent: session.talk.emit({
+    talkEvent: session.harness.talk.emit({
       type: "session.closed",
       payload: { reason },
       final: true,
@@ -589,23 +705,34 @@ export function createTalkRealtimeRelaySession(
   if (expiresAtMs === undefined) {
     throw new Error("Realtime relay session expiry is outside the supported Date range");
   }
-  const talk = createTalkSessionController(
-    {
+  const harness = createRealtimeVoiceSessionHarness({
+    talk: {
       sessionId: relaySessionId,
       mode: "realtime",
       transport: "gateway-relay",
       brain: "agent-consult",
       provider: params.provider.id,
+      // Keep the pre-harness steering window; other harness consumers use the shared default.
+      maxRecentEvents: 20,
     },
-    { onEvent: recordTalkObservabilityEvent },
-  );
+    talkPayloads: {
+      turnStarted: () => ({}),
+      turnEnded: (reason) => ({ reason }),
+      inputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
+      outputAudioStarted: () => ({}),
+      outputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
+      outputAudioDone: (reason) => ({ reason }),
+    },
+    transcriptLookbackMs: RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
+    captureBridgeEvents: false,
+  });
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
     broadcastToOwner(
       params.context,
       params.connId,
       {
         ...event,
-        ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
+        ...(talkEvent ? { talkEvent: harness.emit(talkEvent) } : {}),
       },
       relayEventDeliveryOptions(event),
     );
@@ -614,7 +741,7 @@ export function createTalkRealtimeRelaySession(
   let ready = false;
   let failureEmitted = false;
   const relayRef: { current?: RelaySession } = {};
-  const bridge = createRealtimeVoiceBridgeSession({
+  const bridge = harness.createBridge({
     provider: params.provider,
     cfg: params.cfg,
     providerConfig: params.providerConfig,
@@ -707,7 +834,7 @@ export function createTalkRealtimeRelaySession(
       const relay = relayRef.current;
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (final && relay) {
-        recordRealtimeVoiceTranscript(relay.transcript, role, text);
+        enqueueRelayVoiceTranscript(relay, role, text);
       }
       const eventType =
         role === "assistant"
@@ -770,13 +897,13 @@ export function createTalkRealtimeRelaySession(
       const relay = relayRef.current;
       let shouldSubmitWorkingResult = false;
       if (relay && toolCall.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-        const forcedConsult = relay.forcedConsults.recordNativeConsult(
+        const forcedConsult = relay.harness.forcedConsults.recordNativeConsult(
           toolCall.args,
           toolCall.callId,
         );
         if (forcedConsult.kind === "in_flight" || forcedConsult.kind === "already_delivered") {
           if (forcedConsult.kind === "already_delivered") {
-            const result = relay.forcedConsults.isCancelled(forcedConsult.handle)
+            const result = relay.harness.forcedConsults.isCancelled(forcedConsult.handle)
               ? buildRealtimeVoiceAgentCancelProviderResult(
                   "OpenClaw cancelled this consult before completion. Do not restart it.",
                 )
@@ -840,11 +967,12 @@ export function createTalkRealtimeRelaySession(
       if (!active) {
         return;
       }
-      active.forcedConsults.clear();
+      active.harness.close();
       relaySessions.delete(relaySessionId);
       forgetUnifiedTalkSession(relaySessionId);
       clearTimeout(active.cleanupTimer);
       abortRelayAgentRuns(active, "relay-closed");
+      closeRelayVoiceSession(active);
       if (!ready && !failureEmitted) {
         const issue = realtimeRelayIssue({
           message: "Realtime provider closed before the session became ready.",
@@ -869,7 +997,7 @@ export function createTalkRealtimeRelaySession(
     connId: params.connId,
     context: params.context,
     bridge,
-    talk,
+    harness,
     sessionKey: params.sessionKey?.trim() || undefined,
     expiresAtMs,
     cleanupTimer: setTimeout(() => {
@@ -879,6 +1007,7 @@ export function createTalkRealtimeRelaySession(
       }
     }, RELAY_SESSION_TTL_MS),
     activeAgentRuns: new Map(),
+    provider: params.provider.id,
     activeAgentToolCalls: new Map(),
     completedAgentToolCalls: new Set(),
     cancelledAgentToolCalls: new Map(),
@@ -888,8 +1017,11 @@ export function createTalkRealtimeRelaySession(
     pendingWorkingToolResults: new Map(),
     forcedTerminalProviderResults: new Map(),
     toolResultEpoch: 0,
-    forcedConsults: createRealtimeVoiceForcedConsultCoordinator(),
-    transcript: [],
+    ...(params.cfg ? { voiceConfig: params.cfg } : {}),
+    voiceSessionCreated: false,
+    voiceTranscriptSeq: 0,
+    voiceTranscriptWrites: Promise.resolve(),
+    pendingVoiceTranscripts: [],
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
@@ -933,23 +1065,26 @@ function scheduleForcedAgentConsult(session: RelaySession | undefined, question:
   if (!session || !question.trim()) {
     return;
   }
-  if (session.forcedConsults.hasRecentNativeConsult(question)) {
+  if (session.harness.forcedConsults.hasRecentNativeConsult(question)) {
     return;
   }
-  session.forcedConsults.clearPending();
-  const handle = session.forcedConsults.prepare(question);
+  session.harness.forcedConsults.clearPending();
+  const handle = session.harness.forcedConsults.prepare(question);
   if (!handle) {
     return;
   }
-  session.forcedConsults.schedule(handle, FORCED_CONSULT_FALLBACK_DELAY_MS, () => {
+  session.harness.forcedConsults.schedule(handle, FORCED_CONSULT_FALLBACK_DELAY_MS, () => {
     if (!relaySessions.has(session.id)) {
       return;
     }
     const turnId = ensureRelayTurn(session);
     const callId = handle.id;
     const itemId = `forced-consult-item-${randomUUID()}`;
-    session.forcedConsults.markStarted(handle);
-    session.bridge.handleBargeIn({ audioPlaybackActive: true, force: true });
+    session.harness.forcedConsults.markStarted(handle);
+    session.harness.handleBargeIn(
+      { audioPlaybackActive: true, force: true },
+      noFallbackRelayOutputFlush,
+    );
     broadcastToOwner(session.context, session.connId, {
       relaySessionId: session.id,
       type: "toolCall",
@@ -963,7 +1098,7 @@ function scheduleForcedAgentConsult(session: RelaySession | undefined, question:
           "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult for realtime Talk.",
         responseStyle: "Reply in a concise spoken tone.",
       },
-      talkEvent: session.talk.emit({
+      talkEvent: session.harness.talk.emit({
         type: "tool.call",
         itemId,
         callId,
@@ -1000,7 +1135,7 @@ function drainForcedTerminalProviderResults(
   if (session.forcedTerminalProviderResults.get(handle.id) !== terminal) {
     return;
   }
-  const submissions = session.forcedConsults
+  const submissions = session.harness.forcedConsults
     .nativeCallIds(handle)
     .map((callId) =>
       submitForcedConsultProviderResult(session, callId, terminal.result, terminal.options),
@@ -1013,7 +1148,7 @@ function drainForcedTerminalProviderResults(
       drainForcedTerminalProviderResults(session, handle, terminal),
     );
   }
-  const hasUnsubmittedCall = session.forcedConsults
+  const hasUnsubmittedCall = session.harness.forcedConsults
     .nativeCallIds(handle)
     .some((callId) => !session.completedProviderToolResults.has(callId));
   if (hasUnsubmittedCall) {
@@ -1026,7 +1161,7 @@ function drainForcedTerminalProviderResultsAfterPending(
   handle: RealtimeVoiceForcedConsultHandle,
   terminal: ForcedTerminalProviderResult,
 ): void | Promise<void> {
-  const pending = session.forcedConsults
+  const pending = session.harness.forcedConsults
     .nativeCallIds(handle)
     .map((callId) => session.pendingProviderToolResults.get(callId))
     .filter((submission): submission is Promise<void> => submission !== undefined);
@@ -1060,7 +1195,7 @@ function submitRealtimeAgentConsultWorkingResponse(
       relaySessionId: session.id,
       type: "toolResult",
       callId,
-      talkEvent: session.talk.emit({
+      talkEvent: session.harness.talk.emit({
         type: "tool.progress",
         callId,
         turnId,
@@ -1072,7 +1207,7 @@ function submitRealtimeAgentConsultWorkingResponse(
 }
 
 function ensureRelayTurn(session: RelaySession): string {
-  const turn = session.talk.ensureTurn();
+  const turn = session.harness.talk.ensureTurn();
   if (turn.event) {
     broadcastToOwner(session.context, session.connId, {
       relaySessionId: session.id,
@@ -1105,14 +1240,14 @@ export function sendTalkRealtimeRelayAudio(params: {
     throw new Error("Realtime relay audio frame is too large");
   }
   const session = getRelaySession(params.relaySessionId, params.connId);
+  const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Realtime relay");
   const turnId = ensureRelayTurn(session);
-  const audio = Buffer.from(params.audioBase64, "base64");
   session.bridge.sendAudio(audio);
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "inputAudio",
     byteLength: audio.byteLength,
-    talkEvent: session.talk.emit({
+    talkEvent: session.harness.talk.emit({
       type: "input.audio.delta",
       turnId,
       payload: { byteLength: audio.byteLength },
@@ -1150,13 +1285,13 @@ export function submitTalkRealtimeRelayToolResult(params: {
   if (pendingFinal && !cancelledAgentCall) {
     return pendingFinal;
   }
-  const forcedConsult = session.forcedConsults
+  const forcedConsult = session.harness.forcedConsults
     .handles()
     .find((handle) => handle.id === params.callId);
   if (forcedConsult) {
-    const cancelled = session.forcedConsults.isCancelled(forcedConsult);
+    const cancelled = session.harness.forcedConsults.isCancelled(forcedConsult);
     const turnId = cancelled
-      ? (session.cancelledAgentToolCalls.get(params.callId) ?? session.talk.activeTurnId)
+      ? (session.cancelledAgentToolCalls.get(params.callId) ?? session.harness.talk.activeTurnId)
       : ensureRelayTurn(session);
     if (!turnId) {
       throw new Error("Cancelled realtime consult is missing its original turn");
@@ -1187,7 +1322,7 @@ export function submitTalkRealtimeRelayToolResult(params: {
         if (session.toolResultEpoch !== terminal.epoch) {
           return;
         }
-        session.forcedConsults.markCancelled(forcedConsult);
+        session.harness.forcedConsults.markCancelled(forcedConsult);
         clearRelayAgentToolCall(session, params.callId);
         session.cancelledAgentToolCalls.delete(params.callId);
         session.completedAgentToolCalls.add(params.callId);
@@ -1238,10 +1373,10 @@ export function submitTalkRealtimeRelayToolResult(params: {
       if (session.toolResultEpoch !== terminal.epoch) {
         return;
       }
-      session.forcedConsults.markDelivered(forcedConsult);
+      session.harness.forcedConsults.markDelivered(forcedConsult);
       clearRelayAgentToolCall(session, params.callId);
       session.completedAgentToolCalls.add(params.callId);
-      const hasNativeCalls = session.forcedConsults.nativeCallIds(forcedConsult).length > 0;
+      const hasNativeCalls = session.harness.forcedConsults.nativeCallIds(forcedConsult).length > 0;
       if (text && (!hasNativeCalls || providerOptions)) {
         session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
       }
@@ -1352,6 +1487,24 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   if (!session.sessionKey) {
     session.sessionKey = params.sessionKey;
   }
+  if (!ensureRelayVoiceSession(session)) {
+    throw new Error("Realtime relay voice session could not be created for agent consult");
+  }
+  registerClientVoiceConsultRun({
+    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    sessionKey: params.sessionKey,
+    voiceSessionId: session.id,
+    runId: params.runId,
+  });
+}
+
+/** Wait for server-owned final transcript appends before a relay consult is authorized. */
+export async function flushTalkRealtimeRelayVoiceWrites(params: {
+  relaySessionId: string;
+  connId: string;
+}): Promise<void> {
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  await session.voiceTranscriptWrites;
 }
 
 /** Applies realtime voice-control text to the active agent-consult chat run. */
@@ -1375,7 +1528,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
     sessionKey,
     text: params.text,
     mode: params.mode,
-    recentEvents: session.talk.recentEvents,
+    recentEvents: session.harness.talk.recentEvents,
   });
   if (relaySessions.get(session.id) !== session) {
     throw new Error("Realtime relay session closed while steering the agent run");
@@ -1395,7 +1548,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
     relaySessionId: session.id,
     type: "toolProgress",
     result: finalResult,
-    talkEvent: session.talk.emit({
+    talkEvent: session.harness.talk.emit({
       type: "tool.progress",
       turnId,
       payload: {
@@ -1424,17 +1577,17 @@ export function cancelTalkRealtimeRelayTurn(params: {
   for (const callId of session.activeAgentToolCalls.keys()) {
     session.cancelledAgentToolCalls.set(callId, turnId);
   }
-  for (const forcedConsult of session.forcedConsults.handles()) {
-    if (session.forcedConsults.isCancelled(forcedConsult)) {
+  for (const forcedConsult of session.harness.forcedConsults.handles()) {
+    if (session.harness.forcedConsults.isCancelled(forcedConsult)) {
       session.cancelledAgentToolCalls.set(forcedConsult.id, turnId);
-      for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
+      for (const nativeCallId of session.harness.forcedConsults.nativeCallIds(forcedConsult)) {
         session.cancelledAgentToolCalls.set(nativeCallId, turnId);
       }
     }
   }
-  session.bridge.handleBargeIn({ audioPlaybackActive: true });
+  session.harness.handleBargeIn({ audioPlaybackActive: true }, noFallbackRelayOutputFlush);
   abortRelayAgentRuns(session, reason);
-  const cancelled = session.talk.cancelTurn({
+  const cancelled = session.harness.talk.cancelTurn({
     turnId,
     payload: { reason },
   });

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtim
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   loadCombinedSessionStoreForGateway,
@@ -56,7 +57,7 @@ function isPrivateConversation(params: {
     return false;
   }
   const key = params.key.trim().toLowerCase();
-  const chatTypes = [params.entry.chatType, params.entry.origin?.chatType].filter(
+  const chatTypes = [params.entry.chatType, sessionDeliveryOrigin(params.entry)?.chatType].filter(
     (chatType): chatType is NonNullable<typeof chatType> => chatType !== undefined,
   );
   if (
@@ -331,6 +332,12 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ) {
       continue;
     }
+    const sameAgentLiveOwnerId =
+      !identity.archived &&
+      normalizedScopedAgentId &&
+      normalizedOwnerAgentId === normalizedScopedAgentId
+        ? normalizedOwnerAgentId
+        : undefined;
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
       ((identity.ownerAgentId &&
@@ -349,20 +356,25 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
           allowQmdSlugFallback: false,
         })
       : [];
+    const resolvedKeys =
+      liveKeys.length > 0
+        ? liveKeys
+        : resolveTranscriptStemToSessionKeys({
+            store: combinedSessionStore,
+            stem: identity.stem,
+            allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
+            ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+          });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys:
-        liveKeys.length > 0
-          ? liveKeys
-          : resolveTranscriptStemToSessionKeys({
-              store: combinedSessionStore,
-              stem: identity.stem,
-              allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
-              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-            }),
+      keys: resolvedKeys,
     });
     if (keys.length === 0) {
+      const agentWideVisibility = visibility === "agent" || visibility === "all";
+      if (sameAgentLiveOwnerId && agentWideVisibility && !conversationRecall) {
+        next.push(hit);
+      }
       continue;
     }
     const allowed = areSessionKeysAllowed(keys);

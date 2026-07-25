@@ -10,6 +10,36 @@ export const MATRIX_QA_E2EE_SYNC_FILTER = {
   },
 };
 
+export async function runMatrixQaE2eeClientOperation<T>(params: {
+  label: string;
+  run: () => Promise<T>;
+  stop: () => void;
+  timeoutMs: number;
+}): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      // Matrix SDK encryption can wait indefinitely after room-key sharing. Stop this
+      // disposable QA client so the scenario can fail and release its worker resources.
+      try {
+        params.stop();
+      } catch {
+        // Preserve the operation timeout as the actionable failure.
+      }
+      reject(new Error(`${params.label} timed out after ${params.timeoutMs}ms`));
+    }, params.timeoutMs);
+    timer.unref();
+  });
+
+  try {
+    return await Promise.race([params.run(), timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export function shouldRecordMatrixQaObservedEventUpdate(params: {
   next: MatrixQaObservedEvent;
   previous: MatrixQaObservedEvent | undefined;

@@ -238,6 +238,105 @@ describe("usage-format", () => {
     });
   });
 
+  it("scopes models.json pricing by agent directory before configured and default pricing", async () => {
+    const secondAgentDir = path.join(stateDir, "agents", "second", "agent");
+    const configuredOnlyAgentDir = path.join(stateDir, "agents", "configured-only", "agent");
+    const writePricing = async (targetAgentDir: string, input: number) => {
+      await fs.mkdir(targetAgentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(targetAgentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            "demo-scoped": {
+              models: [
+                {
+                  id: "demo-model",
+                  cost: { input, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        }),
+        "utf8",
+      );
+    };
+    await writePricing(agentDir, 10);
+    await writePricing(secondAgentDir, 20);
+    await fs.mkdir(configuredOnlyAgentDir, { recursive: true });
+
+    const config = {
+      models: {
+        providers: {
+          "demo-scoped": {
+            models: [
+              {
+                id: "demo-model",
+                cost: { input: 30, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const resolveInputPrice = (scopedAgentDir?: string) =>
+      resolveModelCostConfig({
+        provider: "demo-scoped",
+        model: "demo-model",
+        config,
+        agentDir: scopedAgentDir,
+      })?.input;
+
+    expect(resolveInputPrice(agentDir)).toBe(10);
+    expect(resolveInputPrice(secondAgentDir)).toBe(20);
+    expect(resolveInputPrice(configuredOnlyAgentDir)).toBe(30);
+    expect(resolveInputPrice()).toBe(10);
+  });
+
+  it("bounds the agent-directory models.json pricing cache", async () => {
+    const writePricing = async (targetAgentDir: string, input: number) => {
+      await fs.mkdir(targetAgentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(targetAgentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            "demo-bounded": {
+              models: [
+                {
+                  id: "demo-model",
+                  cost: { input, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        }),
+        "utf8",
+      );
+    };
+    const agentDirs = Array.from({ length: 129 }, (_, index) =>
+      path.join(stateDir, "agents", `bounded-${index}`, "agent"),
+    );
+    for (const [index, targetAgentDir] of agentDirs.entries()) {
+      await writePricing(targetAgentDir, index + 1);
+      expect(
+        resolveModelCostConfig({
+          provider: "demo-bounded",
+          model: "demo-model",
+          agentDir: targetAgentDir,
+        })?.input,
+      ).toBe(index + 1);
+    }
+
+    const firstAgentDir = expectDefined(agentDirs[0], "first bounded agent directory");
+    await writePricing(firstAgentDir, 999);
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-bounded",
+        model: "demo-model",
+        agentDir: firstAgentDir,
+      })?.input,
+    ).toBe(999);
+  });
+
   it("falls back to openclaw config pricing when models.json is absent", () => {
     const config = {
       models: {

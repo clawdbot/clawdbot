@@ -46,6 +46,20 @@ function createProfileEvent(overrides: Partial<Event> = {}): Event {
   };
 }
 
+function respondWithProfileContent(content: unknown): void {
+  mockState.subscribeMany.mockImplementation((_relays, _filter, params) => {
+    params.onevent?.(createProfileEvent({ content: JSON.stringify(content) }));
+    params.oneose?.();
+  });
+}
+
+function importDefaultProfile() {
+  return importProfileFromRelays({
+    pubkey: "a".repeat(64),
+    relays: ["wss://relay.example"],
+  });
+}
+
 describe("nostr-profile-import", () => {
   beforeEach(() => {
     mockState.close.mockReset();
@@ -121,21 +135,54 @@ describe("nostr-profile-import", () => {
     });
 
     it("rejects profile content that is not a JSON object", async () => {
-      mockState.subscribeMany.mockImplementation((_relays, _filter, params) => {
-        params.onevent?.(createProfileEvent({ content: "null" }));
-        params.oneose?.();
-      });
+      respondWithProfileContent(null);
 
-      await expect(
-        importProfileFromRelays({
-          pubkey: "a".repeat(64),
-          relays: ["wss://relay.example"],
-        }),
-      ).resolves.toMatchObject({
+      await expect(importDefaultProfile()).resolves.toMatchObject({
         ok: false,
         error: "Profile event content must be a JSON object",
         sourceRelay: "wss://relay.example",
       });
+    });
+
+    it.each([
+      {
+        case: "a wrong field type",
+        content: { name: 123, about: "valid" },
+      },
+      {
+        case: "a wrong URL field type",
+        content: { name: "valid", picture: 123 },
+      },
+      {
+        case: "an overlong field",
+        content: { name: "a".repeat(257), about: "valid" },
+      },
+      {
+        case: "a wrong field type alongside an unsafe URL",
+        content: { name: "valid", about: 123, picture: "https://127.0.0.1/avatar.png" },
+      },
+    ])("rejects the whole profile for $case", async ({ content }) => {
+      respondWithProfileContent(content);
+
+      await expect(importDefaultProfile()).resolves.toMatchObject({
+        ok: false,
+        error: "Profile event content has invalid fields",
+        sourceRelay: "wss://relay.example",
+      });
+    });
+
+    it("drops unknown fields and unsafe URLs from an otherwise valid profile", async () => {
+      respondWithProfileContent({
+        name: "valid",
+        picture: "https://127.0.0.1/avatar.png",
+        website: "https://example.com",
+        custom: "ignored",
+      });
+
+      const result = await importDefaultProfile();
+
+      expect(result).toMatchObject({ ok: true, sourceRelay: "wss://relay.example" });
+      expect(result.profile).toStrictEqual({ name: "valid", website: "https://example.com" });
     });
   });
 

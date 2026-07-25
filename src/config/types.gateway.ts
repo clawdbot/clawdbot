@@ -18,8 +18,6 @@ export type GatewayTlsConfig = {
 };
 
 export type WideAreaDiscoveryConfig = {
-  /** Enable DNS-SD style wide-area discovery. */
-  enabled?: boolean;
   /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
   domain?: string;
 };
@@ -62,8 +60,6 @@ export type TalkRealtimeConfig = {
   speakerVoice?: string;
   /** Provider speaker voice id override for realtime sessions. */
   speakerVoiceId?: string;
-  /** @deprecated Use speakerVoice. */
-  voice?: string;
   /** Additional system instructions appended to realtime Talk sessions. */
   instructions?: string;
   /** Realtime execution mode. */
@@ -125,6 +121,13 @@ export type TalkConfigResponse = TalkConfig & {
 };
 
 export type GatewayControlUiConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  chatMessageMaxWidth?: string;
+  /**
+   * @deprecated Upgrade-only transport input. Retained so releases that shipped
+   * this break-glass flag can migrate an unpaired browser safely.
+   */
+  dangerouslyDisableDeviceAuth?: boolean;
   /** If false, the Gateway will not serve the Control UI (default /). */
   enabled?: boolean;
   /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
@@ -137,6 +140,8 @@ export type GatewayControlUiConfig = {
    * utility-model routing and caches them per agent.
    */
   toolTitles?: boolean;
+  /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
+  sessionObserver?: boolean;
   /**
    * Embed sandbox mode for hosted Control UI previews.
    * - strict: no script execution inside embeds
@@ -150,7 +155,6 @@ export type GatewayControlUiConfig = {
    */
   allowExternalEmbedUrls?: boolean;
   /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
-  chatMessageMaxWidth?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
@@ -158,14 +162,6 @@ export type GatewayControlUiConfig = {
    * Supported long-term for deployments that intentionally rely on this policy.
    */
   dangerouslyAllowHostHeaderOriginFallback?: boolean;
-  /**
-   * Insecure-auth toggle.
-   * Control UI still requires secure context + device identity unless
-   * dangerouslyDisableDeviceAuth is enabled.
-   */
-  allowInsecureAuth?: boolean;
-  /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
-  dangerouslyDisableDeviceAuth?: boolean;
 };
 
 /** Gateway authentication strategy for WebSocket and HTTP clients. */
@@ -200,6 +196,22 @@ export type GatewayTrustedProxyConfig = {
    * trust boundary and direct Gateway access is otherwise locked down.
    */
   allowLoopback?: boolean;
+  /**
+   * Automatically approve new browser device identities after trusted-proxy
+   * authentication. Disabled by default; existing-device upgrades stay manual.
+   */
+  deviceAutoApprove?: {
+    /** Enable automatic approval for new browser devices. @default false */
+    enabled?: boolean;
+    /**
+     * Maximum operator scopes granted by automatic approval. Listing
+     * operator.admin explicitly lets every proxy-authenticated user request
+     * automatic full-admin device grants. Requests without scopes receive the
+     * configured maximum. @default operator.read, operator.write,
+     * operator.approvals
+     */
+    scopes?: string[];
+  };
 };
 
 export type GatewayAuthConfig = {
@@ -303,16 +315,6 @@ export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 export type GatewayReloadConfig = {
   /** Reload strategy for config changes (default: hybrid). */
   mode?: GatewayReloadMode;
-  /** Debounce window for config reloads (ms). Default: 300. */
-  debounceMs?: number;
-  /**
-   * Optional maximum time (ms) to wait for in-flight operations to complete
-   * before forcing a restart. Absent uses the gateway's default bounded wait;
-   * 0 waits indefinitely and logs periodic still-pending warnings.
-   * Lower positive values risk aborting active subagent LLM calls.
-   * @see https://github.com/openclaw/openclaw/issues/65485
-   */
-  deferralTimeoutMs?: number;
 };
 
 export type GatewayHttpChatCompletionsConfig = {
@@ -321,21 +323,6 @@ export type GatewayHttpChatCompletionsConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
-  /**
-   * Max request body size in bytes for `/v1/chat/completions`.
-   * Default: 20MB.
-   */
-  maxBodyBytes?: number;
-  /**
-   * Max number of `image_url` parts processed from the latest user message.
-   * Default: 8.
-   */
-  maxImageParts?: number;
-  /**
-   * Max cumulative decoded image bytes for all `image_url` parts in one request.
-   * Default: 20MB.
-   */
-  maxTotalImageBytes?: number;
   /** Image input controls for `image_url` parts. */
   images?: GatewayHttpChatCompletionsImagesConfig;
 };
@@ -364,11 +351,6 @@ export type GatewayHttpResponsesConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
-  /**
-   * Max request body size in bytes for `/v1/responses`.
-   * Default: 20MB.
-   */
-  maxBodyBytes?: number;
   /**
    * Max number of URL-based `input_file` + `input_image` parts per request.
    * Default: 8.
@@ -500,6 +482,12 @@ export type GatewayNodePairingConfig = {
 };
 
 export type GatewayNodesConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  skills?: { enabled?: boolean };
+  /** @deprecated Doctor-only legacy input. */
+  allowCommands?: string[];
+  /** @deprecated Doctor-only legacy input. */
+  denyCommands?: string[];
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
     /** Routing mode (default: auto). */
@@ -514,15 +502,14 @@ export type GatewayNodesConfig = {
     /** Accept node-published plugin tool descriptors (default: true). */
     enabled?: boolean;
   };
-  /** Controls whether paired nodes may publish agent-visible skills (default: true). */
-  skills?: {
-    /** Accept node-published skill descriptors (default: true). */
-    enabled?: boolean;
+  /** Accept node-published skill descriptors (default: true). */
+  allowSkills?: boolean;
+  commands?: {
+    /** Additional node.invoke commands to allow on the gateway. */
+    allow?: string[];
+    /** Commands to deny even if they appear in the defaults or node claims. */
+    deny?: string[];
   };
-  /** Additional node.invoke commands to allow on the gateway. */
-  allowCommands?: string[];
-  /** Commands to deny even if they appear in the defaults or node claims. */
-  denyCommands?: string[];
 };
 
 export type GatewayToolsConfig = {
@@ -576,27 +563,4 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
-  /**
-   * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
-   * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.
-   */
-  handshakeTimeoutMs?: number;
-  /**
-   * Channel health monitor interval in minutes.
-   * Periodically checks channel health and restarts unhealthy channels.
-   * Set to 0 to disable. Default: 5.
-   */
-  channelHealthCheckMinutes?: number;
-  /**
-   * Stale transport-activity threshold in minutes for the channel health monitor.
-   * A connected channel that reports no provider-proven transport activity for
-   * this duration is treated as a stale socket and restarted. Default: 30.
-   */
-  channelStaleEventThresholdMinutes?: number;
-  /**
-   * Maximum number of health-monitor-initiated channel restarts per hour.
-   * Once this limit is reached, the monitor skips further restarts until
-   * the rolling window expires. Default: 10.
-   */
-  channelMaxRestartsPerHour?: number;
 };

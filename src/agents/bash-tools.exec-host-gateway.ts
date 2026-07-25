@@ -5,6 +5,7 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
@@ -48,6 +49,7 @@ import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
+  isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import {
@@ -63,6 +65,7 @@ import {
   sendExecApprovalFollowupResult,
   shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
+import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import {
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
@@ -99,12 +102,15 @@ type ProcessGatewayAllowlistParams = {
   trigger?: string;
   agentId?: string;
   sessionKey?: string;
+  runId?: string;
+  toolCallId?: string;
   /** Session UUID active when the approval was requested; pins the followup. */
   sessionId?: string;
   /** Session-store template, so the direct/denied followup can detect a rebind. */
   sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
   approvalReviewerDeviceId?: string;
+  nonInteractiveApproval?: boolean;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -385,6 +391,7 @@ function buildGatewayExecApprovalFollowupSummary(params: {
   approvalFollowupText?: string;
 }): string {
   const exitLabel = formatOutcomeExitLabel(params.outcome);
+  let summary: string;
   if (params.trigger === "diagnostics") {
     const diagnosticsText =
       params.outcome.status === "completed" && params.outcome.exitCode === 0
@@ -392,15 +399,16 @@ function buildGatewayExecApprovalFollowupSummary(params: {
         : formatDiagnosticsExportFailure({ outcome: params.outcome, exitLabel });
     const followupText = params.approvalFollowupText?.trim();
     const body = [diagnosticsText, followupText].filter(Boolean).join("\n\n");
-    return `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
+    summary = `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
+  } else {
+    const output = normalizeNotifyOutput(
+      tail(params.outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
+    );
+    summary = output
+      ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
+      : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
   }
-
-  const output = normalizeNotifyOutput(
-    tail(params.outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
-  return output
-    ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
-    : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
+  return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
 }
 
 function shouldAwaitGatewayApprovalInline(params: {
@@ -704,6 +712,23 @@ export async function processGatewayAllowlist(
     );
   }
   if (requiresAsk) {
+    if (params.nonInteractiveApproval) {
+      const text = `Exec denied (approval_required): ${params.command}`;
+      return {
+        deniedResult: {
+          content: [{ type: "text", text }],
+          details: {
+            status: "failed",
+            exitCode: null,
+            failureKind: "approval_required",
+            durationMs: 0,
+            aggregated: text,
+            timedOut: false,
+            cwd: params.workdir,
+          },
+        },
+      };
+    }
     const [autoReviewSegment] = allowlistEval.segments;
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&
@@ -824,6 +849,9 @@ export async function processGatewayAllowlist(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
         }),
+        sessionId: params.sessionId,
+        runId: params.runId,
+        toolCallId: params.toolCallId,
         approvalReviewerDeviceIds: params.approvalReviewerDeviceId
           ? [params.approvalReviewerDeviceId]
           : undefined,
@@ -946,7 +974,21 @@ export async function processGatewayAllowlist(
         approvalId,
         preResolvedDecision,
         onFailure,
+      }).catch((error: unknown) => {
+        if (isExecApprovalRunAbortedError(error)) {
+          return "run-aborted" as const;
+        }
+        throw error;
       });
+      if (decision === "run-aborted") {
+        return {
+          deniedReason: "run-aborted",
+          requestFailed: false,
+          runAborted: true,
+          authorizationSource: "explicit-approval" as const,
+          allowAlwaysDecision: undefined,
+        };
+      }
       if (decision === undefined) {
         emitGatewayExecApprovalSecurityEvent({
           action: "exec.approval.denied",
@@ -1039,7 +1081,36 @@ export async function processGatewayAllowlist(
     };
 
     if (unavailableReason === null && shouldAwaitGatewayApprovalInline(params)) {
-      const approvalDecision = await resolveApprovalForExecution(() => undefined);
+      if (params.runId) {
+        emitAgentEvent({
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          stream: "lifecycle",
+          data: { phase: "waiting-approval", approvalId, toolCallId: params.toolCallId },
+        });
+      }
+      let approvalDecision: Awaited<ReturnType<typeof resolveApprovalForExecution>>;
+      try {
+        approvalDecision = await resolveApprovalForExecution(() => undefined);
+      } finally {
+        if (params.runId) {
+          emitAgentEvent({
+            runId: params.runId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            stream: "lifecycle",
+            data: { phase: "approval-resolved", approvalId, toolCallId: params.toolCallId },
+          });
+        }
+      }
+      // A run-abort cancellation must propagate as cancellation, not resolve
+      // into an ordinary denial the aborted run would keep processing. The
+      // abort owner cancels approvals before firing the controller, so the
+      // signal is aborted by the time the released waiter reaches us.
+      if (approvalDecision.runAborted) {
+        params.signal?.throwIfAborted();
+      }
       if (approvalDecision.deniedReason) {
         return {
           deniedResult: buildGatewayExecApprovalDeniedToolResult({
@@ -1051,6 +1122,7 @@ export async function processGatewayAllowlist(
         };
       }
 
+      params.signal?.throwIfAborted();
       await commitExecutionAuthorization({
         source: approvalDecision.authorizationSource,
         resolvedPath: resolvedPath ?? undefined,
@@ -1058,6 +1130,9 @@ export async function processGatewayAllowlist(
           ? { allowAlwaysDecision: approvalDecision.allowAlwaysDecision }
           : {}),
       });
+      // The commit awaits: an abort that lands during it must not admit the
+      // process (mirrors the detached path's post-commit check).
+      params.signal?.throwIfAborted();
       return {
         execCommandOverride: approvalDecision.execCommandOverride,
         allowWithoutEnforcedCommand: approvalDecision.execCommandOverride === undefined,
@@ -1114,6 +1189,12 @@ export async function processGatewayAllowlist(
       if (approvalDecision.requestFailed) {
         return;
       }
+      if (approvalDecision.runAborted) {
+        return;
+      }
+      if (params.signal?.aborted) {
+        return;
+      }
 
       if (approvalDecision.deniedReason) {
         await sendExecApprovalFollowupResult(
@@ -1126,9 +1207,15 @@ export async function processGatewayAllowlist(
       let admitted:
         | { status: "started"; run: Awaited<ReturnType<typeof runExecProcess>> }
         | { status: "approval-state-write-failed" }
+        | { status: "run-aborted" }
         | { status: "spawn-failed" };
       try {
         admitted = await runWithGatewayIndependentRootWorkAdmission(async () => {
+          // Admission can queue: recheck abort before writing authorization so
+          // an abort that wins while waiting cannot persist an allow-always.
+          if (params.signal?.aborted) {
+            return { status: "run-aborted" as const };
+          }
           try {
             await commitExecutionAuthorization({
               source: approvalDecision.authorizationSource,
@@ -1139,6 +1226,9 @@ export async function processGatewayAllowlist(
             });
           } catch {
             return { status: "approval-state-write-failed" as const };
+          }
+          if (params.signal?.aborted) {
+            return { status: "run-aborted" as const };
           }
 
           let run: Awaited<ReturnType<typeof runExecProcess>>;
@@ -1189,6 +1279,9 @@ export async function processGatewayAllowlist(
 
       if (admitted.status === "approval-state-write-failed") {
         await denyApprovalStateWriteFailure();
+        return;
+      }
+      if (admitted.status === "run-aborted") {
         return;
       }
       if (admitted.status === "spawn-failed") {

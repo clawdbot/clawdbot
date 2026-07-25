@@ -198,7 +198,7 @@ function resolveSecretString(params: { value: unknown; path: string }): string |
 function resolveRemoteApiKey(value: unknown): string | undefined {
   return resolveSecretString({
     value,
-    path: "agents.*.memorySearch.remote.apiKey",
+    path: "memory.search.remote.apiKey",
   });
 }
 

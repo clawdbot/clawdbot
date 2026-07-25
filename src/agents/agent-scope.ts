@@ -367,8 +367,17 @@ export function resolveAgentEffectiveModelPrimary(
   );
 }
 
-function findMutableAgentEntry(cfg: OpenClawConfig, agentId: string): AgentConfig | undefined {
+function findMutableAgentEntry(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Pick<AgentConfig, "model"> | undefined {
   const id = normalizeAgentId(agentId);
+  const entryKey = Object.keys(cfg.agents?.entries ?? {}).find(
+    (key) => normalizeAgentId(key) === id,
+  );
+  if (entryKey) {
+    return cfg.agents?.entries?.[entryKey];
+  }
   return cfg.agents?.list?.find((entry) => normalizeAgentId(entry?.id) === id);
 }
 

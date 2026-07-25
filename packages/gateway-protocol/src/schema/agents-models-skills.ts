@@ -14,7 +14,7 @@ import { NonEmptyString } from "./primitives.js";
  */
 
 /** Model option shown in selectors and model catalog results. */
-export const GatewayAgentRuntimeSchema = closedObject({
+const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
   source: Type.Union([
@@ -52,9 +52,13 @@ export const ModelChoiceSchema = closedObject({
   ),
 });
 
+/** Semantic owner of an agent roster entry. */
+export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("system")]);
+
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
   id: NonEmptyString,
+  kind: Type.Optional(AgentKindSchema),
   name: Type.Optional(NonEmptyString),
   identity: Type.Optional(
     closedObject({
@@ -97,10 +101,10 @@ export const AgentsListResultSchema = closedObject({
   agents: Type.Array(AgentSummarySchema),
 });
 
-/** Creates a configured agent with workspace, identity, and optional model. */
+/** Creates a configured agent; the server supplies an omitted workspace. */
 export const AgentsCreateParamsSchema = closedObject({
   name: NonEmptyString,
-  workspace: NonEmptyString,
+  workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
@@ -223,6 +227,19 @@ export const ModelsListParamsSchema = closedObject({
   ),
 });
 
+/** Reads model-provider credential health for one configured agent. */
+export const ModelsAuthStatusParamsSchema = closedObject({
+  refresh: Type.Optional(Type.Boolean()),
+  agentId: Type.Optional(Type.String()),
+});
+
+/** Removes saved model-provider credentials from one configured agent. */
+export const ModelsAuthLogoutParamsSchema = closedObject({
+  provider: NonEmptyString,
+  profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+  agentId: Type.Optional(Type.String()),
+});
+
 /** Model catalog result. */
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
@@ -233,6 +250,7 @@ export const ModelsProbeParamsSchema = closedObject({
   provider: NonEmptyString,
   profileId: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  agentId: Type.Optional(Type.String()),
 });
 
 export const AuthProbeStatusSchema = Type.Union([
@@ -911,6 +929,7 @@ export const ToolsInvokeResultSchema = closedObject({
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
+export type AgentKind = Static<typeof AgentKindSchema>;
 export type AgentSummary = Static<typeof AgentSummarySchema>;
 export type GatewayAgentRuntime = Static<typeof GatewayAgentRuntimeSchema>;
 export type AgentsFileEntry = Static<typeof AgentsFileEntrySchema>;
@@ -931,6 +950,8 @@ export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
+export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
+export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
 export type AuthProbeStatus = Static<typeof AuthProbeStatusSchema>;
 export type ModelsProbeParams = Static<typeof ModelsProbeParamsSchema>;
 export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchema>;

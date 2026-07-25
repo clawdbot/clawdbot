@@ -35,6 +35,7 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildNovitaProvider,
       buildStaticProvider: buildNovitaProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     augmentModelCatalog: ({ config }) =>
       readConfiguredProviderCatalogEntries({

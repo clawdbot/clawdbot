@@ -17,6 +17,8 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
+import { redactLoginFailureError } from "./login-gate.ts";
+import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
 import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
@@ -24,7 +26,9 @@ type SettingsSidebarProps = {
   activeRouteId: RouteId;
   activeSearch?: string;
   activeHash?: string;
-  connected: boolean;
+  offline: boolean;
+  queuedOutboxCount?: number;
+  lastError: string | null;
   version: string;
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
@@ -32,6 +36,7 @@ type SettingsSidebarProps = {
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
   onExit: () => void;
+  onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
   onPreload?: (routeId: RouteId) => Promise<void> | void;
   onSearchQueryChange: (query: string) => void;
@@ -198,10 +203,17 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
   `;
 }
 
+function syncSettingsSearchScrollShadow(nav: HTMLElement) {
+  // The nav's top padding scrolls away with its rows. Keep the fixed search
+  // region visually separated once content reaches that boundary.
+  nav
+    .closest(".settings-sidebar")
+    ?.querySelector(".settings-sidebar__search")
+    ?.classList.toggle("settings-sidebar__search--scrolled", nav.scrollTop > 0);
+}
+
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
-  const gatewayStatus = t("chat.gatewayStatus", {
-    status: props.connected ? t("common.online") : t("common.offline"),
-  });
+  const reconnecting = t("connection.reconnecting");
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
     props.searchBlockMatches ?? [],
@@ -255,7 +267,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             `
           : nothing}
       </div>
-      <nav class="settings-sidebar__nav" aria-label=${t("common.settingsSections")}>
+      <nav
+        class="settings-sidebar__nav"
+        aria-label=${t("common.settingsSections")}
+        @scroll=${(event: Event) =>
+          syncSettingsSearchScrollShadow(event.currentTarget as HTMLElement)}
+      >
         ${navigationGroups.length === 0
           ? html`<p class="settings-sidebar__empty" role="status">
               ${t("nav.settingsSearchNoResults")}
@@ -282,14 +299,14 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         .onUpdate=${props.onUpdate}
       ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
-        <span
-          class="sidebar-status__dot ${props.connected
-            ? "sidebar-connection-status--online"
-            : "sidebar-connection-status--offline"}"
-          role="img"
-          aria-label=${gatewayStatus}
-        ></span>
-        <span class="settings-sidebar__footer-status">${gatewayStatus}</span>
+        ${props.offline
+          ? renderOfflineSidebarStatus({
+              queuedOutboxCount: props.queuedOutboxCount ?? 0,
+              reconnecting,
+              title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
+              onRetry: props.onRetryConnect,
+            })
+          : nothing}
         ${props.version
           ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`
           : nothing}

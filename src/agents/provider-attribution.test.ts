@@ -1,5 +1,5 @@
 // Verifies provider attribution headers and endpoint classification policies.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   // Policy helpers return broad records; assertions pin only the relevant fields.
@@ -116,20 +116,39 @@ const providerEndpointPlugins = vi.hoisted(() => [
   },
 ]);
 
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({
-    plugins: providerEndpointPlugins,
-    diagnostics: [],
-  }),
+const providerMetadataState = vi.hoisted(() => ({
+  compatible: true,
+  snapshot: undefined as unknown,
 }));
 
-vi.mock("../plugins/manifest-metadata-scan.js", () => ({
-  listOpenClawPluginManifestMetadata: () =>
-    providerEndpointPlugins.map((manifest, index) => ({
-      pluginDir: `provider-endpoint-fixture-${index}`,
-      manifest,
-      origin: "bundled",
-    })),
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: (params?: {
+    config?: unknown;
+    requireDefaultDiscoveryContext?: boolean;
+  }) =>
+    params?.config !== undefined ||
+    (params?.requireDefaultDiscoveryContext && !providerMetadataState.compatible)
+      ? undefined
+      : (providerMetadataState.snapshot ?? {
+          owners: {
+            providerEndpoints: providerEndpointPlugins.flatMap((manifest) =>
+              (manifest.providerEndpoints ?? []).map((endpoint) =>
+                Object.assign({}, endpoint, {
+                  hosts: endpoint.hosts ?? [],
+                  hostSuffixes: endpoint.hostSuffixes ?? [],
+                  baseUrls: (endpoint.baseUrls ?? []).map((baseUrl) =>
+                    baseUrl.toLowerCase().replace(/\/+$/, ""),
+                  ),
+                }),
+              ),
+            ),
+            providerRequests: new Map(
+              providerEndpointPlugins.flatMap((manifest) =>
+                Object.entries(manifest.providerRequest?.providers ?? {}),
+              ),
+            ),
+          },
+        }),
 }));
 
 import {
@@ -168,6 +187,73 @@ function listProviderAttributionPolicies(env: ProviderAttributionTestEnv) {
 }
 
 describe("provider attribution", () => {
+  afterEach(() => {
+    providerMetadataState.compatible = true;
+    providerMetadataState.snapshot = undefined;
+  });
+
+  it("uses provider facts from the replacement plugin snapshot after reload", () => {
+    providerMetadataState.snapshot = {
+      owners: {
+        providerEndpoints: [
+          {
+            endpointClass: "openai-public",
+            hosts: ["reload.example.com"],
+            hostSuffixes: [],
+            baseUrls: [],
+          },
+        ],
+        providerRequests: new Map([["reload", { family: "before-reload" }]]),
+      },
+    };
+    expect(resolveProviderEndpoint("https://reload.example.com").endpointClass).toBe(
+      "openai-public",
+    );
+    expect(resolveProviderRequestPolicy({ provider: "reload" }).knownProviderFamily).toBe(
+      "before-reload",
+    );
+
+    providerMetadataState.snapshot = {
+      owners: {
+        providerEndpoints: [
+          {
+            endpointClass: "anthropic-public",
+            hosts: ["reload.example.com"],
+            hostSuffixes: [],
+            baseUrls: [],
+          },
+        ],
+        providerRequests: new Map([["reload", { family: "after-reload" }]]),
+      },
+    };
+
+    expect(resolveProviderEndpoint("https://reload.example.com").endpointClass).toBe(
+      "anthropic-public",
+    );
+    expect(resolveProviderRequestPolicy({ provider: "reload" }).knownProviderFamily).toBe(
+      "after-reload",
+    );
+  });
+
+  it("rejects provider facts from a scoped current snapshot", () => {
+    providerMetadataState.compatible = false;
+    providerMetadataState.snapshot = {
+      owners: {
+        providerEndpoints: [
+          {
+            endpointClass: "openai-public",
+            hosts: ["scoped-only.example"],
+            hostSuffixes: [],
+            baseUrls: [],
+          },
+        ],
+        providerRequests: new Map(),
+      },
+    };
+
+    expect(resolveProviderEndpoint("https://scoped-only.example").endpointClass).toBe("custom");
+  });
+
   it("resolves the canonical OpenClaw product and runtime version", () => {
     const identity = resolveProviderAttributionIdentity({
       OPENCLAW_VERSION: "2026.3.99",
@@ -858,6 +944,13 @@ describe("provider attribution", () => {
     expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/anthropic"), {
       endpointClass: "custom",
       hostname: "proxy.example.com",
+    });
+  });
+
+  it("classifies WebSocket provider URLs by hostname", () => {
+    expectRecordFields(resolveProviderEndpoint("wss://api.openai.com/v1/realtime"), {
+      endpointClass: "openai-public",
+      hostname: "api.openai.com",
     });
   });
 

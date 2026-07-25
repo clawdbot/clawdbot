@@ -137,6 +137,18 @@ function normalizeAgentModelMapForWrite(value: unknown): unknown {
   return normalizeAgentModelMapForConfig(value);
 }
 
+function normalizeAgentModelPolicyForWrite(value: unknown): unknown {
+  if (!isPlainRecord(value) || !Array.isArray(value.allow)) {
+    return value;
+  }
+  return {
+    ...value,
+    allow: value.allow.map((ref) =>
+      typeof ref === "string" ? normalizeAgentModelRefForConfig(ref) : ref,
+    ),
+  };
+}
+
 function normalizeProviderCatalogModelIdForWrite(provider: string, modelId: string): string {
   const trimmed = modelId.trim();
   if (!trimmed) {
@@ -232,6 +244,13 @@ function normalizeAgentListForWrite(value: unknown): unknown {
         mutated = true;
       }
     }
+    if (Object.hasOwn(agent, "modelPolicy")) {
+      const normalizedModelPolicy = normalizeAgentModelPolicyForWrite(agent.modelPolicy);
+      if (normalizedModelPolicy !== agent.modelPolicy) {
+        nextAgent = { ...nextAgent, modelPolicy: normalizedModelPolicy };
+        mutated = true;
+      }
+    }
     return nextAgent;
   });
 
@@ -259,6 +278,11 @@ function normalizeConfigModelRefsForWrite(
         defaults.models,
       ) as typeof defaults.models;
     }
+    if (defaults.modelPolicy !== undefined) {
+      nextDefaults.modelPolicy = normalizeAgentModelPolicyForWrite(
+        defaults.modelPolicy,
+      ) as typeof defaults.modelPolicy;
+    }
   }
 
   const nextAgentsList = normalizeAgentListForWrite(agentsList);
@@ -272,38 +296,6 @@ function normalizeConfigModelRefsForWrite(
       ...providerNormalized.agents,
       ...(nextDefaults ? { defaults: nextDefaults } : {}),
       ...(nextAgentsList !== undefined ? { list: nextAgentsList as typeof agentsList } : {}),
-    },
-  };
-}
-
-/** Keep a restrictive model allowlist consistent with the configured primary and fallbacks. */
-function ensureConfiguredDefaultModelsAllowed(cfg: OpenClawConfig): OpenClawConfig {
-  const defaults = cfg.agents?.defaults;
-  if (!defaults?.models) {
-    return cfg;
-  }
-  const model = defaults.model;
-  const refs = [
-    typeof model === "string" ? model : model?.primary,
-    ...(typeof model === "object" ? (model.fallbacks ?? []) : []),
-  ].filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0);
-  const models = normalizeAgentModelMapForConfig(defaults.models);
-  let changed = false;
-  for (const ref of refs) {
-    const normalizedRef = normalizeAgentModelRefForConfig(ref);
-    if (!models[normalizedRef]) {
-      models[normalizedRef] = {};
-      changed = true;
-    }
-  }
-  if (!changed) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: { ...defaults, models },
     },
   };
 }
@@ -323,7 +315,7 @@ export function applyProviderAuthConfigPatch(
     providerConfigNormalizer,
   );
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {
-    return ensureConfiguredDefaultModelsAllowed(merged);
+    return merged;
   }
 
   const patchModels = (patch.agents as { defaults?: { models?: unknown } } | undefined)?.defaults
@@ -401,7 +393,7 @@ export function applyDefaultModel(
           normalizeAgentModelRefForConfig(fallback),
         )
       : undefined;
-  return ensureConfiguredDefaultModelsAllowed({
+  return {
     ...cfg,
     agents: {
       ...cfg.agents,
@@ -417,5 +409,5 @@ export function applyDefaultModel(
         },
       },
     },
-  });
+  };
 }

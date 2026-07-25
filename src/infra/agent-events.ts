@@ -5,51 +5,8 @@ import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { createAbortError } from "./abort-signal.js";
-
-/** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
-export type AgentEventStream =
-  | "lifecycle"
-  | "tool"
-  | "assistant"
-  | "error"
-  | "item"
-  | "plan"
-  | "approval"
-  | "command_output"
-  | "patch"
-  | "compaction"
-  | "thinking"
-  | (string & {});
-
-/** Lifecycle phase for a visible item in the agent activity feed. */
-type AgentItemEventPhase = "start" | "update" | "end";
-/** Status rendered for an item-level agent activity event. */
-type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
-/** Item category used by channels and Control UI to choose progress presentation. */
-type AgentItemEventKind = "tool" | "command" | "patch" | "search" | "analysis" | (string & {});
-
-/** Payload for a single item shown in the agent activity stream. */
-export type AgentItemEventData = {
-  itemId: string;
-  phase: AgentItemEventPhase;
-  kind: AgentItemEventKind;
-  title: string;
-  status: AgentItemEventStatus;
-  name?: string;
-  meta?: string;
-  toolCallId?: string;
-  startedAt?: number;
-  endedAt?: number;
-  error?: string;
-  summary?: string;
-  progressText?: string;
-  /** Preserve item telemetry while letting channel progress render a sibling tool event instead. */
-  suppressChannelProgress?: boolean;
-  /** Preserve activity telemetry without rendering this internal item in channel progress. */
-  hideFromChannelProgress?: boolean;
-  approvalId?: string;
-  approvalSlug?: string;
-};
+import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
+import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Approval event phase for request/resolution transitions. */
 type AgentApprovalEventPhase = "requested" | "resolved";
@@ -75,32 +32,21 @@ export type AgentApprovalEventData = {
   message?: string;
 };
 
-/** Incremental command output payload associated with an item/tool call. */
-export type AgentCommandOutputEventData = {
-  itemId: string;
-  phase: "delta" | "end";
-  title: string;
-  toolCallId: string;
-  name?: string;
-  output?: string;
-  status?: AgentItemEventStatus | "running";
-  exitCode?: number | null;
-  durationMs?: number;
-  cwd?: string;
-};
-
-/** Patch summary payload emitted after an agent applies file changes. */
-export type AgentPatchSummaryEventData = {
-  itemId: string;
-  phase: "end";
-  title: string;
-  toolCallId: string;
-  name?: string;
-  added: string[];
-  modified: string[];
-  deleted: string[];
-  summary: string;
-};
+/** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
+export type AgentEventStream =
+  | "lifecycle"
+  | "tool"
+  | "assistant"
+  | "usage"
+  | "error"
+  | "item"
+  | "plan"
+  | "approval"
+  | "command_output"
+  | "patch"
+  | "compaction"
+  | "thinking"
+  | (string & {});
 
 /** Enriched event delivered to subscribers after sequencing and context stamping. */
 export type AgentEventPayload = {
@@ -142,6 +88,8 @@ type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
+  /** Active cadence state by job; admission permits one invocation per job. */
+  cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
@@ -165,6 +113,7 @@ type AgentEventState = {
     }
   >;
   lifecycleGeneration: string;
+  lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
 
 const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
@@ -221,9 +170,25 @@ export function getAgentEventLifecycleGeneration(): string {
   return getAgentEventState().lifecycleGeneration;
 }
 
+export function isAgentEventLifecycleGenerationCurrent(lifecycleGeneration: string): boolean {
+  return lifecycleGeneration === getAgentEventState().lifecycleGeneration;
+}
+
+/** Registers process-local state cleanup at the gateway lifecycle boundary. */
+export function registerAgentEventLifecycleRotationHandler(
+  key: string,
+  handler: (lifecycleGeneration: string) => void,
+): void {
+  const state = getAgentEventState();
+  const handlers =
+    state.lifecycleRotationHandlers ??
+    (state.lifecycleRotationHandlers = new Map<string, (lifecycleGeneration: string) => void>());
+  handlers.set(key, handler);
+}
+
 /** Rejects work that no longer belongs to the active gateway lifecycle. */
 export function assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration: string): void {
-  if (lifecycleGeneration === getAgentEventState().lifecycleGeneration) {
+  if (isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
     return;
   }
   throw createAbortError("Agent run belongs to a stale gateway lifecycle");
@@ -242,6 +207,18 @@ export function captureAgentRunLifecycleGeneration(runId: string): string {
 export function rotateAgentEventLifecycleGeneration(): string {
   const state = getAgentEventState();
   state.lifecycleGeneration = randomUUID();
+  // Rotation is the liveness choke point: after it returns, no prior-generation
+  // owner is operationally reachable. Recovery and runtime consumers therefore
+  // agree that only current-generation owners can drive or receive work.
+  const errors: unknown[] = [];
+  notifyListeners(
+    state.lifecycleRotationHandlers?.values() ?? [],
+    state.lifecycleGeneration,
+    (error) => errors.push(error),
+  );
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to retire stale agent lifecycle owners");
+  }
   return state.lifecycleGeneration;
 }
 
@@ -293,6 +270,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   }
   if (context.projectSessionActive !== undefined) {
     existing.projectSessionActive = context.projectSessionActive;
+  }
+  if (context.cronRunsByJobId !== undefined) {
+    existing.cronRunsByJobId ??= new Map();
+    for (const [jobId, cronRun] of context.cronRunsByJobId) {
+      existing.cronRunsByJobId.set(jobId, cronRun);
+    }
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
@@ -393,12 +376,41 @@ export function claimAgentRunContext(
     registeredAt: context.registeredAt ?? Date.now(),
   });
   state.seqByRun.delete(runId);
+  clearAgentRunUsage(runId);
   return claimId;
 }
 
 /** Returns the currently registered context for a run, if it has not been cleared or swept. */
 export function getAgentRunContext(runId: string) {
   return getAgentEventState().runContextById.get(runId);
+}
+
+/** Records the latest next-check proposal on the matching paced cron run. */
+export function recordCronNextCheckProposal(runId: string, jobId: string, delayMs: number): void {
+  const context = getAgentEventState().runContextById.get(runId);
+  const cronRun = context?.cronRunsByJobId?.get(jobId);
+  if (!cronRun) {
+    throw new Error("cron next_check is only available to the currently running job");
+  }
+  if (!cronRun.pacingEnabled) {
+    throw new Error("cron next_check requires pacing on the current job");
+  }
+  cronRun.nextCheckMs = delayMs;
+}
+
+/** Consumes one successful cron run's proposal so it cannot affect a later run. */
+export function consumeCronNextCheckProposal(runId: string, jobId: string): number | undefined {
+  const context = getAgentEventState().runContextById.get(runId);
+  const cronRuns = context?.cronRunsByJobId;
+  const cronRun = cronRuns?.get(jobId);
+  if (!cronRun) {
+    return undefined;
+  }
+  cronRuns?.delete(jobId);
+  if (cronRuns?.size === 0 && context) {
+    delete context.cronRunsByJobId;
+  }
+  return cronRun.nextCheckMs;
 }
 
 export function getAgentRunContextOwnerStatus(
@@ -495,6 +507,7 @@ export function clearAgentRunContext(
   }
   state.runContextById.delete(runId);
   state.seqByRun.delete(runId);
+  clearAgentRunUsage(runId, lifecycleGeneration ?? existing?.lifecycleGeneration);
 }
 
 /** Releases one tracked owner and clears its context after the final owner exits. */
@@ -537,6 +550,7 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     if (age > maxAgeMs) {
       state.runContextById.delete(runId);
       state.seqByRun.delete(runId);
+      clearAgentRunUsage(runId, ctx.lifecycleGeneration);
       getAgentRunContextOwners(state).delete(runId);
       swept++;
     }
@@ -574,6 +588,9 @@ function enrichAgentEvent(
     return undefined;
   }
   if (ownedLifecycleGeneration && ownedLifecycleGeneration !== state.lifecycleGeneration) {
+    return undefined;
+  }
+  if (hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
     return undefined;
   }
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
@@ -639,12 +656,19 @@ function enrichAgentEvent(
   return enriched;
 }
 
+/** Emits an event only when its run ownership is still current. */
+export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "ts">): boolean {
+  const enriched = enrichAgentEvent(event);
+  if (!enriched) {
+    return false;
+  }
+  notifyListeners(getAgentEventState().listeners, enriched);
+  return true;
+}
+
 /** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
-  const enriched = enrichAgentEvent(event);
-  if (enriched) {
-    notifyListeners(getAgentEventState().listeners, enriched);
-  }
+  emitAgentEventIfCurrent(event);
 }
 
 export function emitAgentEventForOwner(
@@ -672,62 +696,6 @@ export function emitAgentAuditEvent(event: Omit<AgentEventPayload, "seq" | "ts">
   }
 }
 
-/** Emits an item activity event on the shared agent event bus. */
-export function emitAgentItemEvent(params: {
-  runId: string;
-  data: AgentItemEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "item",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-/** Emits an approval event on the shared agent event bus. */
-export function emitAgentApprovalEvent(params: {
-  runId: string;
-  data: AgentApprovalEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "approval",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-/** Emits command output for a running or completed item/tool call. */
-export function emitAgentCommandOutputEvent(params: {
-  runId: string;
-  data: AgentCommandOutputEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "command_output",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-/** Emits a patch summary for a completed file-editing item/tool call. */
-export function emitAgentPatchSummaryEvent(params: {
-  runId: string;
-  data: AgentPatchSummaryEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "patch",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
 /** Subscribes to sequenced agent events; returns an unsubscribe callback. */
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
   const state = getAgentEventState();
@@ -748,6 +716,7 @@ export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
 export function resetAgentEventsForTest(options?: { preserveListeners?: boolean }) {
   const state = getAgentEventState();
   state.seqByRun.clear();
+  resetAgentRunUsageForTest();
   if (!options?.preserveListeners) {
     state.listeners.clear();
     state.auditListeners.clear();

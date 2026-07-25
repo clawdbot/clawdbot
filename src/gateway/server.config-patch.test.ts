@@ -144,10 +144,6 @@ function makeRouteBinding(index: number) {
   };
 }
 
-function makeAgentEntry(id: string, extra: Record<string, unknown> = {}) {
-  return { id, ...extra };
-}
-
 async function expectSchemaLookupInvalid(pathValue: unknown) {
   const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", { pathValue });
   expect(res.ok).toBe(false);
@@ -531,7 +527,6 @@ describe("gateway config methods", () => {
                 name,
                 {
                   cdpPort: 18991 + index,
-                  color: "#0066CC",
                   constructor: { polluted: true },
                   prototype: { polluted: true },
                 },
@@ -568,6 +563,42 @@ describe("gateway config methods", () => {
       for (const name of profileNames) {
         expect(Object.hasOwn(afterProfiles, name)).toBe(false);
       }
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("rejects concurrent config.patch writes that share a stale base hash", async () => {
+    const original = await getCurrentConfigObject();
+    const names = Array.from({ length: 8 }, (_, index) => `concurrent-mcp-${index}`);
+
+    try {
+      const results = await Promise.all(
+        names.map((name, index) =>
+          rpcReq<{ ok?: boolean; error?: { message?: string } }>(requireWs(), "config.patch", {
+            raw: JSON.stringify({
+              mcp: {
+                servers: {
+                  [name]: { command: "node", args: [`server-${index}.mjs`] },
+                },
+              },
+            }),
+            baseHash: original.hash,
+          }),
+        ),
+      );
+
+      expect(results.filter((result) => result.ok).length).toBe(1);
+      const failures = results.filter((result) => !result.ok);
+      expect(failures).toHaveLength(names.length - 1);
+      for (const failure of failures) {
+        expect(failure.error?.message).toContain("config changed since last load");
+      }
+
+      const after = await getCurrentConfigObject();
+      const mcp = requireConfigObject(after.config.mcp, "mcp");
+      const servers = requireConfigObject(mcp.servers, "mcp.servers");
+      expect(names.filter((name) => Object.hasOwn(servers, name))).toHaveLength(1);
     } finally {
       await restoreConfigFileForTest(original);
     }
@@ -693,6 +724,50 @@ describe("gateway config methods", () => {
     // Config hash should not change (no file write)
     const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
     expect(after.payload?.hash).toBe(current.payload?.hash);
+  });
+
+  it("accepts messages.groupChat.historyLimit: 0 through config.patch", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    let previousConfig: string | null = null;
+    try {
+      try {
+        previousConfig = await fs.readFile(configPath, "utf-8");
+      } catch (error) {
+        if ((error as { code?: string }).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ messages: { groupChat: { historyLimit: 1 } } }, null, 2)}\n`,
+        "utf-8",
+      );
+      resetConfigRuntimeState();
+
+      const current = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+      expect(current.ok).toBe(true);
+      expect(typeof current.payload?.hash).toBe("string");
+
+      const res = await rpcReq<{
+        config?: { messages?: { groupChat?: { historyLimit?: number } } };
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ messages: { groupChat: { historyLimit: 0 } } }),
+        baseHash: current.payload?.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      expect(res.payload?.config?.messages?.groupChat?.historyLimit).toBe(0);
+    } finally {
+      if (previousConfig === null) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
+      resetConfigRuntimeState();
+    }
   });
 
   it("rejects config.patch when raw is null", async () => {
@@ -858,42 +933,14 @@ describe("gateway config methods", () => {
     }
   });
 
-  it("uses replacePaths to replace id-keyed arrays instead of merging by id", async () => {
-    const original = await getCurrentConfigObject();
-    const agents = {
-      ...(original.config.agents as Record<string, unknown> | undefined),
-      list: [makeAgentEntry("main", { default: true }), makeAgentEntry("worker")],
-    };
-    const seed = await sendConfigApply(
-      configRawPayload({ ...original.config, agents }, original.hash),
-    );
-    expect(seed.ok).toBe(true);
-
-    try {
-      const before = await getCurrentConfigObject();
-      const replacement = [makeAgentEntry("main", { default: true })];
-      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
-        raw: JSON.stringify({ agents: { list: replacement } }),
-        baseHash: before.hash,
-        replacePaths: ["agents.list"],
-      });
-
-      expect(res.ok).toBe(true);
-      const after = await getCurrentConfigObject();
-      expect((after.config.agents as { list?: unknown[] }).list).toEqual(replacement);
-    } finally {
-      await restoreConfigFileForTest(original);
-    }
-  });
-
   it("rejects nested destructive array patches inside id-keyed arrays without replacePaths", async () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
-      list: [
-        makeAgentEntry("main", { default: true, skills: ["alpha", "beta"] }),
-        makeAgentEntry("worker", { skills: ["gamma"] }),
-      ],
+      entries: {
+        main: { default: true, skills: ["alpha", "beta"] },
+        worker: { skills: ["gamma"] },
+      },
     };
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
@@ -903,17 +950,19 @@ describe("gateway config methods", () => {
     try {
       const before = await getCurrentConfigObject();
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
-        raw: JSON.stringify({ agents: { list: [{ id: "main", skills: ["alpha"] }] } }),
+        raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
       });
 
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain(
-        "config.patch would remove entries from array path(s): agents.list[].skills",
+        "config.patch would remove entries from array path(s): agents.entries.main.skills",
       );
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
-      expect((after.config.agents as { list?: unknown[] }).list).toEqual(agents.list);
+      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
+        agents.entries,
+      );
     } finally {
       await restoreConfigFileForTest(original);
     }
@@ -923,10 +972,10 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
-      list: [
-        makeAgentEntry("main", { default: true, skills: ["alpha", "beta"] }),
-        makeAgentEntry("worker", { skills: ["gamma"] }),
-      ],
+      entries: {
+        main: { default: true, skills: ["alpha", "beta"] },
+        worker: { skills: ["gamma"] },
+      },
     };
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
@@ -936,18 +985,20 @@ describe("gateway config methods", () => {
     try {
       const before = await getCurrentConfigObject();
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
-        raw: JSON.stringify({ agents: { list: [{ id: "main", skills: ["alpha"] }] } }),
+        raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
         replacePaths: ["agents"],
       });
 
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain(
-        "config.patch would remove entries from array path(s): agents.list[].skills",
+        "config.patch would remove entries from array path(s): agents.entries.main.skills",
       );
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
-      expect((after.config.agents as { list?: unknown[] }).list).toEqual(agents.list);
+      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
+        agents.entries,
+      );
     } finally {
       await restoreConfigFileForTest(original);
     }
@@ -957,7 +1008,7 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
-      list: [makeAgentEntry("main", { default: true }), makeAgentEntry("worker")],
+      entries: { main: { default: true, skills: ["alpha"] }, worker: {} },
     };
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
@@ -973,7 +1024,7 @@ describe("gateway config methods", () => {
 
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain(
-        "config.patch would remove entries from array path(s): agents.list",
+        "config.patch would remove entries from array path(s): agents.entries.main.skills",
       );
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
@@ -986,13 +1037,13 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
-      list: [
-        makeAgentEntry("main", {
+      entries: {
+        main: {
           default: true,
           subagents: { allowAgents: ["worker"] },
-        }),
-        makeAgentEntry("worker"),
-      ],
+        },
+        worker: {},
+      },
     };
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
@@ -1002,13 +1053,13 @@ describe("gateway config methods", () => {
     try {
       const before = await getCurrentConfigObject();
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
-        raw: JSON.stringify({ agents: { list: [{ id: "main", subagents: null }] } }),
+        raw: JSON.stringify({ agents: { entries: { main: { subagents: null } } } }),
         baseHash: before.hash,
       });
 
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain(
-        "config.patch would remove entries from array path(s): agents.list[].subagents.allowAgents",
+        "config.patch would remove entries from array path(s): agents.entries.main.subagents.allowAgents",
       );
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
@@ -1021,10 +1072,10 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
-      list: [
-        makeAgentEntry("main", { default: true, skills: ["alpha", "beta"] }),
-        makeAgentEntry("worker", { skills: ["gamma"] }),
-      ],
+      entries: {
+        main: { default: true, skills: ["alpha", "beta"] },
+        worker: { skills: ["gamma"] },
+      },
     };
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
@@ -1034,17 +1085,17 @@ describe("gateway config methods", () => {
     try {
       const before = await getCurrentConfigObject();
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
-        raw: JSON.stringify({ agents: { list: [{ id: "main", skills: ["alpha"] }] } }),
+        raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
-        replacePaths: ["agents.list[].skills"],
+        replacePaths: ["agents.entries.main.skills"],
       });
 
       expect(res.ok).toBe(true);
       const after = await getCurrentConfigObject();
-      expect((after.config.agents as { list?: unknown[] }).list).toEqual([
-        makeAgentEntry("main", { default: true, skills: ["alpha"] }),
-        makeAgentEntry("worker", { skills: ["gamma"] }),
-      ]);
+      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual({
+        main: { default: true, skills: ["alpha"] },
+        worker: { skills: ["gamma"] },
+      });
     } finally {
       await restoreConfigFileForTest(original);
     }

@@ -86,7 +86,9 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
   "tilde-log-path",
+  "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
+  "cron-scheduled-authority",
 ];
 
 const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
@@ -97,6 +99,14 @@ const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
 const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
+  [
+    "10ea475027d8b320d6a704cd6e4dd0f7e984c57a93b327048db229a7e0132c8a",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority",
+  ],
+  [
+    "213e004a28814fe0f7bb33018ae59a709c2e6d6e13b273df82a0e7935fbaf5af",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps",
+  ],
   [
     "755557a6ea609e5b9d9fe9d61beb7e75651641e26a3f0ef2fe1fc3a973b398c8",
     "base feishu-channel bootstrap-persona channel-post-core-restore plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path versioned-runtime-deps",

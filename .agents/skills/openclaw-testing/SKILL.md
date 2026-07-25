@@ -309,6 +309,12 @@ node scripts/full-release-validation-at-sha.mjs \
   --target-ref release/YYYY.M.PATCH
 ```
 
+That helper is for regular releases. Extended-stable dispatches Full Release
+Validation directly from and against `extended-stable/YYYY.M.33` with
+`release_profile=stable`; its exact branch-tip evidence is fresh and cannot be
+replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
+classification and run-identity rules.
+
 The helper pins the trusted workflow revision on current `main` while targeting
 the historical release SHA and recording the canonical release branch as
 context. It infers `beta` for alpha/beta package versions and `stable` for
@@ -654,9 +660,10 @@ Npm candidate selection:
 - For stable package proof, use `package_spec=openclaw@latest` only when the
   question is explicitly the current stable dist-tag; otherwise pin the exact
   version.
-- `source=npm` only accepts registry specs for `openclaw@beta`,
-  `openclaw@latest`, or exact OpenClaw release versions. Do not pass semver
-  ranges, git refs, file paths, tarball URLs, or plugin package names there.
+- `source=npm` only accepts registry specs for `openclaw@extended-stable`,
+  `openclaw@beta`, `openclaw@latest`, or exact OpenClaw release versions. Do
+  not pass semver ranges, git refs, file paths, tarball URLs, or plugin package
+  names there.
 - If the candidate is a tarball URL, use `source=url` with `package_sha256`. If
   it is an Actions tarball artifact, use `source=artifact`. If it is an
   unpublished source candidate, use `source=ref` with a trusted ref or SHA.
@@ -680,7 +687,8 @@ Profiles:
 
 Candidate sources:
 
-- `source=npm`: `openclaw@beta`, `openclaw@latest`, or an exact release version.
+- `source=npm`: `openclaw@extended-stable`, `openclaw@beta`,
+  `openclaw@latest`, or an exact release version.
 - `source=ref`: pack `package_ref` using the trusted `workflow_ref` harness.
   This intentionally separates old package commits from new workflow/test code.
 - `source=url`: HTTPS `.tgz` plus required `package_sha256`.

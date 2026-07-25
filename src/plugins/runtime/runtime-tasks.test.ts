@@ -47,7 +47,7 @@ describe("runtime tasks", () => {
 
   it("exposes canonical task and TaskFlow DTOs without leaking raw registry fields", () => {
     const runtimeTasks = createRuntimeTasks({
-      legacyTaskFlow: createRuntimeTaskFlow(),
+      managedTaskFlow: createRuntimeTaskFlow(),
     });
     const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
@@ -147,7 +147,7 @@ describe("runtime tasks", () => {
 
   it("maps task cancellation results onto canonical task DTOs", async () => {
     const runtimeTasks = createRuntimeTasks({
-      legacyTaskFlow: createRuntimeTaskFlow(),
+      managedTaskFlow: createRuntimeTaskFlow(),
     });
     const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
@@ -196,7 +196,7 @@ describe("runtime tasks", () => {
 
   it("routes runtime task cancellation through the detached task runtime seam", async () => {
     const runtimeTasks = createRuntimeTasks({
-      legacyTaskFlow: createRuntimeTaskFlow(),
+      managedTaskFlow: createRuntimeTaskFlow(),
     });
     const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
@@ -248,7 +248,7 @@ describe("runtime tasks", () => {
 
   it("does not allow cross-owner task cancellation or leak task details", async () => {
     const runtimeTasks = createRuntimeTasks({
-      legacyTaskFlow: createRuntimeTaskFlow(),
+      managedTaskFlow: createRuntimeTaskFlow(),
     });
     const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",

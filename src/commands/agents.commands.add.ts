@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { createAgent } from "../agents/agent-create.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -30,18 +31,16 @@ import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import {
-  applyAgentBindings,
-  buildChannelBindings,
-  describeBinding,
-  parseBindingSpecs,
-} from "./agents.bindings.js";
-import { createQuietRuntime, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
-import { applyAgentConfig, findAgentEntryIndex, listAgentEntries } from "./agents.config.js";
+import { applyAgentBindings, buildChannelBindings, describeBinding } from "./agents.bindings.js";
+import { requireValidConfigFileSnapshot } from "./agents.command-shared.js";
+import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
-import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
 type AgentsAddOptions = {
@@ -55,18 +54,6 @@ type AgentsAddOptions = {
 };
 
 type AgentBindingResult = ReturnType<typeof applyAgentBindings>;
-
-type AgentsAddMutationResult = {
-  agentDir: string;
-  bindingResult: AgentBindingResult;
-};
-
-class AgentsAddMutationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AgentsAddMutationError";
-  }
-}
 
 function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): AgentBindingResult {
   return { config, added: [], updated: [], skipped: [], conflicts: [] };
@@ -138,92 +125,41 @@ export async function agentsAddCommand(
       return;
     }
     const agentId = normalizeAgentId(nameInput);
-    if (agentId === DEFAULT_AGENT_ID || isReservedSystemAgentId(agentId)) {
-      runtime.error(
-        `"${agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
-      );
-      runtime.exit(1);
-      return;
-    }
     if (agentId !== nameInput) {
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
-    if (findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0) {
+
+    const created = await createAgent({
+      name: nameInput,
+      workspace: workspaceFlag,
+      ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
+      transformConfig: transformConfigWithPendingPluginInstalls,
+    });
+    if (created.status === "error") {
       runtime.error(
-        `Agent "${agentId}" already exists. Run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
+        created.reason === "reserved-id"
+          ? `"${created.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
+          : created.reason === "already-exists"
+            ? `Agent "${created.agentId}" already exists.`
+            : created.message,
       );
       runtime.exit(1);
       return;
     }
 
-    const workspaceDir = resolveUserPath(workspaceFlag);
-    const explicitAgentDir = opts.agentDir?.trim()
-      ? resolveUserPath(opts.agentDir.trim())
-      : undefined;
-    const model = opts.model?.trim();
-
-    let committed;
-    try {
-      committed = await transformConfigWithPendingPluginInstalls<AgentsAddMutationResult>({
-        transform: (latestConfig) => {
-          if (findAgentEntryIndex(listAgentEntries(latestConfig), agentId) >= 0) {
-            throw new AgentsAddMutationError(`Agent "${agentId}" already exists.`);
-          }
-          const agentDir = explicitAgentDir ?? resolveAgentDir(latestConfig, agentId);
-          const nextConfig = applyAgentConfig(latestConfig, {
-            agentId,
-            name: nameInput,
-            workspace: workspaceDir,
-            agentDir,
-            ...(model ? { model } : {}),
-          });
-          const bindingParse = parseBindingSpecs({
-            agentId,
-            specs: opts.bind,
-            config: nextConfig,
-          });
-          if (bindingParse.errors.length > 0) {
-            throw new AgentsAddMutationError(bindingParse.errors.join("\n"));
-          }
-          const bindingResult =
-            bindingParse.bindings.length > 0
-              ? applyAgentBindings(nextConfig, bindingParse.bindings)
-              : emptyBindingResult(nextConfig);
-          return {
-            nextConfig: bindingResult.config,
-            result: { agentDir, bindingResult },
-          };
-        },
-      });
-    } catch (err) {
-      if (err instanceof AgentsAddMutationError) {
-        runtime.error(err.message);
-        runtime.exit(1);
-        return;
-      }
-      throw err;
-    }
-    const mutationResult = committed.result;
-    if (!mutationResult) {
-      throw new Error("Agent config mutation did not return a result.");
-    }
-    const { agentDir, bindingResult } = mutationResult;
+    const bindingResult = created.bindingResult ?? emptyBindingResult(cfg);
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
-    const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
-    await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
-      skipBootstrap: Boolean(committed.nextConfig.agents?.defaults?.skipBootstrap),
-      skipOptionalBootstrapFiles: committed.nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-      agentId,
-    });
 
     const payload = {
-      agentId,
-      name: nameInput,
-      workspace: workspaceDir,
-      agentDir,
-      model,
+      agentId: created.agentId,
+      name: created.name,
+      workspace: created.workspace,
+      agentDir: created.agentDir,
+      model: created.model,
       bindings: {
         added: bindingResult.added.map(describeBinding),
         updated: bindingResult.updated.map(describeBinding),
@@ -237,10 +173,10 @@ export async function agentsAddCommand(
       writeRuntimeJson(runtime, payload);
     } else {
       runtime.log(`Agent: ${agentId}`);
-      runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
-      runtime.log(`Agent dir: ${shortenHomePath(agentDir)}`);
-      if (model) {
-        runtime.log(`Model: ${model}`);
+      runtime.log(`Workspace: ${shortenHomePath(created.workspace)}`);
+      runtime.log(`Agent dir: ${shortenHomePath(created.agentDir)}`);
+      if (created.model) {
+        runtime.log(`Model: ${created.model}`);
       }
       if (bindingResult.conflicts.length > 0) {
         runtime.error(
@@ -477,17 +413,17 @@ export async function agentsAddCommand(
     });
     nextConfig = committed.config;
     logConfigUpdated(runtime);
-    await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+    const target = resolveOnboardingAgentTarget(nextConfig, agentId);
+    await ensureOnboardingAgentWorkspace(target, runtime, {
       skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
       skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-      agentId,
     });
 
     const payload = {
-      agentId,
+      agentId: target.agentId,
       name: agentName,
-      workspace: workspaceDir,
-      agentDir,
+      workspace: target.workspaceDir,
+      agentDir: target.agentDir,
     };
     if (opts.json) {
       writeRuntimeJson(runtime, payload);

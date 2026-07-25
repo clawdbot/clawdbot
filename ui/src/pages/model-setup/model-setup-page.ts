@@ -28,7 +28,7 @@ import {
   type ModelSetupVerifyState,
   type ModelSetupWizardState,
 } from "./state.ts";
-import { renderModelSetup } from "./view.ts";
+import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
@@ -93,6 +93,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     onDone: () => void this.handleWizardDone(),
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
+    sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
   });
 
   override disconnectedCallback() {
@@ -142,7 +143,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     return Boolean(
       client &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true,
     );
@@ -171,7 +172,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         ...result.manualProviders,
         ...(result.authOptions ?? []),
         ...(result.recommendedInstalls ?? []),
-      ].flatMap((entry) => (entry.icon ? [entry.icon] : [])),
+      ].flatMap((entry) => (entry.icon && !resolveSetupBrandIcon(entry) ? [entry.icon] : [])),
     );
   }
 
@@ -234,7 +235,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       .then((blobUrl) => {
         if (
           this.iconRequests.get(iconUrl) !== request ||
-          !this.context.gateway.snapshot.connected ||
+          this.context.gateway.snapshot.phase !== "connected" ||
           !this.currentIconUrls().has(iconUrl)
         ) {
           if (blobUrl) {
@@ -477,7 +478,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     const canAdmin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     const gatewayTooOld =
-      snapshot.connected && isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
+      snapshot.phase === "connected" &&
+      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
     const canVerify =
       canAdmin &&
       !gatewayTooOld &&

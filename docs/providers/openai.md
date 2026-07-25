@@ -151,7 +151,7 @@ explicit runtime config.
 | Server-side web search    | Native OpenAI Responses tool                                                                  | Yes, when web search is enabled and no other provider is pinned |
 | Images                    | `image_generate`                                                                              | Yes                                                             |
 | Videos                    | `video_generate`                                                                              | Yes                                                             |
-| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                                                     | Yes                                                             |
+| Text-to-speech            | `tts.provider: "openai"` / `tts`                                                              | Yes                                                             |
 | Batch speech-to-text      | `tools.media.audio` / media understanding                                                     | Yes                                                             |
 | Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                                                     | Yes                                                             |
 | Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk `talk.realtime.provider: "openai"` | Yes (OpenAI Platform API key)                                   |
@@ -171,6 +171,11 @@ auth. Realtime voice accepts the `openai` API-key auth profile created by
 `talk.realtime.providers.openai.apiKey` for Control UI Talk, or
 `plugins.entries.voice-call.config.realtime.providers.openai.apiKey` for Voice
 Call, or the `OPENAI_API_KEY` environment variable.
+
+In Control UI Video Talk, OpenAI WebRTC receives camera context on demand:
+when the model calls `describe_view`, the browser sends one bounded JPEG over
+the realtime data channel. OpenClaw does not attach a continuous camera track
+to the OpenAI session.
 </Note>
 
 ## Memory embeddings
@@ -180,19 +185,17 @@ OpenClaw can use OpenAI, or an OpenAI-compatible embedding endpoint, for
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai",
-        model: "text-embedding-3-small",
-      },
+  memory: {
+    search: {
+      provider: "openai",
+      model: "text-embedding-3-small",
     },
   },
 }
 ```
 
 For OpenAI-compatible endpoints that require asymmetric embedding labels, set
-`queryInputType` and `documentInputType` under `memorySearch`. OpenClaw
+`queryInputType` and `documentInputType` under `memory.search`. OpenClaw
 forwards these as provider-specific `input_type` request fields: query
 embeddings use `queryInputType`; indexed memory chunks and batch indexing use
 `documentInputType`. See the
@@ -456,35 +459,81 @@ for the full example.
     or session state, `openclaw doctor --fix` rewrites them to `openai/*` with
     the Codex runtime unless OpenClaw is explicitly configured.
 
-    ### Context window cap
+    ### Context window defaults and long-context opt-in
 
-    OpenClaw treats model metadata and the runtime context cap as separate
-    values. For `openai/gpt-5.5` through the Codex OAuth catalog:
+    OpenClaw treats native model capacity and the active runtime budget as
+    separate values:
 
-    - Native `contextWindow`: `400000`
-    - Default runtime `contextTokens` cap: `272000`
+    - `contextWindow` declares the provider's total model window.
+    - `contextTokens` caps how much of that window OpenClaw uses for active input.
 
-    The smaller default cap has better latency and quality characteristics in
-    practice. Override it with `contextTokens`:
+    ChatGPT/Codex OAuth follows the live Codex account catalog. The current
+    catalog commonly advertises a `272000` token active window for GPT-5.6.
+    Direct API-key GPT-5.5 and GPT-5.6 models also default to `272000`
+    `contextTokens`, even though the Platform API exposes a larger native
+    window. This keeps the normal latency, quality, and cost profile consistent
+    across auth modes. A configured `agents.defaults.contextTokens` value can
+    lower that budget further, but it cannot raise a model above its configured
+    `contextTokens` cap.
+
+    For direct API-key GPT-5.5 and GPT-5.6, OpenAI documents a `1050000`
+    token provider window and `128000` maximum output tokens. Reserving the
+    full output allowance leaves `922000` tokens for input. This is a derived
+    operating budget, not a separate provider-published input limit. See the
+    official [model comparison](https://developers.openai.com/api/docs/models/compare)
+    and [GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5).
+    The following example opts one Terra model into that allowance and asks
+    OpenAI to compact at `700000` active tokens:
 
     ```json5
     {
       models: {
         providers: {
           openai: {
-            models: [{ id: "gpt-5.5", contextTokens: 160000 }],
+            models: [
+              {
+                id: "gpt-5.6-terra",
+                name: "GPT-5.6 Terra",
+                contextWindow: 1050000,
+                contextTokens: 922000,
+                maxTokens: 128000,
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-terra" },
+          models: {
+            "openai/gpt-5.6-terra": {
+              agentRuntime: { id: "openclaw" },
+              params: {
+                responsesServerCompaction: true,
+                responsesCompactThreshold: 700000,
+              },
+            },
           },
         },
       },
     }
     ```
 
-    <Note>
-    Use `contextWindow` to declare native model metadata. Use `contextTokens`
-    to limit the runtime context budget. The direct OpenAI API-key route
-    reports a larger native `contextWindow` (`1000000`) for `gpt-5.5`; the two
-    routes are tracked separately because upstream catalogs differ.
-    </Note>
+    `agentRuntime.id: "openclaw"` is intentional in this example. It proves the
+    embedded OpenClaw Responses path is using the model metadata and server-side
+    compaction settings above. A native Codex harness thread owns its context
+    budget in Codex config instead; see
+    [Codex harness long context](/plugins/codex-harness#direct-api-long-context).
+
+    <Warning>
+    OpenAI applies higher long-context pricing once a GPT-5.5 or GPT-5.6
+    request exceeds `272000` input tokens: the whole qualifying request is
+    billed at 2× input and 1.5× output rates. Large prompts are resent or
+    compacted across turns, so an opt-in session can cost substantially more
+    than the default even when the visible reply is short. See
+    [OpenAI API pricing](https://developers.openai.com/api/docs/pricing). The API
+    remains authoritative for account access, actual limits, and billing.
+    </Warning>
 
     ### Catalog recovery
 
@@ -731,18 +780,18 @@ compatibility fallback when the shared
 <AccordionGroup>
   <Accordion title="Speech synthesis (TTS)">
     The bundled `openai` plugin registers speech synthesis for the
-    `messages.tts` surface.
+    `tts` surface.
 
     | Setting      | Config path                                            | Default                          |
     | ------------- | --------------------------------------------------------- | ----------------------------------- |
-    | Model        | `messages.tts.providers.openai.model`                  | `gpt-4o-mini-tts`                |
-    | Voice        | `messages.tts.providers.openai.speakerVoice`           | `coral`                          |
-    | Speed        | `messages.tts.providers.openai.speed`                  | (unset)                          |
-    | Instructions | `messages.tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` only)  |
-    | Format       | `messages.tts.providers.openai.responseFormat`         | `opus` for voice notes, `mp3` for files |
-    | API key      | `messages.tts.providers.openai.apiKey`                 | Falls back to `OPENAI_API_KEY`   |
-    | Base URL     | `messages.tts.providers.openai.baseUrl`                | `https://api.openai.com/v1`      |
-    | Extra body   | `messages.tts.providers.openai.extraBody` / `extra_body` | (unset)                        |
+    | Model        | `tts.providers.openai.model`                  | `gpt-4o-mini-tts`                |
+    | Voice        | `tts.providers.openai.speakerVoice`           | `coral`                          |
+    | Speed        | `tts.providers.openai.speed`                  | (unset)                          |
+    | Instructions | `tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` only)  |
+    | Format       | `tts.providers.openai.responseFormat`         | `opus` for voice notes, `mp3` for files |
+    | API key      | `tts.providers.openai.apiKey`                 | Falls back to `OPENAI_API_KEY`   |
+    | Base URL     | `tts.providers.openai.baseUrl`                | `https://api.openai.com/v1`      |
+    | Extra body   | `tts.providers.openai.extraBody` / `extra_body` | (unset)                        |
 
     Available models: `gpt-4o-mini-tts`, `tts-1`, `tts-1-hd`. Available voices:
     `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `fable`, `juniper`,
@@ -754,11 +803,9 @@ compatibility fallback when the shared
 
     ```json5
     {
-      messages: {
-        tts: {
-          providers: {
-            openai: { model: "gpt-4o-mini-tts", speakerVoice: "coral" },
-          },
+      tts: {
+        providers: {
+          openai: { model: "gpt-4o-mini-tts", speakerVoice: "coral" },
         },
       },
     }

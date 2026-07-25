@@ -141,6 +141,30 @@ direct remote Gateway relay. A loopback relay on a browser node cannot yet
 provide the node route required by the typed tab binding, so the panel denies
 that topology instead of falling back to browser-wide routing.
 
+## Send a page to OpenClaw
+
+Use **Send page to OpenClaw** in the toolbar popup to share readable page text
+with your main OpenClaw session. You can add an optional note, use the page or
+selection right-click menu, or press `Alt+Shift+S`. OpenClaw prefers your current
+selection when one exists, enqueues the share as a system event, and wakes the
+main session immediately.
+
+The tab does not need to be in the OpenClaw tab group. This is a one-shot,
+explicit share: nothing else on the page is exposed, and it grants no ongoing
+access. Google Docs are exported as plain text with your signed-in browser
+session, without Google API setup. X and Twitter threads are extracted without
+the surrounding interface chrome.
+
+Page text is wrapped in OpenClaw's external-content safety boundary. Your
+optional note stays outside that boundary as your own instruction. Page text
+and selections are capped at about 120,000 characters and include a truncation
+marker when shortened.
+
+Page sharing works when the extension relay is hosted by the Gateway, using
+same-host pairing or direct `wss://` Gateway pairing. Node-hosted relays return
+a clear error for now. To remap the keyboard shortcut, open
+`chrome://extensions/shortcuts`.
+
 ## Remote / cross-machine
 
 Chrome does not have to run on the Gateway host. Three topologies work:

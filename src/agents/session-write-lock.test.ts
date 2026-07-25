@@ -699,56 +699,17 @@ describe("acquireSessionWriteLock", () => {
 
   it("resolves the session write-lock acquire timeout", () => {
     expect(resolveSessionWriteLockAcquireTimeoutMs()).toBe(60_000);
-    expect(
-      resolveSessionWriteLockAcquireTimeoutMs({
-        session: { writeLock: { acquireTimeoutMs: 90_000 } },
-      }),
-    ).toBe(90_000);
-    expect(
-      resolveSessionWriteLockAcquireTimeoutMs({
-        session: { writeLock: { acquireTimeoutMs: 0 } },
-      }),
-    ).toBe(60_000);
   });
 
-  it("resolves session write-lock stale and max-hold policy", () => {
+  it("lets session write-lock env override built-in defaults for emergency tuning", () => {
     expect(
-      resolveSessionWriteLockOptions({
-        session: {
-          writeLock: {
-            acquireTimeoutMs: 90_000,
-            staleMs: 45_000,
-            maxHoldMs: 30_000,
-          },
+      resolveSessionWriteLockOptions(undefined, {
+        env: {
+          OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "120000",
+          OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "60000",
+          OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "50000",
         },
       }),
-    ).toEqual({
-      timeoutMs: 90_000,
-      staleMs: 45_000,
-      maxHoldMs: 30_000,
-    });
-  });
-
-  it("lets session write-lock env override config for emergency tuning", () => {
-    expect(
-      resolveSessionWriteLockOptions(
-        {
-          session: {
-            writeLock: {
-              acquireTimeoutMs: 90_000,
-              staleMs: 45_000,
-              maxHoldMs: 30_000,
-            },
-          },
-        },
-        {
-          env: {
-            OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "120000",
-            OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "60000",
-            OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "50000",
-          },
-        },
-      ),
     ).toEqual({
       timeoutMs: 120_000,
       staleMs: 60_000,
@@ -758,28 +719,17 @@ describe("acquireSessionWriteLock", () => {
 
   it("ignores non-decimal and unsafe session write-lock env values", () => {
     expect(
-      resolveSessionWriteLockOptions(
-        {
-          session: {
-            writeLock: {
-              acquireTimeoutMs: 90_000,
-              staleMs: 45_000,
-              maxHoldMs: 30_000,
-            },
-          },
+      resolveSessionWriteLockOptions(undefined, {
+        env: {
+          OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "1e3",
+          OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "0x1000",
+          OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "9007199254740993",
         },
-        {
-          env: {
-            OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "1e3",
-            OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "0x1000",
-            OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "9007199254740993",
-          },
-        },
-      ),
+      }),
     ).toEqual({
-      timeoutMs: 90_000,
-      staleMs: 45_000,
-      maxHoldMs: 30_000,
+      timeoutMs: 60_000,
+      staleMs: 30 * 60_000,
+      maxHoldMs: 5 * 60_000,
     });
   });
 
@@ -822,18 +772,8 @@ describe("acquireSessionWriteLock", () => {
         "utf8",
       );
 
-      const configOnly = await cleanStaleLockFiles({
-        sessionsDir,
-        config: { session: { writeLock: { staleMs: 30_000 } } },
-        nowMs,
-        removeStale: false,
-        readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
-      });
-      expect(configOnly.locks[0]?.stale).toBe(true);
-
       const envOverride = await cleanStaleLockFiles({
         sessionsDir,
-        config: { session: { writeLock: { staleMs: 30_000 } } },
         env: { OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "60000" },
         nowMs,
         removeStale: false,

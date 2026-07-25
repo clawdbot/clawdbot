@@ -135,7 +135,7 @@
       }
     },
     "discovery": {
-      "moonshot": "static"
+      "moonshot": "refreshable"
     }
   },
   "setup": {
@@ -206,9 +206,6 @@
         "video": 20
       }
     }
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

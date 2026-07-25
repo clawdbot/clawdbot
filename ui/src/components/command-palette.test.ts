@@ -22,8 +22,8 @@ function createGateway(connected: boolean): GatewayHarness {
   const client = {} as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
+    offlineStable: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",
@@ -53,8 +53,7 @@ function createGateway(connected: boolean): GatewayHarness {
     setConnected(nextConnected) {
       snapshot = {
         ...snapshot,
-        connected: nextConnected,
-        reconnecting: !nextConnected,
+        phase: nextConnected ? "connected" : "reconnecting",
       };
       for (const listener of listeners) {
         listener(snapshot);

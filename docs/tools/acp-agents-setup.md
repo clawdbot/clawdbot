@@ -89,20 +89,14 @@ Core ACP baseline:
       "opencode",
       "qwen",
     ],
-    maxConcurrentSessions: 8,
     stream: {
-      // Defaults are coalesceIdleMs: 350, maxChunkChars: 1800; shown explicitly here.
-      coalesceIdleMs: 350,
-      maxChunkChars: 1800,
-    },
-    runtime: {
-      ttlMinutes: 120,
+      deliveryMode: "live",
     },
   },
 }
 ```
 
-Thread binding config is channel-adapter specific. Example for Discord:
+Thread binding config is shared across supported channel adapters:
 
 ```json5
 {
@@ -111,15 +105,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
       enabled: true,
       idleHours: 24,
       maxAgeHours: 0,
-    },
-  },
-  channels: {
-    discord: {
-      threadBindings: {
-        enabled: true,
-        // Default is already true; shown explicitly here.
-        spawnSessions: true,
-      },
+      spawnSessions: true,
     },
   },
 }
@@ -127,7 +113,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
 
 If thread-bound ACP spawn does not work, verify the adapter feature flag first:
 
-- Discord: `channels.discord.threadBindings.spawnSessions=true`
+- Discord: `session.threadBindings.spawnSessions=true`
 
 Current-conversation binds do not require child-thread creation. They require an active conversation context and a channel adapter that exposes ACP conversation bindings.
 

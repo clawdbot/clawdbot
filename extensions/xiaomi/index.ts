@@ -19,6 +19,7 @@ import {
   upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   applyModelCompatPatch,
   buildProviderReplayFamilyHooks,
@@ -85,15 +86,15 @@ function hasConfiguredProviderEntry(ctx: ProviderCatalogContext, providerId: str
   return Boolean(configuredProvider && typeof configuredProvider === "object");
 }
 
-function resolveXiaomiCatalog(params: {
+async function resolveXiaomiCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;
   buildProvider: () => ReturnType<typeof buildXiaomiProvider>;
   requireConfiguredProvider?: boolean;
   requireBaseUrl?: boolean;
 }) {
-  const apiKey = params.ctx.resolveProviderApiKey(params.providerId).apiKey;
-  if (!apiKey) {
+  const auth = params.ctx.resolveProviderApiKey(params.providerId);
+  if (!auth.apiKey) {
     return null;
   }
   if (
@@ -107,11 +108,15 @@ function resolveXiaomiCatalog(params: {
     return null;
   }
   return {
-    provider: {
-      ...params.buildProvider(),
-      ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-      apiKey,
-    },
+    provider: await buildOpenAICompatibleLiveModelProviderConfig({
+      providerId: params.providerId,
+      providerConfig: {
+        ...params.buildProvider(),
+        ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+      },
+      apiKey: auth.apiKey,
+      discoveryApiKey: auth.discoveryApiKey,
+    }),
   };
 }
 
@@ -376,6 +381,10 @@ export default definePluginEntry({
             buildProvider: buildXiaomiProvider,
           }),
       },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({ provider: buildXiaomiProvider() }),
+      },
       ...XIAOMI_PROVIDER_HOOKS,
       resolveUsageAuth: async (ctx) => {
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
@@ -411,6 +420,10 @@ export default definePluginEntry({
             requireConfiguredProvider: true,
             requireBaseUrl: true,
           }),
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({ provider: buildXiaomiTokenPlanProvider() }),
       },
       ...XIAOMI_PROVIDER_HOOKS,
       resolveUsageAuth: async (ctx) => {

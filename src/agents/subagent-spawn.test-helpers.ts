@@ -133,6 +133,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   hasInProcessGatewayContextMock?: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
   loadSessionStoreMock?: MockFn;
+  loadPreparedModelCatalogMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionEntryFromParentMock?: MockFn;
@@ -140,6 +141,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
   registerSubagentRunMock?: MockFn;
+  startQueuedSubagentRunMock?: MockFn;
+  settleFailedQueuedSubagentLaunchMock?: MockFn;
+  completeCollectorLaunchCleanupMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
   hookRunner?: HookRunner;
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
@@ -147,6 +151,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveSubagentSpawnModelSelection?: () => string | undefined;
   getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
   countActiveRunsForSession?: (sessionKey: string) => number;
+  listSwarmRunsForGroup?: (groupId: string) => unknown[];
   resolveSandboxRuntimeStatus?: (params: {
     cfg?: Record<string, unknown>;
     sessionKey?: string;
@@ -261,6 +266,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    loadPreparedModelCatalog: (...args: unknown[]) =>
+      params.loadPreparedModelCatalogMock?.(...args) ?? [],
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
@@ -381,10 +388,15 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   vi.doMock("./subagent-registry.js", () => ({
+    completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
+    listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
     resetSubagentRegistryForTests,
+    settleFailedQueuedSubagentLaunch:
+      params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),
+    startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),
   }));
 
   const subagentSpawnModule = await import("./subagent-spawn.js");

@@ -2230,40 +2230,6 @@ describe("doctor legacy state migrations", () => {
     expect(gunzipSync(Buffer.from(blob?.data ?? [])).toString("utf8")).toBe('{"legacy":true}');
   });
 
-  it("imports debug proxy capture storage from shipped environment overrides", async () => {
-    const root = await makeTempRoot();
-    const sourcePath = path.join(root, "custom-capture", "capture.sqlite");
-    const blobDir = path.join(root, "custom-capture", "blobs");
-    writeLegacyDebugProxyCaptureSidecar(root, { sourcePath, blobDir });
-    const sqlite = requireNodeSqlite();
-    const legacyDb = new sqlite.DatabaseSync(sourcePath);
-    try {
-      legacyDb
-        .prepare("UPDATE capture_sessions SET blob_dir = ?")
-        .run(path.join(root, "stale-machine-specific-blobs"));
-    } finally {
-      legacyDb.close();
-    }
-    const env = {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_DEBUG_PROXY_DB_PATH: sourcePath,
-      OPENCLAW_DEBUG_PROXY_BLOB_DIR: blobDir,
-    } as NodeJS.ProcessEnv;
-
-    const detected = await detectLegacyStateMigrations({ cfg: {}, env });
-    expect(detected.debugProxyCaptureSidecar).toEqual({
-      sourcePath,
-      blobDir,
-      hasLegacy: true,
-    });
-
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-    expect(fs.existsSync(`${blobDir}.migrated`)).toBe(true);
-  });
-
   it("uses stored per-session debug proxy blob directories without active overrides", async () => {
     const root = await makeTempRoot();
     const blobDir = path.join(root, "custom-session-blobs");
@@ -2284,42 +2250,6 @@ describe("doctor legacy state migrations", () => {
     expect(state.db.prepare("SELECT COUNT(*) AS count FROM capture_events").get()).toEqual({
       count: 1,
     });
-  });
-
-  it("ignores a legacy debug proxy override that points at shared state", async () => {
-    const root = await makeTempRoot();
-    const sharedStatePath = path.join(root, "state", "openclaw.sqlite");
-    const state = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    state.db
-      .prepare(
-        `INSERT INTO capture_sessions (
-          id, started_at, mode, source_scope, source_process
-        ) VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run("shared-session", 100, "proxy-run", "openclaw", "openclaw");
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: {
-        OPENCLAW_STATE_DIR: root,
-        OPENCLAW_DEBUG_PROXY_DB_PATH: sharedStatePath,
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(detected.debugProxyCaptureSidecar).toEqual({
-      sourcePath: sharedStatePath,
-      blobDir: path.join(root, "debug-proxy", "blobs"),
-      hasLegacy: false,
-    });
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(fs.existsSync(sharedStatePath)).toBe(true);
-    expect(fs.existsSync(`${sharedStatePath}.migrated`)).toBe(false);
-    expect(
-      state.db.prepare("SELECT id FROM capture_sessions WHERE id = ?").get("shared-session"),
-    ).toEqual({ id: "shared-session" });
   });
 
   it("preserves duplicate debug proxy events and retry idempotency", async () => {

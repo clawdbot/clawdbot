@@ -56,7 +56,7 @@ export function createCopilotUserInputBridge(params: {
         if (result.status !== "answered") {
           return emptyCopilotUserInputResponse();
         }
-        const selected = result.answers.answers[COPILOT_USER_INPUT_QUESTION_ID]?.answers[0] ?? "";
+        const selected = result.answers.answers[COPILOT_USER_INPUT_QUESTION_ID]?.[0] ?? "";
         return {
           answer: selected,
           wasFreeform: !isChoiceAnswer(question, selected),

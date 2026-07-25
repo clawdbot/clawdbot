@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withFileLock } from "../infra/file-lock.js";
+import { isNotFoundPathError } from "../infra/path-guards.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -23,11 +24,7 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
   "MEMORY.md",
   "skills",
 ] as const;
-const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
-
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-}
+const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents", "state"] as const;
 
 function canonicalizeJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -117,6 +114,12 @@ export async function inspectSetupMigrationFreshness(params: {
       reasons.push(`workspace ${entry} exists`);
     }
   }
+  if (
+    reasons.every((reason) => !reason.startsWith("workspace ")) &&
+    (await hasDirectoryEntries(params.workspaceDir))
+  ) {
+    reasons.push("workspace directory is not empty");
+  }
   for (const entry of MEANINGFUL_STATE_ENTRIES) {
     if (await hasDirectoryEntries(path.join(params.stateDir, entry))) {
       reasons.push(`state ${entry}/ exists`);
@@ -149,7 +152,7 @@ async function hashTargetPath(
   try {
     stat = await fs.lstat(candidate);
   } catch (error) {
-    if (isMissingPathError(error)) {
+    if (isNotFoundPathError(error)) {
       hash.update(`missing:${snapshotPath}\0`);
       return;
     }
@@ -187,7 +190,7 @@ async function hashSourcePath(
   try {
     stat = await fs.lstat(candidate);
   } catch (error) {
-    if (isMissingPathError(error)) {
+    if (isNotFoundPathError(error)) {
       hash.update(`missing:${snapshotPath}\0`);
       return;
     }
@@ -243,9 +246,7 @@ export async function buildSetupMigrationTargetSnapshot(params: {
   const hash = crypto.createHash("sha256");
   const targetConfig = buildSetupMigrationSnapshotConfig(params.config);
   hash.update(`config:${JSON.stringify(canonicalizeJsonValue(targetConfig))}\0`);
-  for (const entry of MEANINGFUL_WORKSPACE_ENTRIES) {
-    await hashTargetPath(hash, path.join(params.workspaceDir, entry), `workspace/${entry}`);
-  }
+  await hashTargetPath(hash, params.workspaceDir, "workspace");
   for (const entry of MEANINGFUL_STATE_ENTRIES) {
     await hashTargetPath(hash, path.join(params.stateDir, entry), `state/${entry}`);
   }

@@ -229,10 +229,12 @@ describe("googlechatPlugin outbound", () => {
     ]);
   });
 
-  it("chunks outbound text without requiring Google Chat runtime initialization", () => {
+  it("renders and chunks outbound text without requiring Google Chat runtime initialization", () => {
     const chunker = googlechatOutboundAdapter.base.chunker;
 
-    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+    expect(chunker("**alpha** [docs](https://example.com)", 32_000)).toEqual([
+      "*alpha* <https://example.com|docs>",
+    ]);
   });
 });
 
@@ -480,7 +482,7 @@ describe("googlechat directory", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: { allowFrom: ["users/alice", "googlechat:bob"] },
+          allowFrom: ["users/alice", "googlechat:bob"],
           groups: {
             "spaces/AAA": {},
             "spaces/BBB": {},
@@ -521,7 +523,7 @@ describe("googlechat directory", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: { allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "] },
+          allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "],
         },
       },
     } as unknown as OpenClawConfig;
@@ -548,10 +550,8 @@ describe("googlechatPlugin security", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: {
-            policy: "allowlist",
-            allowFrom: ["  googlechat:user:Bob@Example.com  "],
-          },
+          dmPolicy: "allowlist",
+          allowFrom: ["  googlechat:user:Bob@Example.com  "],
         },
       },
     } as OpenClawConfig;
@@ -586,5 +586,9 @@ describe("googlechatPlugin outbound sanitizeText", () => {
   it("preserves ordinary assistant prose untouched", () => {
     const text = "El pipeline tiene 3 deals abiertos por USD 12.000.";
     expect(sanitizeText({ text })).toBe(text);
+  });
+
+  it("keeps CommonMark intact until chunks reach the send boundary", () => {
+    expect(sanitizeText({ text: "**bold** and ~~gone~~" })).toBe("**bold** and ~~gone~~");
   });
 });

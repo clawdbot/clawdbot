@@ -150,8 +150,10 @@ export default definePluginEntry({
     api.registerAgentHarness(
       createCodexAppServerAgentHarness({
         bindingStore,
+        sessionCatalogControl,
         resolveConfig: resolveCurrentConfig,
         resolvePluginConfig: resolveCurrentPluginConfig,
+        runtime: api.runtime,
       }),
     );
     api.registerMediaUnderstandingProvider(

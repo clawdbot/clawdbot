@@ -65,6 +65,7 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
   "updateSessionStore",
 ]);
 const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
+const materializingSessionEntryAccessorNames = new Set(["listSessionEntries", "loadSessionEntry"]);
 
 // Shipped beta.5 official plugins import these deprecated helpers during
 // doctor migrations. Remove this ratchet with the compatibility bridge once
@@ -244,6 +245,25 @@ export const migratedSessionLifecycleCleanupFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/cron/session-reaper.ts",
   "src/infra/heartbeat-runner.ts",
+]);
+
+export const readOnlyGatewaySessionAccessorFiles = new Set([
+  "src/gateway/approval-session-audience.ts",
+  "src/gateway/control-ui-session-prs.ts",
+  "src/gateway/managed-image-attachments.ts",
+  "src/gateway/mcp-app-reconstruction.ts",
+  "src/gateway/server-chat.ts",
+  "src/gateway/server-methods/artifacts.ts",
+  "src/gateway/server-methods/chat-history-handler.ts",
+  "src/gateway/server-methods/chat-message-get-handler.ts",
+  "src/gateway/server-methods/sessions-diff.ts",
+  "src/gateway/server-methods/sessions-files.ts",
+  "src/gateway/server-methods/sessions-read.ts",
+  "src/gateway/server-methods/sessions-subscriptions.ts",
+  "src/gateway/server-methods/task-suggestions.ts",
+  "src/gateway/server-methods/tools-effective.ts",
+  "src/gateway/server-methods/usage.ts",
+  "src/gateway/server-session-events.ts",
 ]);
 
 export const migratedMemoryHostSessionCorpusFiles = new Set([
@@ -460,6 +480,15 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
   const legacyNames = legacyNamesForFile(fileName);
   const legacyKind = legacyNames === legacyWholeStoreAccessNames ? "access" : "reader";
   return findNamedSessionStoreViolations(content, fileName, legacyNames, legacyKind);
+}
+
+export function findReadOnlySessionAccessorViolations(content, fileName = "source.ts") {
+  return findNamedBoundaryViolations(
+    content,
+    fileName,
+    materializingSessionEntryAccessorNames,
+    "materializing session entry accessor",
+  );
 }
 
 export function findEmbeddedAgentSessionTargetViolations(content, fileName = "source.ts") {
@@ -921,6 +950,15 @@ export async function main() {
       ),
     findViolations: findEmbeddedAgentSessionTargetViolations,
   });
+  const readOnlyGatewaySessionAccessorViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway"]),
+    skipFile: (filePath) =>
+      !readOnlyGatewaySessionAccessorFiles.has(
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+      ),
+    findViolations: findReadOnlySessionAccessorViolations,
+  });
   const sessionStoreRuntimePath = path.join(repoRoot, "src/plugin-sdk/session-store-runtime.ts");
   const sessionStoreRuntimeCompatViolations =
     findSessionStoreRuntimeFileBackedCompatExportViolations(
@@ -938,6 +976,7 @@ export async function main() {
     ...lifecycleCleanupViolations,
     ...memoryHostSessionCorpusViolations,
     ...embeddedAgentSessionTargetViolations,
+    ...readOnlyGatewaySessionAccessorViolations,
     ...sessionStoreRuntimeCompatViolations,
   ];
 

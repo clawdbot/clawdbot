@@ -22,13 +22,59 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  const marker = document.createElement("script");
-  marker.dataset.openclawControlUiMockGateway = "";
-  document.head.append(marker);
-  containers.push(marker);
+  window.history.replaceState({}, "", "/?mockBoard=1");
 });
 
 describe("board session shell", () => {
+  it("delegates the optional Workboard chip to its lazy element", () => {
+    const linked = createContainer();
+    const unlinked = createContainer();
+    const provider = boardProviderForSession("agent:main:workboard-link");
+    const client = {
+      request: vi.fn(async () => ({ cards: [] })),
+      addEventListener: vi.fn(() => () => {}),
+    } as never;
+    const props = {
+      snapshot: provider.snapshot$.value,
+      sessions: [],
+      activeTabId: "main",
+      dock: "right" as const,
+      reopenDock: "right" as const,
+      dockSize: { height: 300, width: 420 },
+      chat: html`<div>chat</div>`,
+      divider: html`<div></div>`,
+      canMutate: true,
+      canGrant: true,
+      callbacks: {
+        applyOps: (ops: Parameters<typeof provider.applyOps>[0]) => provider.applyOps(ops),
+        grant: (...args: Parameters<typeof provider.grant>) => provider.grant(...args),
+        selectTab: () => {},
+      },
+      widgetFrameUrl: (name: string, revision: number) => provider.widgetFrameUrl(name, revision),
+      onDockChange: () => {},
+    };
+
+    render(
+      renderBoardSessionSurface({
+        ...props,
+        workboardCardChip: {
+          basePath: "",
+          client,
+          sessionKey: "agent:main:workboard-link",
+        },
+      }),
+      linked,
+    );
+    render(renderBoardSessionSurface(props), unlinked);
+
+    const chip = linked.querySelector<HTMLElementTagNameMap["openclaw-workboard-card-chip"]>(
+      "openclaw-workboard-card-chip",
+    );
+    expect(chip?.sessionKey).toBe("agent:main:workboard-link");
+    expect(chip?.client).toBe(client);
+    expect(unlinked.querySelector("openclaw-workboard-card-chip")).toBeNull();
+  });
+
   it("shows the face toggle only when a board exists", () => {
     const withoutBoard = createContainer();
     const withBoard = createContainer();
@@ -66,17 +112,21 @@ describe("board session shell", () => {
     render(
       renderBoardSessionSurface({
         snapshot: provider.snapshot$.value,
+        sessions: [],
         activeTabId: "main",
         dock,
         reopenDock: "right",
         dockSize: { height: 300, width: 420 },
         chat: html`<div data-test-chat>chat</div>`,
         divider: html`<div class="board-session-surface__divider" data-test-divider></div>`,
+        canMutate: true,
+        canGrant: true,
         callbacks: {
           applyOps: (ops) => provider.applyOps(ops),
           grant: (name, decision) => provider.grant(name, decision),
           selectTab: () => {},
         },
+        widgetFrameUrl: (name, revision) => provider.widgetFrameUrl(name, revision),
         onDockChange: () => {},
       }),
       container,
@@ -95,17 +145,21 @@ describe("board session shell", () => {
     render(
       renderBoardSessionSurface({
         snapshot: provider.snapshot$.value,
+        sessions: [],
         activeTabId: "main",
         dock: "hidden",
         reopenDock: "left",
         dockSize: { height: 300, width: 420 },
         chat: html`<div data-test-chat>chat</div>`,
         divider: html`<div class="board-session-surface__divider"></div>`,
+        canMutate: true,
+        canGrant: true,
         callbacks: {
           applyOps: (ops) => provider.applyOps(ops),
           grant: (name, decision) => provider.grant(name, decision),
           selectTab: () => {},
         },
+        widgetFrameUrl: (name, revision) => provider.widgetFrameUrl(name, revision),
         onDockChange,
       }),
       container,
@@ -123,16 +177,20 @@ describe("board session shell", () => {
     const provider = boardProviderForSession("agent:main:main");
     const props = {
       snapshot: provider.snapshot$.value,
+      sessions: [],
       activeTabId: "main",
       reopenDock: "left" as const,
       dockSize: { height: 300, width: 420 },
       chat: html`<div data-test-chat>chat</div>`,
       divider: html`<div class="board-session-surface__divider"></div>`,
+      canMutate: true,
+      canGrant: true,
       callbacks: {
         applyOps: (ops: Parameters<typeof provider.applyOps>[0]) => provider.applyOps(ops),
         grant: (...args: Parameters<typeof provider.grant>) => provider.grant(...args),
         selectTab: () => {},
       },
+      widgetFrameUrl: (name: string, revision: number) => provider.widgetFrameUrl(name, revision),
       onDockChange: () => {},
     };
 

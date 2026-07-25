@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
-import { validateConfigObjectWithPlugins } from "./validation.js";
+import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
 
 vi.unmock("../version.js");
 
@@ -139,8 +139,42 @@ describe("config plugin validation", () => {
       VITEST: "true",
     }) satisfies NodeJS.ProcessEnv;
 
-  const validateInSuite = (raw: unknown) =>
-    validateConfigObjectWithPlugins(raw, { env: suiteEnv() });
+  const withCanonicalAgentEntries = (raw: unknown): unknown => {
+    const next = structuredClone(raw);
+    if (!next || typeof next !== "object" || Array.isArray(next)) {
+      return next;
+    }
+    const agents = (next as { agents?: unknown }).agents;
+    if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
+      return next;
+    }
+    const mutableAgents = agents as { entries?: unknown; list?: unknown };
+    if (!Array.isArray(mutableAgents.list)) {
+      return next;
+    }
+    mutableAgents.entries = Object.fromEntries(
+      mutableAgents.list.flatMap((value) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          return [];
+        }
+        const { id, ...entry } = value as Record<string, unknown>;
+        return typeof id === "string" && id.trim() ? [[id, entry]] : [];
+      }),
+    );
+    delete mutableAgents.list;
+    return next;
+  };
+
+  const validateConfigObjectWithPlugins = (
+    raw: unknown,
+    options: Parameters<typeof validateConfigObjectWithPluginsRaw>[1] = {},
+  ) =>
+    validateConfigObjectWithPluginsRaw(withCanonicalAgentEntries(raw), {
+      ...options,
+      env: options.env ?? suiteEnv(),
+    });
+
+  const validateInSuite = (raw: unknown) => validateConfigObjectWithPlugins(raw);
 
   const validateRemovedPluginConfig = (removedId: string) =>
     validateInSuite({

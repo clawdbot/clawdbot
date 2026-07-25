@@ -115,8 +115,8 @@ describe("Hermes migration config mapping", () => {
         enabled: false,
         command: "npx",
         args: ["-y", "mcp-server-time"],
-        timeout: 45,
-        connectTimeout: 10,
+        connectionTimeoutMs: 10_000,
+        requestTimeoutMs: 45_000,
         supportsParallelToolCalls: true,
       },
     });

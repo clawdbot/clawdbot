@@ -64,9 +64,7 @@ export type ModelCatalogCompatConfig = {
   strictMessageKeys?: boolean;
   toolSchemaProfile?: string;
   unsupportedToolSchemaKeywords?: string[];
-  nativeWebSearchTool?: boolean;
   toolCallArgumentsEncoding?: string;
-  requiresMistralToolIds?: boolean;
   requiresOpenAiAnthropicToolPayload?: boolean;
   thinkingFormat?: ModelCatalogThinkingFormat;
   supportedReasoningEfforts?: string[];

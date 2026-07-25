@@ -61,6 +61,48 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     expect((converted[0] as { content?: unknown }).content).not.toContain("Conversation info");
   });
 
+  it("preserves settled history while isolating the finalization prompt", async () => {
+    const { activeSession, reset } = createActiveSession();
+    const sessionManager = createSessionManager({
+      getLeafEntry: () => ({
+        id: "user-leaf",
+        parentId: "parent-entry",
+        type: "message",
+        timestamp: "2026-07-13T00:00:00.000Z",
+        message: { role: "user", content: "old" },
+      }),
+    });
+    const boundary = prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        operation: "settled-tool-finalization",
+        prompt: "finalize exactly",
+        trigger: "user",
+      },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+    const converted = await activeSession.agent.convertToLlm([
+      {
+        role: "user",
+        content: [{ type: "text", text: "finalize exactly" }],
+        timestamp: 1,
+        __openclaw: { senderName: "Must not leak" },
+      } as AgentMessage,
+    ]);
+
+    expect(reset).not.toHaveBeenCalled();
+    expect(boundary).toMatchObject({
+      boundaryTimezone: undefined,
+      includeBoundaryTimestamp: false,
+      orphanRepair: undefined,
+    });
+    expect((converted[0] as { content?: unknown }).content).toBe("finalize exactly");
+  });
+
   it("applies the prepared current-turn timestamp at the LLM boundary", async () => {
     const { activeSession } = createActiveSession();
     const preparedTimestamp = 1_717_570_800_000;

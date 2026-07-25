@@ -6,8 +6,8 @@ import {
   emitAgentEvent as emitGlobalAgentEvent,
   runAgentEndSideEffects,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
@@ -19,7 +19,8 @@ export function shouldKeepCodexSharedAbortOpen(params: {
   attemptSucceeded: boolean;
   explicitCancellationObserved: boolean;
 }): boolean {
-  if (params.explicitCancellationObserved || params.result.aborted || params.result.externalAbort) {
+  const terminal = attemptTerminal.project(params.result.terminal);
+  if (params.explicitCancellationObserved || terminal.aborted || terminal.externalAbort) {
     return false;
   }
   // Memory attempts are preparatory. Failed attempts can still enter runner

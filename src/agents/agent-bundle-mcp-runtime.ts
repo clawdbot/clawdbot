@@ -11,8 +11,8 @@ import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { toErrorObject } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
@@ -110,31 +110,57 @@ type McpServerBackoffState = {
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
 
-function connectWithTimeout(
+async function connectWithTimeout(
+  serverName: string,
   client: Client,
   transport: Transport,
   timeoutMs: number,
 ): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`MCP server connection timed out after ${timeoutMs}ms`)),
-      timeoutMs,
-    );
-    client.connect(transport).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(toErrorObject(error, "Non-Error rejection"));
-      },
-    );
-  });
+  const abortController = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let deadlineExpired = false;
+  try {
+    // Client.connect() owns both transport startup and the initialize round trip.
+    // Give the SDK the deadline so initialize is cancelled, while the outer race
+    // also bounds transports whose start() has not reached initialize yet.
+    await Promise.race([
+      client.connect(transport, {
+        signal: abortController.signal,
+        timeout: timeoutMs,
+        maxTotalTimeout: timeoutMs,
+      }),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          deadlineExpired = true;
+          abortController.abort();
+          reject(new Error("MCP connect deadline expired"));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (deadlineExpired || (isMcpConfigRecord(error) && error.code === ErrorCode.RequestTimeout)) {
+      if (transport instanceof OpenClawStdioClientTransport) {
+        await transport.forceClose();
+      }
+      // Closing the SDK client settles its pending initialize request. Without
+      // this, later runtime disposal waits its full teardown timeout even though
+      // the stdio child is already dead.
+      await settleWithin(client.close(), Math.min(timeoutMs, 1_000));
+      throw new Error(
+        `MCP server "${serverName}" timed out: did not complete initialize within ${timeoutMs / 1_000}s`,
+        { cause: error },
+      );
+    }
+    throw error;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
-function redactErrorUrls(error: unknown): string {
-  return redactSensitiveUrlLikeString(String(error));
+function redactMcpDiagnosticError(error: unknown): string {
+  return redactToolPayloadText(redactSensitiveUrlLikeString(String(error)));
 }
 
 async function listAllTools(client: Client, timeoutMs: number) {
@@ -456,6 +482,7 @@ export function createSessionMcpRuntime(params: {
       return;
     }
     session.connectPromise ??= connectWithTimeout(
+      session.serverName,
       session.client,
       session.transport,
       connectionTimeoutMs,
@@ -601,7 +628,7 @@ export function createSessionMcpRuntime(params: {
                         onChanged: (error) => {
                           if (error) {
                             logWarn(
-                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactMcpDiagnosticError(error)}`,
                             );
                           }
                           catalogInvalidationGeneration += 1;
@@ -726,7 +753,7 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
-                const message = redactErrorUrls(error);
+                const message = redactMcpDiagnosticError(error);
                 if (!disposed) {
                   const action = reusedSession ? "refresh" : "start";
                   logWarn(

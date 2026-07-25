@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   loadChatHistory,
   rewindChatHistory,
+  switchChatHistoryBranch,
   type ChatHistoryResult,
   type ChatState,
 } from "./chat-history.ts";
@@ -165,6 +166,127 @@ describe("rewindChatHistory", () => {
     ).toEqual([]);
     expect(result).toBeNull();
     expect(state.handleChatDraftChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("switchChatHistoryBranch", () => {
+  it("clears the cached snapshot and refetches history plus branches", async () => {
+    const state = createState({
+      messages: [{ role: "assistant", content: "restored branch" }],
+    }) as TestState & {
+      chatMessagesBySession: ChatMessageCache;
+      sessions: {
+        listBranches: ReturnType<typeof vi.fn>;
+        switchBranch: ReturnType<typeof vi.fn>;
+      };
+    };
+    state.sessionKey = "agent:main:branches";
+    state.chatMessages = [{ role: "assistant", content: "stale branch" }];
+    state.chatMessagesBySession = new Map();
+    state.sessions = {
+      listBranches: vi.fn().mockResolvedValue([
+        {
+          leafEntryId: "branch-b",
+          headline: "restored branch",
+          messageCount: 2,
+          active: true,
+        },
+      ]),
+      switchBranch: vi.fn().mockResolvedValue({}),
+      setModelOverride: vi.fn(),
+    };
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession,
+      state,
+      { sessionKey: state.sessionKey },
+      {
+        messages: state.chatMessages,
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "old-session",
+      },
+    );
+
+    await expect(switchChatHistoryBranch(state as never, "branch-b")).resolves.toBe(true);
+
+    expect(state.sessions.switchBranch).toHaveBeenCalledWith(
+      state.sessionKey,
+      "branch-b",
+      expect.any(Object),
+    );
+    expect(state.sessions.listBranches).toHaveBeenCalledWith(state.sessionKey, expect.any(Object));
+    expect(state.chatMessages).toEqual([{ role: "assistant", content: "restored branch" }]);
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      }),
+    ).toEqual([{ role: "assistant", content: "restored branch" }]);
+  });
+
+  it("refreshes branch metadata after the Gateway connection changes", async () => {
+    const state = createState({ messages: [] }) as TestState & {
+      sessions: { listBranches: ReturnType<typeof vi.fn> };
+    };
+    state.chatBranchesSessionKey = state.sessionKey;
+    state.chatBranchesConnectionEpoch = state.connectionEpoch - 1;
+    state.sessions = { listBranches: vi.fn().mockResolvedValue([]), setModelOverride: vi.fn() };
+
+    await loadChatHistory(state);
+
+    expect(state.sessions.listBranches).toHaveBeenCalledWith(state.sessionKey, expect.any(Object));
+    expect(state.chatBranchesConnectionEpoch).toBe(state.connectionEpoch);
+  });
+});
+
+describe("active-run commentary reconciliation", () => {
+  it("keeps keyed commentary live across history reloads when persistence is disabled", async () => {
+    const state = createState(activeHistory("run-live"));
+    state.chatRunId = "run-live";
+    state.settings = { chatPersistCommentary: false };
+    state.chatStreamSegments = [{ text: "Checking the workspace", ts: 2, itemId: "preamble-live" }];
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-live");
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Checking the workspace", ts: 2, itemId: "preamble-live" },
+    ]);
+  });
+
+  it("materializes live commentary when history replaces active tool activity", async () => {
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      content: "tool output",
+      timestamp: 3,
+    };
+    const state = createState({
+      ...activeHistory("run-live"),
+      messages: [{ role: "user", content: "do it", timestamp: 1 }, toolResult],
+    });
+    state.chatRunId = "run-live";
+    state.settings = { chatPersistCommentary: false };
+    state.chatStreamSegments = [{ text: "Checking the workspace", ts: 2, itemId: "preamble-live" }];
+    state.toolStreamOrder = ["call-1"];
+    state.toolStreamById.set("call-1", {
+      toolCallId: "call-1",
+      runId: "run-live",
+      name: "read",
+      startedAt: 2,
+      receivedAt: 2,
+      message: toolResult,
+    });
+    state.chatToolMessages = [toolResult];
+
+    await loadChatHistory(state);
+
+    expect(
+      state.chatMessages.some(
+        (message) =>
+          (message as { openclawStreamFallback?: { itemId?: unknown } }).openclawStreamFallback
+            ?.itemId === "preamble-live",
+      ),
+    ).toBe(true);
+    expect(state.chatStreamSegments).toEqual([]);
   });
 });
 

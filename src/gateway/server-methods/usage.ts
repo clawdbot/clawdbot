@@ -57,13 +57,17 @@ import type {
   SessionsUsageAggregates,
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadCombinedSessionStoreForGateway, loadSessionEntry } from "../session-utils.js";
+import { loadCombinedSessionStoreForGateway, loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
@@ -144,7 +148,7 @@ function resolveSessionUsageFileOrRespond(
   sessionId: string;
   sessionFile: string;
 } | null {
-  const { entry, storePath } = loadSessionEntry(key);
+  const { entry, storePath } = loadSessionEntryReadOnly(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
   const parsed = parseAgentSessionKey(key);
@@ -905,12 +909,7 @@ async function loadCostUsageSummaryCached(params: {
   const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
-  if (
-    cached?.summary &&
-    cached.updatedAt &&
-    now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS &&
-    cached.summary.cacheStatus?.status !== "refreshing"
-  ) {
+  if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
     return cached.summary;
   }
 
@@ -941,9 +940,11 @@ async function loadCostUsageSummaryCached(params: {
         })
   )
     .then((summary) => {
+      // Refresh work is independent; retaining freshness prevents fleet rescans while it runs.
+      // The short TTL still picks up a completed refresh promptly.
       setCostUsageCache(cacheKey, {
         summary,
-        updatedAt: summary.cacheStatus?.status === "refreshing" ? undefined : Date.now(),
+        updatedAt: Date.now(),
       });
       return summary;
     })
@@ -1469,8 +1470,9 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
-      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
+      const channel = sessionDeliveryChannel(merged.storeEntry);
+      const chatType =
+        merged.storeEntry?.chatType ?? sessionDeliveryOrigin(merged.storeEntry)?.chatType;
 
       if (usage) {
         if (usage.messageCounts) {
@@ -1601,7 +1603,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           channel,
           chatType,
-          origin: merged.storeEntry?.origin,
+          origin: sessionDeliveryOrigin(merged.storeEntry),
           modelOverride: merged.storeEntry?.modelOverride,
           providerOverride: merged.storeEntry?.providerOverride,
           modelProvider: merged.storeEntry?.modelProvider,

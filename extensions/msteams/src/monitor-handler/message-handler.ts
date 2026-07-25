@@ -3,9 +3,11 @@ import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
+  formatMediaPlaceholderText,
   logInboundDrop,
   resolveInboundMentionDecision,
   resolveInboundSupplementalSenderAllowed,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   hasFinalInboundReplyDispatch,
@@ -24,8 +26,7 @@ import {
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
-  buildMSTeamsMediaPayload,
-  resolveMSTeamsInboundAttachmentPresentation,
+  resolveMSTeamsAdvertisedMedia,
   summarizeMSTeamsHtmlAttachments,
   type MSTeamsAttachmentLike,
 } from "../attachments.js";
@@ -96,6 +97,7 @@ import { resolveMSTeamsSenderAccess } from "./access.js";
 import {
   resolveMSTeamsInboundMedia,
   resolveMSTeamsInboundMediaBody,
+  mergeMSTeamsMediaFacts,
   shouldAttemptMSTeamsGraphMediaFallback,
 } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
@@ -227,12 +229,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const rawText = params.rawText;
     const text = params.text;
     const attachments = params.attachments;
-    const attachmentPresentation = resolveMSTeamsInboundAttachmentPresentation(attachments, {
+    const advertisedMedia = resolveMSTeamsAdvertisedMedia(attachments, {
       maxInlineBytes: mediaMaxBytes,
       maxInlineTotalBytes: mediaMaxBytes,
     });
-    const attachmentPlaceholder = attachmentPresentation.placeholder;
-    const rawBody = text || attachmentPlaceholder;
+    const rawBody = text;
+    const historyBody = [text, formatMediaPlaceholderText(advertisedMedia)]
+      .filter(Boolean)
+      .join("\n");
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;
     let quoteSenderName: string | undefined;
@@ -475,7 +479,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         htmlSummary: htmlSummary ?? undefined,
         graphMediaFallback: msteamsCfg?.graphMediaFallback,
       });
-    if (!rawBody && !mayRecoverGraphMedia) {
+    if (!rawBody && advertisedMedia.length === 0 && !mayRecoverGraphMedia) {
       log.debug?.("skipping empty message after stripping mentions");
       return;
     }
@@ -553,14 +557,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           requireMention,
           mentioned,
         });
-        if (rawBody) {
+        if (historyBody) {
           enqueuePrimaryMessageSystemEvent();
           createChannelHistoryWindow({ historyMap: conversationHistories }).record({
             historyKey: conversationId,
             limit: historyLimit,
             entry: {
               sender: senderName,
-              body: rawBody,
+              body: historyBody,
               timestamp: timestamp?.getTime(),
               messageId: activity.id ?? undefined,
             },
@@ -619,8 +623,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             },
             log,
             deadline: preprocessingDeadline,
-            preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
-              ?.preserveFilenames,
+            preserveFilenames: false,
           }),
       });
     } catch (err) {
@@ -629,18 +632,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
     }
 
-    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
-    const materializedMediaPlaceholder = resolveMSTeamsInboundAttachmentPresentation(
-      mediaList.map((media) => ({ contentType: media.contentType, name: media.path })),
-    ).placeholder;
+    const inboundMedia = mergeMSTeamsMediaFacts(advertisedMedia, mediaList);
+    const nativeMediaForComparison = [
+      ...advertisedMedia,
+      ...mediaList.slice(advertisedMedia.length).map((media) => ({
+        contentType: media.contentType,
+        kind: media.kind,
+      })),
+    ];
     const agentBody = resolveMSTeamsInboundMediaBody({
-      body: rawBody || materializedMediaPlaceholder,
-      mediaPlaceholder: attachmentPlaceholder,
-      materializedMediaPlaceholder,
-      expectedMediaCount: attachmentPresentation.expectedMediaCount,
-      mediaCount: mediaList.length,
+      body: rawBody,
+      nativeMedia: nativeMediaForComparison,
+      materializedMedia: inboundMedia,
     });
-    if (!agentBody) {
+    if (!agentBody && inboundMedia.length === 0) {
       log.debug?.("skipping empty message after Graph media recovery");
       return;
     }
@@ -866,6 +871,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             }
           : undefined,
       },
+      media: toInboundMediaFacts(inboundMedia),
       messageId: activity.id,
       timestamp: timestamp?.getTime() ?? Date.now(),
       from: teamsFrom,
@@ -898,6 +904,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         rawBody,
         commandBody,
       },
+      sessionTranscript: { historyLimit: isRoomish ? historyLimit : 0 },
       access: {
         mentions: {
           canDetectMention: !isDirectMessage,
@@ -910,7 +917,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       extra: {
         GroupSubject: !isDirectMessage ? conversationType : undefined,
         ReplyToIsQuote: quoteInfo ? true : undefined,
-        ...mediaPayload,
       },
     });
 

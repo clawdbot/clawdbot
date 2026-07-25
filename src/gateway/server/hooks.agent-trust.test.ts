@@ -95,10 +95,22 @@ function buildAgentPayload(name: string, agentId?: string) {
 }
 
 function dispatchAgentHook(payload: unknown): unknown {
+  return resolveDispatchAgentHook()(payload);
+}
+
+function resolveDispatchAgentHook(): (...args: unknown[]) => unknown {
   if (!capturedDispatchAgentHook) {
     throw new Error("dispatchAgentHook missing");
   }
-  return capturedDispatchAgentHook(payload);
+  return capturedDispatchAgentHook;
+}
+
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
 }
 
 type HookLogMeta = {
@@ -139,6 +151,7 @@ describe("dispatchAgentHook trust handling", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
     vi.clearAllMocks();
+    loadConfigMock.mockImplementation(() => ({}));
     capturedDispatchAgentHook = undefined;
     createGatewayHooksRequestHandler(buildMinimalParams());
   });
@@ -178,6 +191,167 @@ describe("dispatchAgentHook trust handling", () => {
     );
     expect(subordinateAdmissionClosed).toBe(false);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("serializes canonical aliases for the same session in dispatch order", async () => {
+    const dispatch = resolveDispatchAgentHook();
+    const firstGate = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await firstGate.promise;
+      return { status: "ok", summary: "first done", delivered: false };
+    });
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "second done",
+      delivered: false,
+    });
+
+    dispatch({
+      ...buildAgentPayload("First"),
+      message: "first",
+      sessionKey: "main",
+    });
+    dispatch({
+      ...buildAgentPayload("Second"),
+      message: "second",
+      sessionKey: "agent:main:main",
+    });
+
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[0]?.[0]).toMatchObject({
+      message: "first",
+      sessionKey: "main",
+    });
+
+    firstGate.resolve();
+
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[1]?.[0]).toMatchObject({
+      message: "second",
+      sessionKey: "agent:main:main",
+    });
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("runs different sessions in parallel", async () => {
+    const dispatch = resolveDispatchAgentHook();
+    const firstGate = createDeferred();
+    const secondGate = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await firstGate.promise;
+      return { status: "ok", summary: "first done", delivered: false };
+    });
+
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await secondGate.promise;
+      return { status: "ok", summary: "second done", delivered: false };
+    });
+
+    dispatch({
+      ...buildAgentPayload("First"),
+      message: "first",
+      sessionKey: "agent:main:session-a",
+    });
+    dispatch({
+      ...buildAgentPayload("Second"),
+      message: "second",
+      sessionKey: "agent:main:session-b",
+    });
+
+    expect(getActiveGatewayRootWorkCount()).toBe(2);
+
+    try {
+      await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+    } finally {
+      firstGate.resolve();
+      secondGate.resolve();
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    }
+  });
+
+  it("uses fresh config when a queued hook starts after reload", async () => {
+    const dispatch = resolveDispatchAgentHook();
+    let currentConfig: { session?: { mainKey?: string } } = {};
+    loadConfigMock.mockImplementation(() => currentConfig);
+    const firstGate = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await firstGate.promise;
+      return { status: "ok", summary: "first done", delivered: false };
+    });
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "second done",
+      delivered: false,
+    });
+
+    dispatch({ ...buildAgentPayload("First"), message: "first", sessionKey: "main" });
+    dispatch({ ...buildAgentPayload("Second"), message: "second", sessionKey: "main" });
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+
+    currentConfig = { session: { mainKey: "reloaded" } };
+    firstGate.resolve();
+
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[1]?.[0]).toMatchObject({
+      agentId: "main",
+      cfg: currentConfig,
+      message: "second",
+      sessionKey: "main",
+    });
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("continues a same-session hook queue after a failed run", async () => {
+    const dispatch = resolveDispatchAgentHook();
+    runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "second done",
+      delivered: false,
+    });
+
+    dispatch({
+      ...buildAgentPayload("First"),
+      message: "first",
+      sessionKey: "shared-session",
+    });
+    dispatch({
+      ...buildAgentPayload("Second"),
+      message: "second",
+      sessionKey: "shared-session",
+    });
+
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook First (error): Error: agent exploded",
+        {
+          sessionKey: "agent:main:main",
+        },
+      ),
+    );
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[1]?.[0]).toMatchObject({
+      message: "second",
+      sessionKey: "shared-session",
+    });
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("reports runtime-config failures after returning a run id", async () => {
+    loadConfigMock.mockImplementationOnce(() => {
+      throw new Error("config exploded");
+    });
+
+    const runId = dispatchAgentHook(buildAgentPayload("Config"));
+
+    expect(runId).toEqual(expect.any(String));
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook Config (error): Error: config exploded",
+        { sessionKey: "main-session" },
+      ),
+    );
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("does not announce successful deliver:false hook results", async () => {
@@ -230,7 +404,7 @@ describe("dispatchAgentHook trust handling", () => {
 
   it("prefers cron diagnostics for returned hook errors", async () => {
     const diagnosticSummary =
-      "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6";
+      "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6";
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
       status: "error",
       summary: "generic failure",

@@ -15,6 +15,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-mark
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createChatRunState } from "../server-chat-state.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -24,6 +25,17 @@ import {
 type TranscriptLine = {
   message?: Record<string, unknown>;
 };
+
+type TestChatRunRecord =
+  ReturnType<typeof createChatRunState>["runs"] extends Map<string, infer Record> ? Record : never;
+
+function createAbortTestRunState(entries: Array<[string, Partial<TestChatRunRecord>]>) {
+  const state = createChatRunState();
+  for (const [runId, record] of entries) {
+    Object.assign(state.getOrCreate(runId), record);
+  }
+  return state;
+}
 
 const sessionEntryState = vi.hoisted(() => ({
   transcriptPath: "",
@@ -246,8 +258,9 @@ describe("chat abort transcript persistence", () => {
     const respond = vi.fn();
     const context = createChatAbortContext({
       chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
-      chatRunBuffers: new Map([[runId, "Partial from run abort"]]),
-      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      chatRunState: createAbortTestRunState([
+        [runId, { buffer: "Partial from run abort", deltaSentAt: Date.now() }],
+      ]),
       removeChatRun: vi
         .fn()
         .mockReturnValue({ sessionKey: "main", clientRunId: "client-idem-abort-run-1" }),
@@ -275,8 +288,9 @@ describe("chat abort transcript persistence", () => {
     expectAbortPayload(payload1, { runIds: [runId] });
 
     context.chatAbortControllers.set(runId, createActiveRun("main", { sessionId }));
-    context.chatRunBuffers.set(runId, "Partial from run abort");
-    context.chatDeltaSentAt.set(runId, Date.now());
+    const retryRun = context.chatRunState.getOrCreate(runId);
+    retryRun.buffer = "Partial from run abort";
+    retryRun.deltaSentAt = Date.now();
 
     await invokeChatAbortHandler({
       handler: expectDefined(
@@ -320,8 +334,9 @@ describe("chat abort transcript persistence", () => {
     const respond = vi.fn();
     const context = createChatAbortContext({
       chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
-      chatRunBuffers: new Map([[runId, "Partial after collision"]]),
-      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      chatRunState: createAbortTestRunState([
+        [runId, { buffer: "Partial after collision", deltaSentAt: Date.now() }],
+      ]),
       logGateway: { warn: vi.fn() },
     });
 
@@ -359,13 +374,9 @@ describe("chat abort transcript persistence", () => {
         ["run-a", createActiveRun("main", { sessionId })],
         ["run-b", createActiveRun("main", { sessionId })],
       ]),
-      chatRunBuffers: new Map([
-        ["run-a", "Session abort partial"],
-        ["run-b", "   "],
-      ]),
-      chatDeltaSentAt: new Map([
-        ["run-a", Date.now()],
-        ["run-b", Date.now()],
+      chatRunState: createAbortTestRunState([
+        ["run-a", { buffer: "Session abort partial", deltaSentAt: Date.now() }],
+        ["run-b", { buffer: "   ", deltaSentAt: Date.now() }],
       ]),
     });
 
@@ -409,9 +420,9 @@ describe("chat abort transcript persistence", () => {
         ["run-aborted", createActiveRun("main", { sessionId })],
         ["run-finalizing", finalizingRun],
       ]),
-      chatRunBuffers: new Map([
-        ["run-aborted", "Aborted partial"],
-        ["run-finalizing", "Completed reply"],
+      chatRunState: createAbortTestRunState([
+        ["run-aborted", { buffer: "Aborted partial" }],
+        ["run-finalizing", { buffer: "Completed reply" }],
       ]),
     });
 
@@ -441,8 +452,9 @@ describe("chat abort transcript persistence", () => {
     const respond = vi.fn();
     const context = createChatAbortContext({
       chatAbortControllers: new Map([["run-stop-1", createActiveRun("main", { sessionId })]]),
-      chatRunBuffers: new Map([["run-stop-1", "Partial from /stop"]]),
-      chatDeltaSentAt: new Map([["run-stop-1", Date.now()]]),
+      chatRunState: createAbortTestRunState([
+        ["run-stop-1", { buffer: "Partial from /stop", deltaSentAt: Date.now() }],
+      ]),
       removeChatRun: vi.fn().mockReturnValue({ sessionKey: "main", clientRunId: "client-stop-1" }),
       agentRunSeq: new Map<string, number>([["run-stop-1", 1]]),
     });
@@ -569,7 +581,9 @@ describe("chat abort transcript persistence", () => {
         ["run-main-global", mainActive],
         ["run-work-global", workActive],
       ]),
-      chatRunBuffers: new Map([["run-work-global", "partial work response"]]),
+      chatRunState: createAbortTestRunState([
+        ["run-work-global", { buffer: "partial work response" }],
+      ]),
       removeChatRun: vi.fn().mockReturnValue({
         sessionKey: "global",
         agentId: "work",
@@ -627,7 +641,9 @@ describe("chat abort transcript persistence", () => {
         ["run-main-global", mainActive],
         ["run-work-global", workActive],
       ]),
-      chatRunBuffers: new Map([["run-main-global", "partial main response"]]),
+      chatRunState: createAbortTestRunState([
+        ["run-main-global", { buffer: "partial main response" }],
+      ]),
       removeChatRun: vi.fn().mockReturnValue({
         sessionKey: "global",
         agentId: "main",
@@ -1263,8 +1279,9 @@ describe("chat abort transcript persistence", () => {
     const respond = vi.fn();
     const context = createChatAbortContext({
       chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
-      chatRunBuffers: new Map([[runId, "  \n\t  "]]),
-      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      chatRunState: createAbortTestRunState([
+        [runId, { buffer: "  \n\t  ", deltaSentAt: Date.now() }],
+      ]),
     });
 
     await invokeChatAbortHandler({
@@ -1296,8 +1313,9 @@ describe("chat abort transcript persistence", () => {
       chatAbortControllers: new Map([
         [runId, createActiveRun("main", { sessionId, controlUiVisible: false })],
       ]),
-      chatRunBuffers: new Map([[runId, "Hidden partial"]]),
-      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      chatRunState: createAbortTestRunState([
+        [runId, { buffer: "Hidden partial", deltaSentAt: Date.now() }],
+      ]),
     });
 
     await invokeChatAbortHandler({

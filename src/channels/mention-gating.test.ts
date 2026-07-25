@@ -4,65 +4,7 @@ import {
   allowedImplicitMentionKindsFromConfig,
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
-  resolveMentionGating,
-  resolveMentionGatingWithBypass,
 } from "./mention-gating.js";
-
-describe("resolveMentionGating", () => {
-  it("combines explicit, implicit, and bypass mentions", () => {
-    const res = resolveMentionGating({
-      requireMention: true,
-      canDetectMention: true,
-      wasMentioned: false,
-      implicitMention: true,
-      shouldBypassMention: false,
-    });
-    expect(res.effectiveWasMentioned).toBe(true);
-    expect(res.shouldSkip).toBe(false);
-  });
-
-  it("skips when mention required and none detected", () => {
-    const res = resolveMentionGating({
-      requireMention: true,
-      canDetectMention: true,
-      wasMentioned: false,
-      implicitMention: false,
-      shouldBypassMention: false,
-    });
-    expect(res.effectiveWasMentioned).toBe(false);
-    expect(res.shouldSkip).toBe(true);
-  });
-});
-
-describe("resolveMentionGatingWithBypass", () => {
-  it.each([
-    {
-      name: "enables bypass when control commands are authorized",
-      commandAuthorized: true,
-      shouldBypassMention: true,
-      shouldSkip: false,
-    },
-    {
-      name: "does not bypass when control commands are not authorized",
-      commandAuthorized: false,
-      shouldBypassMention: false,
-      shouldSkip: true,
-    },
-  ])("$name", ({ commandAuthorized, shouldBypassMention, shouldSkip }) => {
-    const res = resolveMentionGatingWithBypass({
-      isGroup: true,
-      requireMention: true,
-      canDetectMention: true,
-      wasMentioned: false,
-      hasAnyMention: false,
-      allowTextCommands: true,
-      hasControlCommand: true,
-      commandAuthorized,
-    });
-    expect(res.shouldBypassMention).toBe(shouldBypassMention);
-    expect(res.shouldSkip).toBe(shouldSkip);
-  });
-});
 
 describe("resolveInboundMentionDecision", () => {
   it("allows matching implicit mention kinds by default", () => {
@@ -269,36 +211,22 @@ describe("resolveInboundMentionDecision", () => {
 });
 
 describe("unavailable mention detection", () => {
-  it.each([
-    {
-      name: "raw gating",
-      check: () =>
-        resolveMentionGating({
-          requireMention: true,
-          canDetectMention: false,
-          wasMentioned: false,
-        }).shouldSkip,
-    },
-    {
-      name: "inbound decision",
-      check: () =>
-        resolveInboundMentionDecision({
-          facts: {
-            canDetectMention: false,
-            wasMentioned: false,
-            implicitMentionKinds: [],
-          },
-          policy: {
-            isGroup: true,
-            requireMention: true,
-            allowTextCommands: true,
-            hasControlCommand: false,
-            commandAuthorized: false,
-          },
-        }).shouldSkip,
-    },
-  ])("does not skip when mention detection is unavailable for $name", ({ check }) => {
-    expect(check()).toBe(false);
+  it("does not skip when mention detection is unavailable", () => {
+    const decision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: false,
+        wasMentioned: false,
+        implicitMentionKinds: [],
+      },
+      policy: {
+        isGroup: true,
+        requireMention: true,
+        allowTextCommands: true,
+        hasControlCommand: false,
+        commandAuthorized: false,
+      },
+    });
+    expect(decision.shouldSkip).toBe(false);
   });
 });
 

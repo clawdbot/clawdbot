@@ -5,9 +5,9 @@ scenario:
   surface: runtime
   coverage:
     primary:
-      - runtime.reasoning-only-recovery
+      - agent-runtime.failure-recovery-reasoning-only-recovery
     secondary:
-      - runtime.retry-policy
+      - agent-runtime.failure-recovery-retry-policy
   objective: Verify a GPT-style reasoning-only turn after a replay-safe read auto-continues into a visible answer.
   successCriteria:
     - Scenario is mock-openai only so live lanes do not pick it up implicitly.

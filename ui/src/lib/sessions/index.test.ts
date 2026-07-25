@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import {
   GatewayRequestError,
@@ -32,13 +33,13 @@ function deferred<T>() {
 function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: string[]) {
   let snapshot: {
     client: GatewayBrowserClient | null;
-    connected: boolean;
+    phase: "connected" | "reconnecting";
     sessionKey: string;
     assistantAgentId: string | null;
     hello: GatewayHelloOk | null;
   } = {
     client,
-    connected: true,
+    phase: "connected" as const,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello:
@@ -67,8 +68,12 @@ function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: str
         listener(event);
       }
     },
-    publish: (connected: boolean) => {
-      snapshot = { ...snapshot, connected };
+    publish: (connected: boolean, nextClient: GatewayBrowserClient | null = snapshot.client) => {
+      snapshot = {
+        ...snapshot,
+        client: nextClient,
+        phase: connected ? "connected" : "reconnecting",
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -411,7 +416,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:main",
         assistantAgentId: "main",
         hello: null,
@@ -551,7 +556,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:source",
         assistantAgentId: "main",
         hello: null,
@@ -701,7 +706,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:source",
         assistantAgentId: "main",
         hello: null,
@@ -752,7 +757,7 @@ describe("createSessionCapability", () => {
     const gateway = {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:oldest",
         assistantAgentId: "main",
         hello: null,
@@ -807,7 +812,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: key,
         assistantAgentId: "main",
         hello: null,
@@ -1049,7 +1054,7 @@ describe("createSessionCapability", () => {
     const gateway = {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: key,
         assistantAgentId: "main",
         hello: null,

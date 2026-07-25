@@ -1362,7 +1362,9 @@ export function createExecTool(
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
-  const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
+  const notifySessionKey = normalizeOptionalString(
+    defaults?.notifySessionKey ?? defaults?.sessionKey,
+  );
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
     to: defaults?.currentChannelId,
@@ -1581,7 +1583,7 @@ export function createExecTool(
       }
       return execParams;
     },
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
       let params = stripMalformedXmlArgValueSuffixFromKeys(
         args as ExecToolArgs,
@@ -1883,6 +1885,7 @@ export function createExecTool(
         if (host === "node") {
           return executeNodeHostCommand({
             command: params.command,
+            toolCallId,
             workdir,
             env,
             requestedEnv,
@@ -1893,6 +1896,7 @@ export function createExecTool(
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+            nonInteractiveApproval: defaults?.nonInteractiveApproval,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
@@ -1943,10 +1947,13 @@ export function createExecTool(
             trigger: defaults?.trigger,
             agentId,
             sessionKey: defaults?.sessionKey,
+            runId: defaults?.runId,
+            toolCallId,
             sessionId: defaults?.sessionId,
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+            nonInteractiveApproval: defaults?.nonInteractiveApproval,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,

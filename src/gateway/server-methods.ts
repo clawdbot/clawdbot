@@ -1,4 +1,8 @@
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
@@ -20,6 +24,7 @@ import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
+  resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -39,6 +44,10 @@ import type {
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import {
+  resolveSessionMutationAuthorization,
+  SessionMutationAuthorizationChangedError,
+} from "./session-sharing.js";
 
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
@@ -56,9 +65,17 @@ const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
 );
+const loadBoardHandlers = lazyHandlerModule(
+  () => import("./server-methods/board.js"),
+  (module) => module.boardHandlers,
+);
 const loadAuditHandlers = lazyHandlerModule(
   () => import("./server-methods/audit.js"),
   (module) => module.auditHandlers,
+);
+const loadUsersHandlers = lazyHandlerModule(
+  () => import("./server-methods/users.js"),
+  (module) => module.usersHandlers,
 );
 const loadAttachHandlers = lazyHandlerModule(
   () => import("./server-methods/attach.js"),
@@ -67,6 +84,10 @@ const loadAttachHandlers = lazyHandlerModule(
 const loadChannelsHandlers = lazyHandlerModule(
   () => import("./server-methods/channels.js"),
   (module) => module.channelsHandlers,
+);
+const loadChannelPairingHandlers = lazyHandlerModule(
+  () => import("./server-methods/channel-pairing.js"),
+  (module) => module.channelPairingHandlers,
 );
 const loadChatHandlers = lazyHandlerModule(
   () => import("./server-methods/chat.js"),
@@ -212,6 +233,14 @@ const loadSessionCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/session-catalog.js"),
   (module) => module.sessionCatalogHandlers,
 );
+const loadSessionDiscussionHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-discussion.js"),
+  (module) => module.sessionDiscussionHandlers,
+);
+const loadSessionObserverHandlers = lazyHandlerModule(
+  () => import("./session-observer-rpc.js"),
+  (module) => module.sessionObserverHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -276,6 +305,10 @@ const loadSystemAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/system-agent.js"),
   (module) => module.systemAgentHandlers,
 );
+const loadSystemChangesHandlers = lazyHandlerModule(
+  () => import("./server-methods/system-changes.js"),
+  (module) => module.systemChangesHandlers,
+);
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
   (module) => module.wizardHandlers,
@@ -315,7 +348,14 @@ function authorizeGatewayMethod(
     ? authorizeOperatorScopesForRequiredScope(registeredScope, scopes)
     : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
+    const resolvedRequiredScopes = isOperatorScope(registeredScope)
+      ? [registeredScope]
+      : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
+    return missingScopeErrorShape({
+      missingScope: scopeAuth.missingScope,
+      requiredScopes:
+        resolvedRequiredScopes.length > 0 ? resolvedRequiredScopes : [scopeAuth.missingScope],
+    });
   }
   return null;
 }
@@ -344,6 +384,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadLogsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["openclaw.changes.list"],
+    loadHandlers: loadSystemChangesHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "terminal.open",
       "terminal.input",
@@ -361,6 +405,20 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadUiCommandHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: [
+      "board.get",
+      "board.update",
+      "board.widget.put",
+      "board.widget.grant",
+      "board.widget.appView",
+      "board.event",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+    ],
+    loadHandlers: loadBoardHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
     loadHandlers: loadVoicewakeHandlers,
   }),
@@ -375,6 +433,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["channels.status", "channels.start", "channels.stop", "channels.logout"],
     loadHandlers: loadChannelsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["channels.pairing.list", "channels.pairing.approve", "channels.pairing.dismiss"],
+    loadHandlers: loadChannelPairingHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -399,6 +461,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "cron.list",
       "cron.status",
       "cron.get",
+      "cron.scratch.get",
+      "cron.scratch.set",
       "cron.add",
       "cron.update",
       "cron.remove",
@@ -531,6 +595,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "openclaw.chat",
+      "openclaw.chat.history",
       "openclaw.approval.list",
       "openclaw.setup.detect",
       "openclaw.setup.verify",
@@ -554,6 +619,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.session.steer",
       "talk.session.close",
       "talk.client.create",
+      "talk.client.transcript",
+      "talk.client.close",
       "talk.client.toolCall",
       "talk.client.steer",
       "talk.catalog",
@@ -566,6 +633,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["audit.list", "audit.activity.list"],
     loadHandlers: loadAuditHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "users.list",
+      "users.self",
+      "users.linkEmail",
+      "users.setDisplayName",
+      "users.setAvatar",
+    ],
+    loadHandlers: loadUsersHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],
@@ -600,6 +677,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "mcp.app.listResources",
       "mcp.app.listResourceTemplates",
       "mcp.app.readResource",
+      "mcp.app.updateModelContext",
     ],
     loadHandlers: loadMcpAppHandlers,
   }),
@@ -631,6 +709,14 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadSessionCatalogHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["session.discussion.info", "session.discussion.open"],
+    loadHandlers: loadSessionDiscussionHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.observer.ask", "sessions.observer.visibility"],
+    loadHandlers: loadSessionObserverHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "sessions.list",
       "sessions.search",
@@ -647,6 +733,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.create",
       "sessions.compaction.branch",
       "sessions.compaction.restore",
+      "sessions.branches.list",
+      "sessions.branches.switch",
       "sessions.rewind",
       "sessions.fork",
       "sessions.send",
@@ -664,6 +752,14 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.delete",
       "sessions.dispatch",
       "sessions.reclaim",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -848,6 +944,30 @@ export async function handleGatewayRequest(
     respond(false, undefined, authError);
     return;
   }
+  const sessionMutation = resolveSessionMutationAuthorization({
+    client: client ?? null,
+    method: req.method,
+    requestParams: req.params,
+    context,
+  });
+  if (sessionMutation.error) {
+    respond(false, undefined, sessionMutation.error);
+    return;
+  }
+  if (
+    client?.connect.role === "node" &&
+    (!client.connId || !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId)))
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      }),
+    );
+    return;
+  }
   if (context.unavailableGatewayMethods?.has(req.method)) {
     // During startup, methods can be listed before their runtime is ready. Return the protocol
     // retry shape so clients can back off without treating startup as a permanent unknown method.
@@ -958,16 +1078,28 @@ export async function handleGatewayRequest(
       isWebchatConnect,
       respond,
       context,
+      ...(sessionMutation.authorization
+        ? { sessionMutationAuthorization: sessionMutation.authorization }
+        : {}),
     });
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
   // The scope also carries caller identity into plugin-owned gateway methods.
-  const invokeWithRequestScope = async () =>
-    await withPluginRuntimeGatewayRequestScope(
-      { context, client, isWebchatConnect },
-      invokeHandler,
-    );
+  const invokeWithRequestScope = async () => {
+    try {
+      await withPluginRuntimeGatewayRequestScope(
+        { context, client, isWebchatConnect },
+        invokeHandler,
+      );
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, error.error);
+        return;
+      }
+      throw error;
+    }
+  };
   if (!rootWorkAdmission) {
     await invokeWithRequestScope();
     return;

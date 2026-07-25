@@ -126,18 +126,11 @@ function isAbsolutePathname(value: string): boolean {
   );
 }
 
-function resolveResolutionLimits(config: OpenClawConfig): ResolutionLimits {
-  const resolution = config.secrets?.resolution;
+function resolveResolutionLimits(): ResolutionLimits {
   return {
-    maxProviderConcurrency: normalizePositiveInt(
-      resolution?.maxProviderConcurrency,
-      DEFAULT_PROVIDER_CONCURRENCY,
-    ),
-    maxRefsPerProvider: normalizePositiveInt(
-      resolution?.maxRefsPerProvider,
-      DEFAULT_MAX_REFS_PER_PROVIDER,
-    ),
-    maxBatchBytes: normalizePositiveInt(resolution?.maxBatchBytes, DEFAULT_MAX_BATCH_BYTES),
+    maxProviderConcurrency: DEFAULT_PROVIDER_CONCURRENCY,
+    maxRefsPerProvider: DEFAULT_MAX_REFS_PER_PROVIDER,
+    maxBatchBytes: DEFAULT_MAX_BATCH_BYTES,
   };
 }
 
@@ -292,7 +285,7 @@ async function readFileProviderPayload(params: {
         filePath,
         label: `secrets.providers.${params.providerName}.path`,
         io: { maxBytes, timeoutMs },
-        permissions: { allowInsecure: params.providerConfig.allowInsecurePath },
+        permissions: { allowInsecure: false },
       });
       const text = payload.toString("utf8").replace(/^\uFEFF/, "");
       if (params.providerConfig.mode === "singleValue") {
@@ -525,9 +518,8 @@ async function resolveExecRefs(params: {
       targetPath: commandPath,
       label: `secrets.providers.${params.providerName}.command`,
       trustedDirs: params.providerConfig.trustedDirs,
-      allowInsecurePath: params.providerConfig.allowInsecurePath,
       allowReadableByOthers: true,
-      allowSymlinkPath: params.providerConfig.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     throwUnknownProviderResolutionError({
@@ -807,7 +799,7 @@ async function resolveSecretRefProviderGroups(params: {
   errorMode: "continue" | "stop";
 }) {
   const groups = normalizeAndGroupSecretRefs(params.refs);
-  const limits = resolveResolutionLimits(params.options.config);
+  const limits = resolveResolutionLimits();
   const errorsByIndex = new Map<number, unknown>();
   const taskResults = await runTasksWithConcurrency({
     tasks: createProviderResolutionTasks({ groups, options: params.options, limits }),

@@ -10,8 +10,15 @@ type ChatSelectionPopupActions = {
 
 let activeSelectionPopup: HTMLDivElement | null = null;
 let removeDismissListeners: (() => void) | null = null;
+let selectionPopupTimer: number | null = null;
 
 export function removeChatSelectionPopup() {
+  // The popup is a document singleton; teardown and replacement must cancel
+  // deferred selection work so an old pane cannot recreate it.
+  if (selectionPopupTimer !== null) {
+    window.clearTimeout(selectionPopupTimer);
+    selectionPopupTimer = null;
+  }
   activeSelectionPopup?.remove();
   activeSelectionPopup = null;
   removeDismissListeners?.();
@@ -154,7 +161,9 @@ export function handleChatSelectionPointerUp(
     return;
   }
   // Defer one tick so the browser finalizes the selection for this pointerup.
-  window.setTimeout(() => {
+  removeChatSelectionPopup();
+  selectionPopupTimer = window.setTimeout(() => {
+    selectionPopupTimer = null;
     const selection = window.getSelection();
     const text = selection ? selectionTextWithinChatBubble(selection, threadRoot) : null;
     if (!text || !selection) {

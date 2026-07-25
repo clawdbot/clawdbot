@@ -139,6 +139,19 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun sessionDashboardRoutePreservesTheOpeningSessionAndReturnsToChat() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Chat)
+
+    nav.openSessionDashboard("agent:main:phone")
+
+    assertEquals(Tab.Dashboard, nav.activeTab)
+    assertEquals("agent:main:phone", nav.dashboardSessionKey)
+    nav.back()
+    assertEquals(Tab.Chat, nav.activeTab)
+  }
+
+  @Test
   fun tabBarSelectionClearsCrossTabReturnOrigin() {
     val nav = ShellNavigation()
     nav.selectTab(Tab.Chat)
@@ -470,7 +483,7 @@ class ShellScreenLogicTest {
         sessionCount = 4,
       )
 
-    assertEquals(listOf("Gateway", "Nodes", "Approvals", "Sessions", "Files"), cards.map { it.title })
+    assertEquals(listOf("Gateway", "Nodes", "Approvals", "Threads", "Files"), cards.map { it.title })
     assertEquals("Online", cards.single { it.title == "Gateway" }.value)
     assertEquals("Review highlighted items", cards.single { it.title == "Gateway" }.subtitle)
     assertEquals("1/1", cards.single { it.title == "Nodes" }.value)
@@ -478,7 +491,7 @@ class ShellScreenLogicTest {
     assertEquals(ClawStatus.Warning, cards.single { it.title == "Nodes" }.status)
     assertEquals(1f, cards.single { it.title == "Nodes" }.progressFraction ?: 0f, 0.001f)
     assertEquals("2", cards.single { it.title == "Approvals" }.value)
-    assertEquals("4", cards.single { it.title == "Sessions" }.value)
+    assertEquals("4", cards.single { it.title == "Threads" }.value)
     assertEquals("Browse", cards.single { it.title == "Files" }.value)
     assertEquals(Tab.Files, cards.single { it.title == "Files" }.tab)
   }
@@ -688,7 +701,7 @@ class ShellScreenLogicTest {
       overviewAgentActivityText(isConnected = true, pendingRunCount = 2, sessionCount = 50, cronJobCount = 19, statusText = "Online and ready"),
     )
     assertEquals(
-      "Monitoring · 50 sessions",
+      "Monitoring · 50 threads",
       overviewAgentActivityText(isConnected = true, pendingRunCount = 0, sessionCount = 50, cronJobCount = 19, statusText = "Online and ready"),
     )
     assertEquals(
@@ -768,6 +781,7 @@ class ShellScreenLogicTest {
   fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
     assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
     assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.SystemAgent).resolveNativeText())
     assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
     assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
     assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())

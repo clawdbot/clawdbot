@@ -12,6 +12,22 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { readCommitmentsForTest, seedCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentRecord } from "./types.js";
 
+vi.mock("./config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config.js")>()),
+  resolveCommitmentsConfig: () => ({
+    enabled: true,
+    maxPerDay: 3,
+    extraction: {
+      debounceMs: 15_000,
+      batchMaxItems: 8,
+      queueMaxItems: 64,
+      confidenceThreshold: 0.72,
+      careConfidenceThreshold: 0.86,
+      timeoutSeconds: 45,
+    },
+  }),
+}));
+
 installHeartbeatRunnerTestRuntime();
 
 describe("commitments heartbeat delivery policy e2e", () => {
@@ -66,7 +82,6 @@ describe("commitments heartbeat delivery policy e2e", () => {
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
         await seedSessionStore(storePath, sessionKey, {
           lastChannel: "telegram",

@@ -382,39 +382,37 @@ describe("memory index", () => {
       enabled: boolean;
       vectorWeight?: number;
       textWeight?: number;
-      temporalDecay?: { enabled: boolean; halfLifeDays: number };
+      temporalDecay?: { enabled: boolean };
     };
   }): TestCfg {
     return {
+      memory: {
+        search: {
+          ...(params.provider !== undefined ? { provider: params.provider } : {}),
+          model: params.model ?? "mock-embed",
+          fallback: params.fallback,
+          outputDimensionality: params.outputDimensionality,
+          store: {
+            vector: params.vectorEnabled !== undefined ? { enabled: params.vectorEnabled } : {},
+          },
+          remote: params.batchEnabled
+            ? {
+                batch: { enabled: true },
+              }
+            : undefined,
+          query: { minScore: params.minScore ?? 0 },
+          cache: params.cacheEnabled ? { enabled: true } : undefined,
+          extraPaths: params.extraPaths,
+          multimodal: params.multimodal,
+          sources: params.sources,
+          rememberAcrossConversations:
+            params.rememberAcrossConversations ?? params.sessionMemory ?? false,
+        },
+      },
+
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            ...(params.provider !== undefined ? { provider: params.provider } : {}),
-            model: params.model ?? "mock-embed",
-            fallback: params.fallback,
-            outputDimensionality: params.outputDimensionality,
-            store: { vector: { enabled: params.vectorEnabled ?? false } },
-            // Perf: keep test indexes to a single chunk to reduce sqlite work.
-            chunking: { tokens: 4000, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
-            remote: params.batchEnabled
-              ? {
-                  nonBatchConcurrency: 1,
-                  batch: { enabled: true, pollIntervalMs: 0, timeoutMinutes: 1 },
-                }
-              : undefined,
-            query: {
-              minScore: params.minScore ?? 0,
-              hybrid: params.hybrid ?? { enabled: false },
-            },
-            cache: params.cacheEnabled ? { enabled: true } : undefined,
-            extraPaths: params.extraPaths,
-            multimodal: params.multimodal,
-            sources: params.sources,
-            rememberAcrossConversations: params.rememberAcrossConversations ?? false,
-            experimental: { sessionMemory: params.sessionMemory ?? false },
-          },
         },
         list: [{ id: "main", default: true }],
       },
@@ -563,6 +561,7 @@ describe("memory index", () => {
     forceNoProvider = true;
     setMemoryIndexStateDir(path.join(workspaceDir, params.stateDirName));
     const cfg = createCfg({
+      provider: "none",
       sources: ["memory", "sessions"],
       sessionMemory: true,
       minScore: 0,
@@ -1831,6 +1830,33 @@ describe("memory index", () => {
     expect(status.vector?.available).toBe(available);
   });
 
+  it("rebuilds vector tables created before completeness markers", async () => {
+    const cfg = createCfg({ provider: "gemini", vectorEnabled: true });
+    const legacyManager = await getFreshManager(cfg);
+    const available = await legacyManager.probeVectorStoreAvailability?.();
+    if (!available) {
+      await legacyManager.close?.();
+      return;
+    }
+    const legacyDb = Reflect.get(legacyManager, "db") as DatabaseSync;
+    legacyDb.exec(`
+      CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
+        id TEXT PRIMARY KEY,
+        embedding FLOAT[3]
+      );
+      INSERT INTO memory_index_chunks_vec VALUES ('orphan-before-marker', '[1,0,0]');
+    `);
+    await legacyManager.close?.();
+
+    const manager = await getFreshManager(cfg);
+    try {
+      await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(false);
+      expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("drops the shipped legacy vector table and schedules a full reindex", async () => {
     const cfg = createCfg({ vectorEnabled: true });
     const manager = await getPersistentManager(cfg);
@@ -1867,21 +1893,11 @@ describe("memory index", () => {
     expect(status.vector?.available).toBeUndefined();
   });
 
-  it("marks older vector indexes dirty after vector store probing", async () => {
-    const legacyCfg = createCfg({
-      provider: "gemini",
-      vectorEnabled: false,
-    });
-    const legacyManager = await getFreshManager(legacyCfg);
-    await legacyManager.sync({ reason: "test", force: true });
-    await legacyManager.close?.();
-
-    const cfg = createCfg({
-      provider: "gemini",
-      vectorEnabled: true,
-    });
+  it("keeps current vector indexes clean after vector store probing", async () => {
+    const cfg = createCfg({ provider: "gemini" });
     const manager = await getFreshManager(cfg);
     try {
+      await manager.sync({ reason: "test", force: true });
       const metaAccess = manager as unknown as {
         readMeta(): MemoryIndexMeta | null;
       };
@@ -1889,18 +1905,56 @@ describe("memory index", () => {
       if (!meta) {
         throw new Error("expected index metadata");
       }
-      expect(meta.vectorDims).toBeUndefined();
+      expect(meta.vectorDims).toBe(4);
 
       await manager.probeVectorStoreAvailability?.();
       const status = manager.status();
 
-      expect(status.dirty).toBe(true);
-      expect(status.custom?.indexIdentity).toEqual({
-        status: "mismatched",
-        reason: "index vector dimensions are missing",
-      });
+      expect(status.dirty).toBe(false);
     } finally {
       await manager.close?.();
+    }
+  });
+
+  it("forces a rebuild after incremental writes while vectors are disabled", async () => {
+    const enabledCfg = createCfg({ provider: "gemini", vectorEnabled: true });
+    const initialManager = await getFreshManager(enabledCfg);
+    await initialManager.sync({ reason: "test", force: true });
+    await initialManager.close?.();
+
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      "# Updated\n\nvector writes were disabled for this update\n",
+    );
+    const disabledManager = await getFreshManager(
+      createCfg({ provider: "gemini", vectorEnabled: false }),
+    );
+    Reflect.set(disabledManager, "dirty", true);
+    await disabledManager.sync({ reason: "test" });
+    const disabledDb = Reflect.get(disabledManager, "db") as DatabaseSync;
+    expect(
+      disabledDb
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+        .get(),
+    ).toEqual({ value: "1" });
+    await disabledManager.close?.();
+
+    const reloadedManager = await getFreshManager(enabledCfg);
+    try {
+      await expect(reloadedManager.probeVectorStoreAvailability?.()).resolves.toBe(false);
+      expect(Reflect.get(reloadedManager, "memoryFullRetryDirty")).toBe(true);
+      expect(reloadedManager.status().dirty).toBe(true);
+
+      await reloadedManager.sync({ reason: "test" });
+      const rebuiltDb = Reflect.get(reloadedManager, "db") as DatabaseSync;
+      expect(
+        rebuiltDb
+          .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+          .get(),
+      ).toEqual({ value: "clean" });
+      await expect(reloadedManager.probeVectorStoreAvailability?.()).resolves.toBe(true);
+    } finally {
+      await reloadedManager.close?.();
     }
   });
 
@@ -2101,7 +2155,7 @@ describe("memory index", () => {
     }
   });
 
-  it("activates configured fallback after probe-time local degradation", async () => {
+  it("reinitializes the configured provider after probe-time local degradation", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -2139,17 +2193,15 @@ describe("memory index", () => {
 
     const results = await manager.search("alpha");
 
-    expect(results).toStrictEqual([]);
-    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
-      "fallback-provider",
-    );
+    expect(results.length).toBeGreaterThan(0);
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain("openai");
     expect(
       (
         manager as unknown as {
           provider: { id: string } | null;
         }
       ).provider?.id,
-    ).toBe("fallback-provider");
+    ).toBe("mock");
   });
 
   it("clears identity dirty after status resolves the indexed fallback provider", async () => {
@@ -2306,6 +2358,7 @@ describe("memory index", () => {
     forceNoProvider = true;
 
     const cfg = createCfg({
+      provider: "none",
       minScore: 0.35,
       hybrid: { enabled: true },
     });
@@ -2338,6 +2391,7 @@ describe("memory index", () => {
   it("ranks an exact path stem ahead of a body match before applying the result limit", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
+      provider: "none",
       minScore: 0.35,
       hybrid: { enabled: true },
     });
@@ -2365,6 +2419,7 @@ describe("memory index", () => {
   it("does not let fallback-term filenames consume the candidate cap", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
+      provider: "none",
       minScore: 0,
       hybrid: { enabled: true },
     });
@@ -2545,6 +2600,7 @@ describe("memory index", () => {
   it("uses body relevance within the same exact basename tier in FTS-only mode", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
+      provider: "none",
       minScore: 0,
       hybrid: { enabled: true },
     });
@@ -2570,7 +2626,7 @@ describe("memory index", () => {
     expect(results[0]?.score).toBe(1);
   });
 
-  it("preserves temporal decay for body and path-only exact basenames", async () => {
+  it("returns exact basename candidates with fixed FTS ranking", async () => {
     forceNoProvider = true;
     const staleDir = path.join(fixtureRoot, "decay-a-stale");
     const freshDir = path.join(fixtureRoot, "decay-z-fresh");
@@ -2583,18 +2639,15 @@ describe("memory index", () => {
     await fs.writeFile(freshFooPath, "Unrelated fresh candidate.");
     await fs.writeFile(staleBarPath, "bar md bar md bar md strongest stale body");
     await fs.writeFile(path.join(freshDir, "bar.md"), "bar md fresh body");
-    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
     await Promise.all([
       fs.utimes(staleFooPath, staleMtime, staleMtime),
       fs.utimes(staleBarPath, staleMtime, staleMtime),
     ]);
     const cfg = createCfg({
+      provider: "none",
       extraPaths: [staleDir, freshDir],
       minScore: 0,
-      hybrid: {
-        enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
-      },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -2608,14 +2661,13 @@ describe("memory index", () => {
     for (const basename of ["foo.md", "bar.md"]) {
       const results = await manager.search(basename, { maxResults: 1, minScore: 0 });
       expect(results).toHaveLength(1);
-      expect(results[0]?.path.endsWith(`decay-z-fresh/${basename}`)).toBe(true);
       expect(results[0]?.score).toBe(1);
     }
   });
 
-  it("applies temporal decay after the exact-path candidate cap", async () => {
+  it("applies the fixed FTS candidate cap to exact paths", async () => {
     forceNoProvider = true;
-    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
     const extraPaths: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
@@ -2630,12 +2682,9 @@ describe("memory index", () => {
       extraPaths.push(extraDir);
     }
     const cfg = createCfg({
+      provider: "none",
       extraPaths,
       minScore: 0,
-      hybrid: {
-        enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
-      },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -2648,12 +2697,11 @@ describe("memory index", () => {
 
     const results = await manager.search("foo.md", { maxResults: 1, minScore: 0 });
     expect(results).toHaveLength(1);
-    expect(results[0]?.path.endsWith("decay-cap-z-fresh/foo.md")).toBe(true);
     expect(results[0]?.score).toBe(1);
   });
 
-  it("applies hybrid temporal decay beyond the content candidate cap", async () => {
-    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+  it("applies the fixed hybrid candidate cap", async () => {
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
     const extraPaths: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
@@ -2670,22 +2718,17 @@ describe("memory index", () => {
     const cfg = createCfg({
       extraPaths,
       minScore: 0,
-      hybrid: {
-        enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
-      },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
     const results = await manager.search("alpha.md", { maxResults: 1, minScore: 0 });
     expect(results).toHaveLength(1);
-    expect(results[0]?.path.endsWith("hybrid-decay-cap-z-fresh/alpha.md")).toBe(true);
     expect(results[0]?.score).toBe(1);
   });
 
-  it("keeps temporal decay when degraded hybrid search becomes keyword-only", async () => {
-    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+  it("keeps fixed hybrid ranking when search degrades to keyword-only", async () => {
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
     const extraPaths: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
@@ -2702,10 +2745,6 @@ describe("memory index", () => {
       extraPaths,
       fallback: "none",
       minScore: 0,
-      hybrid: {
-        enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
-      },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -2732,13 +2771,13 @@ describe("memory index", () => {
 
     const results = await manager.search("beta.md", { maxResults: 1, minScore: 0 });
     expect(results).toHaveLength(1);
-    expect(results[0]?.path.endsWith("degraded-decay-cap-z-fresh/beta.md")).toBe(true);
     expect(results[0]?.score).toBe(1);
   });
 
   it("keeps body relevance for an exact basename beyond the exact candidate cap", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
+      provider: "none",
       minScore: 0,
       hybrid: { enabled: true },
     });
@@ -2802,6 +2841,7 @@ describe("memory index", () => {
   it("keeps boosted score ordering for non-exact FTS-only body matches", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
+      provider: "none",
       minScore: 0,
       hybrid: { enabled: true },
     });
@@ -2829,14 +2869,11 @@ describe("memory index", () => {
     expect(results[0]?.score).toBeLessThanOrEqual(1);
   });
 
-  it("keeps an exact dated path ahead when temporal decay is enabled", async () => {
+  it("keeps an exact dated path ahead in FTS-only mode", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
+      provider: "none",
       minScore: 0.35,
-      hybrid: {
-        enabled: true,
-        temporalDecay: { enabled: true, halfLifeDays: 1 },
-      },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -2983,6 +3020,7 @@ describe("memory index", () => {
     setMemoryIndexStateDir(path.join(workspaceDir, ".state-remember-search-sources"));
     try {
       const cfg = createCfg({
+        provider: "none",
         rememberAcrossConversations: true,
         minScore: 0,
         hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },

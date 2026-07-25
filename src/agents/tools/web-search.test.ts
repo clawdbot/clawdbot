@@ -721,6 +721,23 @@ describe("web_search normalized output contract", () => {
     expect(normalized.message).toContain("quota exceeded");
   });
 
+  it("keeps structured provider error serialization surrogate-safe at the cap", () => {
+    const normalized = normalizeWebSearchOutput({
+      provider: "external-demo",
+      query: "emoji error",
+      // The emoji straddles the 2000-unit cut: a plain slice would keep only
+      // its high surrogate half.
+      result: { error: { message: `${"x".repeat(1_987)}🤖` } },
+    });
+
+    if (normalized.kind !== "error") {
+      throw new Error("expected error branch");
+    }
+    const expectedPrefix = `{"message":"${"x".repeat(1_987)}`;
+    expect(stripWrapMarkers(normalized.message)).toBe(expectedPrefix);
+    expect(expectedPrefix).toHaveLength(1_999);
+  });
+
   it("keeps ordinary Source attribution lines in answer content", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-answer",
@@ -963,36 +980,35 @@ describe("web_search unsupported filter response", () => {
 });
 
 describe("web_search scoped config merge", () => {
-  it("returns the original config when no plugin config exists", () => {
+  it("drops retired provider config when no plugin config exists", () => {
     const searchConfig = { provider: "grok", grok: { model: "grok-4-1-fast" } };
-    expect(mergeScopedSearchConfig(searchConfig, "grok", undefined)).toBe(searchConfig);
+    expect(mergeScopedSearchConfig(searchConfig, "grok", undefined)).toEqual({ provider: "grok" });
   });
 
-  it("merges plugin config into the scoped provider object", () => {
-    expect(
-      mergeScopedSearchConfig({ provider: "grok", grok: { model: "old-model" } }, "grok", {
+  it("projects plugin config into a runtime-only provider object", () => {
+    const merged = mergeScopedSearchConfig(
+      { provider: "grok", grok: { model: "old-model" } },
+      "grok",
+      {
         model: "new-model",
         apiKey: "xai-test-key",
-      }),
-    ).toEqual({
-      provider: "grok",
-      grok: { model: "new-model", apiKey: "xai-test-key" },
-    });
+      },
+    );
+
+    expect(merged?.grok).toEqual({ model: "new-model", apiKey: "xai-test-key" });
+    expect(Object.keys(merged ?? {})).toEqual(["provider"]);
   });
 
   it("can mirror the plugin apiKey to the top level config", () => {
-    expect(
-      mergeScopedSearchConfig(
-        { provider: "brave", brave: { count: 5 } },
-        "brave",
-        { apiKey: "brave-test-key" },
-        { mirrorApiKeyToTopLevel: true },
-      ),
-    ).toEqual({
-      provider: "brave",
-      apiKey: "brave-test-key",
-      brave: { count: 5, apiKey: "brave-test-key" },
-    });
+    const merged = mergeScopedSearchConfig(
+      { provider: "brave", brave: { count: 5 } },
+      "brave",
+      { apiKey: "brave-test-key" },
+      { mirrorApiKeyToTopLevel: true },
+    );
+
+    expect(merged).toEqual({ provider: "brave", apiKey: "brave-test-key" });
+    expect(merged?.brave).toEqual({ apiKey: "brave-test-key" });
   });
 
   it("keeps mirrored Brave plugin config runtime-only when newly injected", () => {

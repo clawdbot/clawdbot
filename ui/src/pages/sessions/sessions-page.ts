@@ -15,7 +15,7 @@ import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import { isStoppableCloudWorkerPlacement } from "../../components/session-row-badges.ts";
-import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
+import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
@@ -24,9 +24,11 @@ import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
+  DEFAULT_SESSION_LIST_QUERY,
   filterSessionRows,
   scopedAgentParamsForSession,
   searchForSession,
+  type SessionArchivedFilter,
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -56,7 +58,7 @@ export type SessionsRouteData = {
   result: SessionsListResult | null;
   error: string | null;
   expandedSessionKey: string | null;
-  showArchived: boolean;
+  statusFilter: SessionArchivedFilter;
 };
 
 type SessionsPageRequestScope = {
@@ -79,11 +81,11 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private result: SessionsListResult | null = null;
   @state() private loading = false;
   @state() private error: string | null = null;
-  @state() private activeMinutes = "60";
-  @state() private limit = "50";
+  @state() private activeMinutes = "";
+  @state() private limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
   @state() private includeGlobal = true;
   @state() private includeUnknown = false;
-  @state() private showArchived = false;
+  @state() private statusFilter: SessionArchivedFilter = "active";
   @state() private searchQuery = "";
   @state() private transcriptSearchQuery = "";
   @state() private transcriptSearch: TranscriptSearchState = { status: "idle" };
@@ -234,10 +236,10 @@ class SessionsPage extends OpenClawLightDomElement {
     resetForSourceBind = false,
   ) {
     const clientChanged = resetForSourceBind || snapshot.client !== this.gatewayClient;
-    const connectionChanged = snapshot.connected !== this.gatewayConnected;
-    const becameConnected = snapshot.connected && !this.gatewayConnected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.gatewayConnected;
+    const becameConnected = snapshot.phase === "connected" && !this.gatewayConnected;
     this.gatewayClient = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (clientChanged || connectionChanged) {
       this.invalidatePageWork();
       this.ignorePendingSharedRefresh = false;
@@ -245,7 +247,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (clientChanged) {
       this.resetProviderState();
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       this.requestUpdate();
       return;
     }
@@ -293,7 +295,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     const gateway = context.gateway;
     const client = gateway.snapshot.client;
-    if (!gateway.snapshot.connected || !client) {
+    if (gateway.snapshot.phase !== "connected" || !client) {
       return null;
     }
     return {
@@ -316,7 +318,7 @@ class SessionsPage extends OpenClawLightDomElement {
       gateway === scope.gateway &&
       context.sessions === scope.sessions &&
       context.workboard === scope.workboard &&
-      gateway.snapshot.connected &&
+      gateway.snapshot.phase === "connected" &&
       gateway.snapshot.client === scope.client
     );
   }
@@ -335,18 +337,18 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!this.routeDataEnabled) {
       return;
     }
-    this.showArchived = data.showArchived;
+    this.statusFilter = data.statusFilter;
     if (data.expandedSessionKey) {
       this.activeMinutes = "";
-      this.limit = "";
+      this.limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
       this.includeGlobal = true;
       this.includeUnknown = true;
       this.searchQuery = "";
       this.page = 0;
       this.selectedKeys = new Set();
     } else {
-      this.activeMinutes = "60";
-      this.limit = "50";
+      this.activeMinutes = "";
+      this.limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
       this.includeGlobal = true;
       this.includeUnknown = false;
     }
@@ -357,7 +359,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const gateway = context.gateway;
     const snapshot = gateway.snapshot;
     this.gatewayClient = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
       this.routeDataEnabled = false;
       void this.loadSessions();
@@ -367,7 +369,7 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     this.result = data.result
-      ? filterSessionRows(data.result, { showArchived: data.showArchived })
+      ? filterSessionRows(data.result, { archivedFilter: data.statusFilter })
       : null;
     this.error = data.error;
     this.loading = false;
@@ -395,7 +397,7 @@ class SessionsPage extends OpenClawLightDomElement {
       if (
         this.isConnected &&
         context &&
-        gateway?.connected &&
+        gateway?.phase === "connected" &&
         gateway.client &&
         !context.sessions.state.loading
       ) {
@@ -427,12 +429,15 @@ class SessionsPage extends OpenClawLightDomElement {
     const deepLinkKey = this.deepLinkSessionKey;
     const scopeAgentId = this.context?.agentSelection.state.scopeId ?? undefined;
     return {
-      activeMinutes: deepLinkKey || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
-      limit: deepLinkKey ? 50 : parseFilterInteger(this.limit),
+      activeMinutes:
+        deepLinkKey || this.statusFilter !== "active"
+          ? undefined
+          : parseFilterInteger(this.activeMinutes),
+      limit: deepLinkKey ? DEFAULT_SESSION_LIST_QUERY.limit : parseFilterInteger(this.limit),
       search: deepLinkKey ?? undefined,
       includeGlobal: deepLinkKey ? true : this.includeGlobal,
       includeUnknown: deepLinkKey ? true : this.includeUnknown,
-      showArchived: this.showArchived,
+      archivedFilter: this.statusFilter,
       ...(deepLinkKey
         ? { agentId: this.sessionAgentId(deepLinkKey) }
         : scopeAgentId
@@ -456,7 +461,9 @@ class SessionsPage extends OpenClawLightDomElement {
       if (requestId !== this.sessionRequestId || !this.isRequestScopeCurrent(scope)) {
         return;
       }
-      this.result = result ? filterSessionRows(result, { showArchived: this.showArchived }) : null;
+      this.result = result
+        ? filterSessionRows(result, { archivedFilter: this.statusFilter })
+        : null;
       this.ensureAgentIdentities(this.result);
       const checkpointKey = this.reconcileCheckpointCache(previous, this.result);
       if (checkpointKey) {
@@ -582,13 +589,11 @@ class SessionsPage extends OpenClawLightDomElement {
     limit: string;
     includeGlobal: boolean;
     includeUnknown: boolean;
-    showArchived: boolean;
   }) {
     this.activeMinutes = next.activeMinutes;
     this.limit = next.limit;
     this.includeGlobal = next.includeGlobal;
     this.includeUnknown = next.includeUnknown;
-    this.showArchived = next.showArchived;
     this.page = 0;
     this.selectedKeys = new Set();
     // Explicit filter edits leave deep-link mode; load the full roster.
@@ -596,20 +601,23 @@ class SessionsPage extends OpenClawLightDomElement {
     void this.loadSessions();
   }
 
-  private updateArchivedView(showArchived: boolean) {
+  private updateStatusFilter(statusFilter: SessionArchivedFilter) {
     const context = this.context;
-    if (showArchived === this.showArchived || !context) {
+    if (statusFilter === this.statusFilter || !context) {
       return;
     }
-    this.showArchived = showArchived;
+    this.statusFilter = statusFilter;
     this.page = 0;
     this.selectedKeys = new Set();
     this.deepLinkSessionKey = null;
-    // Route navigation refetches (showArchived is in loaderDeps); mask the old
+    // Route navigation refetches (statusFilter is in loaderDeps); mask the old
     // view's rows until the new result applies via applyRouteData.
     this.loading = true;
     this.error = null;
-    context.navigate("sessions", showArchived ? { search: "?showArchived=1" } : undefined);
+    context.navigate(
+      "sessions",
+      statusFilter === "active" ? undefined : { search: `?status=${statusFilter}` },
+    );
   }
 
   private async deleteSelected() {
@@ -619,7 +627,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     if (
       !window.confirm(
-        `Delete ${keys.length} ${keys.length === 1 ? "session" : "sessions"}?\n\nThis will delete the session entries and archive their transcripts.`,
+        `Delete ${keys.length} ${keys.length === 1 ? "thread" : "threads"}?\n\nThis will delete the thread entries and archive their transcripts.`,
       )
     ) {
       return;
@@ -1049,7 +1057,7 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async branchCheckpoint(sessionKey: string, checkpointId: string) {
-    if (!window.confirm("Create a new child session from this compacted checkpoint?")) {
+    if (!window.confirm("Create a new child thread from this compacted checkpoint?")) {
       return;
     }
     const scope = this.captureRequestScope();
@@ -1078,7 +1086,7 @@ class SessionsPage extends OpenClawLightDomElement {
   private async restoreCheckpoint(sessionKey: string, checkpointId: string) {
     if (
       !window.confirm(
-        "Restore this session to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
+        "Restore this thread to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
       )
     ) {
       return;
@@ -1265,23 +1273,19 @@ class SessionsPage extends OpenClawLightDomElement {
       return html``;
     }
     return html`
-      <section class="content-header content-header--page">
-        <div>
-          <div class="page-title">${titleForRoute("sessions")}</div>
-        </div>
-        ${renderSessionsHubTabs({
-          active: "sessions",
-          onSelect: (tab) => {
-            if (tab !== "sessions") {
-              context.navigate(tab);
-            }
-          },
-        })}
-        ${renderAgentScopeControl({
+      ${renderSessionsHubHeader({
+        active: "sessions",
+        title: titleForRoute("sessions"),
+        actions: renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],
           selection: context.agentSelection,
-        })}
-      </section>
+        }),
+        onSelect: (tab) => {
+          if (tab !== "sessions") {
+            context.navigate(tab);
+          }
+        },
+      })}
       ${renderSettingsWorkspace(
         renderSessions({
           loading: this.loading,
@@ -1291,7 +1295,7 @@ class SessionsPage extends OpenClawLightDomElement {
           limit: this.limit,
           includeGlobal: this.includeGlobal,
           includeUnknown: this.includeUnknown,
-          showArchived: this.showArchived,
+          statusFilter: this.statusFilter,
           basePath: context.basePath,
           searchQuery: this.searchQuery,
           transcriptSearchAvailable:
@@ -1318,10 +1322,9 @@ class SessionsPage extends OpenClawLightDomElement {
           onFiltersChange: (next) => this.updateFilters(next),
           onClearFilters: () => {
             this.activeMinutes = "";
-            this.limit = "";
+            this.limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
             this.includeGlobal = true;
-            this.includeUnknown = true;
-            this.showArchived = false;
+            this.includeUnknown = false;
             this.searchQuery = "";
             this.page = 0;
             this.selectedKeys = new Set();
@@ -1351,7 +1354,7 @@ class SessionsPage extends OpenClawLightDomElement {
             this.page = 0;
           },
           onRefresh: () => void this.loadSessions(),
-          onArchivedViewChange: (showArchived) => this.updateArchivedView(showArchived),
+          onStatusFilterChange: (statusFilter) => this.updateStatusFilter(statusFilter),
           onDeleteAllArchived: () => void this.deleteAllArchived(),
           onPatch: (key, patch) => void this.patchSession(key, patch),
           onToggleSelect: (key) => {

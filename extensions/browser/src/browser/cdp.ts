@@ -263,9 +263,8 @@ export async function createTargetViaCdp(opts: {
         candidateWsUrl,
         async (send) => {
           opts.signal?.throwIfAborted();
-          const created = (await send("Target.createTarget", { url: opts.url })) as {
-            targetId?: string;
-          };
+          const params = { url: opts.url, background: true }; // Target-id selection must not activate browser UI.
+          const created = (await send("Target.createTarget", params)) as { targetId?: string };
           const targetId = created?.targetId?.trim() ?? "";
           if (!targetId) {
             throw new Error("CDP Target.createTarget returned no targetId");

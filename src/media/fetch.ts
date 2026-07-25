@@ -26,6 +26,10 @@ import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 /** Default remote media fetch cap shared by buffer reads and store writes. */
 const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
 
+// Large media endpoints get a generous header-only deadline. The timer is
+// cleared once headers arrive, so healthy streaming bodies keep their own limits.
+const DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
+
 /** Remote media bytes plus metadata before they are persisted to the media store. */
 type FetchMediaResult = {
   buffer: Buffer;
@@ -129,6 +133,14 @@ function stripQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
 }
 
+function decodeRemoteFileNameComponent(value: string): string {
+  try {
+    return decodeURIComponent(value).replace(/[\\/]/g, "_");
+  } catch {
+    return value;
+  }
+}
+
 function parseContentDispositionFileName(header?: string | null): string | undefined {
   if (!header) {
     return undefined;
@@ -137,11 +149,7 @@ function parseContentDispositionFileName(header?: string | null): string | undef
   if (starMatch?.[1]) {
     const cleaned = stripQuotes(starMatch[1].trim());
     const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
-    try {
-      return basenameFromAnyPath(decodeURIComponent(encoded));
-    } catch {
-      return basenameFromAnyPath(encoded);
-    }
+    return basenameFromAnyPath(decodeRemoteFileNameComponent(encoded));
   }
   const match = /filename\s*=\s*([^;]+)/i.exec(header);
   if (match?.[1]) {
@@ -155,11 +163,7 @@ function basenameFromUrlPathname(pathname: string): string {
   if (!base) {
     return "";
   }
-  try {
-    return decodeURIComponent(base).replace(/[\\/]/g, "_");
-  } catch {
-    return base;
-  }
+  return decodeRemoteFileNameComponent(base);
 }
 
 async function readErrorBodySnippet(
@@ -193,7 +197,7 @@ async function fetchGuardedMediaResponse(
     requestInit,
     maxRedirects,
     timeoutMs,
-    responseHeaderTimeoutMs,
+    responseHeaderTimeoutMs = DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,

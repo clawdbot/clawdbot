@@ -226,6 +226,26 @@ private func commandChoice(
         acceptsArgs: acceptsArgs)
 }
 
+private struct ToolActivityEvent: Equatable {
+    var id: String
+    var name: String
+    var isActive: Bool
+    var sessionKey: String
+}
+
+@MainActor
+private final class ToolActivityRecorder {
+    private(set) var events: [ToolActivityEvent] = []
+
+    func record(id: String, name: String, isActive: Bool, sessionKey: String) {
+        self.events.append(ToolActivityEvent(
+            id: id,
+            name: name,
+            isActive: isActive,
+            sessionKey: sessionKey))
+    }
+}
+
 @MainActor
 private func makeViewModel(
     sessionKey: String = "main",
@@ -262,6 +282,11 @@ private func makeViewModel(
     modelPickerStore: ChatModelPickerStore? = nil,
     onSessionChanged: (@MainActor (String) -> Void)? = nil,
     onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
+    onToolActivity: (@MainActor @Sendable (
+        _ id: String,
+        _ name: String,
+        _ isActive: Bool,
+        _ sessionKey: String) -> Void)? = nil,
     onThinkingPreferenceChanged: (@MainActor @Sendable (String?) -> Void)? = nil,
     onVerboseLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
     onVerbosePreferenceChanged: (@MainActor @Sendable (String?) -> Void)? = nil) async
@@ -308,6 +333,7 @@ private func makeViewModel(
         initialVerboseLevel: initialVerboseLevel,
         onSessionChanged: onSessionChanged,
         onThinkingLevelChanged: onThinkingLevelChanged,
+        onToolActivity: onToolActivity,
         onThinkingPreferenceChanged: onThinkingPreferenceChanged,
         onVerboseLevelChanged: onVerboseLevelChanged,
         onVerbosePreferenceChanged: onVerbosePreferenceChanged)
@@ -516,6 +542,18 @@ private actor AsyncCounter {
     }
 }
 
+private actor AsyncStringRecorder {
+    private var values: [String] = []
+
+    func append(_ value: String) {
+        self.values.append(value)
+    }
+
+    func current() -> [String] {
+        self.values
+    }
+}
+
 private actor SessionSubscribeGate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
@@ -614,6 +652,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         (@Sendable (String, Int) async -> OpenClawChatRunObservation)?
     private let acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)?
     private let listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])?
+    private let getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)?
+    private let cancelQuestionHook: (@Sendable (String) async throws -> Void)?
     private let healthResponses: [Bool]
 
     private let stream: AsyncStream<OpenClawChatTransportEvent>
@@ -646,6 +686,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
         acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
         listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
+        getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)? = nil,
+        cancelQuestionHook: (@Sendable (String) async throws -> Void)? = nil,
         healthResponses: [Bool] = [true])
     {
         self.historyResponses = historyResponses
@@ -672,6 +714,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.waitForRunCompletionHook = waitForRunCompletionHook
         self.acquireSessionSettingsRouteLeaseHook = acquireSessionSettingsRouteLeaseHook
         self.listQuestionsHook = listQuestionsHook
+        self.getQuestionHook = getQuestionHook
+        self.cancelQuestionHook = cancelQuestionHook
         self.healthResponses = healthResponses
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in
@@ -917,7 +961,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
                     code: 0,
                     userInfo: [NSLocalizedDescriptionKey: "thinkingLevel cannot be cleared"])
             }
-            let thinkingResult = try await self.patchSessionThinking(
+            let thinkingResult = try await patchSessionThinking(
                 sessionKey: sessionKey,
                 thinkingLevel: thinkingLevel)
             result = OpenClawChatModelPatchResult(
@@ -934,7 +978,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         sessionKey: String,
         thinkingLevel: String) async throws -> OpenClawChatModelPatchResult?
     {
-        let index = await self.state.recordPatchedThinkingLevel(thinkingLevel)
+        let index = await state.recordPatchedThinkingLevel(thinkingLevel)
         if let setSessionThinkingHook {
             try await setSessionThinkingHook(thinkingLevel)
         }
@@ -961,6 +1005,20 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func listQuestions() async throws -> [QuestionRecord] {
         try await self.listQuestionsHook?() ?? []
+    }
+
+    func getQuestion(id: String) async throws -> QuestionRecord {
+        guard let getQuestionHook else {
+            throw NSError(
+                domain: "TestChatTransport",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "missing question.get fixture"])
+        }
+        return try await getQuestionHook(id)
+    }
+
+    func cancelQuestion(id: String) async throws {
+        try await self.cancelQuestionHook?(id)
     }
 
     func waitForRunCompletion(
@@ -1259,27 +1317,30 @@ private actor QuestionListEventRace {
 private func chatQuestionRecord(
     id: String,
     status: QuestionStatus = .pending,
-    expiresAtMs: Int = 4_000_000_000_000) -> QuestionRecord
+    expiresAtMs: Int = 4_000_000_000_000,
+    sessionKey: String? = "main",
+    answers: QuestionAnswers? = nil) -> QuestionRecord
 {
     QuestionRecord(
         id: id,
         questions: [
             Question(
-                id: "choice",
+                questionid: "choice",
                 header: "Choice",
                 question: "Choose",
                 options: [QuestionOption(label: "One"), QuestionOption(label: "Two")]),
         ],
         agentid: "main",
-        sessionkey: "main",
+        sessionkey: sessionKey,
         createdatms: 1,
         expiresatms: expiresAtMs,
-        status: status)
+        status: status,
+        answers: answers)
 }
 
 @Suite(.serialized)
 struct ChatViewModelTests {
-    @Test @MainActor func `locally expired question is evicted after terminal grace`() {
+    @Test @MainActor func `locally expired question remains in transcript`() {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
             transport: TestChatTransport(historyResponses: []))
@@ -1287,13 +1348,14 @@ struct ChatViewModelTests {
         viewModel.upsertQuestion(chatQuestionRecord(id: "ask_local", expiresAtMs: 1_500_000))
         let model = viewModel.questionCards[0]
 
-        viewModel.evictQuestionIfTerminalGraceElapsed(model, at: expiresAt)
+        viewModel.expireQuestionIfNeeded(model, at: expiresAt)
         #expect(viewModel.questionCards.map(\.id) == ["ask_local"])
+        #expect(model.status(at: expiresAt) == .expired)
 
-        viewModel.evictQuestionIfTerminalGraceElapsed(
+        viewModel.expireQuestionIfNeeded(
             model,
             at: expiresAt.addingTimeInterval(15))
-        #expect(viewModel.questionCards.isEmpty)
+        #expect(viewModel.questionCards.map(\.id) == ["ask_local"])
     }
 
     @Test @MainActor func `stale question list cannot overwrite a newer event`() async throws {
@@ -1321,6 +1383,28 @@ struct ChatViewModelTests {
                     code: "INVALID_REQUEST",
                     message: "unknown method: question.list",
                     details: nil)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_stale"))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.questionCards.isEmpty)
+    }
+
+    @Test @MainActor func `structured missing question scope clears stale cards`() async {
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                throw GatewayResponseError(
+                    method: "question.list",
+                    code: "FORBIDDEN",
+                    message: "permission denied",
+                    details: [
+                        "code": AnyCodable("MISSING_SCOPE"),
+                        "missingScope": AnyCodable("operator.questions"),
+                        "requiredScopes": AnyCodable(["operator.questions"]),
+                    ])
             })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.upsertQuestion(chatQuestionRecord(id: "ask_stale"))
@@ -1382,7 +1466,7 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards.map(\.id) == ["ask_other"])
     }
 
-    @Test @MainActor func `question list retains recently resolved card`() async {
+    @Test @MainActor func `question list retains resolved card persistently`() async {
         let transport = TestChatTransport(
             historyResponses: [],
             listQuestionsHook: { [] })
@@ -1396,16 +1480,274 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards.first?.status() == .answeredElsewhere)
     }
 
-    @Test @MainActor func `question card is evicted after terminal grace`() {
-        let transport = TestChatTransport(historyResponses: [])
+    @Test @MainActor func `terminal question survives later empty list refresh`() async {
+        let transport = TestChatTransport(historyResponses: [], listQuestionsHook: { [] })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.upsertQuestion(chatQuestionRecord(id: "ask_done"))
         viewModel.resolveQuestionEvent(.init(id: "ask_done", status: .answered))
-        let model = viewModel.questionCards[0]
 
-        viewModel.evictQuestionIfTerminalGraceElapsed(model, at: Date().addingTimeInterval(16))
+        await viewModel.refreshQuestions()
 
-        #expect(viewModel.questionCards.isEmpty)
+        #expect(viewModel.questionCards.map(\.id) == ["ask_done"])
+        #expect(viewModel.questionCards[0].status() == .answeredElsewhere)
+    }
+
+    @Test @MainActor func `missing pending question uses question get fallback`() async {
+        let answers = QuestionAnswers(answers: [
+            "choice": AnyCodable(["Two"]),
+        ])
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: { [] },
+            getQuestionHook: { id in
+                chatQuestionRecord(id: id, status: .answered, answers: answers)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_missing"))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.questionCards[0].status() == .answeredElsewhere)
+        #expect(viewModel.questionCards[0].terminalSummaryText(
+            for: viewModel.questionCards[0].record.questions[0]) == "Two")
+    }
+
+    @Test @MainActor func `missing question tombstone has unknown terminal outcome`() async {
+        let getCalls = AsyncCounter()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: { [] },
+            getQuestionHook: { id in
+                _ = await getCalls.increment()
+                throw GatewayResponseError(
+                    method: "question.get",
+                    code: "INVALID_REQUEST",
+                    message: "question '\(id)' was not found",
+                    details: ["reason": AnyCodable("QUESTION_NOT_FOUND")])
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_missing"))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.questionCards[0].status() == .unavailable)
+        #expect(viewModel.questionCards[0].terminalSummaryText(
+            for: viewModel.questionCards[0].record.questions[0]) == "Unavailable")
+
+        await viewModel.refreshQuestions()
+
+        #expect(await getCalls.current() == 1)
+    }
+
+    @Test @MainActor func `question refresh retries transport failure`() async throws {
+        let listCalls = AsyncCounter()
+        let getCalls = AsyncCounter()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                let call = await listCalls.increment()
+                if call == 1 {
+                    throw GatewayResponseError(
+                        method: "question.list",
+                        code: "UNAVAILABLE",
+                        message: "retry",
+                        details: nil)
+                }
+                return []
+            },
+            getQuestionHook: { id in
+                _ = await getCalls.increment()
+                return chatQuestionRecord(id: id, status: .cancelled)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.questionRefreshRetryDelaysMs = [0]
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_retry"))
+
+        await viewModel.refreshQuestions()
+        try await waitUntil("question refresh retry") { await getCalls.current() == 1 }
+
+        #expect(await listCalls.current() == 2)
+        #expect(viewModel.questionCards[0].status() == .cancelled)
+    }
+
+    @Test @MainActor func `question refresh resets exhausted retry budget after overlapping skip`() async throws {
+        let listCalls = AsyncCounter()
+        let getStarted = AsyncCounter()
+        let getCalls = AsyncCounter()
+        let firstGetGate = AsyncGate()
+        let recovering = chatQuestionRecord(id: "ask_recovering")
+        let unrelated = chatQuestionRecord(id: "ask_unrelated")
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                let call = await listCalls.increment()
+                if call == 1 {
+                    throw GatewayResponseError(
+                        method: "question.list",
+                        code: "UNAVAILABLE",
+                        message: "consume retry budget",
+                        details: nil)
+                }
+                return [unrelated]
+            },
+            getQuestionHook: { id in
+                let call = await getCalls.increment()
+                if call == 1 {
+                    _ = await getStarted.increment()
+                    await firstGetGate.wait()
+                }
+                return chatQuestionRecord(id: id, status: .answered)
+            },
+            cancelQuestionHook: { _ in })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.questionRefreshRetryDelaysMs = [0]
+        viewModel.upsertQuestion(recovering)
+        viewModel.upsertQuestion(unrelated)
+
+        let refresh = Task { await viewModel.refreshQuestions() }
+        try await waitUntil("question get request") { await getStarted.current() == 1 }
+        let unrelatedModel = try #require(viewModel.questionCards.first { $0.id == unrelated.id })
+        await viewModel.skipQuestion(unrelatedModel)
+        await firstGetGate.open()
+        await refresh.value
+        try await waitUntil("question reconciliation after skip") {
+            await MainActor.run {
+                viewModel.questionCards.first { $0.id == recovering.id }?.status() == .answeredElsewhere
+            }
+        }
+
+        #expect(await getCalls.current() == 2)
+        #expect(await listCalls.current() == 3)
+    }
+
+    @Test @MainActor func `question refresh resets exhausted retry budget after partial progress`() async throws {
+        let listCalls = AsyncCounter()
+        let recoveringCalls = AsyncCounter()
+        let progressed = chatQuestionRecord(id: "ask_progressed")
+        let recovering = chatQuestionRecord(id: "ask_recovering")
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                let call = await listCalls.increment()
+                if call == 1 {
+                    throw GatewayResponseError(
+                        method: "question.list",
+                        code: "UNAVAILABLE",
+                        message: "consume retry budget",
+                        details: nil)
+                }
+                return []
+            },
+            getQuestionHook: { id in
+                if id == progressed.id {
+                    return chatQuestionRecord(id: id, status: .answered)
+                }
+                let call = await recoveringCalls.increment()
+                if call == 1 {
+                    throw GatewayResponseError(
+                        method: "question.get",
+                        code: "UNAVAILABLE",
+                        message: "partial failure",
+                        details: nil)
+                }
+                return chatQuestionRecord(id: id, status: .cancelled)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.questionRefreshRetryDelaysMs = [0]
+        viewModel.upsertQuestion(progressed)
+        viewModel.upsertQuestion(recovering)
+
+        await viewModel.refreshQuestions()
+        try await waitUntil("question retry after partial progress") {
+            await MainActor.run {
+                viewModel.questionCards.first { $0.id == recovering.id }?.status() == .cancelled
+            }
+        }
+
+        #expect(await listCalls.current() == 3)
+        #expect(await recoveringCalls.current() == 2)
+        #expect(viewModel.questionCards.first { $0.id == progressed.id }?.status() == .answeredElsewhere)
+    }
+
+    @Test @MainActor func `question refresh resets retry budget after state change during backoff`() async throws {
+        let listCalls = AsyncCounter()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                let call = await listCalls.increment()
+                if call < 3 {
+                    throw GatewayResponseError(
+                        method: "question.list",
+                        code: "UNAVAILABLE",
+                        message: "retry",
+                        details: nil)
+                }
+                return []
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.questionRefreshRetryDelaysMs = [25]
+        let question = chatQuestionRecord(id: "ask_backoff")
+        viewModel.upsertQuestion(question)
+
+        await viewModel.refreshQuestions()
+        viewModel.resolveQuestionEvent(.init(id: question.id, status: .cancelled))
+        try await waitUntil("question retry budget reset after backoff mutation") {
+            await listCalls.current() == 3
+        }
+
+        #expect(viewModel.questionCards[0].status() == .cancelled)
+    }
+
+    @Test @MainActor func `question refresh stops after bounded retries`() async throws {
+        let listCalls = AsyncCounter()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                _ = await listCalls.increment()
+                throw GatewayResponseError(
+                    method: "question.list",
+                    code: "UNAVAILABLE",
+                    message: "retry",
+                    details: nil)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.questionRefreshRetryDelaysMs = [0, 0, 0]
+
+        await viewModel.refreshQuestions()
+        try await waitUntil("bounded question refresh retries") { await listCalls.current() >= 4 }
+        try await Task.sleep(for: .milliseconds(25))
+
+        #expect(await listCalls.current() == 4)
+        #expect(viewModel.questionRefreshRetryTask == nil)
+    }
+
+    @Test @MainActor func `visible questions filter by current session`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_main"))
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_other", sessionKey: "other"))
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_unscoped", sessionKey: nil))
+
+        #expect(viewModel.visibleQuestionCards.map(\.id) == ["ask_main", "ask_unscoped"])
+    }
+
+    @Test @MainActor func `skip sends question cancellation and retains summary`() async {
+        let cancelledIDs = AsyncStringRecorder()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            cancelQuestionHook: { id in
+                await cancelledIDs.append(id)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_skip"))
+
+        await viewModel.skipQuestion(viewModel.questionCards[0])
+
+        #expect(await cancelledIDs.current() == ["ask_skip"])
+        #expect(viewModel.questionCards[0].status() == .cancelled)
+        #expect(viewModel.questionCards[0].terminalSummaryText(
+            for: viewModel.questionCards[0].record.questions[0]) == "Skipped")
     }
 
     @Test func `context usage fraction validates freshness and token bounds`() {
@@ -2804,6 +3146,220 @@ struct ChatViewModelTests {
         }
         #expect(await MainActor.run { vm.streamingAssistantText } == nil)
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
+    }
+
+    @Test func `dictation completion only updates its originating session`() async {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionKey: "other", sessionId: "sess-other")])
+        await MainActor.run {
+            let startingSession = vm.currentSessionSnapshot()
+            vm.switchSession(to: "other")
+            vm.appendDictationTranscript("belongs to main", for: startingSession)
+            #expect(vm.input.isEmpty)
+            vm.appendDictationTranscript("belongs to other", for: vm.currentSessionSnapshot())
+            #expect(vm.input == "belongs to other")
+        }
+    }
+
+    @Test func `dictation completion cannot cross a same-session agent change`() async {
+        let (_, vm) = await makeViewModel(
+            activeAgentId: "alpha",
+            historyResponses: [historyPayload(), historyPayload()])
+        await MainActor.run {
+            let alphaSession = vm.currentSessionSnapshot()
+            vm.syncActiveAgentId("beta")
+            vm.appendDictationTranscript("belongs to alpha", for: alphaSession)
+            #expect(vm.input.isEmpty)
+            vm.appendDictationTranscript("belongs to beta", for: vm.currentSessionSnapshot())
+            #expect(vm.input == "belongs to beta")
+        }
+    }
+
+    @Test func `dictation failure only updates its originating session`() async {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionKey: "other", sessionId: "sess-other")])
+        await MainActor.run {
+            let startingSession = vm.currentSessionSnapshot()
+            vm.switchSession(to: "other")
+            vm.setDictationError(
+                NSError(domain: "Dictation", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "stale dictation failure",
+                ]),
+                for: startingSession)
+            #expect(vm.errorText == nil)
+        }
+    }
+
+    @Test func `composer presentation owner changes when the model is replaced for the same session`() async {
+        let (_, first) = await makeViewModel(historyResponses: [historyPayload()])
+        let (_, replacement) = await makeViewModel(historyResponses: [historyPayload()])
+
+        let firstOwner = await MainActor.run {
+            OpenClawChatComposerPresentationOwner(viewModel: first)
+        }
+        let replacementOwner = await MainActor.run {
+            OpenClawChatComposerPresentationOwner(viewModel: replacement)
+        }
+
+        #expect(firstOwner.session.key == replacementOwner.session.key)
+        #expect(firstOwner != replacementOwner)
+    }
+
+    @Test func `composer presentation owner changes with same-session agent routing`() async {
+        let (_, vm) = await makeViewModel(
+            activeAgentId: "alpha",
+            historyResponses: [historyPayload(), historyPayload()])
+
+        let alphaOwner = await MainActor.run {
+            OpenClawChatComposerPresentationOwner(viewModel: vm)
+        }
+        let betaOwner = await MainActor.run {
+            vm.syncActiveAgentId("beta")
+            return OpenClawChatComposerPresentationOwner(viewModel: vm)
+        }
+
+        #expect(alphaOwner.session.key == betaOwner.session.key)
+        #expect(alphaOwner != betaOwner)
+    }
+
+    @Test func `camera attachment completion only updates its originating session`() async {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionKey: "other", sessionId: "sess-other")])
+        let originalSession = await MainActor.run {
+            let session = vm.currentSessionSnapshot()
+            vm.switchSession(to: "other")
+            return session
+        }
+
+        await vm.addImageAttachment(
+            data: Data([0]),
+            fileName: "stale-camera.jpg",
+            mimeType: "image/jpeg",
+            for: originalSession)
+
+        #expect(await MainActor.run { vm.attachments.isEmpty })
+        #expect(await MainActor.run { vm.errorText == nil })
+    }
+
+    @Test func `camera attachment completion cannot cross a same-session agent change`() async {
+        let (_, vm) = await makeViewModel(
+            activeAgentId: "alpha",
+            historyResponses: [historyPayload(), historyPayload()])
+        let alphaSession = await MainActor.run {
+            let session = vm.currentSessionSnapshot()
+            vm.syncActiveAgentId("beta")
+            return session
+        }
+
+        await vm.addImageAttachment(
+            data: Data([0]),
+            fileName: "stale-camera.jpg",
+            mimeType: "image/jpeg",
+            for: alphaSession)
+
+        #expect(await MainActor.run { vm.attachments.isEmpty })
+        #expect(await MainActor.run { vm.errorText == nil })
+    }
+
+    @Test func `file attachment completion cannot cross a same-session agent change`() async {
+        let (_, vm) = await makeViewModel(
+            activeAgentId: "alpha",
+            historyResponses: [historyPayload(), historyPayload()])
+        let alphaSession = await MainActor.run {
+            let session = vm.currentSessionSnapshot()
+            vm.syncActiveAgentId("beta")
+            return session
+        }
+
+        await vm.loadAttachments(
+            urls: [URL(fileURLWithPath: "/does-not-exist/stale-file.jpg")],
+            expectedSession: alphaSession)
+
+        #expect(await MainActor.run { vm.attachments.isEmpty })
+        #expect(await MainActor.run { vm.errorText == nil })
+    }
+
+    @Test func `attachment staging defers a same-session agent change`() async {
+        let (_, vm) = await makeViewModel(
+            activeAgentId: "alpha",
+            historyResponses: [historyPayload(), historyPayload()])
+
+        await MainActor.run {
+            let alphaSession = vm.currentSessionSnapshot()
+            vm.beginAttachmentStaging()
+            vm.syncActiveAgentId("beta")
+            #expect(vm.activeAgentId == "alpha")
+            #expect(vm.isCurrentSession(alphaSession))
+
+            vm.endAttachmentStaging()
+            #expect(vm.activeAgentId == "beta")
+            #expect(!vm.isCurrentSession(alphaSession))
+        }
+    }
+
+    @Test func `balances tool activity when a terminal event clears pending calls`() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let recorder = await MainActor.run { ToolActivityRecorder() }
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending",
+            onToolActivity: { id, name, isActive, sessionKey in
+                recorder.record(id: id, name: name, isActive: isActive, sessionKey: sessionKey)
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        await sendUserMessage(vm)
+        let runId = try await waitForLastSentRunId(transport)
+
+        emitToolStart(transport: transport, runId: runId)
+        try await waitUntil("tool activity starts") {
+            await MainActor.run { recorder.events.count == 1 }
+        }
+
+        transport.emit(.chat(OpenClawChatEventPayload(
+            runId: runId,
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))
+
+        try await waitUntil("tool activity ends") {
+            await MainActor.run { recorder.events.count == 2 }
+        }
+        #expect(await MainActor.run { recorder.events } == [
+            ToolActivityEvent(id: "t1", name: "demo", isActive: true, sessionKey: "main"),
+            ToolActivityEvent(id: "t1", name: "demo", isActive: false, sessionKey: "main"),
+        ])
+    }
+
+    @Test func `session switch ends tool activity under its original session`() async throws {
+        let recorder = await MainActor.run { ToolActivityRecorder() }
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "other", sessionId: "sess-other"),
+            ],
+            sendMessageStatus: "pending",
+            onToolActivity: { id, name, isActive, sessionKey in
+                recorder.record(id: id, name: name, isActive: isActive, sessionKey: sessionKey)
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await sendUserMessage(vm)
+        let runId = try await waitForLastSentRunId(transport)
+
+        emitToolStart(transport: transport, runId: runId)
+        try await waitUntil("tool activity starts") {
+            await MainActor.run { recorder.events.count == 1 }
+        }
+        await MainActor.run { vm.switchSession(to: "other") }
+        try await waitUntil("tool activity ends during session switch") {
+            await MainActor.run { recorder.events.count == 2 }
+        }
+
+        #expect(await MainActor.run { recorder.events } == [
+            ToolActivityEvent(id: "t1", name: "demo", isActive: true, sessionKey: "main"),
+            ToolActivityEvent(id: "t1", name: "demo", isActive: false, sessionKey: "main"),
+        ])
     }
 
     @Test func `renders final chat event message when history is stale`() async throws {
@@ -5844,7 +6400,7 @@ struct ChatViewModelTests {
         try await waitUntil("compact attempted") {
             await transport.compactSessionKeys() == ["main"]
         }
-        #expect(await MainActor.run { vm.errorText } == "Unable to compact the session. Please try again.")
+        #expect(await MainActor.run { vm.errorText } == "Unable to compact the thread. Please try again.")
     }
 
     @Test func `compact trigger ignores concurrent and immediate repeat requests`() async throws {
@@ -5890,7 +6446,7 @@ struct ChatViewModelTests {
 
         try await waitUntil("compact cooldown rejects immediate retry") {
             await MainActor.run {
-                vm.errorText == "Please wait before compacting this session again."
+                vm.errorText == "Please wait before compacting this thread again."
             }
         }
         #expect(await transport.compactSessionKeys() == ["main"])
@@ -5920,7 +6476,7 @@ struct ChatViewModelTests {
         try await waitUntil("first compact attempted") {
             await transport.compactSessionKeys() == ["main"]
         }
-        #expect(await MainActor.run { vm.errorText } == "Unable to compact the session. Please try again.")
+        #expect(await MainActor.run { vm.errorText } == "Unable to compact the thread. Please try again.")
 
         await MainActor.run {
             vm.input = "/compact"
@@ -9651,7 +10207,9 @@ struct ChatViewModelTests {
             },
             listSessionsHook: { _ in
                 let call = await listCallCount.increment()
-                if call == 1 { return initialSessions }
+                if call == 1 {
+                    return initialSessions
+                }
                 if call == 2 {
                     await staleListGate.wait()
                     return initialSessions
@@ -9711,8 +10269,12 @@ struct ChatViewModelTests {
             },
             listSessionsHook: { _ in
                 let call = await listCallCount.increment()
-                if call == 1 { return initialSessions }
-                if call == 2 { await staleListGate.wait() }
+                if call == 1 {
+                    return initialSessions
+                }
+                if call == 2 {
+                    await staleListGate.wait()
+                }
                 return initialSessions
             })
 
@@ -9777,8 +10339,12 @@ struct ChatViewModelTests {
             },
             listSessionsHook: { _ in
                 let call = await listCallCount.increment()
-                if call == 1 { return initialSessions }
-                if call == 2 { await staleListGate.wait() }
+                if call == 1 {
+                    return initialSessions
+                }
+                if call == 2 {
+                    await staleListGate.wait()
+                }
                 return initialSessions
             })
 

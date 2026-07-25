@@ -13,9 +13,8 @@ import {
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
-import * as memoryCoreAlias from "./memory-core.js";
 import {
   buildActiveMemoryPromptSection,
   listMemoryHostPublicArtifacts,
@@ -32,7 +31,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("exposes the active memory prompt guidance builder for context engines", () => {
-    registerMemoryPromptSection(({ citationsMode }) => [
+    registerTestMemoryPromptBuilder(({ citationsMode }) => [
       "## Memory Recall",
       `citations=${citationsMode ?? "default"}`,
       "",
@@ -992,10 +991,5 @@ describe("memory-host-core helpers", () => {
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
-  });
-
-  it("keeps the deprecated memory-core alias wired to memory-host-core", () => {
-    expect(memoryCoreAlias.buildActiveMemoryPromptSection).toBe(buildActiveMemoryPromptSection);
-    expect(memoryCoreAlias.listActiveMemoryPublicArtifacts).toBe(listActiveMemoryPublicArtifacts);
   });
 });

@@ -1,6 +1,7 @@
 /**
  * Chutes model catalog, static model definitions, and dynamic model discovery.
  */
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
@@ -8,7 +9,10 @@ import {
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
@@ -58,6 +62,7 @@ interface ChutesModelEntry {
   pricing?: {
     prompt?: number;
     completion?: number;
+    input_cache_read?: number;
   };
   [key: string]: unknown;
 }
@@ -77,6 +82,7 @@ async function fetchChutesModelRows(accessToken?: string): Promise<readonly unkn
     }),
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
     auditContext: "chutes-model-discovery",
+    fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
   });
 }
 
@@ -127,7 +133,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
         cost: {
           input: entry.pricing?.prompt || 0,
           output: entry.pricing?.completion || 0,
-          cacheRead: 0,
+          cacheRead: entry.pricing?.input_cache_read || 0,
           cacheWrite: 0,
         },
         contextWindow: asPositiveSafeInteger(entry.context_length) ?? CHUTES_DEFAULT_CONTEXT_WINDOW,

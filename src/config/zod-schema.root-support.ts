@@ -1,8 +1,8 @@
 import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import { base64UrlDecode, normalizeEd25519PublicKeyBase64Url } from "../infra/ed25519-signature.js";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
+import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import { NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -36,15 +36,6 @@ export const TailscaleServiceNameSchema = z
     message:
       'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
   });
-
-export const LegacyCanvasHostSchema = z
-  .strictObject({
-    enabled: z.boolean().optional(),
-    root: z.string().optional(),
-    port: z.number().int().positive().optional(),
-    liveReload: z.boolean().optional(),
-  })
-  .optional();
 
 export const SecuritySchema = z
   .strictObject({
@@ -80,8 +71,6 @@ export const SecuritySchema = z
             env: z.record(z.string(), z.string().register(sensitive)).optional(),
             passEnv: z.array(z.string()).optional(),
             trustedDirs: z.array(z.string()).optional(),
-            allowInsecurePath: z.boolean().optional(),
-            allowSymlinkCommand: z.boolean().optional(),
           })
           .optional(),
       })
@@ -119,30 +108,11 @@ const MemoryQmdSessionSchema = z.strictObject({
   retentionDays: z.number().int().nonnegative().optional(),
 });
 
-const MemoryQmdUpdateSchema = z.strictObject({
-  interval: z.string().optional(),
-  debounceMs: z.number().int().nonnegative().optional(),
-  onBoot: z.boolean().optional(),
-  startup: z.enum(["off", "idle", "immediate"]).optional(),
-  startupDelayMs: z.number().int().nonnegative().optional(),
-  waitForBootSync: z.boolean().optional(),
-  embedInterval: z.string().optional(),
-  commandTimeoutMs: z.number().int().nonnegative().optional(),
-  updateTimeoutMs: z.number().int().nonnegative().optional(),
-  embedTimeoutMs: z.number().int().nonnegative().optional(),
-});
-
 const MemoryQmdLimitsSchema = z.strictObject({
   maxResults: z.number().int().positive().optional(),
   maxSnippetChars: z.number().int().positive().optional(),
   maxInjectedChars: z.number().int().positive().optional(),
   timeoutMs: z.number().int().nonnegative().optional(),
-});
-
-const MemoryQmdMcporterSchema = z.strictObject({
-  enabled: z.boolean().optional(),
-  serverName: z.string().optional(),
-  startDaemon: z.boolean().optional(),
 });
 
 export const LoggingLevelSchema = z.union([
@@ -157,14 +127,12 @@ export const LoggingLevelSchema = z.union([
 
 const MemoryQmdSchema = z.strictObject({
   command: z.string().optional(),
-  mcporter: MemoryQmdMcporterSchema.optional(),
   searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
   rerank: z.boolean().optional(),
   searchTool: z.string().trim().min(1).optional(),
   includeDefaultMemory: z.boolean().optional(),
   paths: z.array(MemoryQmdPathSchema).optional(),
   sessions: MemoryQmdSessionSchema.optional(),
-  update: MemoryQmdUpdateSchema.optional(),
   limits: MemoryQmdLimitsSchema.optional(),
   scope: SessionSendPolicySchema.optional(),
 });
@@ -173,11 +141,12 @@ export const MemorySchema = z
   .strictObject({
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    search: MemorySearchSchema,
     qmd: MemoryQmdSchema.optional(),
   })
   .optional();
 
-export const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
+const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
 
 const McpOAuthClientMetadataUrlSchema = z
   .string()
@@ -242,7 +211,6 @@ const TalkRealtimeSchema = z
     model: z.string().optional(),
     speakerVoice: z.string().optional(),
     speakerVoiceId: z.string().optional(),
-    voice: z.string().optional(),
     instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
@@ -321,7 +289,6 @@ const McpServerSchema = z
       )
       .optional(),
     cwd: z.string().optional(),
-    workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
     transport: z
       .union([z.literal("stdio"), z.literal("sse"), z.literal("streamable-http")])
@@ -333,12 +300,8 @@ const McpServerSchema = z
       )
       .optional(),
     connectionTimeoutMs: z.number().finite().positive().optional(),
-    connectTimeout: z.number().finite().positive().optional(),
-    connect_timeout: z.number().finite().positive().optional(),
     requestTimeoutMs: z.number().finite().positive().optional(),
-    timeout: z.number().finite().positive().optional(),
     supportsParallelToolCalls: z.boolean().optional(),
-    supports_parallel_tool_calls: z.boolean().optional(),
     auth: z.literal("oauth").optional(),
     oauth: z
       .strictObject({
@@ -349,11 +312,8 @@ const McpServerSchema = z
       })
       .optional(),
     sslVerify: z.boolean().optional(),
-    ssl_verify: z.boolean().optional(),
     clientCert: z.string().optional(),
-    client_cert: z.string().optional(),
     clientKey: z.string().optional(),
-    client_key: z.string().optional(),
     toolFilter: z
       .strictObject({
         include: z.array(z.string().trim().min(1)).min(1).optional(),
@@ -372,11 +332,37 @@ const McpServerSchema = z
           .min(1)
           .optional(),
         defaultToolsApprovalMode: z.enum(["auto", "prompt", "approve"]).optional(),
-        default_tools_approval_mode: z.enum(["auto", "prompt", "approve"]).optional(),
       })
       .optional(),
   })
   .superRefine((data, ctx) => {
+    // This schema is .catchall(z.unknown()) (open-world server options), so
+    // unknown keys survive into this refine; retired aliases are rejected here.
+    for (const key of [
+      "connectTimeout",
+      "connect_timeout",
+      "timeout",
+      "workingDirectory",
+      "supports_parallel_tool_calls",
+      "ssl_verify",
+      "client_cert",
+      "client_key",
+    ] as const) {
+      if (Object.hasOwn(data, key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unrecognized key: "${key}"`,
+        });
+      }
+    }
+    const codex = data.codex;
+    if (codex && Object.hasOwn(codex, "default_tools_approval_mode")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["codex", "default_tools_approval_mode"],
+        message: 'Unrecognized key: "default_tools_approval_mode"',
+      });
+    }
     if (Object.hasOwn(data, "disabled")) {
       const disabled = Reflect.get(data, "disabled") as unknown;
       const replacement =
@@ -429,7 +415,6 @@ export const McpConfigSchema = z
         sandboxPort: z.number().int().min(1).max(65535).optional(),
       })
       .optional(),
-    sessionIdleTtlMs: z.number().finite().min(0).optional(),
   })
   .optional();
 
@@ -459,133 +444,5 @@ export const NodeHostSchema = z
         enabled: z.boolean().optional(),
       })
       .optional(),
-  })
-  .optional();
-
-export const SystemAgentSchema = z
-  .strictObject({
-    rescue: z
-      .strictObject({
-        enabled: z.union([z.literal("auto"), z.boolean()]).optional(),
-        ownerDmOnly: z.boolean().optional(),
-        pendingTtlMinutes: z.number().int().positive().optional(),
-      })
-      .optional(),
-  })
-  .optional();
-
-function isPlainHttpsUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
-  } catch {
-    return false;
-  }
-}
-
-function isEd25519PublicKeyConfig(value: string): boolean {
-  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)) {
-    return false;
-  }
-  if (!value.includes("BEGIN") && !/^[A-Za-z0-9_-]{43}$/.test(value)) {
-    return false;
-  }
-  try {
-    const normalized = normalizeEd25519PublicKeyBase64Url(value);
-    return normalized ? base64UrlDecode(normalized).length === 32 : false;
-  } catch {
-    return false;
-  }
-}
-
-const MarketplaceFeedTrustedPublicKeySchema = z.strictObject({
-  keyId: z.string().trim().min(1),
-  publicKey: z
-    .string()
-    .trim()
-    .min(1)
-    .refine(
-      (value) => isEd25519PublicKeyConfig(value),
-      "Expected Ed25519 public key as PEM or raw base64url",
-    ),
-});
-
-const MarketplaceVerificationSchema = z.union([
-  z.strictObject({
-    mode: z.literal("unsigned"),
-  }),
-  z
-    .strictObject({
-      mode: z.literal("signed"),
-      keys: z.array(MarketplaceFeedTrustedPublicKeySchema).min(1),
-      threshold: z.number().int().positive().optional(),
-    })
-    .superRefine((value, ctx) => {
-      const seenKeyIds = new Map<string, number>();
-      const seenPublicKeys = new Map<string, number>();
-      value.keys.forEach((key, index) => {
-        const previousKeyIdIndex = seenKeyIds.get(key.keyId);
-        if (previousKeyIdIndex !== undefined) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["keys", index, "keyId"],
-            message: "Signed marketplace feed publisher key IDs must be unique",
-          });
-        } else {
-          seenKeyIds.set(key.keyId, index);
-        }
-        const normalizedPublicKey = normalizeEd25519PublicKeyBase64Url(key.publicKey);
-        if (!normalizedPublicKey) {
-          return;
-        }
-        const previousPublicKeyIndex = seenPublicKeys.get(normalizedPublicKey);
-        if (previousPublicKeyIndex !== undefined) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["keys", index, "publicKey"],
-            message: "Signed marketplace feed publisher public keys must be unique",
-          });
-        } else {
-          seenPublicKeys.set(normalizedPublicKey, index);
-        }
-      });
-      if (value.threshold !== undefined && value.threshold > value.keys.length) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["threshold"],
-          message: "Signed marketplace feed threshold cannot exceed configured key count",
-        });
-      }
-    }),
-]);
-
-const MarketplaceFeedProfileSchema = z.strictObject({
-  url: z
-    .string()
-    .url()
-    .refine(
-      (value) => isPlainHttpsUrl(value),
-      "Expected https:// URL without credentials, query, or fragment",
-    ),
-  verification: MarketplaceVerificationSchema.optional(),
-});
-
-const MarketplaceSourceProfileSchema = z.union([
-  z.strictObject({ type: z.literal("npm") }),
-  z.strictObject({ type: z.literal("clawhub") }),
-  z.strictObject({ type: z.literal("git") }),
-]);
-
-export const MarketplacesSchema = z
-  .strictObject({
-    feeds: z.record(z.string().min(1), MarketplaceFeedProfileSchema).optional(),
-    sources: z.record(z.string().min(1), MarketplaceSourceProfileSchema).optional(),
-  })
-  .optional();
-
-export const CommitmentsSchema = z
-  .strictObject({
-    enabled: z.boolean().optional(),
-    maxPerDay: z.number().int().positive().optional(),
   })
   .optional();

@@ -1,10 +1,7 @@
 // Control UI tests cover markdown behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  handleMarkdownCodeBlockCopy,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownHtml,
-} from "./markdown.ts";
+import { handleMarkdownCodeBlockCopy } from "./markdown-code-blocks.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
@@ -397,6 +394,54 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toBe(
         '<p><img class="markdown-inline-image" src="data:image/png;base64,iVBORw0KGgo=" alt="Chart"></p>\n',
       );
+    });
+
+    it("keeps linked data images under their authored link", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[![Preview](data:image/png;base64,iVBORw0KGgo=)](https://example.com/full.png)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelector("a > img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("a > button")).toBeNull();
+    });
+
+    it("keeps data images inside rich Markdown links under the link", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[Before ![Preview](data:image/png;base64,iVBORw0KGgo=) after](https://example.com/full.png)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelector("a img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("a button")).toBeNull();
+    });
+
+    it("tracks linked and standalone images across one inline token stream", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[![Linked one](data:image/png;base64,QQ==)](https://example.com/one) ![Standalone](data:image/png;base64,Qg==) [![Linked two](data:image/png;base64,Qw==)](https://example.com/two)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelectorAll("a img.markdown-inline-image")).toHaveLength(2);
+      expect(fragment.querySelectorAll("button.markdown-inline-image-button")).toHaveLength(1);
+    });
+
+    it("labels unlabeled inline data image buttons", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![](data:image/png;base64,iVBORw0KGgo=)", {
+          interactiveImages: true,
+        }),
+      );
+
+      expect(
+        fragment.querySelector("button.markdown-inline-image-button")?.getAttribute("aria-label"),
+      ).toBe("Open image Image");
     });
 
     it("keeps inline data images while marking assistant-authored role alt text", () => {

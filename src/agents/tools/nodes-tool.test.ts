@@ -861,6 +861,23 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it.each(["mobile.ui.observe", "mobile.ui.act"])(
+    "blocks raw %s so mobile UI uses the dedicated safety contract",
+    async (invokeCommand) => {
+      const tool = createNodesTool();
+
+      await expect(
+        tool.execute("call-1", {
+          action: "invoke",
+          node: "pixel",
+          invokeCommand,
+          invokeParamsJson: "{}",
+        }),
+      ).rejects.toThrow("use the dedicated mobile_ui tool");
+      expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
+
   it("redirects file-transfer invoke commands to the dedicated file-transfer tool", async () => {
     const tool = createNodesTool({ allowMediaInvokeCommands: true });
 

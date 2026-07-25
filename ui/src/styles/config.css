@@ -43,8 +43,8 @@
 }
 
 .config-mode-toggle__btn.active {
-  background: var(--accent);
-  color: white;
+  background: var(--primary);
+  color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
 
@@ -78,6 +78,29 @@
   gap: var(--space-2);
   margin-left: auto;
   min-height: 28px;
+}
+
+.config-show-advanced.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-subtle);
+}
+
+.config-advanced-fields {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.config-advanced-fields__summary {
+  padding: var(--space-3) 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.config-advanced-fields__content {
+  margin-top: 0;
 }
 
 /* Restart affordance shown after a successful save until apply */
@@ -715,7 +738,7 @@
  * serves both the MCP settings page and the Plugins inventory. */
 .mcp-server-form {
   display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(140px, 220px) minmax(150px, 190px) minmax(0, 1fr) auto;
   gap: var(--space-2);
   align-items: end;
   padding: var(--space-3) var(--space-4);

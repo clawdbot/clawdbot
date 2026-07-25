@@ -186,6 +186,11 @@ describe("command-path-policy", () => {
   });
 
   it("resolves mixed startup-only rules", () => {
+    expectResolvedPolicy(["qa", "suite"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["worker"], {
       bypassConfigGuard: true,
       loadPlugins: "never",

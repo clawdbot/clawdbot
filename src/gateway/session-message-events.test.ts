@@ -177,6 +177,102 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>): 
 }
 
 describe("session.message websocket events", () => {
+  test("projects watched sessions into per-connection presence", async () => {
+    const observerWs = await harness.openWs();
+    const watchedWs = await harness.openWs();
+    const instanceId = "presence-watched-sessions";
+    try {
+      await connectOk(observerWs, { scopes: ["operator.read"] });
+      const watchedHello = await connectOk(watchedWs, {
+        scopes: ["operator.read"],
+        client: {
+          id: GATEWAY_CLIENT_IDS.TEST,
+          version: "1.0.0",
+          platform: "test",
+          mode: GATEWAY_CLIENT_MODES.TEST,
+          instanceId,
+        },
+      });
+      const initialPresenceVersion = (
+        watchedHello as { snapshot?: { stateVersion?: { presence?: number } } }
+      ).snapshot?.stateVersion?.presence;
+      expect(initialPresenceVersion).toEqual(expect.any(Number));
+
+      const findWatchedEntry = (message: unknown) => {
+        const record = requireRecord(message, "presence event");
+        if (record.event !== "presence") {
+          return undefined;
+        }
+        const payload = requireRecord(record.payload, "presence payload");
+        const presence = Array.isArray(payload.presence) ? payload.presence : [];
+        return presence.find(
+          (entry): entry is Record<string, unknown> =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            (entry as { instanceId?: unknown }).instanceId === instanceId,
+        );
+      };
+      const firstKey = "agent:main:watch-00";
+      const subscribePresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return Array.isArray(entry?.watchedSessions) && entry.watchedSessions.includes(firstKey);
+      });
+      const firstSubscribe = await rpcReq(watchedWs, "sessions.messages.subscribe", {
+        key: firstKey,
+      });
+      expect(firstSubscribe.ok).toBe(true);
+      const subscribedEvent = await subscribePresence;
+      const subscribedEntry = findWatchedEntry(subscribedEvent);
+      expect(subscribedEntry?.watchedSessions).toEqual([firstKey]);
+      expect(subscribedEntry?.user).toBeUndefined();
+      expect(subscribedEvent.stateVersion?.presence).toBeGreaterThan(initialPresenceVersion ?? 0);
+
+      const remainingKeys = Array.from(
+        { length: 33 },
+        (_, index) => `agent:main:watch-${String(index + 1).padStart(2, "0")}`,
+      );
+      for (const key of remainingKeys) {
+        const response = await rpcReq(watchedWs, "sessions.messages.subscribe", { key });
+        expect(response.ok).toBe(true);
+      }
+      const presenceResponse = await rpcReq(observerWs, "system-presence", {});
+      const presence = presenceResponse.payload as unknown as Array<Record<string, unknown>>;
+      const cappedEntry = presence.find((entry) => entry.instanceId === instanceId);
+      const expectedCappedKeys = remainingKeys.slice(-32).toSorted();
+      expect(cappedEntry?.watchedSessions).toEqual(expectedCappedKeys);
+
+      const removedKey = "agent:main:watch-10";
+      const unsubscribePresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return Array.isArray(entry?.watchedSessions) && !entry.watchedSessions.includes(removedKey);
+      });
+      const unsubscribe = await rpcReq(watchedWs, "sessions.messages.unsubscribe", {
+        key: removedKey,
+      });
+      expect(unsubscribe.ok).toBe(true);
+      const unsubscribedEvent = await unsubscribePresence;
+      expect(findWatchedEntry(unsubscribedEvent)?.watchedSessions).not.toContain(removedKey);
+      const subscribedPresenceVersion = subscribedEvent.stateVersion?.presence;
+      expect(unsubscribedEvent.stateVersion?.presence).toBeGreaterThan(
+        typeof subscribedPresenceVersion === "number" ? subscribedPresenceVersion : 0,
+      );
+
+      const disconnectPresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return entry?.reason === "disconnect" && entry.watchedSessions === undefined;
+      });
+      watchedWs.close();
+      const disconnectedEvent = await disconnectPresence;
+      const unsubscribedPresenceVersion = unsubscribedEvent.stateVersion?.presence;
+      expect(disconnectedEvent.stateVersion?.presence).toBeGreaterThan(
+        typeof unsubscribedPresenceVersion === "number" ? unsubscribedPresenceVersion : 0,
+      );
+    } finally {
+      observerWs.close();
+      watchedWs.close();
+    }
+  });
+
   test("enforces session-scoped chat delivery on real gateway connections", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({

@@ -194,21 +194,24 @@ function createQmdCfg(
 
 function createBuiltinCfg(agentId: string): OpenClawConfig {
   return {
+    memory: {
+      search: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        store: {
+          path: "/tmp/index.sqlite",
+          vector: { enabled: false },
+        },
+        sync: { watch: false, onSessionStart: false, onSearch: false },
+        query: { minScore: 0, hybrid: { enabled: false } },
+        sources: ["memory"],
+        experimental: { sessionMemory: false },
+      },
+    },
+
     agents: {
       defaults: {
         workspace: "/tmp/workspace",
-        memorySearch: {
-          provider: "openai",
-          model: "text-embedding-3-small",
-          store: {
-            path: "/tmp/index.sqlite",
-            vector: { enabled: false },
-          },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
-          query: { minScore: 0, hybrid: { enabled: false } },
-          sources: ["memory"],
-          experimental: { sessionMemory: false },
-        },
       },
       list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }],
     },
@@ -737,7 +740,6 @@ describe("getMemorySearchManager caching", () => {
             workspace: "/tmp/workspace",
             contextLimits: {
               memoryGetMaxChars: 24_000,
-              memoryGetDefaultLines: 180,
             },
           },
         ],

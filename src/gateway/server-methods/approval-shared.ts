@@ -15,6 +15,7 @@ import type {
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import { buildWaitResponse, type WaitReasonResolver } from "./approval-wait-response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const APPROVAL_NOT_FOUND_DETAILS = {
@@ -365,7 +366,6 @@ function resolveApprovalRecordForState<TPayload>(
   return { ok: true, approvalId: resolvedId.id, snapshot };
 }
 
-/** Sends the public lookup failure shape for missing, expired, or ambiguous approvals. */
 export function respondPendingApprovalLookupError(params: {
   respond: RespondFn;
   response: PendingApprovalLookupError;
@@ -377,12 +377,12 @@ export function respondPendingApprovalLookupError(params: {
   params.respond(false, undefined, errorShape(params.response.code, params.response.message));
 }
 
-/** Waits for an already-registered approval decision visible to the caller. */
 export async function handleApprovalWaitDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: unknown;
   client?: GatewayClient | null;
   respond: RespondFn;
+  resolveTerminalReason?: WaitReasonResolver<TPayload>;
 }): Promise<void> {
   const id = normalizeOptionalString(params.inputId) ?? "";
   if (!id) {
@@ -414,14 +414,11 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     return;
   }
   const decision = await decisionPromise;
+  const terminalSnapshot = params.manager.getSnapshot(id) ?? snapshot;
+  const terminalReason = params.resolveTerminalReason?.(terminalSnapshot);
   params.respond(
     true,
-    {
-      id,
-      decision,
-      createdAtMs: snapshot?.createdAtMs,
-      expiresAtMs: snapshot?.expiresAtMs,
-    },
+    buildWaitResponse(id, decision, terminalSnapshot, terminalReason),
     undefined,
   );
 }

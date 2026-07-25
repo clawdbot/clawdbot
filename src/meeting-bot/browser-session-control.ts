@@ -1,6 +1,9 @@
 import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import { asMeetingBrowserTabs } from "./browser-request.js";
-import type { MeetingBrowserRequestCaller, MeetingPlatformAdapter } from "./platform-adapter.js";
+import type {
+  MeetingBrowserRequestCaller,
+  MeetingPlatformAdapter,
+} from "./platform-adapter-contract.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,

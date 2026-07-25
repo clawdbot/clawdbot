@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import {
   canonicalProviderName,
@@ -33,6 +34,7 @@ import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpe
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
+const MAX_TIMING_JSON_LINE_CHARS = 1024 * 1024;
 const REMOTE_CHANGED_GATE_BUNDLE_FILE = ".openclaw-crabbox-changed-gate.bundle";
 // A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
 // exceed the snappy default probe timeout while it renders `run --help` or does
@@ -940,12 +942,20 @@ function blacksmithTestboxPrivateKeyPath(id) {
 
 // Crabbox claims bind raw Testbox ids to one repo before remote execution.
 // Check the same sidecar so a dependency exit bug cannot make refusal green.
-function blacksmithTestboxClaimRepoRoot(id) {
+function blacksmithTestboxClaimPath(id) {
+  return resolve(blacksmithTestboxClaimsDir(), `${id}.json`);
+}
+
+function blacksmithTestboxClaimsDir() {
   const configuredStateRoot = process.env.XDG_STATE_HOME?.trim();
   const stateDir = configuredStateRoot
     ? resolve(configuredStateRoot, "crabbox")
     : resolve(crabboxConfigDir(), "state");
-  const claimPath = resolve(stateDir, "claims", `${id}.json`);
+  return resolve(stateDir, "claims");
+}
+
+function blacksmithTestboxClaimRepoRoot(id) {
+  const claimPath = blacksmithTestboxClaimPath(id);
   if (!pathExists(claimPath)) {
     return "";
   }
@@ -983,6 +993,93 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs) {
       `[crabbox] lease ${id} is claimed by repo ${claimRepoRoot}; use --reclaim to claim it for ${repoRoot}`,
     );
     process.exit(2);
+  }
+}
+
+function restoreTemporaryBlacksmithTestboxClaimPath(claimPath) {
+  const original = readFileSync(claimPath, "utf8");
+  const claim = JSON.parse(original);
+  if (!claim || typeof claim !== "object" || claim.repoRoot !== childCwd) {
+    return;
+  }
+  claim.repoRoot = repoRoot;
+  const temporaryPath = `${claimPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(claim)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    if (readFileSync(claimPath, "utf8") !== original) {
+      return;
+    }
+    renameSync(temporaryPath, claimPath);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
+function restoreTemporaryBlacksmithTestboxClaim(commandArgs, capturedLeaseId) {
+  if (childCwd === repoRoot) {
+    return;
+  }
+
+  const explicitLeaseId = commandArgs[0] === "run" ? optionValue(commandArgs, "--id") : "";
+  const exactLeaseId = explicitLeaseId || capturedLeaseId;
+  const canCreateRetainedLease =
+    commandArgs[0] === "warmup" ||
+    (commandArgs[0] === "run" &&
+      (hasOption(commandArgs, "--keep") || hasOption(commandArgs, "--keep-on-failure")));
+  let claimPaths = [];
+  if (exactLeaseId) {
+    claimPaths = [blacksmithTestboxClaimPath(exactLeaseId)];
+  } else if (canCreateRetainedLease) {
+    try {
+      const claimsDir = blacksmithTestboxClaimsDir();
+      if (pathExists(claimsDir)) {
+        claimPaths = readdirSync(claimsDir)
+          .filter((entry) => entry.endsWith(".json"))
+          .map((entry) => resolve(claimsDir, entry));
+      }
+    } catch (error) {
+      console.error(
+        `[crabbox] warning: failed to inspect temporary Testbox claims: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+  } else {
+    return;
+  }
+
+  for (const claimPath of claimPaths) {
+    if (!pathExists(claimPath)) {
+      continue;
+    }
+    try {
+      restoreTemporaryBlacksmithTestboxClaimPath(claimPath);
+    } catch (error) {
+      console.error(
+        `[crabbox] warning: failed to restore temporary Testbox claim: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+}
+
+function observeBlacksmithTimingJSONLine(line) {
+  const value = line.trim();
+  if (!value.startsWith("{") || !value.endsWith("}")) {
+    return;
+  }
+  try {
+    const report = JSON.parse(value);
+    if (
+      canonicalProviderName(report?.provider) === "blacksmith-testbox" &&
+      typeof report.leaseId === "string" &&
+      report.leaseId.startsWith("tbx_")
+    ) {
+      capturedBlacksmithLeaseId = report.leaseId;
+    }
+  } catch {
+    // Human stderr may contain brace-delimited non-JSON lines.
   }
 }
 
@@ -3482,6 +3579,7 @@ let stopFullCheckoutKeepalive = () => {};
 let cleanupDone = false;
 let remoteChangedGateBase = "";
 let remoteChangedGateAlias = "";
+let capturedBlacksmithLeaseId = "";
 const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
 normalizedArgs = scriptBootstrap.args;
 const scriptStdinPrepared = scriptBootstrap.prepared;
@@ -3520,6 +3618,11 @@ function cleanupOnce() {
   stopFullCheckoutKeepalive();
   wsl2ScriptBootstrap.cleanup();
   scriptBootstrap.cleanup();
+  if (canonicalProvider === "blacksmith-testbox") {
+    // Crabbox stamps claims with its cwd. Delegated runs use a throwaway sync checkout,
+    // so restore the real repo or every later reuse needs --reclaim.
+    restoreTemporaryBlacksmithTestboxClaim(normalizedArgs, capturedBlacksmithLeaseId);
+  }
   preserveTemporaryCrabboxRuns();
   cleanupChildCwd();
 }
@@ -3626,6 +3729,8 @@ if (fullCheckout) {
   }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
+const captureBlacksmithTimingJSON =
+  canonicalProvider === "blacksmith-testbox" && hasOption(normalizedArgs, "--timing-json");
 // Fast-fail hint context: run --id reuse dies in under a second when the
 // lease hit its idle timeout, with only a bare nonzero exit from the binary.
 const reusedRunLeaseId = normalizedArgs[0] === "run" ? optionValue(normalizedArgs, "--id") : "";
@@ -3633,11 +3738,53 @@ const childStartedAtMs = Date.now();
 const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
-  stdio: "inherit",
+  stdio: ["inherit", "inherit", captureBlacksmithTimingJSON ? "pipe" : "inherit"],
   detached: process.platform !== "win32",
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
+if (child.stderr) {
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  let discardingOversizedLine = false;
+  const observeText = (text) => {
+    let remaining = text;
+    while (remaining) {
+      const newline = remaining.indexOf("\n");
+      const fragment = newline >= 0 ? remaining.slice(0, newline) : remaining;
+      if (!discardingOversizedLine) {
+        pending += fragment;
+        if (pending.length > MAX_TIMING_JSON_LINE_CHARS) {
+          pending = "";
+          discardingOversizedLine = true;
+        }
+      }
+      if (newline < 0) {
+        return;
+      }
+      if (!discardingOversizedLine) {
+        observeBlacksmithTimingJSONLine(pending);
+      }
+      pending = "";
+      discardingOversizedLine = false;
+      remaining = remaining.slice(newline + 1);
+    }
+  };
+  child.stderr.on("data", (chunk) => {
+    const canContinue = process.stderr.write(chunk);
+    observeText(decoder.write(chunk));
+    if (!canContinue) {
+      child.stderr.pause();
+      process.stderr.once("drain", () => child.stderr?.resume());
+    }
+  });
+  child.stderr.on("end", () => {
+    observeText(decoder.end());
+    if (pending && !discardingOversizedLine) {
+      observeBlacksmithTimingJSONLine(pending);
+    }
+  });
+}
 const childKillGraceMs = resolveChildKillGraceMs(process.env);
 let childForceKillTimer;
 let childTreeShutdownStarted = false;

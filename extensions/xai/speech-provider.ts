@@ -99,7 +99,7 @@ function normalizeXaiProviderConfig(rawConfig: Record<string, unknown>): XaiTtsP
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: xai?.apiKey,
-      path: "messages.tts.providers.xai.apiKey",
+      path: "tts.providers.xai.apiKey",
     }),
     baseUrl: normalizeXaiTtsBaseUrl(
       trimToUndefined(xai?.baseUrl) ?? trimToUndefined(process.env.XAI_BASE_URL) ?? XAI_BASE_URL,
@@ -317,7 +317,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
 }
 
 // Resolve an xAI bearer for `/v1/tts`:
-// 1. Configured `messages.tts.providers.xai.apiKey` (or talk equivalent)
+// 1. Configured `tts.providers.xai.apiKey` (or talk equivalent)
 // 2. `XAI_API_KEY` env var
 // 3. xAI OAuth auth profile (cfg-scoped)
 async function resolveOptionalXaiAudioApiKey(

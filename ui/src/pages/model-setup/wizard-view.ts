@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 
 type WizardViewProps = {
@@ -25,7 +26,7 @@ function renderDeviceCode(step: Extract<ModelSetupWizardState, { phase: "step" }
       <button
         type="button"
         class="btn btn--sm"
-        @click=${() => void navigator.clipboard?.writeText(step.deviceCode!.code)}
+        @click=${() => void copyToClipboard(step.deviceCode!.code)}
       >
         ${t("modelSetup.wizard.copy")}
       </button>
@@ -77,9 +78,12 @@ function renderTextStep(props: WizardViewProps) {
       }}
     >
       ${step.message
-        ? html`<div class="model-setup-wizard__message">${step.message}</div>`
+        ? html`<div class="model-setup-wizard__message">
+            <label for="model-setup-wizard-text-input">${step.message}</label>
+          </div>`
         : nothing}
       <input
+        id="model-setup-wizard-text-input"
         class="input"
         name="wizard-text"
         type=${step.sensitive ? "password" : "text"}

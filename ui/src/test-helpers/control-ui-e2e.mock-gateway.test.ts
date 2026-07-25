@@ -4,11 +4,22 @@
 import { describe, expect, it } from "vitest";
 import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
 
-type ResponseFrame = { id?: string; type?: string; payload?: Record<string, unknown> };
+type ResponseFrame = {
+  event?: string;
+  id?: string;
+  type?: string;
+  payload?: Record<string, unknown>;
+};
 
 function flushMockTimers(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
+  });
+}
+
+function waitForMockCycle(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 300);
   });
 }
 
@@ -151,6 +162,136 @@ describe("mock gateway stateful config", () => {
 });
 
 describe("mock gateway stateful sessions", () => {
+  it("cycles subscription-scoped session events and stops after unsubscribe", async () => {
+    const sessionKey = "agent:main:sidebar-narration-demo";
+    const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "sessions.observer.ask": {
+          cases: [
+            {
+              match: { sessionKey },
+              response: {
+                answer: "It is rerunning the focused test to verify the latest fix.",
+                digestRevision: 1,
+              },
+            },
+          ],
+        },
+      },
+      repeatingSessionEvents: {
+        intervalMs: 250,
+        events: [
+          {
+            event: "agent",
+            payload: {
+              data: {
+                replace: true,
+                text: "Rebasing onto main and rerunning the sidebar suite.",
+              },
+              sessionKey,
+              stream: "assistant",
+            },
+          },
+          {
+            event: "session.tool",
+            payload: { data: { name: "exec" }, sessionKey, stream: "tool" },
+          },
+          {
+            event: "session.observer",
+            payload: {
+              headline: "Rerunning focused tests",
+              health: "grinding",
+              revision: 1,
+              runId: "mock-observer-run",
+              sessionKey,
+              updatedAt: 1_000,
+            },
+          },
+        ],
+      },
+    });
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "subscribe-1",
+        method: "sessions.messages.subscribe",
+        params: { key: sessionKey },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "subscribe-1")?.payload).toEqual({
+      key: sessionKey,
+    });
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "observer-ask-1",
+        method: "sessions.observer.ask",
+        params: { sessionKey, question: "Why is it rerunning that test?" },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "observer-ask-1")?.payload).toEqual({
+      answer: "It is rerunning the focused test to verify the latest fix.",
+      digestRevision: 1,
+    });
+    expect(frames.find((frame) => frame.event === "agent")?.payload).toMatchObject({
+      sessionKey,
+      stream: "assistant",
+      data: { text: "Rebasing onto main and rerunning the sidebar suite." },
+    });
+
+    await waitForMockCycle();
+    expect(frames.find((frame) => frame.event === "session.tool")?.payload).toMatchObject({
+      sessionKey,
+      stream: "tool",
+      data: { name: "exec" },
+    });
+
+    await waitForMockCycle();
+    expect(frames.find((frame) => frame.event === "session.observer")?.payload).toMatchObject({
+      headline: "Rerunning focused tests",
+      runId: "mock-observer-run",
+      sessionKey,
+    });
+
+    // Second assistant cycle must repeat: the replayed snapshot carries
+    // replace, so the narration controller re-renders instead of deduping.
+    await waitForMockCycle();
+    const assistantFrames = frames.filter((frame) => frame.event === "agent");
+    expect(assistantFrames.length).toBeGreaterThanOrEqual(2);
+    expect(assistantFrames.at(-1)?.payload).toMatchObject({
+      sessionKey,
+      stream: "assistant",
+      data: { replace: true, text: "Rebasing onto main and rerunning the sidebar suite." },
+    });
+
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "unsubscribe-1",
+        method: "sessions.messages.unsubscribe",
+        params: { key: sessionKey },
+      }),
+    );
+    await flushMockTimers();
+    const eventCount = frames.filter((frame) => frame.type === "event").length;
+    await waitForMockCycle();
+    expect(frames.filter((frame) => frame.type === "event")).toHaveLength(eventCount);
+    socket.close();
+  });
+
   it("keeps archive filtering opt-in for static session fixtures", async () => {
     const script = createControlUiMockGatewayInitScript({
       methodResponses: {

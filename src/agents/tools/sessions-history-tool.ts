@@ -27,6 +27,7 @@ import {
   readStringParam,
   ToolInputError,
 } from "./common.js";
+import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -408,6 +409,7 @@ export function createSessionsHistoryTool(opts?: {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
       }
       const visibleSession = await resolveVisibleSessionReference({
+        action: "history",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
@@ -453,21 +455,27 @@ export function createSessionsHistoryTool(opts?: {
         throw new ToolInputError("sessionId requires messageId");
       }
       const includeTools = Boolean(params.includeTools);
-      const result = await gatewayCall<{
-        messages: Array<unknown>;
-        offset?: number;
-        nextOffset?: number;
-        hasMore?: boolean;
-        totalMessages?: number;
-      }>({
-        method: "chat.history",
-        params: {
-          sessionKey: resolvedKey,
-          limit,
-          ...(offset !== undefined ? { offset } : {}),
-          ...(messageId ? { messageId } : {}),
-          ...(sessionId ? { sessionId } : {}),
-        },
+      const result = await runWithScopedSessionAccess({
+        cfg,
+        expectedSessionId: access.expectedSessionId,
+        targetSessionKey: resolvedKey,
+        run: async () =>
+          await gatewayCall<{
+            messages: Array<unknown>;
+            offset?: number;
+            nextOffset?: number;
+            hasMore?: boolean;
+            totalMessages?: number;
+          }>({
+            method: "chat.history",
+            params: {
+              sessionKey: resolvedKey,
+              limit,
+              ...(offset !== undefined ? { offset } : {}),
+              ...(messageId ? { messageId } : {}),
+              ...(sessionId ? { sessionId } : {}),
+            },
+          }),
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);

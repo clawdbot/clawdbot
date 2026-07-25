@@ -32,6 +32,7 @@ MIN_INTERVAL=3600
 send_notification() {
     local message="$1"
     local priority="${2:-default}"
+    local notification_sent=0
 
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $message"
 
@@ -46,23 +47,30 @@ send_notification() {
         # Check if we can still use openclaw
         if "$SCRIPT_DIR/claude-auth-status.sh" simple 2>/dev/null | grep -q "OK\|EXPIRING"; then
             echo "Sending via OpenClaw to $NOTIFY_PHONE..."
-            openclaw send --to "$NOTIFY_PHONE" --message "$message" 2>/dev/null || true
+            if openclaw send --to "$NOTIFY_PHONE" --message "$message" 2>/dev/null; then
+                notification_sent=1
+            fi
         fi
     fi
 
     # Send via ntfy.sh if configured
     if [ -n "$NOTIFY_NTFY" ]; then
         echo "Sending via ntfy.sh to $NOTIFY_NTFY..."
-        curl -s --connect-timeout 5 --max-time 15 -o /dev/null \
+        if curl -fsS --connect-timeout 5 --max-time 15 -o /dev/null \
             -H "Title: OpenClaw Auth Alert" \
             -H "Priority: $priority" \
             -H "Tags: warning,key" \
             -d "$message" \
-            "https://ntfy.sh/$NOTIFY_NTFY" || true
+            "https://ntfy.sh/$NOTIFY_NTFY"; then
+            notification_sent=1
+        fi
     fi
 
-    # Update state
-    echo "$NOW" > "$STATE_FILE"
+    if [ "$notification_sent" -eq 1 ]; then
+        echo "$NOW" > "$STATE_FILE"
+    else
+        echo "No notification delivered; cooldown not updated" >&2
+    fi
 }
 
 # Check auth status

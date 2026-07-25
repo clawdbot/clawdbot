@@ -26,6 +26,9 @@ const BEFORE_AGENT_FINALIZE_EVENT = {
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: emitAgentEventMock,
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
 function createContext(

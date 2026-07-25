@@ -58,6 +58,7 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMoonshotProvider,
       buildStaticProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),

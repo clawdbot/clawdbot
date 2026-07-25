@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupAuthStartResult, WizardNextResult } from "../../api/types.ts";
+import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
@@ -13,6 +14,7 @@ type WizardRunnerOptions = {
   onDone: () => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
+  sessionExpiredMessage: () => string;
 };
 
 export class ModelSetupWizardRunner {
@@ -155,15 +157,17 @@ export class ModelSetupWizardRunner {
     this.sessionId = null;
     this.abortController?.abort();
     this.abortController = null;
-    if (client && sessionId) {
+    const sessionExpired = isWizardNotFoundError(error);
+    if (!sessionExpired && client && sessionId) {
       void client
         .request("wizard.cancel", { sessionId }, { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS })
         .catch(() => {
           // The failed request may have already completed or purged the session.
         });
     }
-    const message =
-      error instanceof Error && error.message.trim()
+    const message = sessionExpired
+      ? this.options.sessionExpiredMessage()
+      : error instanceof Error && error.message.trim()
         ? error.message
         : this.options.requestFailedMessage();
     this.setState({ phase: "error", message });

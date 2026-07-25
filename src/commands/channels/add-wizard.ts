@@ -102,7 +102,36 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       resolvedPlugins.set(channel, plugin);
     },
   });
+  const commitWizardConfig = async (config: OpenClawConfig) => {
+    await params.beforePersistentEffect?.();
+    const committed = await commitConfigWithPendingPluginInstalls({
+      nextConfig: config,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
+    if (committed.movedInstallRecords) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: committed.config,
+        reason: "source-changed",
+        installRecords: committed.installRecords,
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    }
+    await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
+      hooks: postWriteHooks.drain(),
+      cfg: committed.config,
+      runtime,
+      ...(params.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
+    });
+    return committed.config;
+  };
   if (selection.length === 0) {
+    if (nextConfig !== cfg) {
+      await commitWizardConfig(nextConfig);
+      await prompter.outro("Channels updated.");
+      return;
+    }
     await prompter.outro("No channel changes made.");
     return;
   }
@@ -198,28 +227,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     }
   }
 
-  await params.beforePersistentEffect?.();
-  const committed = await commitConfigWithPendingPluginInstalls({
-    nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
-  });
-  const writtenConfig = committed.config;
-  if (committed.movedInstallRecords) {
-    await refreshPluginRegistryAfterConfigMutation({
-      config: writtenConfig,
-      reason: "source-changed",
-      installRecords: committed.installRecords,
-      logger: { warn: (message) => runtime.log(message) },
-    });
-  }
-  await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
-    hooks: postWriteHooks.drain(),
-    cfg: writtenConfig,
-    runtime,
-    ...(params.beforePersistentEffect
-      ? { beforePersistentEffect: params.beforePersistentEffect }
-      : {}),
-  });
+  await commitWizardConfig(nextConfig);
   params.onConfigured?.(
     selection.map((channel) => ({
       channel,

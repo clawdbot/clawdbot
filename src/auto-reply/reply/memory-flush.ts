@@ -1,7 +1,7 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { legacyModelKey, modelKey } from "../../agents/model-selection-normalize.js";
+import { legacyModelKey, modelKey } from "../../agents/model-ref-shared.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

@@ -30,6 +30,8 @@ export type ModelCatalogEntry = {
 export type ModelCatalogSnapshot = {
   entries: ModelCatalogEntry[];
   routeVariants: ModelCatalogEntry[];
+  /** Static provider-hook rows captured alongside the full lifecycle generation. */
+  staticEntries?: ModelCatalogEntry[];
   /**
    * `false` only when this snapshot came from a degraded load (discovery threw,
    * static or empty fallback). Absent/`true` means authoritative — consumers that

@@ -138,13 +138,14 @@
     "type": "function"
   },
   {
-    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound only on supporting requester channel. Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work. Run result returns; session output stays thread.",
+    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound only on supporting requester channel. `visible=true`: persistent dashboard session; subagent only; omit `mode` (no `mode=\"run\"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherited tool allow/denylist blocks it at spawn with no config override. Session listing/addressing obeys `tools.sessions.visibility` (`tree` default: current + own spawn subtree). Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work. Run result returns; session output stays thread.",
     "inputSchema": {
       "properties": {
         "agentId": {
           "type": "string"
         },
         "attachAs": {
+          "description": "Attachment mount hint; unavailable with visible=true.",
           "properties": {
             "mountPath": {
               "type": "string"
@@ -153,6 +154,7 @@
           "type": "object"
         },
         "attachments": {
+          "description": "Inline snapshots; unavailable with visible=true.",
           "items": {
             "properties": {
               "content": {
@@ -176,11 +178,12 @@
           "type": "array"
         },
         "cleanup": {
+          "description": "Hidden session cleanup; visible=true always keeps the session.",
           "enum": ["delete", "keep"],
           "type": "string"
         },
         "context": {
-          "description": "Native: omit/isolated clean; fork only needing requester transcript.",
+          "description": "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
           "enum": ["isolated", "fork"],
           "type": "string"
         },
@@ -191,10 +194,11 @@
           "type": "string"
         },
         "lightContext": {
-          "description": "Light bootstrap; subagent only.",
+          "description": "Light bootstrap; subagent only; unavailable with visible=true.",
           "type": "boolean"
         },
         "mode": {
+          "description": "\"run\" one-shot; \"session\" persistent/thread-bound. Omit with visible=true.",
           "enum": ["run", "session"],
           "type": "string"
         },
@@ -202,6 +206,7 @@
           "type": "string"
         },
         "runtime": {
+          "description": "Runtime; visible=true requires \"subagent\".",
           "enum": ["subagent"],
           "type": "string"
         },
@@ -217,14 +222,15 @@
           "type": "string"
         },
         "thinking": {
+          "description": "Thinking override; unavailable with visible=true.",
           "type": "string"
         },
         "thread": {
-          "description": "Bind new chat thread when supported; true defaults mode=\"session\".",
+          "description": "Bind new chat thread when supported; true defaults mode=\"session\"; unavailable with visible=true.",
           "type": "boolean"
         },
         "visible": {
-          "description": "visible: user sees session in UI. Use when user asked or talks via web/app.",
+          "description": "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
           "type": "boolean"
         },
         "worktree": {
@@ -427,12 +433,23 @@
       },
       {
         "deferLoading": true,
-        "description": "Gateway schedules/wakes: reminders, later checks/follow-ups, recurring work. Never exec sleep/process-poll as timer. Main job => heartbeat system event; isolated => background task in `openclaw tasks`.\n\nACTIONS:\n- status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId\n- add job; update jobId+patch; remove jobId\n- run jobId (due only; runMode=\"force\" now); runs jobId history\n- wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.\n\nADD JOB:\n{ \"name\":\"...\", \"schedule\":{...}, \"trigger\":{ \"script\":\"...\", \"once\":false }, \"payload\":{...}, \"delivery\":{...}, \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nRequired: schedule,payload. enabled default true. trigger only every/cron.\n\nTARGET/PAYLOAD:\n- main => systemEvent {kind:\"systemEvent\",text:\"...\"}; systemEvent defaults main.\n- isolated/current/session:<id> => agentTurn {kind:\"agentTurn\",message:\"...\",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.\n- current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.\n\nSCHEDULE:\n- at: {kind:\"at\",at:\"ISO-8601\"}; timezone-less = UTC.\n- every: {kind:\"every\",everyMs:<ms>,anchorMs?}.\n- cron: {kind:\"cron\",expr:\"...\",tz?:\"IANA\"}. Expr is requested local wall time; never pre-convert to UTC. Missing tz = Gateway host local, not UTC. Shanghai 18:00: {kind:\"cron\",expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n\nTRIGGER SCRIPT:\n- Requires cron.triggers.enabled; if off, explain and never model-poll fallback.\n- Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.\n- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success. Check reads; payload acts.\n- Silent watcher: top-level delivery.mode=\"none\". Omitted delivery on isolated agentTurn announces and missing route may fail.\n- once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.\n- Hidden Code Mode tools: await tools.call(\"exec\", {command:\"...\"}); unknown id => search/describe.\n\nDELIVERY top-level: {mode:\"none|announce|webhook\",channel?,to?,threadId?,bestEffort?}\n- Isolated agentTurn omitted delivery => announce. announce only isolated/current/session; channel/to optional; threadId chat topic. Specific chat: set channel/to; no messaging tool inside run.\n- webhook posts finished-run event to URL in to.\n\nRestricted isolated runs may only self status/list, current get/runs, and remove current job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.",
+        "description": "Gateway schedules/wakes: reminders, later checks/follow-ups, recurring work. Never exec sleep/process-poll as timer. Main job => heartbeat system event; isolated => background task in `openclaw tasks`.\n\nACTIONS:\n- status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId\n- add job; update jobId+patch; remove jobId\n- run jobId (due only; runMode=\"force\" now); runs jobId history; next_check in (current paced job only)\n- wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.\n\nADD JOB:\n{ \"name\":\"...\", \"schedule\":{...}, \"pacing\":{ \"min\":\"15m\", \"max\":\"4h\" }, \"trigger\":{ \"script\":\"...\", \"once\":false }, \"payload\":{...}, \"delivery\":{...}, \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nRequired: schedule,payload. enabled default true. trigger only every/cron.\n\nTARGET/PAYLOAD:\n- main => systemEvent {kind:\"systemEvent\",text:\"...\"} or script; systemEvent defaults main.\n- isolated/current/session:<id> => agentTurn {kind:\"agentTurn\",message:\"...\",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.\n- script {kind:\"script\",script:\"...\",timeoutSeconds?,toolBudget?} supports main or isolated only and requires cron.triggers.enabled.\n- current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.\n\nSCHEDULE:\n- at: {kind:\"at\",at:\"ISO-8601\"}; timezone-less = UTC.\n- every: {kind:\"every\",everyMs:<ms>,anchorMs?}.\n- cron: {kind:\"cron\",expr:\"...\",tz?:\"IANA\"}. Expr is requested local wall time; never pre-convert to UTC. Missing tz = Gateway host local, not UTC. Shanghai 18:00: {kind:\"cron\",expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n\nTRIGGER SCRIPT:\n- Requires cron.triggers.enabled; if off, explain and never model-poll fallback.\n- Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.\n- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success.\n- Fire on every actionable state, including failures/timeouts; success-only watchers go silent when broken, which looks healthy. Dedupe by comparing trigger.state and returning new state, never memory.\n- Keep scripts read-only; actions belong in payload. message must be self-contained: it is the fired run's entire context.\n- Silent watcher: top-level delivery.mode=\"none\". Omitted delivery on isolated agentTurn announces and missing route may fail.\n- once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.\n- Hidden Code Mode tools: await tools.call(\"exec\", {command:\"...\"}); unknown id => search/describe.\n\nDELIVERY top-level: {mode:\"none|announce|webhook\",channel?,to?,threadId?,bestEffort?}\n- Isolated agentTurn omitted delivery => announce. announce only isolated/current/session; channel/to optional; threadId chat topic. Specific chat: set channel/to; no messaging tool inside run.\n- webhook posts finished-run event to URL in to.\n\nRestricted isolated runs may only self status/list, current get/runs/remove, and next_check for their own paced job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.",
         "inputSchema": {
           "additionalProperties": true,
           "properties": {
             "action": {
-              "enum": ["status", "list", "get", "add", "update", "remove", "run", "runs", "wake"],
+              "enum": [
+                "status",
+                "list",
+                "get",
+                "add",
+                "update",
+                "remove",
+                "run",
+                "runs",
+                "next_check",
+                "wake"
+              ],
               "type": "string"
             },
             "agentId": {
@@ -451,6 +468,10 @@
               "type": "string"
             },
             "id": {
+              "type": "string"
+            },
+            "in": {
+              "description": "Relative duration for action=\"next_check\" (for example, \"15m\")",
               "type": "string"
             },
             "includeDisabled": {
@@ -611,6 +632,21 @@
                   },
                   "type": "object"
                 },
+                "pacing": {
+                  "additionalProperties": false,
+                  "description": "Dynamic-cadence bounds; at least one of min or max is required",
+                  "properties": {
+                    "max": {
+                      "description": "Maximum dynamic delay",
+                      "type": "string"
+                    },
+                    "min": {
+                      "description": "Minimum dynamic delay",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
                 "payload": {
                   "additionalProperties": true,
                   "properties": {
@@ -626,7 +662,7 @@
                     },
                     "kind": {
                       "description": "Payload kind",
-                      "enum": ["systemEvent", "agentTurn"],
+                      "enum": ["systemEvent", "agentTurn", "script"],
                       "type": "string"
                     },
                     "lightContext": {
@@ -640,6 +676,10 @@
                       "description": "Model override",
                       "type": "string"
                     },
+                    "script": {
+                      "description": "Headless code-mode script",
+                      "type": "string"
+                    },
                     "text": {
                       "description": "systemEvent text",
                       "type": "string"
@@ -651,6 +691,11 @@
                     "timeoutSeconds": {
                       "minimum": 0,
                       "type": "number"
+                    },
+                    "toolBudget": {
+                      "description": "Maximum script tool calls",
+                      "minimum": 1,
+                      "type": "integer"
                     },
                     "toolsAllow": {
                       "description": "Allowed tools",
@@ -674,6 +719,23 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
                       "minimum": 1,
@@ -686,6 +748,18 @@
                     "kind": {
                       "description": "Schedule kind",
                       "enum": ["at", "every", "cron"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
                       "type": "string"
                     },
                     "staggerMs": {
@@ -943,6 +1017,28 @@
                   "description": "Job name",
                   "type": "string"
                 },
+                "pacing": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "description": "Dynamic-cadence bounds; at least one of min or max is required",
+                      "properties": {
+                        "max": {
+                          "description": "Maximum dynamic delay",
+                          "type": "string"
+                        },
+                        "min": {
+                          "description": "Minimum dynamic delay",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "payload": {
                   "additionalProperties": true,
                   "properties": {
@@ -965,7 +1061,7 @@
                     },
                     "kind": {
                       "description": "Payload kind",
-                      "enum": ["systemEvent", "agentTurn"],
+                      "enum": ["systemEvent", "agentTurn", "script"],
                       "type": "string"
                     },
                     "lightContext": {
@@ -986,6 +1082,10 @@
                       ],
                       "description": "Model override, or null to clear"
                     },
+                    "script": {
+                      "description": "Headless code-mode script",
+                      "type": "string"
+                    },
                     "text": {
                       "description": "systemEvent text",
                       "type": "string"
@@ -997,6 +1097,11 @@
                     "timeoutSeconds": {
                       "minimum": 0,
                       "type": "number"
+                    },
+                    "toolBudget": {
+                      "description": "Maximum script tool calls",
+                      "minimum": 1,
+                      "type": "integer"
                     },
                     "toolsAllow": {
                       "anyOf": [
@@ -1027,6 +1132,23 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
                       "minimum": 1,
@@ -1039,6 +1161,18 @@
                     "kind": {
                       "description": "Schedule kind",
                       "enum": ["at", "every", "cron"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
                       "type": "string"
                     },
                     "staggerMs": {

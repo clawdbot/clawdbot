@@ -102,12 +102,8 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     toolSchemaProfile?: string;
     /** JSON Schema keywords rejected by this provider's tool schema validator. */
     unsupportedToolSchemaKeywords?: string[];
-    /** Whether this model/provider exposes a native web search tool. */
-    nativeWebSearchTool?: boolean;
     /** Encoding expected for tool-call arguments in provider payloads. */
     toolCallArgumentsEncoding?: string;
-    /** Whether Mistral-compatible tool-call ids must be generated/normalized. */
-    requiresMistralToolIds?: boolean;
     /** Whether OpenAI-style calls must be reshaped to Anthropic-compatible tool payloads. */
     requiresOpenAiAnthropicToolPayload?: boolean;
   };

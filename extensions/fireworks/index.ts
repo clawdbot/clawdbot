@@ -95,7 +95,9 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildFireworksProvider,
+      buildStaticProvider: buildFireworksProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     wrapStreamFn: wrapFireworksProviderStream,

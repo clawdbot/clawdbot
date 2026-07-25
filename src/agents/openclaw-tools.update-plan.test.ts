@@ -181,16 +181,16 @@ describe("openclaw-tools update_plan gating", () => {
     expect(embedded).not.toContain("openclaw");
   });
 
-  it("requires explicit transcripts enablement before registering the transcripts tool", () => {
+  it("registers transcripts by default with an explicit global opt-out", () => {
     const defaultTools = createFastToolNames({
       config: {} as OpenClawConfig,
     });
-    const enabledTools = createFastToolNames({
-      config: { transcripts: { enabled: true } } as OpenClawConfig,
+    const disabledTools = createFastToolNames({
+      config: { transcripts: { enabled: false } } as OpenClawConfig,
     });
 
-    expect(defaultTools).not.toContain("transcripts");
-    expect(enabledTools).toContain("transcripts");
+    expect(defaultTools).toContain("transcripts");
+    expect(disabledTools).not.toContain("transcripts");
   });
 
   it("registers task suggestions only for sessions with an actionable gateway sink", () => {

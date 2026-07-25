@@ -19,6 +19,25 @@ const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const resolveDefaultModelMock = vi.hoisted(() => vi.fn());
+const resolveCommitmentsConfigMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    enabled: true,
+    maxPerDay: 3,
+    extraction: {
+      debounceMs: 15_000,
+      batchMaxItems: 8,
+      queueMaxItems: 64,
+      confidenceThreshold: 0.72,
+      careConfidenceThreshold: 0.86,
+      timeoutSeconds: 45,
+    },
+  })),
+);
+
+vi.mock("./config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config.js")>()),
+  resolveCommitmentsConfig: resolveCommitmentsConfigMock,
+}));
 
 vi.mock("../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
@@ -60,6 +79,7 @@ describe("commitment extraction runtime", () => {
     resetCommitmentExtractionRuntimeForTests();
     runEmbeddedAgentMock.mockReset();
     resolveDefaultModelMock.mockReset();
+    resolveCommitmentsConfigMock.mockClear();
     vi.useRealTimers();
     vi.unstubAllEnvs();
     stateDirEnvSnapshot?.restore();
@@ -73,11 +93,7 @@ describe("commitment extraction runtime", () => {
     tmpDirs.push(tmpDir);
     stateDirEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
-    return {
-      commitments: {
-        enabled: true,
-      },
-    };
+    return {};
   }
 
   it("does not enqueue background extraction in test mode unless forced", async () => {
@@ -97,9 +113,19 @@ describe("commitment extraction runtime", () => {
   });
 
   it("keeps hidden extraction opt-in by default", () => {
-    const cfg: OpenClawConfig = {
-      commitments: {},
-    };
+    const cfg: OpenClawConfig = {};
+    resolveCommitmentsConfigMock.mockReturnValueOnce({
+      enabled: false,
+      maxPerDay: 3,
+      extraction: {
+        debounceMs: 15_000,
+        batchMaxItems: 8,
+        queueMaxItems: 64,
+        confidenceThreshold: 0.72,
+        careConfidenceThreshold: 0.86,
+        timeoutSeconds: 45,
+      },
+    });
     configureCommitmentExtractionRuntime({
       forceInTests: true,
       setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,

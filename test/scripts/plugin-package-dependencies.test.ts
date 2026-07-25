@@ -74,6 +74,16 @@ describe("scripts/lib/plugin-package-dependencies.mjs", () => {
         shared: "^1.1.0",
       },
     });
+    writePackageJson(root, "external", {
+      dependencies: {
+        shared: "^9.0.0",
+      },
+      openclaw: {
+        build: {
+          bundledDist: false,
+        },
+      },
+    });
 
     expect([...collectBundledPluginPackageDependencySpecs(root)]).toEqual([
       [

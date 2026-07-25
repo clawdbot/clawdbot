@@ -334,7 +334,6 @@ describe("update-startup", () => {
         channel: "beta" as const,
         auto: {
           enabled: true,
-          betaCheckIntervalHours: 1,
         },
       },
     };
@@ -914,8 +913,6 @@ describe("update-startup", () => {
         channel: "stable" as const,
         auto: {
           enabled: true,
-          stableDelayHours: 6,
-          stableJitterHours: 12,
         },
       },
     };
@@ -950,10 +947,6 @@ describe("update-startup", () => {
   it("runs beta auto-update checks hourly when enabled", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     const runAutoUpdate = createAutoUpdateSuccessMock();
-    getRuntimeConfigMock.mockReturnValue({
-      gateway: { reload: { deferralTimeoutMs: 90_000 } },
-    });
-
     await runAutoUpdateCheckWithDefaults({
       cfg: createBetaAutoUpdateConfig(),
       runAutoUpdate,
@@ -963,7 +956,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "beta",
       timeoutMs: 45 * 60 * 1000,
-      restartDrainTimeoutMs: 90_000,
+      restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
     });
   });
@@ -1072,7 +1065,7 @@ describe("update-startup", () => {
       throw new Error("expected command options object");
     }
     expect(options.timeoutMs).toBe(45 * 60 * 1000);
-    expect(options.env).toEqual({ OPENCLAW_AUTO_UPDATE: "1" });
+    expect(options.env).toBeUndefined();
   });
 
   it("hands supervised auto-updates to a detached service handoff before restarting", async () => {

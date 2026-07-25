@@ -5,7 +5,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
-} from "../../channels/plugins/types.public.js";
+} from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {

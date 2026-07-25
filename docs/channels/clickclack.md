@@ -19,15 +19,22 @@ bot using **Setup code (recommended)**, and copy the generated command:
 openclaw channels add clickclack --code 'https://clickclack.example.com/#XXXX-XXXX-XXXX'
 ```
 
+For separate frontend and API origins or a path-mounted API, ClickClack emits an
+exact claim endpoint instead:
+
+```bash
+openclaw channels add clickclack --code 'https://api.example.com/services/clickclack/api/bot-setup-codes/claim#XXXX-XXXX-XXXX'
+```
+
 The setup code is single-use and expires after 10 minutes. OpenClaw claims it,
 receives the newly minted bot token and workspace settings, saves the account,
 verifies the connection, and reports whether the running gateway picked it up.
-The setup code itself is not stored in OpenClaw config.
+For versioned exact endpoints, OpenClaw validates and saves the canonical API
+base returned by ClickClack, including any path prefix. The setup code itself is
+not stored in OpenClaw config.
 
 Setup-code claims use HTTPS for public servers. Plain HTTP is also supported for
-local installations on loopback or private networks, including `localhost`,
-private IP addresses, and internal hostnames that resolve only to private
-addresses.
+local installations on loopback addresses such as `localhost` and `127.0.0.1`.
 
 If OpenClaw is already running, ClickClack connects automatically and no second
 command is needed. Otherwise, start it with:
@@ -105,7 +112,8 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 
 | Key                     | Default             | Notes                                                                                   |
 | ----------------------- | ------------------- | --------------------------------------------------------------------------------------- |
-| `baseUrl`               | none (required)     | ClickClack server URL.                                                                  |
+| `baseUrl`               | none (required)     | Public ClickClack URL used for browser-facing links.                                    |
+| `apiBaseUrl`            | `baseUrl`           | Optional server-to-server endpoint for REST and realtime WebSocket traffic.             |
 | `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec"`).        |
 | `tokenFile`             | none                | Path to a bot-token file; takes precedence over `token`.                                |
 | `workspace`             | none (required)     | Workspace id, slug, or name.                                                            |
@@ -118,6 +126,32 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | `model`, `systemPrompt` | none                | Used by `replyMode: "model"` completions.                                               |
 | `commandMenu`           | `true`              | Publish native commands to ClickClack composer autocomplete.                            |
 | `reconnectMs`           | `1500`              | Realtime reconnect delay (100 to 60000).                                                |
+| `discussions`           | disabled            | Managed per-session channel settings; see [Session discussions](#session-discussions).  |
+
+### Keep an auth-gated public hostname
+
+Use `apiBaseUrl` when ClickClack and the OpenClaw gateway run on the same host
+but the public ClickClack hostname is protected by an authentication gateway
+such as Cloudflare Access:
+
+```json5
+{
+  channels: {
+    clickclack: {
+      baseUrl: "https://clack.openclaw.ai",
+      apiBaseUrl: "http://127.0.0.1:8484",
+      token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
+      workspace: "default",
+    },
+  },
+}
+```
+
+The public hostname can remain fully auth-gated for browser users. OpenClaw
+uses the loopback endpoint for REST requests, setup verification, and the
+realtime WebSocket, while discussion `embedUrl` and `openUrl` links continue to
+use the public `baseUrl`. If `apiBaseUrl` is omitted, all traffic uses
+`baseUrl`, preserving existing behavior.
 
 If `plugins.allow` is a non-empty restrictive list, explicitly selecting
 ClickClack in channel setup or running `openclaw plugins enable clickclack`
@@ -156,6 +190,105 @@ Each account opens its own ClickClack realtime connection and uses its own bot t
   },
 }
 ```
+
+## Session discussions
+
+Enable discussions on one ClickClack account to give each OpenClaw session a
+dedicated ClickClack channel. The account token must include
+`channels:write` (the `bot:admin` bundle includes it); the normal `bot:write`
+setup token cannot create or synchronize channels.
+
+```json5
+{
+  channels: {
+    clickclack: {
+      enabled: true,
+      baseUrl: "https://clickclack.example.com",
+      token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
+      workspace: "default",
+      discussions: {
+        enabled: true,
+        workspace: "default",
+        controlUrlBase: "https://team.openclaw.ai",
+        section: "Sessions",
+      },
+    },
+  },
+}
+```
+
+`discussions.workspace` accepts the same workspace id, slug, or display name
+as the account-level `workspace` and defaults to that value. `section` controls
+the ClickClack sidebar section and defaults to `Sessions`. When
+`controlUrlBase` is set, the managed channel links back to the real Control UI
+session route, `/chat?session=<encoded-session-key>`.
+
+Enable discussions on exactly one ClickClack account. The gateway provider has
+no account selector, so multiple enabled discussion accounts are rejected
+rather than choosing one by configuration order.
+
+Opening a discussion creates a public ClickClack channel marked as externally
+managed. The plugin keeps the session label, category, and archive state in
+sync. Restoring a session restores its channel; clearing the session category
+moves the channel back to the configured default section. Deleting an
+OpenClaw session archives the ClickClack channel instead of deleting it, so its
+history remains available. The plugin reconciles bindings when discussion RPCs
+are used and approximately once per minute while any bindings exist.
+
+Inbound messages in a managed channel use a deterministic side session under
+the same agent id as the attached main session. The side agent is told which
+main session to observe and can use `sessions_history` and `session_status`
+(`changesSince` is useful for incremental checks). It uses `sessions_send` only
+when people in the discussion ask it to relay or steer the main session.
+The binding, managed ownership reference, and side-session peer identity include
+the concrete OpenClaw session id along with the pinned ClickClack server and
+channel. Resetting a reusable session key or retargeting an account revokes the
+old channel locally, archives it when the old credential remains usable, and
+cannot reuse its side transcript. Messages arriving through an
+archived, reset, disabled, or retargeted binding are dropped instead of falling
+back to the account's normal channel routing. Released bindings leave a durable
+revoked-channel marker so delayed realtime events remain fail-closed. Remote
+ownership is keyed by ClickClack server and channel id, so renaming the local
+account cannot turn a managed channel into an ordinary one.
+
+Keep `tools.sessions.visibility` at its safer default `tree`. The plugin
+installs a host-scoped grant only between each side session and its attached
+main session, plus a tool-policy hook that blocks session discovery and
+cross-session targets. It allows `sessions_history`, `session_status`, and
+`sessions_send` only for the attached main session and prevents the status call
+from changing that session's model. Those tools must still be present in the
+agent's effective tool allowlist. The system prompt is guidance; the host grant
+and hook are the authorization boundary.
+
+The ClickClack server must support managed-channel fields (`external_managed`,
+`external_ref`, `external_url`, and `sidebar_section`) on channel creation and
+updates and return them in channel responses. OpenClaw verifies that contract
+before persisting a binding. If a create response is lost, the next open adopts
+the channel by its server-enforced `external_ref` instead of creating another.
+Until that outcome is reconciled, the pending reservation quarantines
+otherwise-unbound events in the destination workspace. The coarse reconciler
+adopts the channel when the same session is still live or archives it after a
+reset; it clears the reservation when no remote channel was created.
+That reference contains a durable per-OpenClaw-installation namespace plus a
+hash of the session key, concrete session id, ClickClack destination, and durable
+binding generation. Separate gateways cannot adopt each other's channels,
+reset sessions cannot inherit old channel history, and an account or workspace
+round trip cannot re-adopt a previous channel. Bindings are also pinned to the
+configured ClickClack server URL and are invalidated if the account is
+retargeted. Changing or removing `controlUrlBase` updates or clears the managed
+channel link on the next reconciliation pass. Changing
+`discussions.workspace` archives and releases the old binding before a channel
+can be opened in the new workspace when the old workspace credential remains
+configured. If the token was replaced with a workspace-scoped credential that
+cannot access the old workspace, OpenClaw records the old channel as revoked and
+releases the binding without trying the replacement token; archive that leftover
+channel from ClickClack.
+
+The attached main session also receives a pull-only `discussion` tool. It reads
+the latest messages and recent thread replies as one escaped, attributed record
+per message, and has no write or lifecycle side effects. Channel-root and thread
+lookups have fixed request budgets; the result explicitly warns when that
+safety bound can omit an older active thread.
 
 ## Reply modes
 

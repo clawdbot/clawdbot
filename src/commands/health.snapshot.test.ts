@@ -69,11 +69,8 @@ async function loadFreshHealthModulesForTest() {
   vi.doMock("../config/sessions/paths.js", () => ({
     resolveStorePath: () => "/tmp/sessions.json",
   }));
-  vi.doMock("../config/sessions/store.js", () => ({
-    loadSessionStore: () => testStore,
-  }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
-    listSessionEntries: (scope?: { agentId?: string; storePath?: string }) => {
+    listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
       listHealthSessionEntriesCalls.push(scope ?? {});
       return Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
     },
@@ -557,7 +554,7 @@ describe("getHealthSnapshot", () => {
     ]);
   });
 
-  it("includes dead-lettered delivery queue entries in the health snapshot", async () => {
+  it("includes outbound and ingress dead letters in the health snapshot", async () => {
     testConfig = { session: { store: "/tmp/x" } };
     testStore = {};
     setActivePluginRegistry(createTestRegistry([]));
@@ -575,12 +572,28 @@ describe("getHealthSnapshot", () => {
         entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
       });
       moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+      const { createChannelIngressQueue } = await import("../channels/message/ingress-queue.js");
+      const ingressQueue = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "ops",
+      });
+      await ingressQueue.enqueue("dead-2", { text: "recover me" });
+      const claim = await ingressQueue.claim("dead-2", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await ingressQueue.fail(claim, { reason: "handler-error", failedAt: 50_000 });
 
       const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-      expect(snap.deliveryQueues?.failed).toEqual([
-        { queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) },
-      ]);
+      expect(snap.deliveryQueues).toEqual({
+        failed: [{ queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) }],
+        ingressFailed: [
+          { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
+        ],
+      });
     } finally {
+      const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
+      closeOpenClawStateDatabaseForTest();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -847,12 +860,12 @@ describe("getHealthSnapshot", () => {
     buildTelegramHealthSummaryForTest = (snapshot) => ({
       accountId: snapshot.accountId,
       configured: Boolean(snapshot.configured),
-      probe: { ok: true, token: "summary-secret" },
+      probe: { ok: true, token: "test-token" },
     });
     probeTelegramAccountForTestOverride = async () => ({
       ok: true,
       bot: { username: "runtime_bot" },
-      token: "probe-secret",
+      token: "test-token",
     });
 
     const snap = await getHealthSnapshot({

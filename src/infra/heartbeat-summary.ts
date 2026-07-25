@@ -96,7 +96,7 @@ export function resolveHeartbeatSummaryForAgent(
       prompt: resolveHeartbeatPromptText(defaults?.prompt),
       target: defaults?.target ?? DEFAULT_HEARTBEAT_TARGET,
       model: defaults?.model,
-      ackMaxChars: Math.max(0, defaults?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS),
+      ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     };
   }
 
@@ -109,13 +109,7 @@ export function resolveHeartbeatSummaryForAgent(
   const target =
     merged?.target ?? defaults?.target ?? overrides?.target ?? DEFAULT_HEARTBEAT_TARGET;
   const model = merged?.model ?? defaults?.model ?? overrides?.model;
-  const ackMaxChars = Math.max(
-    0,
-    merged?.ackMaxChars ??
-      defaults?.ackMaxChars ??
-      overrides?.ackMaxChars ??
-      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  );
+  const ackMaxChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 
   return {
     enabled: true,

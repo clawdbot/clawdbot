@@ -29,6 +29,7 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { createSessionObserver } from "./session-observer.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -71,6 +72,11 @@ export function startGatewayEventSubscriptions(params: {
   const auditMessageMode = resolveAuditMessageMode(runtimeConfig);
   const auditRecorder = createAuditEventRecorder({
     messageMode: auditEnabled ? auditMessageMode : "off",
+  });
+  const sessionObserver = createSessionObserver({
+    getConfig: getRuntimeConfig,
+    subscribers: params.sessionMessageSubscribers,
+    broadcastToConnIds: params.broadcastToConnIds,
   });
   const unsubscribePrivateAuditEvents = auditEnabled
     ? onAgentAuditEvent(auditRecorder.record)
@@ -248,6 +254,7 @@ export function startGatewayEventSubscriptions(params: {
   };
 
   const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
+    sessionObserver.handleEvent(evt);
     if (auditEnabled) {
       auditRecorder.record(evt);
     }
@@ -307,6 +314,7 @@ export function startGatewayEventSubscriptions(params: {
   });
   const agentUnsub = async () => {
     unsubscribeAgentEvents();
+    sessionObserver.dispose();
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
@@ -384,6 +392,7 @@ export function startGatewayEventSubscriptions(params: {
   };
 
   return {
+    sessionObserver,
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,

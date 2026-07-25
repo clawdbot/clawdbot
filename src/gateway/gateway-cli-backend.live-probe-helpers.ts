@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { sleep } from "../utils/sleep.js";
 import type { GatewayClient } from "./client.js";
@@ -221,7 +222,10 @@ async function callLoopbackJsonRpc(params: {
       body: JSON.stringify(params.body),
       signal: controller.signal,
     });
-    text = await readBoundedResponseText(response, maxBodyBytes);
+    const responseBody = await readResponseWithLimit(response, maxBodyBytes, {
+      onOverflow: () => new Error(`mcp loopback response body exceeded ${maxBodyBytes} bytes`),
+    });
+    text = responseBody.toString("utf8");
   } finally {
     clearTimeout(timer);
   }
@@ -239,28 +243,6 @@ async function callLoopbackJsonRpc(params: {
     throw new Error(`mcp loopback json-rpc error: ${parsed.error.message}`);
   }
   return parsed;
-}
-
-async function readBoundedResponseText(response: Response, byteLimit: number): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return "";
-  }
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    totalBytes += value.byteLength;
-    if (totalBytes > byteLimit) {
-      await reader.cancel();
-      throw new Error(`mcp loopback response body exceeded ${byteLimit} bytes`);
-    }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
 export async function verifyCliCronMcpLoopbackPreflight(params: {

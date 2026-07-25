@@ -249,6 +249,11 @@ internal class ChatComposerStateStore(
     omitted: Int,
   ) = synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Image) }
 
+  fun reportAttachmentOmission(
+    owner: ChatComposerOwner,
+    omitted: Int,
+  ) = synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Attachment) }
+
   /** Migrates every state surface and returns aliases owned by external queues. */
   fun resolveAliases(
     to: ChatComposerOwner,

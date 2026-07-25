@@ -26,15 +26,8 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { staticModelIdMatches } from "./model.static-id.js";
 
-export {
-  canonicalizeManifestModelCatalogProviderAlias,
-  resolveManifestModelCatalogProviderAliasMetadata,
-  resolveManifestModelCatalogProviderTransport,
-} from "./model.manifest-alias.js";
-export type {
-  ManifestModelCatalogProviderAliasMetadata,
-  ManifestModelCatalogProviderTransport,
-} from "./model.manifest-alias.js";
+export { resolveManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
+export type { ManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
 
 /**
  * Resolves bundled plugin static model-catalog rows into runtime model records.
@@ -212,6 +205,7 @@ type BundledProviderStaticCatalogResolverParams = {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerIds?: readonly string[];
 };
 
 /**
@@ -244,7 +238,10 @@ export function createBundledStaticCatalogModelResolver(params?: {
     for (const entry of plan.entries) {
       if (
         entry.discovery !== "static" &&
-        !(params?.includeRuntimeDiscovery && entry.discovery === "runtime")
+        !(
+          params?.includeRuntimeDiscovery &&
+          (entry.discovery === "runtime" || entry.discovery === "refreshable")
+        )
       ) {
         continue;
       }
@@ -378,11 +375,25 @@ export async function loadBundledProviderStaticCatalogContextModels(
       plugin.origin === "bundled" && plugin.providerDiscoverySource ? [plugin.id] : [],
     ),
   );
-  const pluginIds = resolveBundledProviderCompatPluginIds({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env,
-  }).filter((pluginId) => discoveryEntryPluginIds.has(pluginId));
+  const providerScopedPluginIds = params.providerIds?.flatMap((provider) =>
+    resolveBundledProviderStaticCatalogPluginIds({
+      provider,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    }),
+  );
+  const candidatePluginIds =
+    providerScopedPluginIds === undefined
+      ? resolveBundledProviderCompatPluginIds({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env,
+        })
+      : providerScopedPluginIds;
+  const pluginIds = [...new Set(candidatePluginIds)]
+    .filter((pluginId) => discoveryEntryPluginIds.has(pluginId))
+    .toSorted((left, right) => left.localeCompare(right));
   if (pluginIds.length === 0) {
     return [];
   }
@@ -457,7 +468,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
  * Prepares bundled provider static-catalog lookup.
  * Each provider hook runs at most once for the resolver lifetime.
  */
-export function createBundledProviderStaticCatalogModelResolver(
+function createBundledProviderStaticCatalogModelResolver(
   params: BundledProviderStaticCatalogResolverParams = {},
 ): (lookup: BundledStaticCatalogLookup) => Promise<ProviderRuntimeModel | undefined> {
   const resolveModel = createScopedBundledProviderStaticCatalogModelResolver(params);

@@ -37,8 +37,8 @@ function createDeferred<T>() {
 function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -304,12 +304,12 @@ describe("CronPage editor state sync", () => {
 });
 
 describe("CronPage lifecycle", () => {
-  it("registers idempotently after a module reset with the shared custom element registry", async () => {
+  it("registers idempotently when the module is evaluated again", async () => {
     const registered = customElements.get("openclaw-cron-page");
     expect(registered).toBeDefined();
 
-    vi.resetModules();
-    await expect(import("./cron-page.ts")).resolves.toBeDefined();
+    const freshModulePath = "./cron-page.ts?custom-element-idempotence";
+    await expect(import(/* @vite-ignore */ freshModulePath)).resolves.toBeDefined();
 
     expect(customElements.get("openclaw-cron-page")).toBe(registered);
   });
@@ -329,7 +329,7 @@ describe("CronPage lifecycle", () => {
     };
     page.cronModelSuggestions = ["old/model"];
 
-    gateway.emitSnapshot({ connected: false });
+    gateway.emitSnapshot({ phase: "stopped" });
     const disconnectedState = page.cron;
 
     expect(disconnectedState).not.toBe(connectedState);
@@ -338,7 +338,7 @@ describe("CronPage lifecycle", () => {
     expect(page.cronModelSuggestions).toEqual([]);
     expect(disconnectedState.cronCreateOpen).toBe(false);
 
-    gateway.emitSnapshot({ connected: true });
+    gateway.emitSnapshot({ phase: "connected" });
     expect(page.cron).not.toBe(disconnectedState);
   });
 
@@ -363,10 +363,10 @@ describe("CronPage lifecycle", () => {
     const page = createPage(createContext(gateway));
     await page.updateComplete;
 
-    gateway.emitSnapshot({ connected: true });
+    gateway.emitSnapshot({ phase: "connected" });
     await waitForCronPage(() => expect(modelRequestCount).toBe(1));
-    gateway.emitSnapshot({ connected: false });
-    gateway.emitSnapshot({ connected: true });
+    gateway.emitSnapshot({ phase: "stopped" });
+    gateway.emitSnapshot({ phase: "connected" });
     await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fresh/model"]));
 
     staleModels.resolve({ models: [{ id: "stale/model" }] });

@@ -5,10 +5,10 @@ scenario:
   surface: channel
   coverage:
     primary:
-      - channels.direct-visible-replies
+      - channels.direct-final-reply
     secondary:
-      - channels.qa-channel
-      - tools.message
+      - channels.qa-channel-final-reply
+      - channels.message-final-reply
   objective: Reproduce #85714 end to end under messages.visibleReplies=message_tool. A long private final reply that never calls the message tool must warn, enqueue one recovery retry by default, and deliver the original reply via message(action=send).
   gatewayConfigPatch:
     messages:

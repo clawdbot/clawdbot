@@ -1,4 +1,9 @@
 import { createCopilotController } from "./modules/copilot-background.js";
+import {
+  buildPageSharePayload,
+  capturePageShare,
+  waitForCondition,
+} from "./modules/page-share-core.js";
 // OpenClaw extension service worker.
 //
 // Thin transport between the OpenClaw extension relay (loopback WebSocket) and
@@ -50,6 +55,10 @@ const attachingTabs = new Map();
 const copilotRevocations = new Map();
 /** Debounce handle for tab-list refreshes. */
 let tabsSyncTimer = null;
+let nextPageShareRequestId = 1;
+let pageShareBadgeTimer = null;
+/** @type {Map<number, {resolve: (value: void) => void, reject: (error: Error) => void, timer: ReturnType<typeof setTimeout>}>} */
+const pendingPageShares = new Map();
 
 function setBadge(kind) {
   relayState = kind;
@@ -60,6 +69,21 @@ function setBadge(kind) {
     ready: kind === "on",
     label: COPILOT_RELAY_LABEL[kind] ?? COPILOT_RELAY_LABEL.off,
   });
+}
+
+function flashPageShareBadge(ok) {
+  if (pageShareBadgeTimer) {
+    clearTimeout(pageShareBadgeTimer);
+  }
+  void chrome.action.setBadgeText({ text: ok ? "✓" : "!" });
+  void chrome.action.setBadgeBackgroundColor({ color: ok ? "#0F9D58" : "#B91C1C" });
+  pageShareBadgeTimer = setTimeout(
+    () => {
+      pageShareBadgeTimer = null;
+      setBadge(relayState);
+    },
+    ok ? 2_000 : 3_000,
+  );
 }
 
 async function getConfig() {
@@ -116,6 +140,12 @@ async function addTabToOpenClawGroup(tabId) {
     title: OPENCLAW_TAB_GROUP_TITLE,
     color: groupColor,
   });
+}
+
+async function focusWindowForTab(tab) {
+  if (typeof tab.windowId === "number") {
+    await chrome.windows.update(tab.windowId, { focused: true });
+  }
 }
 
 async function removeTabFromOpenClawGroup(tabId) {
@@ -347,6 +377,9 @@ async function handleRelayCommand(msg) {
       case "createTab": {
         const tab = await chrome.tabs.create({ url: msg.url, active: msg.background !== true });
         await addTabToOpenClawGroup(tab.id);
+        if (msg.focus === true) {
+          await focusWindowForTab(tab);
+        }
         scheduleTabsSync();
         send({ type: "result", seq, result: { tabId: tab.id } });
         return;
@@ -360,9 +393,7 @@ async function handleRelayCommand(msg) {
       case "activateTab": {
         const tab = await chrome.tabs.get(msg.tabId);
         await chrome.tabs.update(msg.tabId, { active: true });
-        if (typeof tab.windowId === "number") {
-          await chrome.windows.update(tab.windowId, { focused: true });
-        }
+        await focusWindowForTab(tab);
         send({ type: "result", seq, result: {} });
         return;
       }
@@ -431,6 +462,19 @@ async function connectRelay() {
     } catch {
       return;
     }
+    if (msg?.type === "pageShareResult") {
+      const pending = pendingPageShares.get(msg.requestId);
+      if (pending) {
+        pendingPageShares.delete(msg.requestId);
+        clearTimeout(pending.timer);
+        if (msg.ok) {
+          pending.resolve();
+        } else {
+          pending.reject(new Error(msg.error || "Page share failed."));
+        }
+      }
+      return;
+    }
     void handleRelayCommand(msg);
   });
   ws.addEventListener("close", () => {
@@ -442,6 +486,86 @@ async function connectRelay() {
     }
   });
   // onclose follows onerror and drives the reconnect, so no error handler needed.
+}
+
+async function sendPageShareRequest(payload) {
+  if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
+    throw new Error("Relay not connected.");
+  }
+  const requestId = nextPageShareRequestId++;
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingPageShares.delete(requestId);
+      reject(new Error("Timed out waiting for OpenClaw."));
+    }, 10_000);
+    pendingPageShares.set(requestId, { resolve, reject, timer });
+    try {
+      relayWs.send(JSON.stringify({ type: "pageShare", requestId, payload }));
+    } catch (error) {
+      pendingPageShares.delete(requestId);
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
+async function ensureRelayReady() {
+  const config = await getConfig();
+  if (!config.relayUrl || !config.token) {
+    throw new Error("Pair the extension first.");
+  }
+  if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
+    await connectRelay();
+    if (!(await waitForCondition(() => relayWs?.readyState === WebSocket.OPEN, 3_000))) {
+      throw new Error("Relay not connected.");
+    }
+  }
+}
+
+async function sendPageToOpenClaw(tabId, note) {
+  await ensureRelayReady();
+  const tab = await chrome.tabs.get(tabId);
+  const capture = await capturePageShare(tab);
+  const payload = buildPageSharePayload({ ...capture, note });
+  if (!payload.content && !payload.selection) {
+    throw new Error("Nothing to send on this page.");
+  }
+  await sendPageShareRequest(payload);
+}
+
+// Context-menu selections bind to the click-time document: the relay-connect
+// delay can outlive a navigation, and recapture cannot see iframe selections,
+// so the payload is built from the click snapshot without touching the tab.
+async function sendSelectionSnapshot(tab, selection) {
+  await ensureRelayReady();
+  const payload = buildPageSharePayload({
+    url: tab.url ?? "",
+    title: tab.title ?? "",
+    content: "",
+    selection,
+    note: "",
+  });
+  await sendPageShareRequest(payload);
+}
+
+function withShareBadge(promise) {
+  return promise.then(
+    () => flashPageShareBadge(true),
+    () => flashPageShareBadge(false),
+  );
+}
+
+function sendPageFromChromeEntry(tabId) {
+  return withShareBadge(sendPageToOpenClaw(tabId, ""));
+}
+
+async function installPageShareContextMenu() {
+  await chrome.contextMenus.removeAll();
+  chrome.contextMenus.create({
+    id: "openclaw-send-page",
+    title: "Send page to OpenClaw",
+    contexts: ["page", "selection"],
+  });
 }
 
 copilot = createCopilotController({
@@ -572,6 +696,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ shared: await isTabShared(msg.tabId) });
         return;
       }
+      case "sendPageToOpenClaw": {
+        if (typeof msg.tabId !== "number") {
+          sendResponse({ ok: false, error: "No tab." });
+          return;
+        }
+        try {
+          await sendPageToOpenClaw(msg.tabId, msg.note);
+          sendResponse({ ok: true });
+        } catch (error) {
+          sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
       case "prepareCopilotPanel": {
         const options = await copilot.preparePanel(msg.tabId);
         sendResponse({ ok: true, ...options });
@@ -612,6 +752,26 @@ chrome.tabGroups.onRemoved.addListener(() => {
   void copilot.onConsentChanged();
 });
 
+chrome.commands.onCommand.addListener((command) => {
+  if (command !== "send-page") {
+    return;
+  }
+  void chrome.tabs
+    .query({ active: true, lastFocusedWindow: true })
+    .then(([tab]) => (typeof tab?.id === "number" ? sendPageFromChromeEntry(tab.id) : undefined));
+});
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== "openclaw-send-page" || typeof tab?.id !== "number") {
+    return;
+  }
+  const selection = info.selectionText?.trim() ?? "";
+  if (selection) {
+    void withShareBadge(sendSelectionSnapshot(tab, selection));
+    return;
+  }
+  void sendPageFromChromeEntry(tab.id);
+});
+
 // Watchdog: MV3 can stop this worker; the alarm revives it and re-connects.
 chrome.alarms.create(RELAY_WATCHDOG_ALARM, { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -625,6 +785,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 chrome.runtime.onStartup.addListener(() => void connectRelay());
-chrome.runtime.onInstalled.addListener(() => void connectRelay());
-void connectRelay();
-void copilotReady;
+chrome.runtime.onInstalled.addListener(() => {
+  void installPageShareContextMenu();
+  void connectRelay();
+});
+void [connectRelay(), copilotReady];

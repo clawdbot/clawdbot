@@ -140,6 +140,14 @@ function writeOptionalPlatformDependencyPackage(packageDir: string): string {
 }
 
 describe("plugin npm package manifest staging", () => {
+  it("keeps msteams runtime dependencies registry-installed", () => {
+    const packageJson = JSON.parse(
+      readFileSync(join(process.cwd(), "extensions", "msteams", "package.json"), "utf8"),
+    ) as { openclaw?: { release?: { bundleRuntimeDependencies?: boolean } } };
+
+    expect(packageJson.openclaw?.release?.bundleRuntimeDependencies).toBe(false);
+  });
+
   it("wraps Windows npm.cmd staging through cmd.exe without shell mode", () => {
     const nodeDir = "C:\\Program Files\\nodejs";
     const npmCmdPath = win32.resolve(nodeDir, "npm.cmd");

@@ -78,10 +78,14 @@ export function startTrackedBrowserTabCleanupTimer(params: {
       return;
     }
     if (!running) {
-      running = runTrackedBrowserTabCleanupOnce({ onWarn: params.onWarn }).finally(() => {
-        running = null;
-        schedule();
-      });
+      running = runTrackedBrowserTabCleanupOnce({ onWarn: params.onWarn })
+        .catch((error: unknown) => {
+          params.onWarn(`failed to sweep tracked browser tabs: ${String(error)}`);
+        })
+        .finally(() => {
+          running = null;
+          schedule();
+        });
       return;
     }
     schedule();

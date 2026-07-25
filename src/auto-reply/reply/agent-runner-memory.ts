@@ -10,8 +10,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -54,6 +53,7 @@ import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-event
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -158,8 +158,7 @@ async function ensureMemoryFlushTargetFile(params: {
 
 const memoryDeps = {
   compactEmbeddedAgentSession: compactEmbeddedAgentSessionDefault,
-  runWithModelFallback,
-  ensureSelectedAgentHarnessPlugin,
+  runEmbeddedAgentEntry,
   runEmbeddedAgent: runEmbeddedAgentDefault,
   ensureMemoryFlushTargetFile,
   registerAgentRunContext,
@@ -174,8 +173,7 @@ const memoryDeps = {
 /** Overrides memory helper dependencies for tests. */
 function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
-    runWithModelFallback,
-    ensureSelectedAgentHarnessPlugin,
+    runEmbeddedAgentEntry,
     compactEmbeddedAgentSession: compactEmbeddedAgentSessionDefault,
     runEmbeddedAgent: runEmbeddedAgentDefault,
     ensureMemoryFlushTargetFile,
@@ -811,10 +809,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  const reserveTokensFloor =
-    memoryFlushPlan?.reserveTokensFloor ??
-    params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
-    20_000;
+  const reserveTokensFloor = memoryFlushPlan?.reserveTokensFloor ?? 20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
@@ -979,6 +974,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       senderName: params.followupRun.run.senderName,
       senderUsername: params.followupRun.run.senderUsername,
       senderE164: params.followupRun.run.senderE164,
+      inputProvenance: params.followupRun.run.inputProvenance,
       sessionFile,
       workspaceDir: params.followupRun.run.workspaceDir,
       cwd: params.followupRun.run.cwd,
@@ -1125,6 +1121,9 @@ export async function runMemoryFlushIfNeeded(params: {
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  if (entry?.incognito === true || isIncognitoSessionKey(params.sessionKey)) {
+    return { sessionEntry: entry, outcome: "skipped" };
+  }
   const isCli = followupUsesCliRuntime({
     cfg: params.cfg,
     followupRun: params.followupRun,
@@ -1344,38 +1343,44 @@ export async function runMemoryFlushIfNeeded(params: {
   let postCompactionSessionId: string | undefined;
   let postCompactionSessionFile: string | undefined;
   try {
-    await memoryDeps.runWithModelFallback({
-      ...resolveMemoryFlushModelFallbackOptions(
-        params.followupRun.run,
-        activeMemoryFlushPlan.model,
-        params.cfg,
-      ),
-      runId: flushRunId,
-      sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
-      lane: CommandLane.Main,
-      abortSignal: params.replyOperation.abortSignal,
-      resolveAgentHarnessRuntimeOverride: (provider) =>
-        resolveSessionRuntimeOverrideForProvider({
-          provider,
-          entry: activeSessionEntry,
-          cfg: params.cfg,
-        }),
-      prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
-        await memoryDeps.ensureSelectedAgentHarnessPlugin({
-          config: params.cfg,
-          provider,
-          modelId: model,
-          agentId: params.followupRun.run.agentId,
-          sessionKey:
-            params.runtimePolicySessionKey ??
-            params.followupRun.run.runtimePolicySessionKey ??
-            params.sessionKey,
-          agentHarnessId: agentHarnessRuntimeOverride,
-          agentHarnessRuntimeOverride,
-          workspaceDir: params.followupRun.run.workspaceDir,
-        });
+    const selection = resolveMemoryFlushModelFallbackOptions(
+      params.followupRun.run,
+      activeMemoryFlushPlan.model,
+      params.cfg,
+    );
+    await memoryDeps.runEmbeddedAgentEntry({
+      selection: {
+        cfg: selection.cfg,
+        provider: selection.provider,
+        model: selection.model,
+        agentDir: selection.agentDir,
+        fallbacksOverride: selection.fallbacksOverride,
       },
-      run: async (provider, model, runOptions) => {
+      identity: {
+        runId: flushRunId,
+        agentId: params.followupRun.run.agentId,
+        sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
+        sessionKey: selection.sessionKey,
+        lane: CommandLane.Main,
+      },
+      harness: {
+        workspaceDir: params.followupRun.run.workspaceDir,
+        sessionKey:
+          params.runtimePolicySessionKey ??
+          params.followupRun.run.runtimePolicySessionKey ??
+          params.sessionKey,
+        preparation: { kind: "direct" },
+        resolveRuntimeOverride: (provider) =>
+          resolveSessionRuntimeOverrideForProvider({
+            provider,
+            entry: activeSessionEntry,
+            cfg: params.cfg,
+          }),
+      },
+      behavior: { kind: "maintenance" },
+      sessionOverride: { kind: "preserve" },
+      abortSignal: params.replyOperation.abortSignal,
+      runCandidate: async (provider, model, runOptions) => {
         const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
           provider,
           entry: activeSessionEntry,
@@ -1402,7 +1407,7 @@ export async function runMemoryFlushIfNeeded(params: {
           provider,
           model,
           runId: flushRunId,
-          allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+          allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
         });
         const result = await memoryDeps.runEmbeddedAgent({
           ...embeddedContext,
@@ -1418,7 +1423,7 @@ export async function runMemoryFlushIfNeeded(params: {
           prompt: activeMemoryFlushPlan.prompt,
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
-          isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+          isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],

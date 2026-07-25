@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -14,7 +13,7 @@ import {
 } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
-const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
+const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 
 // Isolate the extension relay secret (read from stateDir/credentials) so the
 // extension-token assertions do not pick up a developer's real secret file.
@@ -179,68 +178,11 @@ describe("browser config", () => {
     });
   });
 
-  it("supports overriding the local CDP auto-allocation range start", () => {
-    const resolved = resolveBrowserConfig({
-      cdpPortRangeStart: 19000,
-    });
-    const openclaw = resolveProfile(resolved, "openclaw");
-    expect(resolved.cdpPortRangeStart).toBe(19000);
-    expect(openclaw?.cdpPort).toBe(19000);
-    expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19000");
-  });
-
-  it("rejects cdpPortRangeStart values that overflow the CDP range window", () => {
-    expect(() => resolveBrowserConfig({ cdpPortRangeStart: 65535 })).toThrow(
-      /cdpPortRangeStart .* too high/i,
-    );
-  });
-
   it("normalizes hex colors", () => {
     const resolved = resolveBrowserConfig({
       color: "ff4500",
     });
     expect(resolved.color).toBe("#FF4500");
-  });
-
-  it("supports custom remote CDP timeouts", () => {
-    const resolved = resolveBrowserConfig({
-      remoteCdpTimeoutMs: 2200,
-      remoteCdpHandshakeTimeoutMs: 5000,
-      actionTimeoutMs: 45_000,
-    });
-    expect(resolved.remoteCdpTimeoutMs).toBe(2200);
-    expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(5000);
-    expect(resolved.actionTimeoutMs).toBe(45_000);
-  });
-
-  it("supports custom browser tab cleanup policy", () => {
-    const resolved = resolveBrowserConfig({
-      tabCleanup: {
-        enabled: false,
-        idleMinutes: 0,
-        maxTabsPerSession: 0,
-        sweepMinutes: 15,
-      },
-    });
-    expect(resolved.tabCleanup).toEqual({
-      enabled: false,
-      idleMinutes: 0,
-      maxTabsPerSession: 0,
-      sweepMinutes: 15,
-    });
-  });
-
-  it("caps browser tab cleanup timer minutes before converting to milliseconds", () => {
-    const maxTimerMinutes = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
-    const resolved = resolveBrowserConfig({
-      tabCleanup: {
-        idleMinutes: Number.MAX_SAFE_INTEGER,
-        sweepMinutes: Number.MAX_SAFE_INTEGER,
-      },
-    });
-
-    expect(resolved.tabCleanup.idleMinutes).toBe(maxTimerMinutes);
-    expect(resolved.tabCleanup.sweepMinutes).toBe(maxTimerMinutes);
   });
 
   it("expands tilde-prefixed executablePath with the OS home directory", () => {
@@ -298,22 +240,6 @@ describe("browser config", () => {
     });
 
     expect(resolved.executablePath).toBe("/opt/~chromium/chrome");
-  });
-
-  it("normalizes invalid browser tab cleanup numbers to defaults", () => {
-    const resolved = resolveBrowserConfig({
-      tabCleanup: {
-        idleMinutes: -1,
-        maxTabsPerSession: -2,
-        sweepMinutes: 0,
-      },
-    });
-    expect(resolved.tabCleanup).toEqual({
-      enabled: true,
-      idleMinutes: 120,
-      maxTabsPerSession: 8,
-      sweepMinutes: 5,
-    });
   });
 
   it("falls back to default color for invalid hex", () => {
@@ -418,7 +344,7 @@ describe("browser config", () => {
     const noDisplayEnv = {
       DISPLAY: undefined,
       WAYLAND_DISPLAY: undefined,
-      [OPENCLAW_BROWSER_HEADLESS_ENV]: undefined,
+      [BROWSER_HEADLESS_ENV_KEY]: undefined,
     };
 
     it("falls back to headless for local managed Linux profiles without display", () => {
@@ -489,7 +415,7 @@ describe("browser config", () => {
       expect(
         resolveManagedBrowserHeadlessMode(resolved, profile, {
           platform: "linux",
-          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "1" },
+          env: { ...noDisplayEnv, [BROWSER_HEADLESS_ENV_KEY]: "1" },
         }),
       ).toEqual({ headless: true, source: "env" });
     });
@@ -507,7 +433,7 @@ describe("browser config", () => {
         resolveManagedBrowserHeadlessMode(resolved, profile, {
           headlessOverride: true,
           platform: "linux",
-          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "0" },
+          env: { ...noDisplayEnv, [BROWSER_HEADLESS_ENV_KEY]: "0" },
         }),
       ).toEqual({ headless: true, source: "request" });
     });
@@ -557,26 +483,6 @@ describe("browser config", () => {
 
       expect(resolved.localLaunchTimeoutMs).toBe(15_000);
       expect(resolved.localCdpReadyTimeoutMs).toBe(8_000);
-    });
-
-    it("accepts custom local startup timeout values", () => {
-      const resolved = resolveBrowserConfig({
-        localLaunchTimeoutMs: 45_000,
-        localCdpReadyTimeoutMs: 30_000,
-      });
-
-      expect(resolved.localLaunchTimeoutMs).toBe(45_000);
-      expect(resolved.localCdpReadyTimeoutMs).toBe(30_000);
-    });
-
-    it("clamps oversized local startup timeout values", () => {
-      const resolved = resolveBrowserConfig({
-        localLaunchTimeoutMs: 999_999,
-        localCdpReadyTimeoutMs: 999_999,
-      });
-
-      expect(resolved.localLaunchTimeoutMs).toBe(120_000);
-      expect(resolved.localCdpReadyTimeoutMs).toBe(120_000);
     });
   });
 
@@ -935,14 +841,12 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         allowPrivateNetwork: true,
-        allowedHostnames: [" localhost ", ""],
-        hostnameAllowlist: [" *.trusted.example ", " "],
+        allowedHostnames: [" localhost ", " *.trusted.example ", ""],
       },
     } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
-      allowedHostnames: ["localhost"],
-      hostnameAllowlist: ["*.trusted.example"],
+      allowedHostnames: ["localhost", "*.trusted.example"],
     });
   });
 
@@ -972,13 +876,11 @@ describe("browser config", () => {
   it("keeps allowlist-only browser SSRF policy strict by default", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
-        allowedHostnames: ["example.com"],
-        hostnameAllowlist: ["*.example.com"],
+        allowedHostnames: ["example.com", "*.example.com"],
       },
     } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
-      allowedHostnames: ["example.com"],
-      hostnameAllowlist: ["*.example.com"],
+      allowedHostnames: ["example.com", "*.example.com"],
     });
   });
 
@@ -1000,7 +902,6 @@ describe("browser config", () => {
         "chrome-live": {
           driver: "existing-session",
           attachOnly: true,
-          color: "#00AA00",
         },
       },
     });
@@ -1013,7 +914,7 @@ describe("browser config", () => {
       cdpUrl: "",
       cdpHost: "",
       cdpIsLoopback: true,
-      color: "#00AA00",
+      color: "#FF4500",
       executablePath: undefined,
       headless: false,
       headlessSource: "default",
@@ -1193,4 +1094,3 @@ describe("browser config", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

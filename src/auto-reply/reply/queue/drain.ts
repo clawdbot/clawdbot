@@ -5,7 +5,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/h
 import { stableStringify } from "../../../agents/stable-stringify.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveStorePath } from "../../../config/sessions.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
   channelRouteCompactKey,
@@ -288,9 +288,12 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
   return `---\nQueued #${idx + 1}${senderSuffix}\n${prompt}`.trim();
 }
 
-function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" | "imageOrder"> {
+function collectQueuedPromptMedia(
+  items: FollowupRun[],
+): Pick<FollowupRun, "images" | "imageOrder" | "media"> {
   const images: NonNullable<FollowupRun["images"]> = [];
   const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
+  const media: NonNullable<FollowupRun["media"]> = [];
   for (const item of items) {
     if (item.images) {
       images.push(...item.images);
@@ -298,10 +301,14 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
     if (item.imageOrder) {
       imageOrder.push(...item.imageOrder);
     }
+    if (item.media) {
+      media.push(...item.media);
+    }
   }
   return {
     ...(images.length > 0 ? { images } : {}),
     ...(imageOrder.length > 0 ? { imageOrder } : {}),
+    ...(media.length > 0 ? { media } : {}),
   };
 }
 
@@ -343,7 +350,7 @@ function resolveFollowupTranscriptTarget(source: FollowupRun) {
   const storePath = resolveStorePath(source.run.config.session?.store, {
     agentId: source.run.agentId,
   });
-  const sessionEntry = loadSessionEntry({
+  const sessionEntry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
     clone: false,
@@ -398,12 +405,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
       provenance: source.run.inputProvenance,
       idempotencyKey: `followup-collect:${source.run.sessionId}:${identityHash}`,
       ...(timestamp === undefined ? {} : { timestamp }),
-      ...(media.length === 0
-        ? {}
-        : {
-            media,
-            mediaOnlyText: "[User sent media without caption]",
-          }),
+      ...(media.length === 0 ? {} : { media }),
     };
   };
   const initialTranscriptPrompt = buildCollectTranscriptPrompt(transcriptSources);
@@ -888,6 +890,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
+    media: source.media,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
@@ -1296,7 +1299,7 @@ export function scheduleFollowupDrain(
                       },
                     }
                   : {}),
-                ...collectQueuedImages(activeGroupItems),
+                ...collectQueuedPromptMedia(activeGroupItems),
               });
             };
             try {

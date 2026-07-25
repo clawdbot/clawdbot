@@ -29,7 +29,6 @@ export {
   configureWorkboardLiveRefresh,
   handleWorkboardChanged,
   resumeWorkboardLiveRefresh,
-  stopWorkboardLiveRefresh,
 } from "./live-refresh.ts";
 export { findWorkboardSession, getWorkboardLifecycle } from "./lifecycle.ts";
 export { syncWorkboardLifecycle } from "./lifecycle-reconciliation.ts";
@@ -45,6 +44,7 @@ export { startWorkboardCard, stopWorkboardCard } from "./execution.ts";
 export {
   getWorkboardState,
   stopWorkboardLifecycleRefresh,
+  stopWorkboardLiveRefresh,
   workboardHasActiveWrites,
   workboardMutationsReady,
 } from "./runtime.ts";

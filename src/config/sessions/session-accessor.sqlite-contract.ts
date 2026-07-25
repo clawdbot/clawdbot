@@ -1,6 +1,5 @@
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleResult,
@@ -13,7 +12,8 @@ import type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-} from "./store.js";
+} from "./session-accessor.lifecycle-types.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
@@ -85,6 +85,13 @@ export type SessionTranscriptEventRow = {
   event: TranscriptEvent;
   seq: number;
 };
+
+export type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+} from "./session-accessor.types.js";
 
 export type TranscriptMessageAppendOptions<TMessage> = {
   config?: OpenClawConfig;
@@ -246,12 +253,14 @@ export type ForkSessionEntryFromParentTargetParams = {
 };
 
 export type ResetSessionEntryLifecycleParams = {
+  archivePreviousTranscript?: boolean;
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   agentId?: string;
   buildNextEntry: (context: {
     currentEntry?: SessionEntry;
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
+  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 };
@@ -259,8 +268,9 @@ export type ResetSessionEntryLifecycleParams = {
 export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   archiveTranscript: boolean;
+  deleteTranscriptWithoutArchive?: boolean;
   expectedEntry?: SessionEntry;
-  expectedSessionId?: string;
+  expectedSessionId?: string | null;
   expectedLifecycleRevision?: string;
   expectedUpdatedAt?: number;
   storePath: string;

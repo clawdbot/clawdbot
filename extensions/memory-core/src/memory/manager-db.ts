@@ -10,10 +10,10 @@ import {
   ensureMemoryPathFtsTriggers,
   loadSqliteVecExtension,
   MEMORY_INDEX_PATHS_FTS_TABLE,
-  requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   ensureOpenClawAgentDatabaseSchema,
+  openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -322,8 +322,7 @@ export function openMemoryDatabaseAtPath(
   agentId?: string,
 ): DatabaseSync {
   ensureDir(path.dirname(dbPath));
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(dbPath, { allowExtension });
+  const db = openNodeSqliteDatabase(dbPath, { allowExtension });
   try {
     configureMemorySqliteWalMaintenance(db, {
       busyTimeoutMs: 5000,

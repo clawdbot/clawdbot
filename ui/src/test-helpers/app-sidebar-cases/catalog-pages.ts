@@ -67,7 +67,7 @@ describe("AppSidebar session catalog pagination", () => {
           section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
         ).toContain(errorOwner === "catalog" ? "Catalog page failed" : "Host page failed");
         expect(sidebar.textContent).toContain("Newest");
-        expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+        expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
 
         loadMore()?.click();
         await vi.advanceTimersByTimeAsync(0);
@@ -204,17 +204,21 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "main",
         catalog: {
           ...catalog,
-          hosts: [{ ...host, label: "Progressive Gateway" }],
+          hosts: [{ ...host, hostId: "gateway:progressive" }],
         },
       } satisfies SessionsCatalogHostEvent);
       await sidebar.updateComplete;
-      expect(sidebar.textContent).toContain("Progressive Gateway");
+      expect(
+        sidebar.querySelector('[data-session-catalog-host="gateway:progressive"]'),
+      ).not.toBeNull();
 
       pendingRefetch.resolve(pageTwo);
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
 
-      expect(sidebar.textContent).toContain("Progressive Gateway");
+      expect(
+        sidebar.querySelector('[data-session-catalog-host="gateway:progressive"]'),
+      ).not.toBeNull();
       expect(request).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
@@ -313,7 +317,7 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(sidebar.textContent).not.toContain("Stale page");
-      expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
     } finally {
       vi.useRealTimers();
     }
@@ -356,11 +360,11 @@ describe("AppSidebar session catalog pagination", () => {
           ?.click();
         await vi.advanceTimersByTimeAsync(0);
         await sidebar.updateComplete;
-        expect(sidebar.sessionCatalogs[0]?.hosts[0]?.sessions).toHaveLength(2);
+        expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.sessions).toHaveLength(2);
 
         await vi.advanceTimersByTimeAsync(30_000);
         await sidebar.updateComplete;
-        const host = sidebar.sessionCatalogs[0]?.hosts[0];
+        const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
         expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-1", "thread-2"]);
         expect(host?.connected).toBe(false);
         expect(host?.label).toBe("Unavailable host");
@@ -417,11 +421,11 @@ describe("AppSidebar session catalog pagination", () => {
 
       await vi.advanceTimersByTimeAsync(30_000);
       await sidebar.updateComplete;
-      expect(sidebar.sessionCatalogs[0]?.hosts).toEqual([]);
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
 
       await vi.advanceTimersByTimeAsync(30_000);
       await sidebar.updateComplete;
-      const host = sidebar.sessionCatalogs[0]?.hosts[0];
+      const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
       expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-3"]);
       expect(host?.nextCursor).toBe("page-2");
       expect(host?.connected).toBe(false);
@@ -487,12 +491,12 @@ describe("AppSidebar session catalog pagination", () => {
       await sidebar.updateComplete;
 
       expect(
-        sidebar.sessionCatalogs
+        sidebar.sessionData.sessionCatalogs
           .find((catalog) => catalog.id === "codex")
           ?.hosts[0]?.sessions.map((session) => session.threadId),
       ).toEqual(["codex-1", "codex-2"]);
       expect(
-        sidebar.sessionCatalogs
+        sidebar.sessionData.sessionCatalogs
           .find((catalog) => catalog.id === "claude")
           ?.hosts[0]?.sessions.map((session) => session.threadId),
       ).toEqual(["claude-1", "claude-2"]);

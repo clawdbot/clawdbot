@@ -125,10 +125,13 @@ Example schema:
         {
           "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
           "pattern": "~/Projects/**/bin/rg",
+          "argPattern": "sha256:argv:...",
           "source": "allow-always",
           "lastUsedAt": 1737150000000,
-          "lastUsedCommand": "rg -n TODO",
           "lastResolvedPath": "/Users/user/Projects/.../bin/rg"
+        },
+        {
+          "pattern": "~/Projects/**/bin/git"
         }
       ]
     }
@@ -150,8 +153,8 @@ Example schema:
 | `auto`      | Use allowlist policy, run deterministic matches directly, and send approval misses through OpenClaw's native auto reviewer before falling back to a human approval route. |
 | `full`      | Run host exec without approval prompts.                                                                                                                                   |
 
-Legacy `tools.exec.security` / `tools.exec.ask` remain supported and still
-apply wherever `mode` is unset at that scope.
+Doctor migrates the retired persisted `tools.exec.security` / `tools.exec.ask`
+pair to `tools.exec.mode`.
 
 ### `exec.security`
 
@@ -221,7 +224,7 @@ executable.
 </ParamField>
 
 Set globally under `tools.exec.commandHighlighting` or per agent under
-`agents.list[].tools.exec.commandHighlighting`.
+`agents.entries.*.tools.exec.commandHighlighting`.
 
 ## YOLO mode (no-approval)
 
@@ -232,11 +235,10 @@ host-local approvals policy in the execution host approvals file.
 Omitted `askFallback` defaults to `deny`. Set host `askFallback` to `full`
 explicitly when a no-UI approval prompt should fall back to allow.
 
-| Layer                 | YOLO setting               |
-| --------------------- | -------------------------- |
-| `tools.exec.security` | `full` on `gateway`/`node` |
-| `tools.exec.ask`      | `off`                      |
-| Host `askFallback`    | `full`                     |
+| Layer              | YOLO setting               |
+| ------------------ | -------------------------- |
+| `tools.exec.mode`  | `full` on `gateway`/`node` |
+| Host `askFallback` | `full`                     |
 
 <Warning>
 **Important distinctions:**
@@ -267,8 +269,7 @@ If you want a more conservative setup, tighten OpenClaw exec policy back to
   <Step title="Set the requested config policy">
     ```bash
     openclaw config set tools.exec.host gateway
-    openclaw config set tools.exec.security full
-    openclaw config set tools.exec.ask off
+    openclaw config set tools.exec.mode full
     openclaw gateway restart
     ```
   </Step>
@@ -403,18 +404,22 @@ argv matching. Prefer the UI or approval flow to regenerate those entries
 instead of hand-editing the encoded value. If OpenClaw cannot parse argv
 for a command segment, entries with `argPattern` do not match.
 
+Generated `allow-always` entries are argv-bound. New generated entries include
+`argPattern`; older generated path-only entries are ignored and need a fresh
+approval. For a manual path-only rule, omit both `source` and `argPattern`.
+
 Each allowlist entry supports:
 
-| Field              | Meaning                                              |
-| ------------------ | ---------------------------------------------------- |
-| `pattern`          | Resolved binary path glob or bare command-name glob  |
-| `argPattern`       | Optional ECMAScript argv regex; omitted is path-only |
-| `id`               | Stable opaque ID; generated as a UUID when absent    |
-| `source`           | Entry source, such as `allow-always`                 |
-| `commandText`      | Legacy plaintext input; discarded during load        |
-| `lastUsedAt`       | Last-used timestamp                                  |
-| `lastUsedCommand`  | Last command that matched                            |
-| `lastResolvedPath` | Last resolved binary path                            |
+| Field              | Meaning                                                                  |
+| ------------------ | ------------------------------------------------------------------------ |
+| `pattern`          | Resolved binary path glob or bare command-name glob                      |
+| `argPattern`       | ECMAScript argv regex or generated exact-argv hash; omitted is path-only |
+| `id`               | Stable opaque ID; generated as a UUID when absent                        |
+| `source`           | Generated entry source, such as `allow-always`; omit for manual entries  |
+| `commandText`      | Legacy plaintext input; discarded during load                            |
+| `lastUsedAt`       | Last-used timestamp                                                      |
+| `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
+| `lastResolvedPath` | Last resolved binary path                                                |
 
 ## Auto-allow skill CLIs
 

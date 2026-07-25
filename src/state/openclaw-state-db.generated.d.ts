@@ -47,12 +47,34 @@ export interface AcpSessions {
   updated_at: number;
 }
 
+export interface AgentDatabaseLeases {
+  agent_id: string;
+  lease_id: string;
+  opened_at: number;
+  owner_pid: number;
+  owner_start_time: number | null;
+  path: string;
+}
+
 export interface AgentDatabases {
   agent_id: string;
   last_seen_at: number;
   path: string;
   schema_version: number;
   size_bytes: number | null;
+}
+
+export interface AgentDeletionJournal {
+  agent_dir: string;
+  agent_id: string;
+  cleanup_completed: Generated<number>;
+  cleanup_paths_json: Generated<string>;
+  created_at: number;
+  database_paths_json: Generated<string>;
+  delete_files: Generated<number>;
+  operation_id: Generated<string>;
+  sessions_dir: string;
+  workspace_dir: string;
 }
 
 export interface AgentModelCatalogs {
@@ -234,6 +256,83 @@ export interface ChannelPairingRequests {
   request_id: string;
 }
 
+export interface ClawCronRefs {
+  agent_id: string;
+  created_at_ms: number;
+  declaration_key: string;
+  error: string | null;
+  job_json: string;
+  manifest_id: string;
+  scheduler_job_id: string | null;
+  schema_version: string;
+  status: string;
+  updated_at_ms: number;
+}
+
+export interface ClawInstalls {
+  added_at_ms: number;
+  agent_config_digest: string;
+  agent_id: string;
+  agent_owned_paths_json: string;
+  claw_name: string;
+  claw_version: string;
+  integrity: string;
+  integrity_kind: string;
+  manifest_path: string;
+  manifest_schema_version: number;
+  package_root: string;
+  plan_integrity: string;
+  schema_version: string;
+  source_byte_length: number;
+  source_kind: string;
+  status: string;
+  updated_at_ms: number;
+  workspace: string;
+}
+
+export interface ClawMcpServerRefs {
+  agent_id: string;
+  config_digest: string;
+  created_at_ms: number;
+  error: string | null;
+  independent_owner: Generated<number>;
+  name: string;
+  origin: string;
+  relationship: string;
+  schema_version: string;
+  status: string;
+  updated_at_ms: number;
+}
+
+export interface ClawPackageRefs {
+  agent_id: string;
+  claw_name: string;
+  independent_owner: number;
+  installed_at_ms: number;
+  origin: string;
+  package_integrity: string;
+  package_kind: string;
+  package_ref: string;
+  package_source: string;
+  package_status: string;
+  package_version: string;
+  relationship: string;
+  schema_version: string;
+  updated_at_ms: number;
+}
+
+export interface ClawWorkspaceFiles {
+  agent_id: string;
+  content_digest: string;
+  created_at_ms: number;
+  schema_version: string;
+  source_path: string;
+  status: string;
+  target_path: string;
+  updated_at_ms: number;
+  workspace: string;
+}
+
 export interface ClawhubPromotionClaims {
   claimed_at_ms: number;
   ends_at_ms: number;
@@ -300,6 +399,21 @@ export interface ConfigHealthEntries {
   last_known_good_json: string | null;
   last_observed_suspicious_signature: string | null;
   last_promoted_good_json: string | null;
+  updated_at_ms: number;
+}
+
+export interface ConfigMachineState {
+  state_key: string;
+  updated_at_ms: number;
+  value_json: string;
+}
+
+export interface CronJobScratch {
+  content: string | null;
+  job_id: string;
+  revision: number;
+  source_sha256: string | null;
+  store_key: string;
   updated_at_ms: number;
 }
 
@@ -678,6 +792,47 @@ export interface MediaBlobs {
   updated_at: number;
 }
 
+export interface MeetingTranscriptSessions {
+  created_at_ms: number;
+  export_key: string;
+  export_manifest_json: Generated<string>;
+  export_pending_json: Generated<string>;
+  metadata_json: string | null;
+  next_utterance_seq: Generated<number>;
+  provider_id: string;
+  selector: string;
+  session_id: string;
+  session_slug: string;
+  source_json: string;
+  started_at: string;
+  stopped_at: string | null;
+  title: string | null;
+  updated_at_ms: number;
+}
+
+export interface MeetingTranscriptSummaries {
+  generated_at: string | null;
+  markdown: string | null;
+  session_id: string;
+  session_started_at: string;
+  summary_json: string | null;
+  utterance_count: number;
+}
+
+export interface MeetingTranscriptUtterances {
+  ended_at: string | null;
+  final: number | null;
+  metadata_json: string | null;
+  sequence: number;
+  session_id: string;
+  session_started_at: string;
+  speaker_id: string | null;
+  speaker_label: string | null;
+  started_at: string | null;
+  text: string;
+  utterance_id: string | null;
+}
+
 export interface MigrationRuns {
   finished_at: number | null;
   id: string;
@@ -796,6 +951,15 @@ export interface OperatorApprovals {
   status: string;
   terminal_reason: string | null;
   updated_at_ms: number;
+}
+
+export interface OutboundMediaProvenance {
+  created_at_ms: number;
+  kind: string;
+  realpath: string;
+  sha256: string;
+  size_bytes: number;
+  version: number;
 }
 
 export interface PluginBindingApprovals {
@@ -1020,6 +1184,13 @@ export interface SubagentRuns {
   spawn_mode: string | null;
   started_at: number | null;
   suppress_announce_reason: string | null;
+  swarm_collector: number | null;
+  swarm_completion_status: string | null;
+  swarm_group_id: string | null;
+  swarm_output_schema_json: string | null;
+  swarm_schema_error: string | null;
+  swarm_structured_json: string | null;
+  swarm_usage_json: string | null;
   task: string;
   task_name: string | null;
   wake_on_descendant_settle: number | null;
@@ -1237,6 +1408,7 @@ export interface WorkerWorkspacePendingResults {
   recovery_requested_at_ms: number | null;
   run_id: string;
   session_id: string;
+  staged_result_ref: string | null;
   workspace_accepted_at_ms: number | null;
 }
 
@@ -1308,7 +1480,9 @@ export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
   acp_sessions: AcpSessions;
+  agent_database_leases: AgentDatabaseLeases;
   agent_databases: AgentDatabases;
+  agent_deletion_journal: AgentDeletionJournal;
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
@@ -1324,11 +1498,18 @@ export interface DB {
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
+  claw_cron_refs: ClawCronRefs;
+  claw_installs: ClawInstalls;
+  claw_mcp_server_refs: ClawMcpServerRefs;
+  claw_package_refs: ClawPackageRefs;
+  claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
   clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   command_log_entries: CommandLogEntries;
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
+  config_machine_state: ConfigMachineState;
+  cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
@@ -1351,6 +1532,9 @@ export interface DB {
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
+  meeting_transcript_sessions: MeetingTranscriptSessions;
+  meeting_transcript_summaries: MeetingTranscriptSummaries;
+  meeting_transcript_utterances: MeetingTranscriptUtterances;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;
@@ -1359,6 +1543,7 @@ export interface DB {
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
   operator_approvals: OperatorApprovals;
+  outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;

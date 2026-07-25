@@ -9,7 +9,7 @@ import {
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
-  publicPluginSdkEntrypoints,
+  productionPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -165,9 +165,9 @@ function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig 
 
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
-const productionPluginSdkEntrypoints = shouldBuildPrivateQaEntries
+const selectedPluginSdkEntrypoints = shouldBuildPrivateQaEntries
   ? pluginSdkEntrypoints
-  : publicPluginSdkEntrypoints;
+  : productionPluginSdkEntrypoints;
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -303,7 +303,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/loader": "src/plugins/loader.ts",
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
-    extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
@@ -436,7 +435,7 @@ function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
 }
 
 function shouldExternalizeGatewayClientDependency(id: string): boolean {
-  return ["ws", "@openclaw/net-policy", "@openclaw/gateway-protocol"].some(
+  return ["ws", "@openclaw/gateway-protocol"].some(
     (dependency) => id === dependency || id.startsWith(`${dependency}/`),
   );
 }
@@ -502,12 +501,10 @@ function buildUnifiedDistEntries(): Record<string, string> {
         source,
       ]),
     ),
-    // Internal compat artifact for the root-alias.cjs lazy loader.
-    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
-      Object.entries(buildPluginSdkEntrySources(productionPluginSdkEntrypoints)).map(
+      Object.entries(buildPluginSdkEntrySources(selectedPluginSdkEntrypoints)).map(
         ([entry, source]) => [`plugin-sdk/${entry}`, source],
       ),
     ),

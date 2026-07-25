@@ -1500,7 +1500,11 @@ describe("openai transport stream", () => {
       { push() {} },
     );
 
-    expect(output.content[0]).toEqual({ type: "text", text: "Use <" });
+    expect(output.content[0]).toEqual({
+      type: "text",
+      text: "Use <",
+      textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+    });
     expectRecordFields(output.content[1], {
       type: "toolCall",
       id: "call_0",

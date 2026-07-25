@@ -1,26 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createWorkboardCapability } from "../../lib/workboard/capability.ts";
 import type { WorkboardCapability } from "../../lib/workboard/capability.ts";
+import * as workboardLib from "../../lib/workboard/index.ts";
 
-const { configureLiveRefresh, handleChanged, loadBoard, stopLiveRefresh, stopLifecycleRefresh } =
-  vi.hoisted(() => ({
-    configureLiveRefresh: vi.fn((): boolean => false),
-    handleChanged: vi.fn(),
-    loadBoard: vi.fn(async () => true),
-    stopLiveRefresh: vi.fn(),
-    stopLifecycleRefresh: vi.fn(),
-  }));
-
-vi.mock("../../lib/workboard/index.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../lib/workboard/index.ts")>()),
-  configureWorkboardLiveRefresh: configureLiveRefresh,
-  handleWorkboardChanged: handleChanged,
-  loadWorkboard: loadBoard,
-  stopWorkboardLifecycleRefresh: stopLifecycleRefresh,
-  stopWorkboardLiveRefresh: stopLiveRefresh,
-  syncWorkboardLifecycle: vi.fn(async () => undefined),
-}));
+const configureLiveRefresh = vi.fn((): boolean => false);
+const handleChanged = vi.fn();
+const loadBoard = vi.fn(async () => true);
+const stopLiveRefresh = vi.fn();
+const stopLifecycleRefresh = vi.fn();
+const syncLifecycle = vi.fn(async () => undefined);
 
 await import("./workboard-page.ts");
 
@@ -33,8 +22,8 @@ type WorkboardPageTestElement = HTMLElement & {
 function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
-    connected: false,
-    reconnecting: false,
+    phase: "stopped",
+    offlineStable: false,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -81,11 +70,21 @@ function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContex
   } as unknown as ApplicationContext;
 }
 
+beforeEach(() => {
+  vi.spyOn(workboardLib, "configureWorkboardLiveRefresh").mockImplementation(configureLiveRefresh);
+  vi.spyOn(workboardLib, "handleWorkboardChanged").mockImplementation(handleChanged);
+  vi.spyOn(workboardLib, "loadWorkboard").mockImplementation(loadBoard);
+  vi.spyOn(workboardLib, "stopWorkboardLifecycleRefresh").mockImplementation(stopLifecycleRefresh);
+  vi.spyOn(workboardLib, "stopWorkboardLiveRefresh").mockImplementation(stopLiveRefresh);
+  vi.spyOn(workboardLib, "syncWorkboardLifecycle").mockImplementation(syncLifecycle);
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   configureLiveRefresh.mockReset().mockReturnValue(false);
   loadBoard.mockClear();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 describe("WorkboardPage lifecycle", () => {
@@ -97,7 +96,7 @@ describe("WorkboardPage lifecycle", () => {
       eventListener = listener;
       return () => undefined;
     };
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     context.gateway.snapshot.client = { request: vi.fn() } as never;
     const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
     page.context = context;
@@ -119,7 +118,7 @@ describe("WorkboardPage lifecycle", () => {
   it("forces one canonical reload when the live client is newly installed", async () => {
     const workboard = createWorkboardCapability();
     const context = contextWithWorkboard(workboard);
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     context.gateway.snapshot.client = { request: vi.fn() } as never;
     configureLiveRefresh.mockReturnValueOnce(true);
     const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
@@ -140,7 +139,7 @@ describe("WorkboardPage lifecycle", () => {
       snapshotListener = listener;
       return () => undefined;
     };
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     context.gateway.snapshot.client = { request: vi.fn() } as never;
     const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
     page.context = context;
@@ -148,7 +147,7 @@ describe("WorkboardPage lifecycle", () => {
     await page.updateComplete;
     vi.clearAllMocks();
 
-    snapshotListener?.({ ...context.gateway.snapshot, connected: false, client: null });
+    snapshotListener?.({ ...context.gateway.snapshot, phase: "stopped", client: null });
 
     expect(stopLiveRefresh).toHaveBeenCalledWith(workboard);
     expect(stopLifecycleRefresh).toHaveBeenCalledWith(workboard);

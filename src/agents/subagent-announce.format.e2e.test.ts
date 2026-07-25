@@ -8,13 +8,13 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import * as configSessions from "../config/sessions.js";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -63,7 +63,13 @@ type MockSubagentRun = {
     error?: string;
   };
 };
-type SessionEntryFixture = Omit<SessionEntry, "updatedAt"> & { updatedAt?: number };
+type SessionEntryFixture = Partial<Omit<SessionEntry, "updatedAt">> & {
+  updatedAt?: number;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
 type SessionStoreFixture = Record<string, SessionEntryFixture | undefined>;
 
 function visibleAgentResponse(runId = "run-main") {
@@ -125,8 +131,6 @@ function expectAgentCallFields(
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => visibleAgentResponse());
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
-const loadSessionEntrySpy = vi.spyOn(sessionAccessor, "loadSessionEntry");
-const loadSessionStoreSpy = vi.spyOn(configSessions, "loadSessionStore");
 const resolveAgentIdFromSessionKeySpy = vi.spyOn(configSessions, "resolveAgentIdFromSessionKey");
 const resolveStorePathSpy = vi.spyOn(configSessions, "resolveStorePath");
 const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey");
@@ -295,18 +299,15 @@ function setMessageToolGroupReplyConfig(): void {
   });
 }
 
-function toSessionEntry(
-  sessionKey: string,
-  entry?: Partial<SessionEntry>,
-): SessionEntry | undefined {
+function toSessionEntry(sessionKey: string, entry?: SessionEntryFixture): SessionEntry | undefined {
   if (!entry) {
     return undefined;
   }
-  return {
+  return normalizeLegacySessionEntryDelivery({
+    ...entry,
     sessionId: entry.sessionId ?? sessionKey,
     updatedAt: entry.updatedAt ?? Date.now(),
-    ...entry,
-  };
+  } as SessionEntry);
 }
 
 function loadSessionStoreFixture(): Record<string, SessionEntry> {
@@ -401,6 +402,7 @@ describe("subagent announce formatting", () => {
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
       getRuntimeConfig: () => configOverride,
+      loadSessionEntry: (scope) => loadSessionStoreFixture()[scope.sessionKey],
       getRequesterSessionActivity: (requesterSessionKey: string) => {
         const entry = loadSessionStoreFixture()[requesterSessionKey];
         const sessionId = entry?.sessionId;
@@ -427,10 +429,6 @@ describe("subagent announce formatting", () => {
       resolveAgentIdFromSessionKey: () => "main",
       resolveStorePath: () => "/tmp/sessions.json",
     });
-    loadSessionEntrySpy
-      .mockReset()
-      .mockImplementation((scope) => loadSessionStoreFixture()[scope.sessionKey]);
-    loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
     resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");
     resolveMainSessionKeySpy.mockReset().mockImplementation(() => "agent:main:main");

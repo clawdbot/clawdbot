@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover skill workshop controller behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -28,8 +29,8 @@ function createFixture(
   const request = vi.fn<TestRequest>();
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as ApplicationGatewaySnapshot["client"],
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",
@@ -316,7 +317,11 @@ describe("Skill Workshop proposal RPCs", () => {
     });
     const sendRevisionRequest = vi.fn(async () => {});
 
-    await requestSkillWorkshopRevision(state, context, "proposal-1", sendRevisionRequest);
+    try {
+      await requestSkillWorkshopRevision(state, context, "proposal-1", sendRevisionRequest);
+    } finally {
+      clearNoticeTimer(state);
+    }
 
     expect(sendRevisionRequest).toHaveBeenCalledWith(
       "Tighten the trigger.",

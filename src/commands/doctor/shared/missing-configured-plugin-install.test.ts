@@ -560,6 +560,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("installs a missing configured OpenClaw channel plugin from npm by default", async () => {
+    const cfg = {
+      security: { installPolicy: { enabled: true } },
+      channels: {
+        matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+      },
+    } satisfies OpenClawConfig;
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "matrix",
@@ -576,11 +582,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        channels: {
-          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
-        },
-      },
+      cfg,
       env: {},
     });
 
@@ -591,6 +593,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expectedPluginId: "matrix",
       expectedIntegrity: "sha512-test",
       trustedSourceLinkedOfficialInstall: true,
+      config: cfg,
     });
     const records = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
     expectRecordFields((records as Record<string, unknown>).matrix, {
@@ -609,6 +612,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("uses an explicit ClawHub install spec before npm", async () => {
+    const cfg = {
+      security: { installPolicy: { enabled: true } },
+      channels: {
+        matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+      },
+    } satisfies OpenClawConfig;
     const reviewNotice =
       "╭─ REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check ─╮\n" +
       "│ • Status:            security scan is pending                         │\n" +
@@ -655,17 +664,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        channels: {
-          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
-        },
-      },
+      cfg,
       env: {},
     });
 
     const clawHubCall = expectRecordFields(mockCallArg(mocks.installPluginFromClawHub), {
       spec: "clawhub:@openclaw/plugin-matrix@stable",
       expectedPluginId: "matrix",
+      config: cfg,
     });
     expect(clawHubCall.logger).toEqual(expect.objectContaining({ terminalLinks: false }));
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
@@ -1112,12 +1118,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
-        agents: {
-          defaults: {
-            memorySearch: {
-              provider: "local",
-            },
+        memory: {
+          search: {
+            provider: "local",
           },
+        },
+
+        agents: {
+          defaults: {},
         },
       },
       env: {},
@@ -1702,6 +1710,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("retries npm repair as an update when the install target appears stale", async () => {
+    const cfg = {
+      security: { installPolicy: { enabled: true } },
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    } satisfies OpenClawConfig;
     const npmRoot = makeTempDir();
     const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "discord");
     mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
@@ -1737,13 +1753,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
-        },
-      },
+      cfg,
       env: {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
@@ -1754,11 +1764,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       spec: expectedNpmInstallSpec("@openclaw/discord"),
       npmDir: npmRoot,
       mode: "install",
+      config: cfg,
     });
     expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec, 1), {
       spec: expectedNpmInstallSpec("@openclaw/discord"),
       npmDir: npmRoot,
       mode: "update",
+      config: cfg,
     });
     expect(result.warnings).toEqual([]);
     expect(result.records.discord?.installPath).toBe(packageDir);
@@ -4477,12 +4489,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
-        messages: {
-          tts: {
-            provider: "gradium",
-            providers: {
-              inworld: {},
-            },
+        tts: {
+          provider: "gradium",
+          providers: {
+            inworld: {},
           },
         },
         tools: {
@@ -4592,9 +4602,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       cfg: {
         tools: {
           media: {
-            audio: {
-              models: [{ provider: "groq", model: "whisper-large-v3-turbo" }],
-            },
+            models: [
+              {
+                provider: "groq",
+                model: "whisper-large-v3-turbo",
+                capabilities: ["audio"],
+              },
+            ],
           },
         },
       },

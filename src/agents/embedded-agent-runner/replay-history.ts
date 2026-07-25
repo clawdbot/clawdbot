@@ -19,6 +19,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
@@ -31,7 +32,10 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
-import { isReasoningOnlyLengthAssistantTurn } from "../replay-turn-classification.js";
+import {
+  hasOnlyAssistantReasoningContent,
+  isReasoningOnlyLengthAssistantTurn,
+} from "../replay-turn-classification.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -185,7 +189,7 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   }
   const replayContent = (message as { content?: unknown }).content;
   if (typeof replayContent === "string") {
-    return replayContent.trim() ? message : null;
+    return replayContent.trim() || hasPersistedMedia(message) ? message : null;
   }
   if (!Array.isArray(replayContent)) {
     return message;
@@ -207,7 +211,7 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
     return false;
   });
   if (sanitizedContent.length === 0) {
-    return null;
+    return hasPersistedMedia(message) ? ({ ...message, content: "" } as AgentMessage) : null;
   }
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
 }
@@ -226,6 +230,7 @@ function normalizeAssistantReplayTextContent(message: AgentMessage, replayConten
 
 function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
   let touched = false;
+  let removedSilentText = false;
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
     if (!block || typeof block !== "object") {
@@ -243,14 +248,18 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
         sanitizedContent.push(block);
       } else {
         touched = true;
+        removedSilentText = true;
       }
       continue;
     }
     touched = true;
     const trimmed = strippedText.trim();
-    if (trimmed && !isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
+    const isSilentText =
+      trimmed.length > 0 && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
+    if (trimmed && !isSilentText) {
       sanitizedContent.push({ ...block, text: strippedText });
     }
+    removedSilentText ||= isSilentText;
   }
   if (!touched) {
     return message;
@@ -258,7 +267,10 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   if (sanitizedContent.length === 0) {
     return null;
   }
-  return { ...message, content: sanitizedContent } as AgentMessage;
+  const normalized = { ...message, content: sanitizedContent } as AgentMessage;
+  // A silent reply has no visible assistant output. Do not let its signed
+  // reasoning merge into the next assistant turn during strict replay.
+  return removedSilentText && hasOnlyAssistantReasoningContent(normalized) ? null : normalized;
 }
 
 function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {

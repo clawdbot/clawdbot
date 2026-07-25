@@ -82,6 +82,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     userTurnTranscriptRecorder,
     fallbackTrajectoryRecorder,
     lifecycle,
+    terminal,
     lifecycleGeneration,
   } = params.attempt;
   const { skillsSnapshot, runContext } = params.embeddedSessionState;
@@ -271,8 +272,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
     const resolveFreshSessionEntryForDelivery =
       sessionStore && sessionKey && !params.suppressVisibleSessionEffects
         ? async (): Promise<SessionEntry | undefined> => {
-            const { loadSessionEntry } = await loadSessionStoreRuntime();
-            const freshEntry = loadSessionEntry({
+            const { loadSessionEntryReadOnly } = await loadSessionStoreRuntime();
+            const freshEntry = loadSessionEntryReadOnly({
               storePath,
               sessionKey,
               readConsistency: "latest",
@@ -345,9 +346,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     }
 
     if (fallbackExhausted || lifecycle.resolveResultError(result, false)) {
-      lifecycle.emitResultError(result, fallbackExhausted);
+      lifecycle.emitResultError(result, fallbackExhausted, terminal);
     } else {
-      lifecycle.emitEnd(result);
+      lifecycle.emitEnd(terminal);
     }
     return {
       deliveryResult,

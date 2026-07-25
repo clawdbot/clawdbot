@@ -45,7 +45,9 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildMistralProvider,
+      buildStaticProvider: buildMistralProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),

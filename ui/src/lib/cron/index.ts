@@ -39,9 +39,9 @@ export type CronFormState = {
   clearAgent: boolean;
   enabled: boolean;
   deleteAfterRun: boolean;
-  // on-exit jobs are read-only because the form cannot edit a watched command.
+  // Process-backed schedules are read-only because the form cannot edit their commands.
   // Preserve their schedule verbatim on save instead of rebuilding it.
-  scheduleKind: "at" | "every" | "cron" | "on-exit";
+  scheduleKind: "at" | "every" | "cron" | "on-exit" | "stream";
   scheduleAt: string;
   everyAmount: string;
   everyUnit: "seconds" | "minutes" | "hours" | "days";
@@ -52,7 +52,9 @@ export type CronFormState = {
   staggerUnit: "seconds" | "minutes";
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
-  payloadKind: "systemEvent" | "agentTurn";
+  // "heartbeat" is system-owned and always payloadLocked; the form only
+  // displays it, never submits it.
+  payloadKind: "systemEvent" | "agentTurn" | "command" | "script" | "heartbeat";
   payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
@@ -89,6 +91,12 @@ function isCronPayload(value: unknown): value is CronPayload {
   }
   if (value.kind === "command") {
     return Array.isArray(value.argv) && value.argv.every((arg) => typeof arg === "string");
+  }
+  if (value.kind === "script") {
+    return typeof value.script === "string";
+  }
+  if (value.kind === "heartbeat") {
+    return true;
   }
   return false;
 }
@@ -158,7 +166,7 @@ export type CronFieldKey =
 
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
-export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit";
+export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit" | "stream";
 export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
@@ -654,7 +662,8 @@ function resolveCronJobScheduleKind(job: CronJob): string | null {
     scheduleKind === "at" ||
     scheduleKind === "every" ||
     scheduleKind === "cron" ||
-    scheduleKind === "on-exit"
+    scheduleKind === "on-exit" ||
+    scheduleKind === "stream"
   ) {
     return scheduleKind;
   }
@@ -744,10 +753,14 @@ function parseStaggerSchedule(
   };
 }
 
+function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
+  return payload?.kind === "command" || payload?.kind === "script" || payload?.kind === "heartbeat";
+}
+
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = job.failureAlert;
   const payload = getCronJobPayload(job);
-  const payloadLocked = payload?.kind === "command";
+  const payloadLocked = isReadOnlyCronPayload(payload);
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -768,10 +781,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     staggerUnit: "seconds",
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind:
-      payload?.kind === "systemEvent" || payload?.kind === "agentTurn"
-        ? payload.kind
-        : DEFAULT_CRON_FORM.payloadKind,
+    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
     payloadLocked,
     payloadText:
       payload?.kind === "systemEvent"
@@ -780,7 +790,9 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
           ? payload.message
           : payload?.kind === "command"
             ? payload.argv.join(" ")
-            : "",
+            : payload?.kind === "script"
+              ? payload.script
+              : "",
     payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
     payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
     payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
@@ -836,7 +848,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     next.staggerAmount = staggerFields.staggerAmount;
     next.staggerUnit = staggerFields.staggerUnit;
   }
-  // Other schedule kinds (e.g. on-exit) are shown read-only in the list and have no
+  // Process-backed schedule kinds are shown read-only in the list and have no
   // editable schedule form fields; leave the cron/at/every fields at their defaults.
 
   return normalizeCronFormState(next);
@@ -883,6 +895,9 @@ function buildCronPayload(form: CronFormState) {
       throw new Error(t("cron.errors.systemEventTextRequired"));
     }
     return { kind: "systemEvent" as const, text };
+  }
+  if (form.payloadKind !== "agentTurn") {
+    throw new Error(`Cron ${form.payloadKind} payloads are read-only in Control UI.`);
   }
   const message = form.payloadText.trim();
   if (!message) {
@@ -997,16 +1012,17 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       ? state.cronJobs.find((job) => job.id === state.cronEditingJobId)
       : undefined;
     const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
-    // Preserve on-exit only while the edit form still points at on-exit; if the
+    // Preserve a process-backed schedule while the form still points at it; if the
     // user selects an editable schedule kind, the update must apply it.
     const preserveSchedule = Boolean(
       state.cronEditingJobId &&
-      (editingJob?.schedule as { kind?: string } | undefined)?.kind === "on-exit" &&
-      form.scheduleKind === "on-exit",
+      ((editingJob?.schedule as { kind?: string } | undefined)?.kind === "on-exit" ||
+        (editingJob?.schedule as { kind?: string } | undefined)?.kind === "stream") &&
+      form.scheduleKind === editingJob?.schedule.kind,
     );
     const schedule = preserveSchedule ? undefined : buildCronSchedule(form);
     const preserveLockedPayload = Boolean(
-      state.cronEditingJobId && form.payloadLocked && editingPayload?.kind === "command",
+      state.cronEditingJobId && form.payloadLocked && isReadOnlyCronPayload(editingPayload),
     );
     const payload = preserveLockedPayload ? undefined : buildCronPayload(form);
     if (

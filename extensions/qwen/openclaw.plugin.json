@@ -222,7 +222,8 @@
       }
     },
     "discovery": {
-      "qwen-token-plan": "static"
+      "qwen": "runtime",
+      "qwen-token-plan": "refreshable"
     }
   },
   "contracts": {

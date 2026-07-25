@@ -4,6 +4,12 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { qqbotPlugin } from "./channel.js";
 
+describe("qqbotPlugin metadata", () => {
+  it("opts announce delivery into persisted session lookup", () => {
+    expect(qqbotPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+});
+
 describe("qqbot outbound sanitizeText", () => {
   it("strips reasoning/thinking tags before delivery", () => {
     const sanitize = qqbotPlugin.outbound?.sanitizeText;

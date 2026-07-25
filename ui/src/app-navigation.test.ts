@@ -1,15 +1,22 @@
+// @vitest-environment node
 // Control UI tests cover navigation behavior.
 import { describe, expect, it } from "vitest";
 import {
   SETTINGS_NAVIGATION_GROUPS,
   SIDEBAR_NAV_ROUTES,
+  formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
 } from "./app-navigation.ts";
-import { inferBasePathFromPathname, normalizeBasePath } from "./app-route-paths.ts";
+import {
+  inferBasePathFromPathname,
+  normalizeBasePath,
+  pathForWorkboardBoard,
+  workboardBoardIdFromPath,
+} from "./app-route-paths.ts";
 import {
   createApplicationRouter,
   pathForRoute,
@@ -84,8 +91,8 @@ describe("navigationIconForRoute", () => {
       chat: "messageSquare",
       custodian: "lobster",
       activity: "activity",
-      apps: "smartphone",
-      approvals: "shieldCheck",
+      apps: "layoutGrid",
+      approvals: "badgeCheck",
       workboard: "kanban",
       worktrees: "folder",
       channels: "link",
@@ -100,18 +107,19 @@ describe("navigationIconForRoute", () => {
       "skill-workshop": "wrench",
       nodes: "monitorSmartphone",
       config: "settings",
-      profile: "lobster",
+      profile: "circleUser",
       communications: "send",
-      appearance: "spark",
+      appearance: "palette",
       automation: "terminal",
       mcp: "wrench",
       infrastructure: "globe",
+      labs: "flaskConical",
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
       "model-providers": "plug",
       "memory-import": "download",
-      notifications: "send",
+      notifications: "bell",
       security: "shieldCheck",
       advanced: "fileCode",
       debug: "bug",
@@ -134,6 +142,45 @@ describe("settingsSearchTextMatches", () => {
   });
 });
 
+describe("formatDocumentTitle", () => {
+  it("suffixes the brand after a plain context", () => {
+    expect(formatDocumentTitle({ context: "Usage" })).toBe("Usage — OpenClaw");
+  });
+
+  it("does not duplicate a context ending in the brand", () => {
+    expect(formatDocumentTitle({ context: "Ask OpenClaw" })).toBe("Ask OpenClaw");
+    expect(formatDocumentTitle({ context: "OpenClaw" })).toBe("OpenClaw");
+  });
+
+  it("prefixes a positive attention count", () => {
+    expect(formatDocumentTitle({ context: "Usage", attentionCount: 2 })).toBe(
+      "(2) Usage — OpenClaw",
+    );
+  });
+
+  it("does not add a queued count for an empty offline outbox", () => {
+    expect(formatDocumentTitle({ context: "Usage", offline: true, queuedCount: 0 })).toBe(
+      "(Offline) Usage — OpenClaw",
+    );
+  });
+
+  it("includes the queued outbox count in the offline marker", () => {
+    expect(formatDocumentTitle({ context: "Usage", offline: true, queuedCount: 3 })).toBe(
+      "(Offline · 3 queued) Usage — OpenClaw",
+    );
+  });
+
+  it("ignores a queued count while online", () => {
+    expect(formatDocumentTitle({ context: "Usage", queuedCount: 3 })).toBe("Usage — OpenClaw");
+  });
+
+  it("suppresses the attention count while offline", () => {
+    expect(formatDocumentTitle({ context: "Usage", attentionCount: 2, offline: true })).toBe(
+      "(Offline) Usage — OpenClaw",
+    );
+  });
+});
+
 describe("titleForRoute", () => {
   it("returns expected titles for every route", () => {
     expect(
@@ -148,7 +195,7 @@ describe("titleForRoute", () => {
       worktrees: "Worktrees",
       channels: "Channels",
       connection: "Connection",
-      sessions: "Sessions",
+      sessions: "Threads",
       usage: "Usage",
       cron: "Automations",
       tasks: "Tasks",
@@ -164,6 +211,7 @@ describe("titleForRoute", () => {
       automation: "Automation",
       mcp: "MCP",
       infrastructure: "Infrastructure",
+      labs: "Labs",
       about: "About",
       "ai-agents": "Agent Defaults",
       "model-setup": "Model Setup",
@@ -188,11 +236,11 @@ describe("subtitleForRoute", () => {
       activity: "Browser-local tool activity summaries.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
-      workboard: "Agent work queue and session handoff.",
+      workboard: "Agent work queue and thread handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       connection: "Gateway endpoint, credentials, and handshake status.",
-      sessions: "Active sessions and defaults.",
+      sessions: "Active threads and defaults.",
       usage: "API usage and costs.",
       cron: "Scheduled tasks and recurring agent runs.",
       tasks: "Background tasks: subagents, cron runs, CLI.",
@@ -208,6 +256,7 @@ describe("subtitleForRoute", () => {
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       infrastructure: "Gateway, web, browser, and media settings.",
+      labs: "Experimental agent and tool capabilities.",
       about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Global agent defaults: models, skills, tools, memory, session.",
       "model-setup": "Connect a verified AI model",
@@ -232,6 +281,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("logs")).toBe("/logs");
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
+    expect(pathForRoute("labs")).toBe("/settings/labs");
   });
 
   it("prepends base path", () => {
@@ -269,6 +319,8 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
     expect(routeIdFromPath("/plugins")).toBeNull();
     expect(routeIdFromPath("/settings/about")).toBe("about");
+    expect(routeIdFromPath("/settings/labs")).toBe("labs");
+    expect(routeIdFromPath("/labs")).toBeNull();
     expect(routeIdFromPath("/about")).toBeNull();
   });
 
@@ -280,6 +332,27 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
     expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
     expect(routeIdFromPath("/ui/settings/plugins", "/ui")).toBe("plugins");
+  });
+
+  it("round-trips Workboard board paths", () => {
+    expect(pathForWorkboardBoard("ops.v2")).toBe("/workboard/ops%2Ev2");
+    expect(workboardBoardIdFromPath("/workboard/ops%2Ev2")).toBe("ops.v2");
+    expect(routeIdFromPath("/workboard/ops%2Ev2")).toBe("workboard");
+    expect(createApplicationRouter().routeIdFromPath("/workboard/ops%2Ev2")).toBe("workboard");
+    expect(pathForWorkboardBoard("ops", "/ui")).toBe("/ui/workboard/ops");
+    expect(workboardBoardIdFromPath("/ui/workboard/ops", "/ui")).toBe("ops");
+    expect(inferBasePathFromPathname("/ui/workboard/ops")).toBe("/ui");
+  });
+
+  it("keeps dotted board IDs from resembling static asset paths", () => {
+    expect(pathForWorkboardBoard("release.js")).toBe("/workboard/release%2Ejs");
+    expect(workboardBoardIdFromPath("/workboard/release%2Ejs")).toBe("release.js");
+  });
+
+  it("rejects malformed Workboard board paths", () => {
+    expect(workboardBoardIdFromPath("/workboard/ops/extra")).toBeNull();
+    expect(workboardBoardIdFromPath("/workboard/%2F")).toBeNull();
+    expect(routeIdFromPath("/workboard/ops/extra")).toBeNull();
   });
 
   it("rejects route-shaped paths outside the configured base path", () => {
@@ -395,6 +468,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "nodes",
       "agents",
       "ai-agents",
+      "labs",
       "model-providers",
       "mcp",
       "automation",

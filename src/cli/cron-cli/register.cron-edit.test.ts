@@ -37,6 +37,23 @@ describe("cron edit command", () => {
     expect(help).toMatch(/also\s+implies --announce when used alone/);
   });
 
+  it("updates one pacing bound while preserving the other", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return { id: "job-1", pacing: { min: "15m", max: "4h" } };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--pacing-min", "30m"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { pacing: { min: "30m", max: "4h" } },
+    });
+  });
+
   it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {
     const program = createCronProgram();
 
@@ -300,6 +317,26 @@ describe("cron edit command", () => {
           payload: {
             kind: "agentTurn",
             model: null,
+          },
+        },
+      },
+    );
+  });
+
+  it("stores an explicit wildcard with --clear-tools", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-tools"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearTools: true }),
+      {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            toolsAllow: ["*"],
           },
         },
       },

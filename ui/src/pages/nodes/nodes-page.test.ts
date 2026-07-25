@@ -49,8 +49,8 @@ function gatewaySnapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
+    offlineStable: false,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -62,8 +62,8 @@ function gatewaySnapshot(
 function gateway(client: GatewayBrowserClient | null): ApplicationContext["gateway"] {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: false,
-    reconnecting: false,
+    phase: "stopped",
+    offlineStable: false,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -87,7 +87,10 @@ describe("NodesPage gateway lifecycle", () => {
       gateway: currentGateway,
       gatewaySnapshot: currentGateway.snapshot,
       nodes: {
-        ...createInitialNodesState(currentGateway.snapshot),
+        ...createInitialNodesState({
+          client: currentGateway.snapshot.client,
+          connected: currentGateway.snapshot.phase === "connected",
+        }),
         nodes: preloadedNodes,
       },
     };
@@ -118,7 +121,7 @@ describe("NodesPage gateway lifecycle", () => {
       gateway: currentGateway,
       gatewaySnapshot: gatewaySnapshot(client, false),
       nodes: {
-        ...createInitialNodesState(gatewaySnapshot(client, true)),
+        ...createInitialNodesState({ client, connected: true }),
         nodes: preloadedNodes,
       },
     };

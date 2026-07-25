@@ -1,5 +1,6 @@
 /** Tests foreground reply freshness fencing for buffered inbound dispatch. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createChannelPartialDeliveryError } from "../channels/turn/delivery-result.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -547,7 +548,25 @@ describe("foreground reply freshness", () => {
     expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
   });
 
-  it("suppresses an older foreground final when a newer delivery partially sends before failing", async () => {
+  it.each([
+    {
+      label: "shared outbound error",
+      createError: () =>
+        new OutboundDeliveryError("second chunk failed", {
+          cause: new Error("second chunk failed"),
+          results: [{ channel: "whatsapp", messageId: "wa-1" }],
+        }),
+    },
+    {
+      label: "channel partial-delivery envelope",
+      createError: () =>
+        createChannelPartialDeliveryError(new Error("finalization failed"), {
+          content: "new final",
+          messageIds: ["provider-1"],
+          visibleReplySent: true,
+        }),
+    },
+  ])("suppresses an older foreground final after $label", async ({ createError }) => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
@@ -583,10 +602,7 @@ describe("foreground reply freshness", () => {
       {
         deliver: async (payload, info) => {
           deliveries.push({ kind: info.kind, text: payload.text });
-          throw new OutboundDeliveryError("second chunk failed", {
-            cause: new Error("second chunk failed"),
-            results: [{ channel: "whatsapp", messageId: "wa-1" }],
-          });
+          throw createError();
         },
       },
     );

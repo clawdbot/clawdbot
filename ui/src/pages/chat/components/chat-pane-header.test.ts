@@ -42,11 +42,14 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     workspaceRoot: "/repo/openclaw",
     workspaceLabel: "openclaw",
     branch: "feature/header",
+    branches: [],
+    branchSwitchDisabledReason: null,
     platform: "darwin",
     canReveal: true,
     copiedAction: null,
     canRename: true,
     terminalAction: nothing,
+    discussionAction: nothing,
     diffAction: nothing,
     backgroundTasksAction: nothing,
     workspaceAction: nothing,
@@ -56,6 +59,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     onCancelRename: vi.fn(),
     onMenuOpenChange: vi.fn(),
     onMenuAction: vi.fn(),
+    onBranchSelect: vi.fn(),
     ...patch,
   };
   render(html`${renderChatPaneHeader(props)}`, container);
@@ -103,6 +107,32 @@ describe("chat pane header", () => {
     expect(chip?.textContent?.trim()).toContain("openclaw");
     title?.click();
     expect(props.onBeginRename).toHaveBeenCalledOnce();
+  });
+
+  it("places pane presence between the workspace chip and face control", () => {
+    const { container } = mount({
+      presence: html`<span data-slot="presence"></span>`,
+      faceControl: html`<span data-slot="face"></span>`,
+    });
+    const workspace = container.querySelector(".chat-pane__workspace-menu");
+    expect(workspace?.nextElementSibling?.getAttribute("data-slot")).toBe("presence");
+    expect(workspace?.nextElementSibling?.nextElementSibling?.getAttribute("data-slot")).toBe(
+      "face",
+    );
+  });
+
+  it("renders the permanent owner chip only when attribution chrome is enabled", () => {
+    const shown = mount({
+      showOwnerChip: true,
+      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
+    });
+    expect(shown.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+
+    const dormant = mount({
+      showOwnerChip: false,
+      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
+    });
+    expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
   });
 
   it("routes Enter and Escape from the rename input", () => {
@@ -162,6 +192,65 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__cloud")).not.toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="reveal"]')).toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
+  });
+
+  it("shows an incognito indicator for in-memory threads", () => {
+    const { container } = mount({ session: row({ incognito: true }) });
+    expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
+      "Incognito thread",
+    );
+  });
+
+  it("hides one branch and lists multiple branches with the active tip marked", () => {
+    const one = mount({
+      branches: [{ leafEntryId: "only", headline: "Only path", messageCount: 1, active: true }],
+    });
+    expect(one.container.querySelector(".chat-pane__branches-trigger")).toBeNull();
+
+    const multiple = mount({
+      branches: [
+        { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
+        {
+          leafEntryId: "other",
+          headline: "Earlier idea",
+          messageCount: 2,
+          updatedAt: new Date(Date.now() - 60_000).toISOString(),
+          active: false,
+        },
+      ],
+    });
+    const items = multiple.container.querySelectorAll(".chat-pane__branch-item");
+    expect(multiple.container.querySelector(".chat-pane__branches-trigger")).not.toBeNull();
+    expect(items).toHaveLength(2);
+    expect(items[0]?.textContent).toContain("Current work");
+    expect(items[0]?.getAttribute("data-active")).toBe("true");
+    expect(items[0]?.querySelector(".chat-pane__branch-active")).not.toBeNull();
+    expect(items[1]?.textContent).toContain("Earlier idea");
+
+    multiple.container.querySelector(".chat-pane__branches-menu")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "other" } },
+      }),
+    );
+    expect(multiple.props.onBranchSelect).toHaveBeenCalledWith("other");
+  });
+
+  it("disables branch switching while the agent is working", () => {
+    const { container, props } = mount({
+      branchSwitchDisabledReason: "Branch switch is unavailable while the agent is working.",
+      branches: [
+        { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
+        { leafEntryId: "other", headline: "Earlier idea", messageCount: 2, active: false },
+      ],
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger");
+    expect(trigger?.disabled).toBe(true);
+    container.querySelector(".chat-pane__branches-menu")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "other" } },
+      }),
+    );
+    expect(props.onBranchSelect).not.toHaveBeenCalled();
   });
 });
 

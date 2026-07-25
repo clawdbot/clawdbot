@@ -2,11 +2,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
-import { buildInboundMediaNote } from "../media-note.js";
+import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
@@ -28,9 +30,12 @@ function buildReplyPromptBodies(params: {
   threadContextNote?: string;
   systemEventBlocks?: string[];
   inboundEventKind?: InboundEventKind;
+  /** Facts whose text projection is already present in a body variant. */
+  media?: readonly MediaFact[];
 }): {
   mediaNote?: string;
   mediaReplyHint?: string;
+  media?: MediaFact[];
   prefixedCommandBody: string;
   queuedBody: string;
   transcriptCommandBody: string;
@@ -48,7 +53,9 @@ function buildReplyPromptBodies(params: {
     .filter(Boolean)
     .join("\n\n");
   const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
-  const mediaNote = buildInboundMediaNote(params.ctx);
+  const generatedMedia = buildInboundMediaNoteProjection(params.ctx);
+  const mediaNote = generatedMedia.text;
+  const media = [...generatedMedia.media, ...normalizeMediaFacts(params.media)];
   const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
   const queuedBodyRaw = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
@@ -68,6 +75,7 @@ function buildReplyPromptBodies(params: {
   return {
     mediaNote,
     mediaReplyHint,
+    ...(media.length > 0 ? { media } : {}),
     prefixedCommandBody: annotateInterSessionPromptText(
       prefixedCommandBodyRaw,
       params.sessionCtx.InputProvenance,
@@ -130,14 +138,10 @@ function formatRoomEventLine(ctx: TemplateContext, body: string): string {
 
 function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
   return (
-    normalizeOptionalString(params.ctx.BodyForCommands) ??
-    normalizeOptionalString(params.ctx.CommandBody) ??
-    normalizeOptionalString(params.ctx.RawBody) ??
-    normalizeOptionalString(params.sessionCtx.BodyForCommands) ??
-    normalizeOptionalString(params.sessionCtx.CommandBody) ??
-    normalizeOptionalString(params.sessionCtx.RawBody) ??
+    normalizeOptionalString(params.ctx.commandText) ??
+    normalizeOptionalString(params.sessionCtx.commandText) ??
     (params.hasUserBody ? params.baseBody.trim() : undefined) ??
-    "[User sent media without caption]"
+    MEDIA_ONLY_USER_TEXT
   );
 }
 
@@ -226,7 +230,7 @@ export function buildReplyPromptEnvelopeBase(
     ? ROOM_EVENT_PROMPT
     : params.hasUserBody
       ? resetModelBody
-      : "[User sent media without caption]";
+      : MEDIA_ONLY_USER_TEXT;
   // Room-event transcript rows are plain chat lines; replay treats them as
   // conversation, while the OpenClaw marker remains current-turn context only.
   const transcriptBody = params.isHeartbeat
@@ -237,7 +241,7 @@ export function buildReplyPromptEnvelopeBase(
         ? resolveRoomEventTranscriptBody(params)
         : params.hasUserBody
           ? params.baseBody
-          : "[User sent media without caption]";
+          : MEDIA_ONLY_USER_TEXT;
   const currentInboundContext: CurrentInboundPromptContext | undefined =
     !params.isBareSessionReset && currentInboundContextText
       ? {
@@ -261,6 +265,8 @@ export function buildReplyPromptEnvelope(
     prefixedBody?: string;
     threadContextNote?: string;
     systemEventBlocks?: string[];
+    /** Facts whose model-facing projection is already present in the supplied body. */
+    media?: readonly MediaFact[];
   },
 ): ReplyPromptEnvelope {
   const base = buildReplyPromptEnvelopeBase(params);
@@ -274,6 +280,7 @@ export function buildReplyPromptEnvelope(
     threadContextNote: params.threadContextNote,
     systemEventBlocks: params.systemEventBlocks,
     inboundEventKind: params.inboundEventKind,
+    media: params.media,
   });
 
   return {

@@ -217,8 +217,8 @@ function changedCheckDiffRefsReady({ base, head, cwd = process.cwd() }) {
 export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
   const delegatedArgv = buildDelegatedChangedCheckArgv(argv, options);
   return [
-    "crabbox:run",
-    "--",
+    "scripts/crabbox-wrapper.mjs",
+    "run",
     "--provider",
     "blacksmith-testbox",
     "--blacksmith-org",
@@ -253,17 +253,11 @@ function buildDelegatedChangedCheckArgv(argv, options = {}) {
     return argv;
   }
   const stagedPaths = listStagedChangedPaths(options.cwd);
-  const next = [];
-  if (args.timed) {
-    next.push("--timed");
-  }
+  const timedArgs = args.timed ? ["--timed"] : [];
   if (stagedPaths.length === 0) {
-    next.push("--no-changes");
-    return next;
+    return [...timedArgs, "--no-changes"];
   }
-  next.push("--base", "HEAD", "--head", "HEAD");
-  next.push("--", ...stagedPaths);
-  return next;
+  return [...timedArgs, "--base", "HEAD", "--head", "HEAD", "--", ...stagedPaths];
 }
 
 export function shouldRunShrinkwrapGuard(paths) {
@@ -362,9 +356,9 @@ export function createShrinkwrapGuardCommand(paths) {
 }
 
 async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error("[check:changed] delegating to Blacksmith Testbox via `pnpm crabbox:run`.");
+  console.error("[check:changed] delegating to Blacksmith Testbox via the Node wrapper.");
   return await runManagedCommand({
-    bin: "pnpm",
+    bin: "node",
     args: buildChangedCheckCrabboxArgs(argv),
     env,
   });
@@ -407,6 +401,20 @@ export function createChangedCheckPlan(result, options = {}) {
   };
 
   add("conflict markers", ["check:no-conflict-markers"]);
+  if (
+    result.paths.some((filePath) =>
+      /^(?:src\/|packages\/|extensions\/|config\/env-var-count-budget\.txt$|scripts\/check-env-var-count\.mjs$)/u.test(
+        filePath,
+      ),
+    )
+  ) {
+    add("environment variable count ratchet", [
+      "check:env-var-count",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+    ]);
+  }
   if (
     result.paths.some((filePath) =>
       /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mjs$)/u.test(
@@ -633,6 +641,14 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (hasMacosAppCiPath(result.paths)) {
     add("macOS app CI tests", ["test:macos:ci"], baseEnv);
+  }
+  if (lanes.apps || lanes.core) {
+    addCommand(
+      "native state schema version guard",
+      "node",
+      ["scripts/check-native-state-schema-version.mjs"],
+      baseEnv,
+    );
   }
 
   if (lanes.core || lanes.extensions) {

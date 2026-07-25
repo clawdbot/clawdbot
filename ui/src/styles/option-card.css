@@ -89,7 +89,7 @@
   flex: 0 0 auto;
   padding: 3px 6px;
   border-radius: var(--radius-full);
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground);
   font-size: 10px;
   font-weight: 700;

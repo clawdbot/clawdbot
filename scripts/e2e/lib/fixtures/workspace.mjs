@@ -43,10 +43,10 @@ function writeAgentsDeleteConfig() {
   fs.mkdirSync(sharedWorkspace, { recursive: true });
   writeJson(path.join(stateDir, "openclaw.json"), {
     agents: {
-      list: [
-        { id: "main", workspace: sharedWorkspace },
-        { id: "ops", workspace: sharedWorkspace },
-      ],
+      entries: {
+        main: { workspace: sharedWorkspace },
+        ops: { workspace: sharedWorkspace },
+      },
     },
     ...(gatewayToken ? { gateway: { auth: { mode: "token", token: gatewayToken } } } : {}),
   });

@@ -9,7 +9,7 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
-import { streamSimple } from "../../llm/stream.js";
+import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
 import {
@@ -19,6 +19,7 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
+import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -30,6 +31,7 @@ import type {
   ToolDefinition,
 } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
@@ -118,6 +120,8 @@ export interface CreateAgentSessionOptions {
   /** Optional lock used before session-file writes or write-capable extension hooks. */
   withSessionWriteLock?: AgentSessionWriteLockRunner;
 }
+
+type CreateAgentSessionInternalOptions = Pick<AgentSessionConfig, "contextOverflowRecoveryOwner">;
 
 /** Result from createAgentSession */
 interface CreateAgentSessionResult {
@@ -276,6 +280,21 @@ function getAttributionHeaders(
 export async function createAgentSession(
   options: CreateAgentSessionOptions = {},
 ): Promise<CreateAgentSessionResult> {
+  return await createAgentSessionImpl(options);
+}
+
+/** Internal embedded-runner seam; keep recovery ownership out of the public session SDK. */
+export async function createAgentSessionForEmbeddedRunner(
+  options: CreateAgentSessionOptions,
+  internalOptions: CreateAgentSessionInternalOptions,
+): Promise<CreateAgentSessionResult> {
+  return await createAgentSessionImpl(options, internalOptions);
+}
+
+async function createAgentSessionImpl(
+  options: CreateAgentSessionOptions,
+  internalOptions: CreateAgentSessionInternalOptions = {},
+): Promise<CreateAgentSessionResult> {
   const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
   const agentDir = options.agentDir ?? getDefaultAgentDir();
   let resourceLoader = options.resourceLoader;
@@ -293,6 +312,7 @@ export async function createAgentSession(
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
     await resourceLoader.reload();
+    modelRegistry.refresh();
   }
 
   // Check if session has existing data to restore
@@ -438,6 +458,7 @@ export async function createAgentSession(
   const runWithSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> =>
     options.withSessionWriteLock ? await options.withSessionWriteLock(run) : await run();
 
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
       systemPrompt: "",
@@ -453,7 +474,7 @@ export async function createAgentSession(
       }
       const providerRetrySettings = settingsManager.getProviderRetrySettings();
       const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return streamSimple(modelResult, context, {
+      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
         ...optionsLocal,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
@@ -506,6 +527,9 @@ export async function createAgentSession(
     thinkingBudgets: settingsManager.getThinkingBudgets(),
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
+  if (agent.streamFn) {
+    bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
+  }
 
   // Restore messages if session has existing data
   if (hasExistingSession) {
@@ -536,6 +560,7 @@ export async function createAgentSession(
     extensionRunnerRef,
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteLock: options.withSessionWriteLock,
+    contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
   });
   const extensionsResult = resourceLoader.getExtensions();
 

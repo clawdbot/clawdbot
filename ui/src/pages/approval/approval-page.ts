@@ -106,6 +106,9 @@ function renderPresentation(presentation: ApprovalPresentation) {
   return html`
     <div class="approval-page__preview-label">${t("approvalPage.requestLabel")}</div>
     <div class=${previewClass}>${presentation.description}</div>
+    ${presentation.kind === "plugin" && presentation.detail
+      ? html`<pre class="approval-page__preview mono" dir="ltr">${presentation.detail}</pre>`
+      : nothing}
     <dl class="approval-page__meta">
       ${
         // severity/pluginId/toolName exist only on the plugin presentation.
@@ -253,17 +256,17 @@ export class ApprovalPage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.connected;
-    const becameConnected = snapshot.connected && !this.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
+    const becameConnected = snapshot.phase === "connected" && !this.connected;
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     if (clientChanged || connectionChanged) {
       this.invalidateOperations();
       this.clearPollTimer();
       this.resolving = false;
       this.resolvingDecision = null;
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       if (this.approvalId) {
         this.loading = false;
         this.requestError =

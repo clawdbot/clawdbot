@@ -13,13 +13,13 @@ function deferred<T>() {
 function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: {
     client: GatewayBrowserClient | null;
-    connected: boolean;
+    phase: "connected" | "reconnecting";
     sessionKey: string;
     assistantAgentId: string | null;
     hello: GatewayHelloOk | null;
   } = {
     client,
-    connected: true,
+    phase: "connected",
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello: null,
@@ -41,7 +41,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
     },
     publish: (connected: boolean) => {
-      snapshot = { ...snapshot, connected };
+      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -67,6 +67,10 @@ describe("session capability message cuts", () => {
     committed.resolve({ editorText: "edit me" });
 
     await expect(pending).resolves.toEqual({ editorText: "edit me" });
+    expect(request).toHaveBeenCalledWith("sessions.rewind", {
+      sessionKey: "agent:main:main",
+      entryId: "user-entry",
+    });
     sessions.dispose();
   });
 
@@ -87,6 +91,42 @@ describe("session capability message cuts", () => {
     await expect(sessions.forkAtMessage("agent:main:main", "user-entry")).resolves.toEqual({
       sessionKey: "agent:main:dashboard:forked",
       editorText: "edit me",
+    });
+    expect(request).toHaveBeenCalledWith("sessions.fork", {
+      sessionKey: "agent:main:main",
+      entryId: "user-entry",
+    });
+    sessions.dispose();
+  });
+
+  it("lists branches and sends the selected leaf to the switch RPC", async () => {
+    const branch = {
+      leafEntryId: "branch-b",
+      headline: "Try the earlier path",
+      messageCount: 3,
+      active: false,
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.branches.list") {
+        return { branches: [branch] };
+      }
+      if (method === "sessions.branches.switch") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return { sessions: [], count: 0 };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.listBranches("agent:main:main")).resolves.toEqual([branch]);
+    await expect(sessions.switchBranch("agent:main:main", "branch-b")).resolves.toEqual({});
+    expect(request).toHaveBeenCalledWith("sessions.branches.switch", {
+      sessionKey: "agent:main:main",
+      leafEntryId: "branch-b",
     });
     sessions.dispose();
   });

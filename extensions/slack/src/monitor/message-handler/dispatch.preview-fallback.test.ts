@@ -420,7 +420,6 @@ function createPreparedSlackMessage(params?: {
       botId: "B_OPENCLAW",
       textLimit: 4000,
       typingReaction: params?.typingReaction ?? "",
-      removeAckAfterReply: false,
       historyLimit: 0,
       channelHistories: new Map(),
       allowFrom: [],

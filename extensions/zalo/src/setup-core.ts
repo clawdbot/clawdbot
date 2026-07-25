@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Zalo plugin module implements setup core behavior.
 import {
   addWildcardAllowFrom,
@@ -23,25 +24,48 @@ type ZaloAccountSetupConfig = {
   allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
 };
 
-export const zaloSetupAdapter = createPatchedAccountSetupAdapter({
-  channelKey: channel,
-  validateInput: createSetupInputPresenceValidator({
-    defaultAccountOnlyEnvError: "ZALO_BOT_TOKEN can only be used for the default account.",
-    whenNotUseEnv: [
-      {
-        someOf: ["token", "tokenFile"],
-        message: "Zalo requires token or --token-file (or --use-env).",
-      },
-    ],
+export const zaloSetupAdapter = {
+  ...createPatchedAccountSetupAdapter({
+    channelKey: channel,
+    validateInput: createSetupInputPresenceValidator({
+      defaultAccountOnlyEnvError: "ZALO_BOT_TOKEN can only be used for the default account.",
+      whenNotUseEnv: [
+        {
+          someOf: ["token", "tokenFile"],
+          message: "Zalo requires token or --token-file (or --use-env).",
+        },
+      ],
+    }),
+    buildPatch: (input) =>
+      input.useEnv
+        ? {}
+        : input.tokenFile
+          ? { tokenFile: input.tokenFile }
+          : input.token
+            ? { botToken: input.token }
+            : {},
   }),
-  buildPatch: (input) =>
-    input.useEnv
-      ? {}
-      : input.tokenFile
-        ? { tokenFile: input.tokenFile }
-        : input.token
-          ? { botToken: input.token }
-          : {},
+  singleAccountKeysToMove: ["webhookSecret", "tokenFile"],
+};
+
+export const zaloSetupContract = defineChannelSetupContract({
+  fields: {
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "Zalo bot token" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "Zalo bot token file" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use ZALO_BOT_TOKEN" },
+    },
+  },
+  legacyAdapter: zaloSetupAdapter,
 });
 
 export const zaloDmPolicy: ChannelSetupDmPolicy = {

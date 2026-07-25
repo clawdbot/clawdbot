@@ -98,7 +98,7 @@ function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   return (
-    readConfiguredSecretString(kimi?.apiKey, "tools.web.search.kimi.apiKey") ??
+    readConfiguredSecretString(kimi?.apiKey, "plugins.entries.moonshot.config.webSearch.apiKey") ??
     readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
   );
 }
@@ -358,7 +358,7 @@ export async function executeKimiWebSearchProviderTool(
     return {
       error: "missing_kimi_api_key",
       message:
-        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure plugins.entries.moonshot.config.webSearch.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }

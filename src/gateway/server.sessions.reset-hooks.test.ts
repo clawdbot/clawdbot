@@ -42,6 +42,7 @@ type CommandNewHookEvent = {
 };
 
 type SessionEntryWithCliBindings = {
+  agentHarnessId?: string;
   sessionId?: string;
   claudeCliSessionId?: string;
   cliSessionBindings?: unknown;
@@ -332,7 +333,8 @@ function expectCliBindingsCleared(
   previousSessionId: string,
 ) {
   expect(nextEntry).toBeDefined();
-  expect(nextEntry?.sessionId).not.toBe(previousSessionId);
+  expect(nextEntry?.sessionId).toBe(previousSessionId);
+  expect(nextEntry?.agentHarnessId).toBeUndefined();
   expect(nextEntry?.claudeCliSessionId).toBeUndefined();
   expect(nextEntry?.cliSessionBindings).toBeUndefined();
   expect(nextEntry?.cliSessionIds).toBeUndefined();
@@ -382,7 +384,7 @@ test("sessions.reset removes automatic recovery state from the replacement sessi
 
   const store = await loadGatewaySessionStoreForKey("main");
   const replacement = store["agent:main:main"];
-  expect(replacement?.sessionId).not.toBe("sess-recovery");
+  expect(replacement?.sessionId).toBe("sess-recovery");
   expect(replacement?.abortedLastRun).toBe(false);
   expect(replacement?.restartRecoveryRuns).toBeUndefined();
   expect((replacement as InternalSessionEntry | undefined)?.mainRestartRecovery).toBeUndefined();
@@ -455,7 +457,7 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
     });
 
     expect(reset.ok).toBe(true);
-    if (!reset.ok) {
+    if (!reset.ok || "incognitoDeleted" in reset) {
       throw new Error("expected reset to succeed");
     }
     expect(reset.key).toBe("global");
@@ -477,7 +479,7 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
     });
     expect(mainEntry?.sessionId).toBe("sess-main-global");
     expect(workEntry?.sessionId).toBe(reset.entry.sessionId);
-    expect(workEntry?.sessionId).not.toBe("sess-work-global");
+    expect(workEntry?.sessionId).toBe("sess-work-global");
   });
 });
 
@@ -554,16 +556,15 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.sessionId).toBe("sess-main");
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.reason).toBe("new");
-  expect(endEvent.transcriptArchived).toBe(true);
-  const archivedSessionFile = expectStringWithPrefix(
-    path.basename(expectStringValue(endEvent.sessionFile, "archived session file")),
-    "sess-main.jsonl.reset.",
-    "archived session file",
-  );
-  expect(archivedSessionFile).toContain(".jsonl.reset.");
+  // Retained history: reset keeps the SQLite transcript searchable under the
+  // same key, so nothing is archived and no reset artifact file exists.
+  expect(endEvent.transcriptArchived).toBeUndefined();
+  expect(endEvent.sessionFile).toBeUndefined();
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
+  expect(endEvent.nextSessionId).toBe("sess-main");
   expectMainHookContext(endContext, "sess-main");
   expect(startEvent.sessionKey).toBe("agent:main:main");
+  expect(startEvent.sessionId).toBe("sess-main");
   expect(startEvent.resumedFrom).toBe("sess-main");
   expect(startContext.sessionId).toBe(startEvent.sessionId);
   expect(startContext.sessionKey).toBe("agent:main:main");
@@ -828,7 +829,7 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
     // Reset-in-place: response key matches the parent main key, NOT a dashboard child.
     expect(result.payload?.key).toBe("agent:main:main");
     expect(result.payload?.runStarted).toBe(false);
-    expect(result.payload?.sessionId).not.toBe("sess-parent-dms");
+    expect(result.payload?.sessionId).toBe("sess-parent-dms");
 
     expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
     expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
@@ -904,7 +905,10 @@ test("sessions.reset drops cli session bindings so the next turn does not --resu
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-with-binding", "hello");
 
-  await writeMainSessionEntry("sess-with-binding", claudeCliBindings("claude-cli-old-session"));
+  await writeMainSessionEntry("sess-with-binding", {
+    ...claudeCliBindings("claude-cli-old-session"),
+    agentHarnessId: "openclaw",
+  });
 
   await resetMainSession();
 
@@ -949,6 +953,7 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
   const { storePath } = await createSessionStoreDir();
   const reseedPromptHash = "a".repeat(64);
   const childEntry = cliBoundSessionEntry("sess-spawned-child", "claude-cli-child-session", {
+    agentHarnessId: "codex",
     parentSessionKey: "agent:main:main",
     spawnedBy: "agent:main:main",
     subagentRole: "orchestrator",
@@ -984,7 +989,8 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
   const store = await loadGatewaySessionStoreForKey("subagent:child");
   const nextEntry = store["agent:main:subagent:child"];
   expect(nextEntry).toBeDefined();
-  expect(nextEntry?.sessionId).not.toBe("sess-spawned-child");
+  expect(nextEntry?.sessionId).toBe("sess-spawned-child");
+  expect(nextEntry?.agentHarnessId).toBeUndefined();
   expect(nextEntry?.claudeCliSessionId).toBe("claude-cli-child-session");
   expect(nextEntry?.cliSessionIds).toEqual({
     "claude-cli": "claude-cli-child-session",

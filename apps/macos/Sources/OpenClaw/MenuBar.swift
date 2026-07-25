@@ -88,7 +88,9 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.state.connectionMode) { _, mode in
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
-            CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            if AppLaunchPresentationPolicy.current.allowsAutomaticPresentation {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            }
             BrowserProfileImportModel.shared.handleConnectionModeChange()
         }
 
@@ -103,10 +105,15 @@ struct OpenClawApp: App {
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Session") {
-                    DashboardManager.shared.dispatchNativeCommand(.newSession)
+                Button("New Gateway Window…") {
+                    WebChatManager.shared.newGatewayWindow()
                 }
                 .keyboardShortcut("n", modifiers: .command)
+
+                Button("New Thread") {
+                    DashboardManager.shared.dispatchNativeCommand(.newSession)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
@@ -505,6 +512,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func applicationDidFinishLaunching(_: Notification) {
         let environment = ProcessInfo.processInfo.environment
+        let launchPolicy = AppLaunchPresentationPolicy.current
         let hasReplacementHandoff = ApplicationRelocator.hasReplacementHandoffMetadata(
             environment: environment)
         let isReplacementHandoff = ApplicationRelocator.acceptReplacementHandoff(
@@ -516,7 +524,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Only a child whose signed parent and inherited readiness pipe authenticate
         // may overlap the old process during replacement handoff.
         if !isReplacementHandoff, self.isDuplicateInstance() {
-            NSWorkspace.shared.open(Self.dashboardURL)
+            if launchPolicy.allowsAutomaticPresentation {
+                NSWorkspace.shared.open(Self.dashboardURL)
+            }
             NSApp.terminate(nil)
             return
         }
@@ -540,7 +550,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppActivationPolicy.apply(showDockIcon: state?.showDockIcon ?? false)
         if let state {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
-            if !shouldWaitForConnection {
+            if !shouldWaitForConnection, launchPolicy.allowsAutomaticPresentation {
                 Task { @MainActor in
                     await self.scheduleFirstRunOnboardingIfNeeded(gatewayConnected: false)
                 }
@@ -554,7 +564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ConnectionModeCoordinator.shared.apply(
                     mode: state.connectionMode,
                     paused: state.isPaused)
-                guard shouldWaitForConnection else { return }
+                guard shouldWaitForConnection, launchPolicy.allowsAutomaticPresentation else { return }
                 await self.scheduleFirstRunOnboardingIfNeeded(
                     gatewayConnected: ControlChannel.shared.state == .connected)
             }
@@ -571,9 +581,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         AppStateStore.shared.applyPeekabooBridgeHostState()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            if !PostUpdateController.shared.startIfNeeded() {
-                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+        if launchPolicy.allowsAutomaticPresentation {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                if !PostUpdateController.shared.startIfNeeded() {
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+                }
             }
         }
         Task {
@@ -583,21 +595,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         #if DEBUG
         // Screenshot/demo helper: show the pairing panel with sample requests.
-        if ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1" {
+        if launchPolicy.allowsAutomaticPresentation,
+           ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1"
+        {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 DebugActions.showPairingPanelDemo()
             }
         }
         #endif
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
-        if CommandLine.arguments.contains("--chat") || CommandLine.arguments.contains("--webchat") {
+        if launchPolicy.shouldAutoOpenChat(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
             Task { @MainActor in
                 let sessionKey = await WebChatManager.shared.preferredSessionKey()
                 WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
-        if CommandLine.arguments.contains("--dashboard") {
+        if launchPolicy.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
             Task { @MainActor in
                 if DashboardManager.shared.showConfiguredWindowIfPossible() {

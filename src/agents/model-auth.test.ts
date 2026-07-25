@@ -28,8 +28,8 @@ vi.mock("../plugins/plugin-registry.js", () => ({
       {
         origin: "bundled",
         nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local"],
-        providerAuthEnvVars: {
-          ollama: ["OLLAMA_API_KEY"],
+        setup: {
+          providers: [{ id: "ollama", envVars: ["OLLAMA_API_KEY"] }],
         },
       },
     ],

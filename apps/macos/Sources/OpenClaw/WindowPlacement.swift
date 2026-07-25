@@ -64,6 +64,19 @@ enum WindowPlacement {
         return NSRect(x: x, y: y, width: clampedWidth, height: clampedHeight)
     }
 
+    static func cascadedFrame(from frame: NSRect, offset: CGFloat = 24, in bounds: NSRect) -> NSRect {
+        guard bounds != .zero else {
+            return frame.offsetBy(dx: offset, dy: -offset)
+        }
+        let width = min(frame.width, bounds.width)
+        let height = min(frame.height, bounds.height)
+        let maxX = bounds.maxX - width
+        let maxY = bounds.maxY - height
+        let x = maxX >= bounds.minX ? min(max(frame.minX + offset, bounds.minX), maxX) : bounds.minX
+        let y = maxY >= bounds.minY ? min(max(frame.minY - offset, bounds.minY), maxY) : bounds.minY
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
     static func ensureOnScreen(
         window: NSWindow,
         defaultSize: NSSize,
@@ -75,7 +88,9 @@ enum WindowPlacement {
             frame.intersects(screen.visibleFrame.insetBy(dx: 12, dy: 12))
         }
 
-        if isVisibleSomewhere { return }
+        if isVisibleSomewhere {
+            return
+        }
 
         let screen = NSScreen.main ?? targetScreens.first
         let next = fallback?(screen) ?? self.centeredFrame(size: defaultSize, on: screen)

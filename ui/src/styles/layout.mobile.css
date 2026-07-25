@@ -235,10 +235,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   padding: 0;
 }
 
-.shell--mobile-nav .sidebar-brand__actions {
-  display: none;
-}
-
 .shell--mobile-nav .sidebar {
   width: 100%;
   min-width: 0;

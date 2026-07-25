@@ -6,7 +6,7 @@ type MemoryHostEventStorageMetadata = {
 };
 
 /** Event emitted when a recall query records the selected memory snippets. */
-export type MemoryHostRecallRecordedEvent = MemoryHostEventStorageMetadata & {
+type MemoryHostRecallRecordedEvent = MemoryHostEventStorageMetadata & {
   type: "memory.recall.recorded";
   timestamp: string;
   query: string;
@@ -20,7 +20,7 @@ export type MemoryHostRecallRecordedEvent = MemoryHostEventStorageMetadata & {
 };
 
 /** Event emitted when recall hits are visible but excluded from short-term promotion. */
-export type MemoryHostRecallSkippedEvent = MemoryHostEventStorageMetadata & {
+type MemoryHostRecallSkippedEvent = MemoryHostEventStorageMetadata & {
   type: "memory.recall.skipped";
   timestamp: string;
   query: string;
@@ -37,7 +37,7 @@ export type MemoryHostRecallSkippedEvent = MemoryHostEventStorageMetadata & {
 };
 
 /** Event emitted when deep-dream candidates are promoted into durable memory. */
-export type MemoryHostPromotionAppliedEvent = MemoryHostEventStorageMetadata & {
+type MemoryHostPromotionAppliedEvent = MemoryHostEventStorageMetadata & {
   type: "memory.promotion.applied";
   timestamp: string;
   memoryPath: string;
@@ -53,10 +53,10 @@ export type MemoryHostPromotionAppliedEvent = MemoryHostEventStorageMetadata & {
 };
 
 /** Normalized outcome for a dreaming phase run. */
-export type MemoryDreamOutcome = "completed" | "failed";
+type MemoryDreamOutcome = "completed" | "failed";
 
 /** Event emitted after a dreaming phase writes inline memory and/or reports. */
-export type MemoryHostDreamCompletedEvent = MemoryHostEventStorageMetadata & {
+type MemoryHostDreamCompletedEvent = MemoryHostEventStorageMetadata & {
   type: "memory.dream.completed";
   timestamp: string;
   phase: MemoryDreamingPhaseName;

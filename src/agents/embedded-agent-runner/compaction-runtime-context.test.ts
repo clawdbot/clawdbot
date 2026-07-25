@@ -7,8 +7,52 @@ import { resetProcessRegistryForTests } from "../bash-process-registry.test-supp
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveCompactionHarnessRuntime,
+  resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+
+describe("resolveEmbeddedCompactionThinkingLevel", () => {
+  it("lets the compaction override replace the inherited session level", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "low" } } },
+        },
+        provider: "demo",
+        modelId: "demo-model",
+        inheritedLevel: "high",
+      }),
+    ).toBe("low");
+  });
+
+  it("revalidates an unsupported configured level for the actual candidate", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "ultra" } } },
+        },
+        provider: "demo",
+        modelId: "demo-model",
+      }),
+    ).toBe("high");
+  });
+
+  it("inherits the session level and otherwise defaults to off", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        provider: "demo",
+        modelId: "demo-model",
+        inheritedLevel: "medium",
+      }),
+    ).toBe("medium");
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        provider: "demo",
+        modelId: "demo-model",
+      }),
+    ).toBe("off");
+  });
+});
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
   afterEach(() => {

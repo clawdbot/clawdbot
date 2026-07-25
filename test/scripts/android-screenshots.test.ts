@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT = "scripts/android-screenshots.sh";
+const SCREENSHOT_FIXTURE =
+  "apps/android/app/src/main/java/ai/openclaw/app/AndroidScreenshotFixture.kt";
 
 function runAndroidScreenshots(args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync("bash", [SCRIPT, ...args], {
@@ -19,11 +21,19 @@ describe("android screenshots script", () => {
     expect(result.stdout).toContain(
       "apps/android/fastlane/metadata/android/pt-BR/images/phoneScreenshots",
     );
-    expect(result.stdout).toContain(".artifacts/android-screenshots/latest");
+    expect(result.stdout).toContain(
+      "apps/android/fastlane/metadata/android/pt-BR/images/wearScreenshots",
+    );
+    expect(result.stdout).toContain(".artifacts/android-screenshots/latest/phone");
+    expect(result.stdout).toContain(".artifacts/android-screenshots/latest/wear");
     expect(result.stdout).toContain("Android screenshot size: 1440x2560");
+    expect(result.stdout).toContain("Android screenshot size: 454x454");
     expect(result.stdout).toContain("Screenshot AVD: OpenClaw_Screenshots_API36");
+    expect(result.stdout).toContain("Screenshot AVD: OpenClaw_Wear_Screenshots_API34");
     expect(result.stdout).toContain("Screenshot device profile: pixel_2");
-    expect(result.stdout).toContain("Scenes: home chat voice settings gateway");
+    expect(result.stdout).toContain("Screenshot device profile: wearos_large_round");
+    expect(result.stdout).toContain("Scenes: home chat settings gateway voice-wake");
+    expect(result.stdout).toContain("Scenes: chat voice controls");
     expect(result.stdout).not.toContain("connect chat voice screen settings");
     expect(result.stdout).toContain("Dry run complete.");
   });
@@ -38,9 +48,16 @@ describe("android screenshots script", () => {
     expect(result.stdout).not.toContain(`Android screenshot artifacts: ${process.env.HOME}\n`);
   });
 
-  it("waits for content unique to the settings and gateway screens", () => {
+  it("waits for fixture content unique to the chat, settings, and gateway screens", () => {
     const script = readFileSync(SCRIPT, "utf8");
+    const fixture = readFileSync(SCREENSHOT_FIXTURE, "utf8");
 
+    expect(script).toContain("chat) printf '%s\\n' \"Draft a short status update for the team.\"");
+    expect(script).not.toContain("chat) printf '%s\\n' \"Ready when you are\"");
+    expect(script).toContain('if [[ "$FORM_FACTOR" == "wear" ]]');
+    expect(script).toContain("voice) printf '%s\\n' \"Dictate\"");
+    expect(script).not.toContain("Ready to talk");
+    expect(fixture).toContain('"Draft a short status update for the team."');
     expect(script).toContain("settings) printf '%s\\n' \"OpenClaw mobile\"");
     expect(script).not.toContain("settings) printf '%s\\n' \"Settings\"");
     expect(script).toContain(
@@ -58,11 +75,39 @@ describe("android screenshots script", () => {
     expect(script).toContain("shell wm density reset");
   });
 
+  it("pins the device timezone before rendering seeded timestamps", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+    const requireEmulatorIndex = script.indexOf('require_emulator_device "$ADB_BIN" "$ADB_SERIAL"');
+    const stabilizeDeviceIndex = script.indexOf(
+      'stabilize_device_for_screenshots "$ADB_BIN" "$ADB_SERIAL"',
+    );
+
+    expect(script).toContain("shell cmd time_zone_detector set_auto_detection_enabled false");
+    expect(script).toContain("shell cmd alarm set-timezone UTC");
+    expect(script).toContain('shell cmd alarm set-timezone "$ORIGINAL_TIME_ZONE"');
+    expect(script).toContain(
+      'shell cmd time_zone_detector set_auto_detection_enabled "$ORIGINAL_AUTO_TIME_ZONE"',
+    );
+    expect(requireEmulatorIndex).toBeGreaterThan(-1);
+    expect(stabilizeDeviceIndex).toBeGreaterThan(requireEmulatorIndex);
+  });
+
+  it("dismisses the first-run Wear charging overlay before checking scene readiness", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+
+    expect(script).toContain("com.google.android.wearable.sysui:id/charging_container");
+    expect(script).toContain("shell input keyevent 4");
+  });
+
   it("provisions a retained no-cutout screenshot emulator by default", () => {
     const script = readFileSync(SCRIPT, "utf8");
 
     expect(script).toContain('DEFAULT_SCREENSHOT_AVD="OpenClaw_Screenshots_API36"');
     expect(script).toContain('DEFAULT_SCREENSHOT_DEVICE_PROFILE="pixel_2"');
+    expect(script).toContain('DEFAULT_WEAR_SCREENSHOT_AVD="OpenClaw_Wear_Screenshots_API34"');
+    expect(script).toContain('DEFAULT_WEAR_SCREENSHOT_DEVICE_PROFILE="wearos_large_round"');
+    expect(script).toContain('GRADLE_ASSEMBLE_TASK=":wear:assembleDebug"');
+    expect(script).toContain('OUTPUT_TYPE="wearScreenshots"');
     expect(script).toContain('ensure_screenshot_avd "$avd"');
     expect(script).toContain('--device "$SCREENSHOT_DEVICE_PROFILE"');
     expect(script).toContain("is not the screenshot AVD");
@@ -87,5 +132,23 @@ describe("android screenshots script", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("does not meet Google Play dimension and aspect-ratio limits");
+  });
+
+  it("requires a form factor when selecting one emulator explicitly", () => {
+    const result = runAndroidScreenshots(["--dry-run", "--avd", "custom"]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "--device and --avd require --form-factor phone or --form-factor wear",
+    );
+  });
+
+  it("requires one form factor when retaining an emulator", () => {
+    const result = runAndroidScreenshots(["--dry-run", "--keep-emulator"]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "--keep-emulator requires --form-factor phone or --form-factor wear",
+    );
   });
 });

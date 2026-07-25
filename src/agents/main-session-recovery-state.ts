@@ -155,6 +155,19 @@ export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: 
   );
 }
 
+// A healthy session can retain lifecycle fences after its final recovery owner
+// clears. With no active delivery or aggregate, those fences no longer own work.
+function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: string): boolean {
+  return (
+    entry.status === "running" &&
+    entry.abortedLastRun !== true &&
+    entry.restartRecoveryRuns !== undefined &&
+    entry.mainRestartRecovery === undefined &&
+    entry.restartRecoveryDeliveryRunId === undefined &&
+    isMainRestartRecoveryCandidate(entry, sessionKey)
+  );
+}
+
 function inspectMainSessionRecovery(params: {
   entry: SessionEntry;
   lifecycleGeneration: string;
@@ -444,6 +457,13 @@ export function transitionMainSessionRecovery(
       return { kind: "applied" };
     }
     case "claim_foreground": {
+      if (
+        entry.sessionId === command.sessionId &&
+        hasOrphanedMainRestartRecoveryFences(entry, command.sessionKey)
+      ) {
+        Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+        return { kind: "applied" };
+      }
       if (
         entry.sessionId !== command.sessionId ||
         entry.status !== "running" ||

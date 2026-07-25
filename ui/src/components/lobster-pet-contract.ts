@@ -14,9 +14,19 @@ export type LobsterPetPaletteId =
   | "gold"
   | "calico"
   | "abyss"
+  | "lumen"
   | "ghost"
   | "split"
+  | "cottoncandy"
   | "retro";
+
+// Pass-through ledge visitors. Strangers are other lobsters; everyone else
+// is, at best, lobster-adjacent. None of them count for the Lobsterdex.
+export type LobsterPasserKind = "stranger" | "crab" | "snail" | "duck" | "jellyfish";
+
+// How an arriving pet gets onto the ledge. Rolled per arrival from its own
+// seeded stream; "walk" is the classic pop-up from behind the ledge.
+export type LobsterPetEntrance = "walk" | "balloon" | "bubble";
 
 export type LobsterPetPalette = {
   id: LobsterPetPaletteId;
@@ -31,7 +41,9 @@ export type LobsterPetAccessory =
   | "patch"
   | "santa"
   | "pumpkin"
-  | "party";
+  | "party"
+  | "barnacle"
+  | "monocle";
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
@@ -52,21 +64,17 @@ export type LobsterPetLook = {
   build: LobsterPetBuild;
   clawSize: LobsterPetClawSize;
   tailFan: boolean;
+  // Pokemon-style shiny roll (~1 in 512): sparkles plus a saturated sheen,
+  // logged separately in the Lobsterdex.
+  shiny: boolean;
+  // Real lobsters carry a crusher and a pincer; when set, that side's claw
+  // grows mighty while the other stays dainty (overrides clawSize).
+  crusherSide: "left" | "right" | null;
+  freckles: boolean;
+  // Seeded eye-glint tint for common palettes; rare palettes keep their
+  // signature glints via CSS, and null keeps the default teal.
+  glint: string | null;
 };
-
-export type LobsterLogoVisitPhase = "in" | "leaving" | "out";
-
-export type LobsterLogoVisitDetail = {
-  phase: LobsterLogoVisitPhase;
-  // A null look on a non-"out" phase means "hide the logo, render no
-  // stand-in": a ledge visit scared the brand mark away.
-  look: LobsterPetLook | null;
-  name: string | null;
-};
-
-// Fired on the pet host whenever the logo stand-in phase changes; the
-// sidebar owns the brand slot, so the swap renders there, not here.
-export const LOBSTER_LOGO_VISIT_EVENT = "openclaw-lobster-logo-visit";
 
 function fnv1a(value: string): number {
   let hash = 0x811c9dc5;

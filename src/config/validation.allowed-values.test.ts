@@ -126,7 +126,7 @@ describe("config validation allowed-values metadata", () => {
   it("keeps generic union messaging for mixed scalar-or-object unions", () => {
     const result = validateConfigObjectRaw({
       agents: {
-        list: [{ id: "a", model: true }],
+        entries: { a: { model: true } },
       },
     });
 
@@ -134,7 +134,7 @@ describe("config validation allowed-values metadata", () => {
     if (!result.ok) {
       expect(result.issues).toEqual([
         {
-          path: "agents.list.0.model",
+          path: "agents.entries.a.model",
           message: "Invalid input",
         },
       ]);

@@ -11,6 +11,7 @@ import {
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
+  BrowserOpenResult,
   BrowserStatus,
   BrowserTab,
   BrowserTransport,
@@ -70,12 +71,15 @@ async function sendTabTargetRequest(params: {
   method: "POST" | "DELETE";
   opts: BrowserClientProfileOptions | undefined;
   body?: object;
-}): Promise<void> {
-  await fetchBrowserJson(withProfilePath(params.baseUrl, params.path, params.opts?.profile), {
-    method: params.method,
-    ...(params.body ? { headers: JSON_HEADERS, body: JSON.stringify(params.body) } : {}),
-    timeoutMs: resolveBrowserClientTimeoutMs(params.opts, 5000),
-  });
+}): Promise<{ ok: true; targetId?: string }> {
+  return await fetchBrowserJson(
+    withProfilePath(params.baseUrl, params.path, params.opts?.profile),
+    {
+      method: params.method,
+      ...(params.body ? { headers: JSON_HEADERS, body: JSON.stringify(params.body) } : {}),
+      timeoutMs: resolveBrowserClientTimeoutMs(params.opts, 5000),
+    },
+  );
 }
 
 /** Profile status record returned by browser profile listing. */
@@ -341,13 +345,16 @@ export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
   opts?: { profile?: string; label?: string; timeoutMs?: number },
-): Promise<BrowserTab> {
-  return await fetchBrowserJson<BrowserTab>(withProfilePath(baseUrl, "/tabs/open", opts?.profile), {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ url, ...(opts?.label ? { label: opts.label } : {}) }),
-    timeoutMs: resolveBrowserClientTimeoutMs(opts, 15000),
-  });
+): Promise<BrowserOpenResult> {
+  return await fetchBrowserJson<BrowserOpenResult>(
+    withProfilePath(baseUrl, "/tabs/open", opts?.profile),
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ url, ...(opts?.label ? { label: opts.label } : {}) }),
+      timeoutMs: resolveBrowserClientTimeoutMs(opts, 15000),
+    },
+  );
 }
 
 /** Focus an existing browser tab. */
@@ -355,9 +362,9 @@ export async function browserFocusTab(
   baseUrl: string | undefined,
   targetId: string,
   opts?: { profile?: string; timeoutMs?: number },
-): Promise<void> {
+): Promise<{ ok: true; targetId?: string }> {
   const body = { targetId };
-  await sendTabTargetRequest({ baseUrl, path: "/tabs/focus", method: "POST", opts, body });
+  return await sendTabTargetRequest({ baseUrl, path: "/tabs/focus", method: "POST", opts, body });
 }
 
 /** Close an existing browser tab. */

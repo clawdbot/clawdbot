@@ -167,7 +167,7 @@ export async function prepareCodexAttemptContext(
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
-    reserveTokens: resolveCodexContextEngineProjectionReserveTokens({ config: params.config }),
+    reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
   });
   return {
     runtime,

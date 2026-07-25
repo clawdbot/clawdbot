@@ -393,16 +393,24 @@ internal enum class WearSequenceDecision {
   GapOrReset,
 }
 
+internal data class WearResponseRequest(
+  val responseGeneration: Long,
+  val eventGeneration: Long,
+)
+
 internal class WearEventSequenceTracker {
   private var streamId: String? = null
   private var lastSequence: Long? = null
   private var awaitingSnapshot = false
+  private var responseGeneration = 0L
+  private var eventGeneration = 0L
 
   @Synchronized
   fun adoptSnapshot(
     streamId: String?,
     sequence: Long?,
   ) {
+    eventGeneration += 1
     if (sequence == null) {
       this.streamId = streamId
       lastSequence = null
@@ -426,25 +434,60 @@ internal class WearEventSequenceTracker {
     if (previous == null) {
       this.streamId = streamId
       lastSequence = sequence
+      eventGeneration += 1
       return WearSequenceDecision.Accepted
     }
     if (this.streamId != streamId && (this.streamId != null || streamId != null)) {
       awaitingSnapshot = true
+      eventGeneration += 1
       return WearSequenceDecision.GapOrReset
     }
     if (sequence == previous + 1) {
       lastSequence = sequence
+      eventGeneration += 1
       return WearSequenceDecision.Accepted
     }
     // Stream epochs expose phone restarts even when the new process happens to
     // produce the next numeric sequence. Legacy null epochs still use gap detection.
     awaitingSnapshot = true
+    eventGeneration += 1
     return WearSequenceDecision.GapOrReset
+  }
+
+  // Only the newest model RPC may mutate UI state. The event generation also
+  // rejects legacy unwatermarked responses when live state advanced meanwhile.
+  @Synchronized
+  fun beginResponseRequest(): WearResponseRequest {
+    responseGeneration += 1
+    return WearResponseRequest(responseGeneration = responseGeneration, eventGeneration = eventGeneration)
+  }
+
+  @Synchronized
+  fun invalidateResponseRequests() {
+    responseGeneration += 1
+  }
+
+  @Synchronized
+  fun isResponseCurrent(
+    request: WearResponseRequest,
+    streamId: String?,
+    sequence: Long?,
+  ): Boolean {
+    if (request.responseGeneration != responseGeneration) return false
+    if (awaitingSnapshot) return false
+    if (this.streamId != streamId && (this.streamId != null || streamId != null)) return false
+    val currentSequence = lastSequence
+    return if (sequence == null) {
+      request.eventGeneration == eventGeneration
+    } else {
+      sequence == currentSequence
+    }
   }
 
   @Synchronized
   fun requireSnapshot() {
     awaitingSnapshot = true
+    eventGeneration += 1
   }
 }
 

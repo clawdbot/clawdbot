@@ -528,7 +528,33 @@ struct PortGuardianRecordStoreTests {
     }
 
     @Test
-    func `foreign newer and incompatible databases fail closed`() throws {
+    func `supported and newer Node schema versions open or fail closed`() throws {
+        let fixture = try Self.fixture()
+        defer { fixture.cleanup() }
+
+        for version in [4, 5] {
+            let databaseURL = fixture.root.appendingPathComponent("supported-v\(version).sqlite")
+            try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
+            let store = try PortGuardianRecordStore(databaseURL: databaseURL)
+            let record = Self.record(
+                pid: Int32(4200 + version),
+                port: 18780 + version,
+                timestamp: Double(version))
+            try store.upsert(record)
+            #expect(try store.records() == [record])
+        }
+
+        for version in [6, 99] {
+            let databaseURL = fixture.root.appendingPathComponent("newer-v\(version).sqlite")
+            try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
+            #expect(throws: PortGuardianStoreError.self) {
+                try PortGuardianRecordStore(databaseURL: databaseURL)
+            }
+        }
+    }
+
+    @Test
+    func `foreign and incompatible databases fail closed`() throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
 
@@ -536,12 +562,6 @@ struct PortGuardianRecordStoreTests {
         try Self.execute(foreignURL, "CREATE TABLE unrelated (id INTEGER PRIMARY KEY) STRICT")
         #expect(throws: PortGuardianStoreError.self) {
             try PortGuardianRecordStore(databaseURL: foreignURL)
-        }
-
-        let newerURL = fixture.root.appendingPathComponent("newer.sqlite")
-        try Self.execute(newerURL, "PRAGMA user_version = 5")
-        #expect(throws: PortGuardianStoreError.self) {
-            try PortGuardianRecordStore(databaseURL: newerURL)
         }
 
         let uniqueIndexURL = fixture.root.appendingPathComponent("unique-index.sqlite")
@@ -572,7 +592,7 @@ struct PortGuardianRecordStoreTests {
         try store.upsert(existing)
         try JSONEncoder().encode([existing]).write(to: fixture.legacyURL, options: [.atomic])
 
-        try Self.execute(fixture.databaseURL, "PRAGMA user_version = 5")
+        try Self.execute(fixture.databaseURL, "PRAGMA user_version = 6")
 
         #expect(throws: PortGuardianStoreError.self) {
             try store.upsert(Self.record(pid: 4243, port: 18790, timestamp: 43))
@@ -647,6 +667,36 @@ struct PortGuardianRecordStoreTests {
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
             throw PortGuardianStoreError(String(cString: sqlite3_errmsg(database)))
         }
+    }
+
+    private static func seedVersionedPortGuardianDatabase(
+        _ databaseURL: URL,
+        schemaVersion: Int) throws
+    {
+        try self.execute(databaseURL, """
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          agent_id TEXT,
+          app_version TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO schema_meta (
+          meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
+        ) VALUES ('primary', 'global', \(schemaVersion), NULL, NULL, 1, 1);
+        CREATE TABLE macos_port_guardian_records (
+          pid INTEGER NOT NULL PRIMARY KEY,
+          port INTEGER NOT NULL,
+          command TEXT NOT NULL,
+          mode TEXT NOT NULL,
+          timestamp REAL NOT NULL
+        ) STRICT;
+        CREATE INDEX idx_macos_port_guardian_records_port
+          ON macos_port_guardian_records(port, timestamp DESC);
+        PRAGMA user_version = \(schemaVersion);
+        """)
     }
 
     private static func scalarInt(_ databaseURL: URL, _ sql: String) throws -> Int64 {

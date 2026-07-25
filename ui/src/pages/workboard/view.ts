@@ -4,6 +4,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
+import "../../components/agent-select-registration.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
@@ -57,16 +59,23 @@ import {
 import {
   buildBoardFilterOptions,
   matchesBoardFilter,
-  normalizeActiveBoardFilter,
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "./board-filter.ts";
 import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
+
+function ensureWorkboardCardDashboardElement(): Promise<void> {
+  return ensureCustomElementDefined(
+    "openclaw-workboard-card-dashboard",
+    () => import("./workboard-card-dashboard.ts"),
+  );
+}
 
 type WorkboardProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
   canWrite?: boolean;
+  canGrant?: boolean;
   canModelOverride?: boolean;
   pluginEnabled: boolean | null;
   pluginEnablementError?: string | null;
@@ -822,9 +831,13 @@ function renderCardModal(props: WorkboardProps) {
   const priorityOptions: WorkboardSelectOption<WorkboardPriority>[] = WORKBOARD_PRIORITIES.map(
     (priority) => ({ value: priority, label: formatPriorityLabel(priority) }),
   );
-  const assignableAgentOptions: WorkboardSelectOption[] = agentOptions.map((agent) => ({
-    value: agent.id,
-    label: agent.label,
+  const assignableAgentOptions = agentOptions.map((option) => ({
+    value: option.id,
+    label: option.label,
+    agent: option.id
+      ? (props.agentsList?.agents.find((agent) => agent.id === option.id) ?? { id: option.id })
+      : undefined,
+    icon: option.id ? undefined : icons.bot,
   }));
   const sessionOptions: WorkboardSelectOption[] = [
     { value: "", label: t("workboard.noLinkedSession") },
@@ -988,16 +1001,20 @@ function renderCardModal(props: WorkboardProps) {
               requestUpdate: props.onRequestUpdate,
               disabled: draftActionsBusy,
             })}
-            ${renderWorkboardSelect({
-              value: state.draftAgentId,
-              options: assignableAgentOptions,
-              label: t("workboard.fieldAgent"),
-              onChange: (value) => {
-                state.draftAgentId = value;
-              },
-              requestUpdate: props.onRequestUpdate,
-              disabled: draftActionsBusy,
-            })}
+            <div class="workboard-field">
+              <span>${t("workboard.fieldAgent")}</span>
+              <openclaw-agent-select
+                class="workboard-agent-select"
+                .options=${assignableAgentOptions}
+                .value=${state.draftAgentId}
+                .accessibleLabel=${t("workboard.fieldAgent")}
+                .disabled=${draftActionsBusy}
+                .onSelect=${(value: string) => {
+                  state.draftAgentId = value;
+                  props.onRequestUpdate?.();
+                }}
+              ></openclaw-agent-select>
+            </div>
             ${renderWorkboardSelect({
               value: state.draftSessionKey,
               options: sessionOptions,
@@ -1433,6 +1450,9 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const cardActions = getCardActionState(props, card);
   const { task, busy, activeTask, live, linkedSessionKey, writable, showStartControls, archived } =
     cardActions;
+  if (linkedSessionKey) {
+    void ensureWorkboardCardDashboardElement().catch(() => undefined);
+  }
   const lifecycle = getWorkboardLifecycle(card, props.sessions, task);
   const formatted = formatLifecycle(lifecycle);
   const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
@@ -1515,6 +1535,17 @@ function renderCardDetailsPanel(props: WorkboardProps) {
                   <h3>${t("workboard.fieldNotes")}</h3>
                   <p>${card.notes}</p>
                 </section>
+              `
+            : nothing}
+          ${linkedSessionKey
+            ? html`
+                <openclaw-workboard-card-dashboard
+                  .sessionKey=${linkedSessionKey}
+                  .client=${props.client}
+                  .connected=${props.connected}
+                  .canMutate=${props.canWrite !== false}
+                  .canGrant=${props.canGrant === true}
+                ></openclaw-workboard-card-dashboard>
               `
             : nothing}
           ${renderDependencyDetailList(dependencies)}
@@ -2003,7 +2034,10 @@ export function renderWorkboard(props: WorkboardProps) {
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);
   const boardOptions = buildBoardFilterOptions(state.boards, state.cards);
-  const activeBoardFilter = normalizeActiveBoardFilter(boardOptions, state.boardFilter);
+  // A valid route can outlive a deleted board. Keep that id as the active
+  // filter so the page becomes empty instead of silently showing every card.
+  const activeBoardFilter = state.boardFilter;
+  const showBoardSwitcher = boardOptions.length >= 3;
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
@@ -2072,16 +2106,16 @@ export function renderWorkboard(props: WorkboardProps) {
       label: formatPriorityLabel(priority),
     })),
   ];
-  const agentSelectOptions: WorkboardSelectOption[] = agentOptions.map((agent) => {
-    const option: WorkboardSelectOption = {
-      value: agent.id,
-      label: agent.label,
-    };
-    if (agent.description) {
-      option.description = agent.description;
-    }
-    return option;
-  });
+  const agentSelectOptions = agentOptions.map((option) => ({
+    value: option.id,
+    label: option.label,
+    description: option.description,
+    agent:
+      option.id === "all" || option.id === "default"
+        ? undefined
+        : (props.agentsList?.agents.find((agent) => agent.id === option.id) ?? { id: option.id }),
+    icon: option.id === "all" ? icons.users : option.id === "default" ? icons.bot : undefined,
+  }));
   const dialogOpen = state.draftOpen || Boolean(getVisibleDetailCard(state));
 
   return html`
@@ -2122,7 +2156,7 @@ export function renderWorkboard(props: WorkboardProps) {
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
-            ${boardOptions.length > 2
+            ${showBoardSwitcher
               ? renderWorkboardSelect({
                   value: activeBoardFilter,
                   options: boardOptions,
@@ -2137,17 +2171,21 @@ export function renderWorkboard(props: WorkboardProps) {
                 })
               : nothing}
             ${props.showAgentFilter !== false
-              ? renderWorkboardSelect({
-                  value: state.agentFilter,
-                  options: agentSelectOptions,
-                  label: t("workboard.agentFilter"),
-                  onChange: (value) => {
-                    state.agentFilter = value;
-                  },
-                  requestUpdate: props.onRequestUpdate,
-                  className: "workboard-select--toolbar workboard-select--toolbar-agent",
-                  showLabel: false,
-                })
+              ? html`
+                  <openclaw-agent-select
+                    class="workboard-agent-select workboard-agent-select--toolbar"
+                    .options=${agentSelectOptions}
+                    .value=${state.agentFilter}
+                    .accessibleLabel=${t("workboard.agentFilter")}
+                    .onSelect=${(value: string) => {
+                      const option = agentOptions.find((candidate) => candidate.id === value);
+                      if (option) {
+                        state.agentFilter = option.id;
+                        props.onRequestUpdate?.();
+                      }
+                    }}
+                  ></openclaw-agent-select>
+                `
               : nothing}
             <button
               class="btn workboard-archive-toggle ${state.showArchived ? "active" : ""}"

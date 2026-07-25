@@ -135,6 +135,54 @@ struct ChatGatewayRequestTests {
         #expect(create.params["worktreeBaseRef"]?.value as? String == "origin/release")
     }
 
+    @Test func `message rewind and fork requests preserve routing identity`() {
+        let rewind = OpenClawChatGatewayRequests.rewindSession(
+            sessionKey: "agent:reviewer:telegram:group:1",
+            agentID: " reviewer ",
+            entryId: " message-42 ")
+        let fork = OpenClawChatGatewayRequests.forkAtMessage(
+            sessionKey: "global",
+            agentID: nil,
+            entryId: "message-43")
+
+        #expect(rewind.method == "sessions.rewind")
+        #expect(rewind.timeoutMs == 15000)
+        #expect(rewind.params["sessionKey"]?.value as? String == "agent:reviewer:telegram:group:1")
+        #expect(rewind.params["agentId"]?.value as? String == "reviewer")
+        #expect(rewind.params["entryId"]?.value as? String == "message-42")
+        #expect(rewind.params["key"] == nil)
+
+        #expect(fork.method == "sessions.fork")
+        #expect(fork.timeoutMs == 15000)
+        #expect(fork.params["sessionKey"]?.value as? String == "global")
+        #expect(fork.params["agentId"] == nil)
+        #expect(fork.params["entryId"]?.value as? String == "message-43")
+        #expect(fork.params["key"] == nil)
+    }
+
+    @Test func `branch list and switch requests preserve routing identity`() {
+        let list = OpenClawChatGatewayRequests.listSessionBranches(
+            sessionKey: "agent:reviewer:telegram:group:1",
+            agentID: " reviewer ")
+        let switchBranch = OpenClawChatGatewayRequests.switchSessionBranch(
+            sessionKey: "global",
+            agentID: nil,
+            leafEntryId: " leaf-42 ")
+
+        #expect(list.method == "sessions.branches.list")
+        #expect(list.timeoutMs == 15000)
+        #expect(list.params["sessionKey"]?.value as? String == "agent:reviewer:telegram:group:1")
+        #expect(list.params["agentId"]?.value as? String == "reviewer")
+        #expect(list.params["key"] == nil)
+
+        #expect(switchBranch.method == "sessions.branches.switch")
+        #expect(switchBranch.timeoutMs == 15000)
+        #expect(switchBranch.params["sessionKey"]?.value as? String == "global")
+        #expect(switchBranch.params["agentId"] == nil)
+        #expect(switchBranch.params["leafEntryId"]?.value as? String == "leaf-42")
+        #expect(switchBranch.params["key"] == nil)
+    }
+
     @Test func `session group requests encode exact gateway contracts`() {
         let list = OpenClawChatGatewayRequests.sessionGroupsList()
         let put = OpenClawChatGatewayRequests.sessionGroupsPut(names: ["Work", "Personal"])
@@ -214,7 +262,7 @@ struct ChatGatewayRequestTests {
         #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
     }
 
-    @Test func `question resolve request preserves nested answer contract`() throws {
+    @Test func `question resolve request preserves answer arrays`() throws {
         let request = OpenClawChatGatewayRequests.resolveQuestion(
             id: "ask_123",
             answers: ["meal": ["Pizza", "Salad"]])
@@ -223,9 +271,23 @@ struct ChatGatewayRequestTests {
         let data = try JSONEncoder().encode(request.params)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let answers = try #require(object["answers"] as? [String: Any])
-        let values = try #require(answers["answers"] as? [String: Any])
-        let meal = try #require(values["meal"] as? [String: Any])
-        #expect(meal["answers"] as? [String] == ["Pizza", "Salad"])
+        #expect(answers["meal"] as? [String] == ["Pizza", "Salad"])
+    }
+
+    @Test func `question get request carries id`() {
+        let request = OpenClawChatGatewayRequests.questionGet(id: "ask_123")
+
+        #expect(request.method == "question.get")
+        #expect(request.params["id"]?.value as? String == "ask_123")
+    }
+
+    @Test func `question cancel request uses resolve cancel contract`() {
+        let request = OpenClawChatGatewayRequests.cancelQuestion(id: "ask_123")
+
+        #expect(request.method == "question.resolve")
+        #expect(request.params["id"]?.value as? String == "ask_123")
+        #expect(request.params["cancel"]?.value as? Bool == true)
+        #expect(request.params["answers"] == nil)
     }
 
     @Test func `long running requests share exact gateway timeout margins`() {
@@ -326,8 +388,96 @@ struct ChatGatewayPayloadCodecTests {
         #expect(payload.runId == "run-1")
         #expect(payload.sessionKey == "main")
         #expect(payload.state == "final")
+
+        let observer = EventFrame(
+            type: "event",
+            event: "session.observer",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("main"),
+                "runId": AnyCodable("run-1"),
+                "revision": AnyCodable(2),
+                "updatedAt": AnyCodable(300),
+                "headline": AnyCodable("Wrapping up"),
+                "health": AnyCodable("wrapping-up"),
+            ]))
+        guard case let .sessionObserver(digest) = OpenClawChatGatewayPayloadCodec.event(from: observer)
+        else {
+            Issue.record("expected sessionObserver")
+            return
+        }
+        #expect(digest.sessionkey == "main")
+        #expect(digest.runid == "run-1")
+        #expect(digest.revision == 2)
+
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",
             event: "unknown")) == nil)
+    }
+
+    @Test func `session change decoding distinguishes absent fields from explicit clears`() {
+        func decode(_ fields: [String: AnyCodable]) throws -> OpenClawChatSessionsChangedEvent {
+            let frame = EventFrame(
+                type: "event",
+                event: "sessions.changed",
+                payload: AnyCodable(fields))
+            guard case let .sessionsChanged(change) = OpenClawChatGatewayPayloadCodec.event(from: frame)
+            else {
+                throw CancellationError()
+            }
+            return change
+        }
+
+        let partial = try? decode([
+            "sessionKey": AnyCodable("main"),
+            "reason": AnyCodable("message"),
+            "updatedAt": AnyCodable(200),
+        ])
+        #expect(partial?.agentStatusPresent == false)
+        #expect(partial?.observerDigestPresent == false)
+        #expect(partial?.statusPresent == false)
+        #expect(partial?.lastRunErrorPresent == false)
+
+        let cleared = try? decode([
+            "sessionKey": AnyCodable("main"),
+            "reason": AnyCodable("patch"),
+            "agentStatus": AnyCodable(NSNull()),
+            "observerDigest": AnyCodable(NSNull()),
+            "status": AnyCodable(NSNull()),
+            "lastRunError": AnyCodable(NSNull()),
+        ])
+        #expect(cleared?.agentStatusPresent == true)
+        #expect(cleared?.observerDigestPresent == true)
+        #expect(cleared?.statusPresent == true)
+        #expect(cleared?.lastRunErrorPresent == true)
+    }
+
+    @Test func `session change remains codable without exposing presence flags`() throws {
+        let event = OpenClawChatSessionsChangedEvent(
+            sessionKey: "agent:main:work",
+            agentId: "main",
+            reason: "run-progress",
+            updatedAt: 200,
+            lastReadAt: 100,
+            agentStatus: .init(note: "Reviewing", expiresAt: 500, attention: "hand"),
+            observerDigest: .init(
+                runId: "run-1",
+                revision: 2,
+                updatedAt: 200,
+                headline: "On track",
+                health: "on-track"),
+            status: "running",
+            lastRunError: "Previous warning",
+            hasActiveRun: true,
+            activeRunIds: ["run-1"],
+            startedAt: 50,
+            endedAt: nil)
+
+        let data = try JSONEncoder().encode(event)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["agentStatusPresent"] == nil)
+        #expect(object["observerDigestPresent"] == nil)
+        #expect(object["statusPresent"] == nil)
+        #expect(object["lastRunErrorPresent"] == nil)
+        #expect(try JSONDecoder().decode(OpenClawChatSessionsChangedEvent.self, from: data) == event)
     }
 }

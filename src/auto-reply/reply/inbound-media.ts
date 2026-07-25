@@ -1,38 +1,20 @@
-/** Detects inbound media and audio markers in channel message context. */
-import { isAudioFileName } from "@openclaw/media-core/mime";
+/** Detects inbound media and audio facts in channel message context. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveMediaFacts, resolveMeaningfulMediaFacts } from "../../media/media-facts.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 
 /** Minimal inbound media fields used by media/audio detection. */
-type InboundMediaContext = {
+type InboundMediaContext = Pick<MsgContext, "media"> & {
   Body?: unknown;
-  BodyForCommands?: unknown;
-  CommandBody?: unknown;
-  MediaType?: unknown;
   StickerMediaIncluded?: unknown;
   SkipStickerMediaUnderstanding?: unknown;
   Sticker?: unknown;
-  MediaPath?: unknown;
-  MediaUrl?: unknown;
-  MediaPaths?: readonly unknown[];
-  MediaUrls?: readonly unknown[];
-  MediaTypes?: readonly unknown[];
-  RawBody?: unknown;
 };
-
-function hasNormalizedStringEntry(values: readonly unknown[] | undefined): boolean {
-  return Array.isArray(values) && values.some((value) => normalizeOptionalString(value));
-}
 
 /** Returns true when the context carries current-turn media or sticker data. */
 export function hasInboundMedia(ctx: InboundMediaContext): boolean {
   return Boolean(
-    ctx.StickerMediaIncluded ||
-    ctx.Sticker ||
-    normalizeOptionalString(ctx.MediaPath) ||
-    normalizeOptionalString(ctx.MediaUrl) ||
-    hasNormalizedStringEntry(ctx.MediaPaths) ||
-    hasNormalizedStringEntry(ctx.MediaUrls) ||
-    (Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length > 0),
+    ctx.StickerMediaIncluded || ctx.Sticker || resolveMeaningfulMediaFacts(ctx).length > 0,
   );
 }
 
@@ -41,52 +23,19 @@ export function hasInboundMediaForUnderstanding(ctx: InboundMediaContext): boole
   if (!ctx.SkipStickerMediaUnderstanding) {
     return hasInboundMedia(ctx);
   }
-  return [ctx.MediaPaths, ctx.MediaUrls, ctx.MediaTypes].some(
-    (values) => Array.isArray(values) && values.length > 1,
-  );
+  return resolveMeaningfulMediaFacts(ctx).length > 1;
 }
-
-const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
-const AUDIO_HEADER_RE = /^\[Audio\b/i;
 
 function normalizeMediaType(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
-  return normalized?.split(";", 1)[0]?.toLowerCase();
+  return normalized?.split(";", 1)[0]?.trim().toLowerCase() || undefined;
 }
 
-/** Returns true when media fields or body placeholders indicate inbound audio. */
+/** Returns true when the current turn carries structured audio media facts. */
 export function hasInboundAudio(ctx: InboundMediaContext): boolean {
-  const mediaTypes = [
-    normalizeMediaType(ctx.MediaType),
-    ...(Array.isArray(ctx.MediaTypes)
-      ? ctx.MediaTypes.map((type) => normalizeMediaType(type))
-      : []),
-  ].filter((type): type is string => Boolean(type));
-  if (mediaTypes.some((type) => type === "audio" || type.startsWith("audio/"))) {
-    return true;
-  }
-
-  // Keep the locked-session gate aligned with media-understanding attachment
-  // classification when a channel omits MIME metadata.
-  const mediaLocations = [
-    ctx.MediaPath,
-    ctx.MediaUrl,
-    ...(Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : []),
-    ...(Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : []),
-  ];
-  if (mediaLocations.some((value) => isAudioFileName(normalizeOptionalString(value)))) {
-    return true;
-  }
-
-  const body =
-    normalizeOptionalString(ctx.BodyForCommands) ??
-    normalizeOptionalString(ctx.CommandBody) ??
-    normalizeOptionalString(ctx.RawBody) ??
-    normalizeOptionalString(ctx.Body) ??
-    "";
-  const trimmed = body.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return AUDIO_PLACEHOLDER_RE.test(trimmed) || AUDIO_HEADER_RE.test(trimmed);
+  const isAudio = (type: string | undefined) =>
+    type === "audio" || type?.startsWith("audio/") === true;
+  return resolveMediaFacts(ctx).some(
+    (media) => media.kind === "audio" || isAudio(normalizeMediaType(media.contentType)),
+  );
 }

@@ -1,8 +1,12 @@
 // Session store pruning tests cover pruning decisions and retention ordering.
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
   collectSessionMaintenancePreserveKeys,
@@ -121,6 +125,20 @@ describe("pruneStaleEntries", () => {
     expect(pruned).toBe(1);
     expect(store).toHaveProperty(lockedKey);
     expect(store.old).toBeUndefined();
+  });
+
+  it("preserves archived entries until they are unarchived", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["archived", { ...makeEntry(now - 31 * DAY_MS), archivedAt: now - DAY_MS }],
+    ]);
+
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
+    expect(store).toHaveProperty("archived");
+
+    delete store.archived?.archivedAt;
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
+    expect(store.archived).toBeUndefined();
   });
 });
 
@@ -674,6 +692,20 @@ describe("capEntryCount", () => {
     expect(store.old).toBeUndefined();
   });
 
+  it("preserves archived sessions when capping", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["archived", { ...makeEntry(now - 10 * DAY_MS), archivedAt: now - 5 * DAY_MS }],
+      ["recent", makeEntry(now)],
+      ["old", makeEntry(now - DAY_MS)],
+    ]);
+
+    expect(capEntryCount(store, 2)).toBe(1);
+    expect(store).toHaveProperty("archived");
+    expect(store).toHaveProperty("recent");
+    expect(store.old).toBeUndefined();
+  });
+
   it("preserves runtime-provided pending subagent sessions when capping", () => {
     const now = Date.now();
     const childKey = "agent:main:subagent:child";
@@ -751,6 +783,44 @@ describe("capEntryCount", () => {
   });
 });
 
+describe("enforceSessionDiskBudget", () => {
+  it("preserves archived sessions under disk pressure", async () => {
+    const dir = await fixtureSuite.createCaseDir("archived-disk-budget");
+    const storePath = path.join(dir, "sessions.json");
+    const archivedKey = "agent:main:archived";
+    const removableKey = "agent:main:subagent:old-worker";
+    const activeKey = "agent:main:main";
+    const store: Record<string, SessionEntry> = {
+      [archivedKey]: {
+        sessionId: "archived",
+        updatedAt: 1,
+        archivedAt: 2,
+        displayName: "a".repeat(2_000),
+      },
+      [removableKey]: {
+        sessionId: "removable",
+        updatedAt: 2,
+        displayName: "r".repeat(2_000),
+      },
+      [activeKey]: { sessionId: "active", updatedAt: 3 },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+    const result = await enforceSessionDiskBudget({
+      store,
+      storePath,
+      activeSessionKey: activeKey,
+      maintenance: { maxDiskBytes: 1_000, highWaterBytes: 500 },
+      warnOnly: false,
+    });
+
+    expect(store).toHaveProperty(archivedKey);
+    expect(store[removableKey]).toBeUndefined();
+    expect(store).toHaveProperty(activeKey);
+    expect(result?.removedEntries).toBe(1);
+  });
+});
+
 describe("isProtectedSessionMaintenanceEntry", () => {
   it("treats generated ACP bridge sessions as disposable", () => {
     expect(
@@ -771,7 +841,10 @@ describe("isProtectedSessionMaintenanceEntry", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:cron:job:run:123", {
         ...makeEntry(Date.now()),
-        origin: { chatType: "group" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "group:test" },
+          origin: { chatType: "group" },
+        }),
       }),
     ).toBe(false);
   });

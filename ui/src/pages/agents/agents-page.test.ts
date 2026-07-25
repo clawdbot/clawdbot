@@ -20,6 +20,7 @@ type TestAgentsPage = HTMLElement & {
   routeData?: AgentsRouteData;
   agentFilesLoading: boolean;
   agentFilesList: AgentsFilesListResult | null;
+  agentFileActive: string | null;
   agentFileContents: Record<string, string>;
   agentIdentityLoading: boolean;
   agentsPanel: string;
@@ -53,8 +54,8 @@ function snapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -242,6 +243,52 @@ describe("AgentsPage gateway lifecycle", () => {
     await replacementLoad;
     expect(page.agentFilesList?.workspace).toBe("new");
     expect(page.agentFilesLoading).toBe(false);
+  });
+
+  it("selects and loads AGENTS.md when the file list opens", async () => {
+    const fileList: AgentsFilesListResult = {
+      agentId: "main",
+      workspace: "/tmp/workspace",
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/workspace/AGENTS.md",
+          missing: false,
+        },
+        {
+          name: "SOUL.md",
+          path: "/tmp/workspace/SOUL.md",
+          missing: false,
+        },
+      ],
+    };
+    const request = vi.fn(async () => ({
+      file: {
+        ...fileList.files[0],
+        content: "# Instructions",
+      },
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.client = client;
+    page.connected = true;
+    page.agentsSelectedId = "main";
+    page.context = {
+      agents: {
+        files: () => ({ list: null, loading: false, error: null }),
+        ensureFiles: vi.fn(async () => fileList),
+        refreshFiles: vi.fn(async () => fileList),
+      },
+    } as unknown as ApplicationContext;
+
+    await page.loadAgentFiles("main");
+
+    expect(page.agentFileActive).toBe("AGENTS.md");
+    expect(page.agentFileContents["AGENTS.md"]).toBe("# Instructions");
+    expect(request).toHaveBeenCalledWith("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
   });
 
   it("retries an in-flight panel load after a same-client disconnect", async () => {

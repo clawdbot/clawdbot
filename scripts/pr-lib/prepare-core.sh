@@ -9,6 +9,76 @@ checkout_prep_branch() {
   git checkout "$prep_branch"
 }
 
+refresh_prep_branch_for_reviewed_head() {
+  local pr="$1"
+  require_artifact .local/pr-meta.env
+  require_artifact .local/prep-context.env
+
+  # Capture the prepare context before review metadata overrides the same names.
+  # shellcheck disable=SC1091
+  source .local/prep-context.env
+  local prepared_head_ref="${PR_HEAD:-}"
+  local recorded_source_head="${PR_HEAD_SHA_BEFORE:-}"
+  local prep_branch="${PREP_BRANCH:-pr-$pr-prep}"
+
+  # shellcheck disable=SC1091
+  source .local/pr-meta.env
+  local reviewed_head_ref="${PR_HEAD:-}"
+  local reviewed_head_sha="${PR_HEAD_SHA:-}"
+
+  if [ -z "$recorded_source_head" ] || [ -z "$reviewed_head_sha" ]; then
+    echo "Prepare head refresh failed: missing recorded or reviewed PR head SHA. Re-run review-init and prepare-init."
+    exit 1
+  fi
+  if [ -n "$prepared_head_ref" ] && [ "$prepared_head_ref" != "$reviewed_head_ref" ]; then
+    echo "PR head branch changed from $prepared_head_ref to $reviewed_head_ref. Re-run review-init and prepare-init."
+    exit 1
+  fi
+  if [ "$recorded_source_head" = "$reviewed_head_sha" ]; then
+    return 0
+  fi
+
+  local reviewed_ref="refs/heads/pr-$pr"
+  local fetched_reviewed_head=""
+  if git show-ref --verify --quiet "$reviewed_ref"; then
+    fetched_reviewed_head=$(git rev-parse "$reviewed_ref")
+  fi
+  if [ "$fetched_reviewed_head" != "$reviewed_head_sha" ]; then
+    echo "Reviewed PR head $reviewed_head_sha is not available at $reviewed_ref (found ${fetched_reviewed_head:-missing})."
+    echo "Re-run scripts/pr review-init $pr before preparing."
+    exit 1
+  fi
+
+  local prior_prep_head
+  prior_prep_head=$(git rev-parse "refs/heads/$prep_branch")
+  echo "Prep source head changed from $recorded_source_head to reviewed head $reviewed_head_sha."
+  echo "Rebuilding $prep_branch from the reviewed PR head and invalidating stale prepare evidence."
+  git checkout -B "$prep_branch" "$reviewed_head_sha"
+  rm -f \
+    .local/gates.env \
+    .local/prep.env \
+    .local/prepare-push-result.env \
+    .local/prepare-sync-result.env
+
+  # Security: shell-escape values before sourcing this context later.
+  printf '%s=%q\n' \
+    PR_NUMBER "$pr" \
+    PR_HEAD "$reviewed_head_ref" \
+    PR_HEAD_SHA_BEFORE "$reviewed_head_sha" \
+    PREP_BRANCH "$prep_branch" \
+    PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > .local/prep-context.env
+
+  if [ ! -f .local/prep.md ]; then
+    printf '# PR %s prepare log\n\n' "$pr" > .local/prep.md
+  fi
+  cat >> .local/prep.md <<EOF_PREP
+- Rebuilt prep branch $prep_branch after reviewed PR head drifted from $recorded_source_head to $reviewed_head_sha.
+- Previous prep tip was $prior_prep_head; stale gate and prepare evidence was invalidated.
+EOF_PREP
+  PREP_BRANCH_REFRESHED=true
+}
+
 resolve_prep_branch_name() {
   local pr="$1"
   require_artifact .local/prep-context.env
@@ -49,6 +119,7 @@ verify_prep_branch_matches_prepared_head() {
 
 prepare_init() {
   local pr="$1"
+  mark_pr_operation_side_effects_started
   enter_worktree "$pr" true
 
   require_artifact .local/pr-meta.env
@@ -58,8 +129,24 @@ prepare_init() {
     echo "WARNING: .local/review.json is missing; structured findings are expected."
   fi
 
+  local recorded_source_head=""
+  if [ -s .local/prep-context.env ]; then
+    recorded_source_head=$(
+      unset PR_HEAD_SHA_BEFORE
+      # shellcheck disable=SC1091
+      source .local/prep-context.env
+      printf '%s\n' "${PR_HEAD_SHA_BEFORE:-}"
+    )
+  fi
+
   # shellcheck disable=SC1091
   source .local/pr-meta.env
+  local reviewed_head="${PR_HEAD:-}"
+  local reviewed_head_sha="${PR_HEAD_SHA:-}"
+  if [ -z "$reviewed_head_sha" ]; then
+    echo "Prepare init failed: missing PR_HEAD_SHA in .local/pr-meta.env. Re-run review-init."
+    exit 1
+  fi
 
   local json
   json=$(pr_meta_json "$pr")
@@ -69,20 +156,30 @@ prepare_init() {
   local pr_head_sha_before
   pr_head_sha_before=$(printf '%s\n' "$json" | jq -r .headRefOid)
 
-  if [ -n "${PR_HEAD:-}" ] && [ "$head" != "$PR_HEAD" ]; then
-    echo "PR head branch changed from $PR_HEAD to $head. Re-run review-pr."
+  if [ -n "$reviewed_head" ] && [ "$head" != "$reviewed_head" ]; then
+    echo "PR head branch changed from $reviewed_head to $head. Re-run review-init."
+    exit 1
+  fi
+  if [ "$pr_head_sha_before" != "$reviewed_head_sha" ]; then
+    echo "PR head changed after review-init (reviewed $reviewed_head_sha, live $pr_head_sha_before). Re-run review-init."
     exit 1
   fi
 
   git fetch origin "pull/$pr/head:pr-$pr" --force
-  git checkout -B "pr-$pr-prep" "pr-$pr"
+  local fetched_head_sha
+  fetched_head_sha=$(git rev-parse "refs/heads/pr-$pr")
+  if [ "$fetched_head_sha" != "$reviewed_head_sha" ]; then
+    echo "PR head changed while prepare-init fetched it (reviewed $reviewed_head_sha, fetched $fetched_head_sha). Re-run review-init."
+    exit 1
+  fi
+  git checkout -B "pr-$pr-prep" "$reviewed_head_sha"
   git fetch origin main
 
   # Security: shell-escape values to prevent command injection via malicious branch names.
   printf '%s=%q\n' \
     PR_NUMBER "$pr" \
-    PR_HEAD "$head" \
-    PR_HEAD_SHA_BEFORE "$pr_head_sha_before" \
+    PR_HEAD "$reviewed_head" \
+    PR_HEAD_SHA_BEFORE "$reviewed_head_sha" \
     PREP_BRANCH "pr-$pr-prep" \
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
@@ -92,6 +189,12 @@ prepare_init() {
 # PR $pr prepare log
 
 - Initialized prepare context from the PR head branch without rebasing on origin/main.
+EOF_PREP
+  fi
+  if [ -n "$recorded_source_head" ] && [ "$recorded_source_head" != "$reviewed_head_sha" ]; then
+    echo "Rebuilt pr-$pr-prep after reviewed PR head changed from $recorded_source_head to $reviewed_head_sha."
+    cat >> .local/prep.md <<EOF_PREP
+- Rebuilt prep branch pr-$pr-prep after reviewed PR head changed from $recorded_source_head to $reviewed_head_sha.
 EOF_PREP
   fi
 
@@ -105,6 +208,7 @@ prepare_validate_commit() {
   enter_worktree "$pr" false
   require_artifact .local/pr-meta.env
 
+  mark_pr_operation_side_effects_started
   checkout_prep_branch "$pr"
 
   # shellcheck disable=SC1091
@@ -133,9 +237,17 @@ prepare_push() {
 
   require_artifact .local/pr-meta.env
   require_artifact .local/prep-context.env
-  require_artifact .local/gates.env
 
+  mark_pr_operation_side_effects_started
+  PREP_BRANCH_REFRESHED=false
+  refresh_prep_branch_for_reviewed_head "$pr"
   checkout_prep_branch "$pr"
+  if [ "$PREP_BRANCH_REFRESHED" = "true" ]; then
+    echo "Prep branch was refreshed for reviewed head drift; rerunning prepare gates before push."
+    prepare_gates "$pr"
+    checkout_prep_branch "$pr"
+  fi
+  require_artifact .local/gates.env
 
   # shellcheck disable=SC1091
   source .local/pr-meta.env
@@ -222,6 +334,7 @@ prepare_sync_head() {
   require_artifact .local/pr-meta.env
   require_artifact .local/prep-context.env
 
+  mark_pr_operation_side_effects_started
   checkout_prep_branch "$pr"
 
   # shellcheck disable=SC1091

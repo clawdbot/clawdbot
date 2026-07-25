@@ -58,13 +58,13 @@ describe("skills entries config schema", () => {
     expect(res.success).toBe(true);
   });
 
-  it("accepts agents.list[].skills as explicit replacements", () => {
+  it("accepts agents.entries.*.skills as explicit replacements", () => {
     const res = OpenClawSchema.safeParse({
       agents: {
         defaults: {
           skills: ["github", "weather"],
         },
-        list: [{ id: "writer", skills: ["docs-search"] }],
+        entries: { writer: { skills: ["docs-search"] } },
       },
     });
 
@@ -77,7 +77,7 @@ describe("skills entries config schema", () => {
         defaults: {
           skills: [],
         },
-        list: [{ id: "writer", skills: [] }],
+        entries: { writer: { skills: [] } },
       },
     });
 

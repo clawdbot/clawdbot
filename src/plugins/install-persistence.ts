@@ -23,8 +23,10 @@ import {
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "./installs.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
+import { validateJsonSchemaValue } from "./schema-validator.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { buildPluginSnapshotReport } from "./status.js";
 import {
@@ -73,6 +75,7 @@ export type ConfigSnapshotForInstallPersist = {
   baseHash: string | undefined;
   writeOptions: Pick<
     ConfigWriteOptions,
+    | "auditOrigin"
     | "assertConfigPathForWrite"
     | "expectedConfigPath"
     | "ownedConfigPathForWrite"
@@ -290,6 +293,7 @@ export function selectInstallMutationWriteOptions(
   // Install work may outlive its config read. Keep only mutation-start ownership
   // and conflict facts; plugin metadata must come from the commit-time read.
   return {
+    auditOrigin: "plugin-install",
     ...(writeOptions.assertConfigPathForWrite
       ? { assertConfigPathForWrite: writeOptions.assertConfigPathForWrite }
       : {}),
@@ -425,6 +429,56 @@ function resolveReplacedManagedInstallRemoval(params: {
   return plan.directoryRemoval;
 }
 
+function prepareConfigForDisabledInstall(config: OpenClawConfig, pluginId: string): OpenClawConfig {
+  const entry = config.plugins?.entries?.[pluginId];
+  const policy = isRecord(entry) ? { ...entry } : {};
+  delete policy.config;
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...config.plugins?.entries,
+        [pluginId]: { ...policy, enabled: false },
+      },
+    },
+  };
+}
+
+type PluginConfigEnablement =
+  | { mode: "ready" }
+  | { mode: "missing" }
+  | { mode: "invalid"; error: string };
+
+function resolvePluginConfigEnablement(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+  installRecords: Record<string, PluginInstallRecord>;
+}): PluginConfigEnablement {
+  const manifest = loadPluginManifestRegistry({
+    config: params.config,
+    installRecords: params.installRecords,
+  }).plugins.find((plugin) => plugin.id === params.pluginId);
+  if (!manifest?.configSchema) {
+    return { mode: "ready" };
+  }
+  const entry = params.config.plugins?.entries?.[params.pluginId];
+  const hasConfig = isRecord(entry) && Object.hasOwn(entry, "config");
+  const result = validateJsonSchemaValue({
+    schema: manifest.configSchema,
+    cacheKey: manifest.schemaCacheKey ?? manifest.manifestPath,
+    value: hasConfig ? entry.config : {},
+    applyDefaults: true,
+  });
+  if (result.ok) {
+    return { mode: "ready" };
+  }
+  if (!hasConfig) {
+    return { mode: "missing" };
+  }
+  return { mode: "invalid", error: result.errors[0]?.text ?? "invalid plugin config" };
+}
+
 export async function persistPluginInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
@@ -436,19 +490,6 @@ export async function persistPluginInstall(params: {
   runtime?: RuntimeEnv;
 }): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
-  const installConfig =
-    params.enable === false
-      ? params.snapshot.config
-      : removeInstalledPluginFromDenylist(
-          addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
-          params.pluginId,
-        );
-  let next =
-    params.enable === false
-      ? installConfig
-      : enablePluginInConfig(installConfig, params.pluginId, {
-          updateChannelConfig: false,
-        }).config;
   const installRecords = await tracePluginLifecyclePhaseAsync(
     "install records load",
     () => loadInstalledPluginIndexInstallRecords(),
@@ -464,14 +505,40 @@ export async function persistPluginInstall(params: {
     pluginId: params.pluginId,
     ...params.install,
   });
-  const slotResult =
+  const configEnablement = resolvePluginConfigEnablement({
+    config: params.snapshot.config,
+    pluginId: params.pluginId,
+    installRecords: nextInstallRecords,
+  });
+  if (configEnablement.mode === "invalid") {
+    throw new Error(
+      `Plugin "${params.pluginId}" has invalid configured settings: ${configEnablement.error}. Fix plugins.entries.${params.pluginId}.config, then rerun the install.`,
+    );
+  }
+  const shouldEnable = params.enable !== false && configEnablement.mode === "ready";
+  const configBase =
+    params.enable === false || configEnablement.mode === "ready"
+      ? params.snapshot.config
+      : prepareConfigForDisabledInstall(params.snapshot.config, params.pluginId);
+  const installConfig =
     params.enable === false
-      ? { config: next, warnings: [] }
-      : await tracePluginLifecyclePhaseAsync(
-          "slot selection",
-          async () => applySlotSelectionForPlugin(next, params.pluginId),
-          { command: "install", pluginId: params.pluginId },
+      ? configBase
+      : removeInstalledPluginFromDenylist(
+          addInstalledPluginToAllowlist(configBase, params.pluginId),
+          params.pluginId,
         );
+  let next = shouldEnable
+    ? enablePluginInConfig(installConfig, params.pluginId, {
+        updateChannelConfig: false,
+      }).config
+    : installConfig;
+  const slotResult = shouldEnable
+    ? await tracePluginLifecyclePhaseAsync(
+        "slot selection",
+        async () => applySlotSelectionForPlugin(next, params.pluginId),
+        { command: "install", pluginId: params.pluginId },
+      )
+    : { config: next, warnings: [] };
   next = withoutPluginInstallRecords(slotResult.config);
   await tracePluginLifecyclePhaseAsync(
     "config mutation",
@@ -516,8 +583,13 @@ export async function persistPluginInstall(params: {
     },
   });
   logSlotWarnings(slotResult.warnings, runtime);
-  if (params.warningMessage) {
-    runtime.log(theme.warn(params.warningMessage));
+  const configWarning =
+    params.enable !== false && configEnablement.mode === "missing"
+      ? `Installed plugin "${params.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.pluginId}\`.`
+      : undefined;
+  const warningMessage = [params.warningMessage, configWarning].filter(Boolean).join("\n");
+  if (warningMessage) {
+    runtime.log(theme.warn(warningMessage));
   }
   runtime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
   logShadowedNpmInstallWarning({

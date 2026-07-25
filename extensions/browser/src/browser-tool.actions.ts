@@ -120,10 +120,7 @@ function withConfiguredActTimeout(
     return request;
   }
 
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const configuredTimeout =
-    normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
-  return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
+  return { ...typedRequest, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS } as BrowserActRequest;
 }
 
 function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {

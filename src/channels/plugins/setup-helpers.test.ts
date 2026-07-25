@@ -15,6 +15,7 @@ import {
   moveSingleAccountChannelSectionToDefaultAccount,
   prepareScopedSetupConfig,
 } from "./setup-helpers.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -43,6 +44,9 @@ function accountRecord(
 }
 
 const matrixSingleAccountKeysToMove = [
+  "homeserver",
+  "userId",
+  "accessToken",
   "allowBots",
   "deviceId",
   "deviceName",
@@ -57,6 +61,12 @@ const matrixNamedAccountPromotionKeys = [
   "userId",
 ] as const;
 const telegramSingleAccountKeysToMove = ["streaming"] as const;
+const matrixSetupSurface = {
+  applyAccountConfig: ({ cfg }) => cfg,
+  singleAccountKeysToMove: matrixSingleAccountKeysToMove,
+  namedAccountPromotionKeys: matrixNamedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget: resolveMatrixSingleAccountPromotionTarget,
+} as ChannelSetupAdapter;
 
 function collectNamedAccountIds(accounts: Record<string, unknown>): string[] {
   const ids: string[] = [];
@@ -282,6 +292,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
         },
       }),
       channelKey: "matrix",
+      setupSurface: matrixSetupSurface,
     });
 
     const channel = channelRecord(next, "matrix");
@@ -310,6 +321,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
         },
       }),
       channelKey: "matrix",
+      setupSurface: matrixSetupSurface,
     });
 
     const channel = channelRecord(next, "matrix");
@@ -322,6 +334,29 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     expect(next.channels?.matrix?.homeserver).toBeUndefined();
     expect(next.channels?.matrix?.userId).toBeUndefined();
     expect(next.channels?.matrix?.accessToken).toBeUndefined();
+  });
+
+  it("preserves explicit named-account values over promoted root defaults", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          zalouser: {
+            dmPolicy: "disabled",
+            accounts: {
+              work: {
+                dmPolicy: "allowlist",
+              },
+            },
+          },
+        },
+      }),
+      channelKey: "zalouser",
+    });
+
+    const channel = channelRecord(next, "zalouser");
+    const work = accountRecord(channel, "work");
+    expect(work.dmPolicy).toBe("allowlist");
+    expect(next.channels?.zalouser?.dmPolicy).toBeUndefined();
   });
 
   it("promotes legacy Matrix keys into an existing non-canonical default account key", () => {
@@ -342,6 +377,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
         },
       }),
       channelKey: "matrix",
+      setupSurface: matrixSetupSurface,
     });
 
     const channel = channelRecord(next, "matrix");

@@ -197,7 +197,7 @@ vi.mock("./runtime-api.js", async () => {
     createChannelMessageReplyPipeline: vi.fn((params: { cfg: OpenClawConfig }) => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
-      resolveResponsePrefix: () => params.cfg.messages?.responsePrefix,
+      resolveResponsePrefix: () => params.cfg.channels?.mattermost?.responsePrefix,
     })),
     registerPluginHttpRoute: mockState.registerPluginHttpRoute,
     resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
@@ -780,7 +780,6 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     const inlineCommandConfig: OpenClawConfig = {
-      commands: { useAccessGroups: true },
       channels: {
         mattermost: {
           enabled: true,
@@ -1042,7 +1041,6 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     const mentionConfig: OpenClawConfig = {
-      commands: { useAccessGroups: false },
       messages: { inbound: { debounceMs: 60_000 } },
       channels: {
         mattermost: {
@@ -1052,6 +1050,7 @@ describe("mattermost inbound user posts", () => {
           chatmode: "oncall",
           dmPolicy: "open",
           groupPolicy: "open",
+          groupAllowFrom: ["user-1"],
         },
       },
     };
@@ -1556,7 +1555,6 @@ describe("mattermost inbound user posts", () => {
 
   it("finalizes only the current block when the terminal reply is cumulative", async () => {
     const blockConfig: OpenClawConfig = {
-      messages: { responsePrefix: "[bot]" },
       channels: {
         mattermost: {
           enabled: true,
@@ -1566,6 +1564,7 @@ describe("mattermost inbound user posts", () => {
           dmPolicy: "open",
           groupPolicy: "open",
           streaming: { mode: "block" },
+          responsePrefix: "[bot]",
         },
       },
     };

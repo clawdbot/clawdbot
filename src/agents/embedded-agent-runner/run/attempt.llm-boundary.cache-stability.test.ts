@@ -27,6 +27,7 @@ import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Context, Model } from "../../../llm/types.js";
 import {
+  buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   type UserTurnInput,
@@ -423,8 +424,29 @@ describe("append-only late media (issue #99495)", () => {
         .map((entry) => entry as { message?: AgentMsg })
         .flatMap((entry) => (entry.message ? [entry.message] : []));
       const next = normalizeMessagesForLlmBoundary(persisted, { timezone: TZ });
+      const persistedOutput = persisted as unknown as Array<{
+        content?: unknown;
+        __openclaw?: { lateMedia?: unknown };
+      }>;
+      const providerOutput = next as unknown as Array<{ content?: unknown }>;
+      const latePersisted = persistedOutput.at(-1);
+      const lateProvider = providerOutput.at(-1);
       expect(next).toHaveLength(sent.length + 1);
       expect(next.slice(0, sent.length)).toEqual(sent);
+      expect(latePersisted?.content).toBe("");
+      expect(latePersisted?.["__openclaw"]?.lateMedia).toBe(true);
+      expect(lateProvider?.content).toBe(
+        `${EXPECTED_PREFIX_TURN1}[media attached: ${path.join(dir, "image.png")}]`,
+      );
+      const lateProjection = buildLateMediaAttachedProjection(latePersisted as AgentMsg);
+      expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
+      expect(lateProjection.media).toEqual([
+        expect.objectContaining({
+          path: path.join(dir, "image.png"),
+          contentType: "image/png",
+          kind: "image",
+        }),
+      ]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

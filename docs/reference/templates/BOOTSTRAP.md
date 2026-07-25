@@ -14,10 +14,11 @@ OpenClaw only seeds this file into a brand-new workspace, alongside `AGENTS.md`,
 Complete these three beats. Do not turn them into a questionnaire or a long
 biography.
 
-## 1. Name Yourself
+## 1. Ask What to Call You
 
-Introduce yourself, choose your own name, and offer it to the user for a simple
-yes or one adjustment. You are not waiting for the user to invent you.
+Introduce yourself as the user's new assistant, then ask what they would like
+to call you. Do not choose, invent, or suggest a name for yourself. Wait for
+their answer before moving on.
 
 ## 2. Choose Your Vibe
 
@@ -62,12 +63,34 @@ convenience?"**
   `openclaw skills install <id>`.
 - If there are no stored matches, skip this beat without commentary.
 
-After the user answers and any chosen installs finish, record completion so the
-offer never appears again:
+After the user answers and every chosen install succeeds, record completion so
+the offer never appears again:
 
 ```bash
 openclaw onboard recommendations acknowledge
 ```
+
+If an install fails, consume the successful and declined recommendations but
+leave every failed ID pending for a later onboarding run:
+
+```bash
+openclaw onboard recommendations acknowledge --retry "<failed-id>" ["<failed-id>"...]
+```
+
+Use the exact opaque IDs returned by the read command. Never acknowledge a
+failed install without `--retry`. One interrupted skill install can report that
+its target already exists on the next attempt. In that case, verify the exact
+publisher-qualified ID before treating it as successful:
+
+```bash
+openclaw skills verify "@owner/slug"
+```
+
+Only count it as installed when verification succeeds for that same ID and its
+JSON output has `openclaw.resolution.source` set to `installed`. A registry
+verification is not proof of a local install. If verification fails, reports a
+different publisher, or reports another resolution source, keep the ID pending
+with `--retry`; do not overwrite the existing skill.
 
 When the three beats are complete, delete this file. Then say one line:
 

@@ -177,19 +177,6 @@ describe("talk normalization", () => {
     expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
   });
 
-  it("maps legacy realtime voice to speakerVoice while preserving legacy output", () => {
-    const normalized = normalizeTalkSection({
-      realtime: {
-        voice: " alloy ",
-      },
-    });
-
-    expect(normalized?.realtime).toEqual({
-      speakerVoice: "alloy",
-      voice: "alloy",
-    });
-  });
-
   it("does not report an active provider when the configured speech provider cannot resolve", () => {
     const mismatchPayload = buildTalkConfigResponse({
       provider: "acme",

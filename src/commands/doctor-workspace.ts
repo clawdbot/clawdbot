@@ -314,19 +314,35 @@ export async function migrateLegacyRootMemoryFile(
   };
 }
 
+type WorkspaceMemoryDoctorScope = {
+  agentId: string;
+  workspaceDir: string;
+  labelAgent: boolean;
+};
+
 /** Emits workspace root-memory health warnings. */
-export async function noteWorkspaceMemoryHealth(cfg: OpenClawConfig): Promise<void> {
+export async function noteWorkspaceMemoryHealth(
+  cfg: OpenClawConfig,
+  scope?: WorkspaceMemoryDoctorScope,
+): Promise<void> {
   try {
-    const agentId = resolveDefaultAgentId(cfg);
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const agentId = scope?.agentId ?? resolveDefaultAgentId(cfg);
+    const workspaceDir = scope?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
     const rootMemoryWarning = formatRootMemoryFilesWarning(
       await detectRootMemoryFiles(workspaceDir),
     );
     if (rootMemoryWarning) {
-      note(rootMemoryWarning, "Workspace memory");
+      note(
+        `${scope?.labelAgent ? `Agent "${agentId}":\n` : ""}${rootMemoryWarning}`,
+        "Workspace memory",
+      );
     }
   } catch (err) {
-    note(`Workspace memory audit could not be completed: ${formatErrorMessage(err)}`, "Doctor");
+    const prefix = scope?.labelAgent ? `Agent "${scope.agentId}": ` : "";
+    note(
+      `${prefix}Workspace memory audit could not be completed: ${formatErrorMessage(err)}`,
+      "Doctor",
+    );
   }
 }
 
@@ -334,16 +350,19 @@ export async function noteWorkspaceMemoryHealth(cfg: OpenClawConfig): Promise<vo
 export async function maybeRepairWorkspaceMemoryHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
+  scope?: WorkspaceMemoryDoctorScope;
 }): Promise<void> {
   try {
-    const agentId = resolveDefaultAgentId(params.cfg);
-    const configuredWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+    const agentId = params.scope?.agentId ?? resolveDefaultAgentId(params.cfg);
+    const configuredWorkspaceDir =
+      params.scope?.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
+    const prefix = params.scope?.labelAgent ? `Agent "${agentId}": ` : "";
     const rootMemoryFiles = await detectRootMemoryFiles(configuredWorkspaceDir);
     if (!rootMemoryFiles.canonicalExists || !rootMemoryFiles.legacyExists) {
       return;
     }
     const approvedLegacyMigration = await params.prompter.confirmRuntimeRepair({
-      message: `Merge legacy root ${LEGACY_ROOT_MEMORY_FILENAME} into canonical ${CANONICAL_ROOT_MEMORY_FILENAME} and remove the shadowed file?`,
+      message: `${prefix}Merge legacy root ${LEGACY_ROOT_MEMORY_FILENAME} into canonical ${CANONICAL_ROOT_MEMORY_FILENAME} and remove the shadowed file?`,
       initialValue: true,
     });
     if (!approvedLegacyMigration) {
@@ -353,7 +372,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
     if (migration.readLimitExceeded) {
       note(
         [
-          "Workspace memory root repair skipped (a file exceeded the safe read limit):",
+          `${prefix}Workspace memory root repair skipped (a file exceeded the safe read limit):`,
           `- canonical: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
           migration.archivedLegacyPath
@@ -369,7 +388,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
     if (migration.readError) {
       note(
         [
-          "Workspace memory root repair skipped (a file could not be read):",
+          `${prefix}Workspace memory root repair skipped (a file could not be read):`,
           `- canonical: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
           migration.archivedLegacyPath
@@ -385,7 +404,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
     if (migration.archiveError) {
       note(
         [
-          "Workspace memory root repair skipped (legacy memory could not be archived atomically):",
+          `${prefix}Workspace memory root repair skipped (legacy memory could not be archived atomically):`,
           `- canonical: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
         ].join("\n"),
@@ -397,7 +416,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       return;
     }
     const lines = [
-      "Workspace memory root merged:",
+      `${prefix}Workspace memory root merged:`,
       `- canonical: ${migration.canonicalPath}`,
       migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
       migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
@@ -407,6 +426,10 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
     ].filter(Boolean);
     note(lines.join("\n"), "Doctor changes");
   } catch (err) {
-    note(`Workspace memory repair could not be completed: ${formatErrorMessage(err)}`, "Doctor");
+    const prefix = params.scope?.labelAgent ? `Agent "${params.scope.agentId}": ` : "";
+    note(
+      `${prefix}Workspace memory repair could not be completed: ${formatErrorMessage(err)}`,
+      "Doctor",
+    );
   }
 }

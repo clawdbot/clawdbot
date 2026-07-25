@@ -157,6 +157,7 @@ describe("createBundleMcpToolRuntime", () => {
         _meta: { "ui/state": { selected: true } },
       },
     });
+    sessionRuntime.sessionKey = "agent:main:main";
     sessionRuntime.mcpAppsEnabled = true;
     sessionRuntime.readResource = async () => ({
       contents: [
@@ -183,6 +184,7 @@ describe("createBundleMcpToolRuntime", () => {
           toolName: "show",
           uiResourceUri: "ui://demo/app",
           toolCallId: "call-1",
+          originSessionKey: "agent:main:main",
           resultMetaState: "unavailable",
         },
       },

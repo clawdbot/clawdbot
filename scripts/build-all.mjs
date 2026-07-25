@@ -112,7 +112,6 @@ const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
   },
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
-  "dist/plugin-sdk/webhook-path.js",
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
   ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
 ];

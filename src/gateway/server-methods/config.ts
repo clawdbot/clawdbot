@@ -28,6 +28,7 @@ import {
 import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyMergePatch, isMergePatchObjectKeyAllowed } from "../../config/merge-patch.js";
+import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
@@ -660,6 +661,24 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   return response;
 }
 
+async function commitGatewayConfigWriteOrRespond(
+  params: Parameters<typeof commitGatewayConfigWrite>[0] & { respond: RespondFn },
+): Promise<Awaited<ReturnType<typeof commitGatewayConfigWrite>> | null> {
+  try {
+    return await commitGatewayConfigWrite(params);
+  } catch (error) {
+    if (!(error instanceof ConfigMutationConflictError)) {
+      throw error;
+    }
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `${error.message}; re-run config.get and retry`),
+    );
+    return null;
+  }
+}
+
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
@@ -728,12 +747,16 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const writeResult = await commitGatewayConfigWrite({
+    const writeResult = await commitGatewayConfigWriteOrRespond({
       snapshot,
       writeOptions,
       nextConfig: parsed.writeConfig,
       context,
+      respond,
     });
+    if (!writeResult) {
+      return;
+    }
     clearConfigSchemaResponseCache();
     respond(
       true,
@@ -905,13 +928,17 @@ export const configHandlers: GatewayRequestHandlers = {
       nextConfig: validated.config,
       preparedSecretsSnapshot,
     });
-    const writeResult = await commitGatewayConfigWrite({
+    const writeResult = await commitGatewayConfigWriteOrRespond({
       snapshot,
       writeOptions,
       nextConfig: writeConfig,
       context,
       disconnectSharedAuthClients,
+      respond,
     });
+    if (!writeResult) {
+      return;
+    }
     await respondWithConfigRestartWrite({
       requestParams: params,
       kind: "config-patch",
@@ -957,13 +984,17 @@ export const configHandlers: GatewayRequestHandlers = {
       nextConfig: parsed.config,
       preparedSecretsSnapshot,
     });
-    const writeResult = await commitGatewayConfigWrite({
+    const writeResult = await commitGatewayConfigWriteOrRespond({
       snapshot,
       writeOptions,
       nextConfig: parsed.writeConfig,
       context,
       disconnectSharedAuthClients,
+      respond,
     });
+    if (!writeResult) {
+      return;
+    }
     await respondWithConfigRestartWrite({
       requestParams: params,
       kind: "config-apply",

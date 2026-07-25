@@ -15,6 +15,7 @@ type McpAppPreviewDescriptor = {
   toolName?: string;
   uiResourceUri?: string;
   toolCallId?: string;
+  originSessionKey?: string;
   resultMetaState?: "unavailable";
 };
 
@@ -29,6 +30,7 @@ type CanvasPreview = {
   className?: string;
   style?: string;
   sandbox?: CanvasSandbox;
+  boardWidgetName?: string;
   mcpApp?: McpAppPreviewDescriptor;
 };
 
@@ -67,6 +69,7 @@ function coerceMcpAppDescriptor(
   const toolName = getRecordStringField(record, "toolName");
   const uiResourceUri = getRecordStringField(record, "uiResourceUri");
   const toolCallId = getRecordStringField(record, "toolCallId");
+  const originSessionKey = getRecordStringField(record, "originSessionKey");
   const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
   const hasCompleteDescriptor = Boolean(
     serverName &&
@@ -85,6 +88,7 @@ function coerceMcpAppDescriptor(
         toolName,
         uiResourceUri,
         toolCallId,
+        ...(originSessionKey && originSessionKey.length <= 512 ? { originSessionKey } : {}),
         ...(resultMetaState ? { resultMetaState } : {}),
       }
     : { viewId };
@@ -140,6 +144,11 @@ function coerceCanvasPreview(
   const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
+  const requestedBoardWidgetName = getRecordStringField(view, "boardWidgetName");
+  const boardWidgetName =
+    requestedBoardWidgetName && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(requestedBoardWidgetName)
+      ? requestedBoardWidgetName
+      : undefined;
   if (mcpAppViewId && viewId === mcpAppViewId) {
     return {
       kind: "canvas",
@@ -164,6 +173,7 @@ function coerceCanvasPreview(
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
       ...(sandbox ? { sandbox } : {}),
+      ...(boardWidgetName ? { boardWidgetName } : {}),
       ...(mcpApp ? { mcpApp } : {}),
     };
   }

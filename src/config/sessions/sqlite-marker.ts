@@ -40,3 +40,16 @@ export function sqliteSessionFileMarkerMatchesSession(
 ): boolean {
   return parseSqliteSessionFileMarker(sessionFile)?.sessionId === sessionId;
 }
+
+/** Checks whether a sessionFile marker points at the full expected transcript target. */
+export function sqliteSessionFileMarkerMatchesTarget(
+  sessionFile: string | undefined,
+  target: SqliteSessionFileMarker,
+): boolean {
+  const marker = parseSqliteSessionFileMarker(sessionFile);
+  return (
+    marker?.agentId === target.agentId &&
+    marker.sessionId === target.sessionId &&
+    path.resolve(marker.storePath) === path.resolve(target.storePath)
+  );
+}

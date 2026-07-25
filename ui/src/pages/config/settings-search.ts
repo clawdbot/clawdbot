@@ -7,6 +7,7 @@ import {
   parseConfigSearchQuery,
 } from "../../components/config-form.search.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
 import {
   AI_AGENTS_SECTION_KEYS,
@@ -86,18 +87,16 @@ const GENERAL_SETTINGS_BLOCKS = {
   },
   personal: {
     routeId: "profile",
-    labelKey: "quickSettings.personal.title",
+    labelKey: "profilePage.identity.title",
     hash: `#${PROFILE_SETTINGS_TARGET_IDS.identity}`,
     searchKeys: [
-      "quickSettings.personal.user",
-      "quickSettings.personal.assistant",
-      "quickSettings.personal.localIdentity",
-      "quickSettings.personal.assistantIdentity",
-      "quickSettings.personal.avatarText",
-      "quickSettings.personal.chooseImage",
-      "quickSettings.personal.browserOnly",
+      "profilePage.identity.description",
+      "profilePage.identity.avatar",
+      "profilePage.identity.chooseAvatar",
+      "profilePage.identity.displayName",
+      "profilePage.identity.linkedEmails",
     ],
-    aliases: "avatar image",
+    aliases: "profile avatar image email",
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;
 
@@ -205,12 +204,7 @@ const WORKSPACE_SETTINGS_BLOCKS = {
     routeId: "worktrees",
     labelKey: "worktrees.title",
     hash: "",
-    searchKeys: [
-      "worktrees.subtitle",
-      "worktrees.cleanupTitle",
-      "worktrees.cleanupMaxCount",
-      "worktrees.cleanupMaxSize",
-    ],
+    searchKeys: ["worktrees.subtitle"],
     aliases: "git checkout branch cleanup",
   },
 } as const satisfies Record<string, StaticSettingsBlockDescriptor>;
@@ -271,6 +265,7 @@ export function findSettingsSearchBlocks(params: {
   schema: unknown;
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
+  identityAvailable?: boolean;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -278,9 +273,11 @@ export function findSettingsSearchBlocks(params: {
   const criteria = parseConfigSearchQuery(params.query);
   const matches: SettingsSearchBlock[] =
     criteria.tags.length === 0 && criteria.text
-      ? STATIC_SETTINGS_BLOCKS.map(resolveStaticSettingsBlock).filter((block) =>
-          settingsSearchTextMatches(block.searchText, criteria.text),
+      ? STATIC_SETTINGS_BLOCKS.filter(
+          (block) => params.identityAvailable || block !== GENERAL_SETTINGS_BLOCKS.personal,
         )
+          .map(resolveStaticSettingsBlock)
+          .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
   const schema =
     params.schema && typeof params.schema === "object" && !Array.isArray(params.schema)
@@ -292,24 +289,35 @@ export function findSettingsSearchBlocks(params: {
   const value = params.value ?? {};
   for (const [key, sectionSchema] of Object.entries(schema.properties)) {
     const meta = SECTION_META[key];
-    const matchesSection = matchesConfigSectionSearch({
-      key,
+    const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,
-      value: value[key],
+      path: [key],
       hints: params.uiHints,
-      query: params.query,
-      label: meta?.label,
-      description: meta?.description,
-      textMatcher: settingsSearchTextMatches,
     });
-    if (!matchesSection) {
+    const matchesTier = (tierSchema: JsonSchema | null) =>
+      Boolean(
+        tierSchema &&
+        matchesConfigSectionSearch({
+          key,
+          schema: tierSchema,
+          value: value[key],
+          hints: params.uiHints,
+          query: params.query,
+          label: meta?.label,
+          description: meta?.description,
+          textMatcher: settingsSearchTextMatches,
+        }),
+      );
+    const matchesCommon = matchesTier(tierSplit.common);
+    const matchesAdvanced = matchesTier(tierSplit.advanced);
+    if (!matchesCommon && !matchesAdvanced) {
       continue;
     }
     const encodedKey = encodeURIComponent(key);
     matches.push({
       routeId: routeForConfigSection(key),
       label: meta?.label ?? sectionSchema.title ?? key,
-      search: `?section=${encodedKey}`,
+      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}`,
       hash: `#config-section-${encodedKey}`,
     });
   }

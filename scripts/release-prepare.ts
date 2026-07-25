@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 
 type ReleasePrepareMode = "check" | "shadow" | "write";
 

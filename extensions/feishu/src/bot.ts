@@ -47,7 +47,6 @@ import {
   parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
-  resolveFeishuMediaFailurePresentation,
 } from "./bot-content.js";
 import { resolveGroupName } from "./bot-group-name.js";
 import { resolveFeishuBotName } from "./bot-name.js";
@@ -133,13 +132,17 @@ async function resolveFeishuAudioPreflightTranscript(params: {
   cfg: ClawdbotConfig;
   mediaList: FeishuMediaInfo[];
   content: string;
+  messageType: string;
   chatType: "direct" | "group";
   log: (msg: string) => void;
 }): Promise<string | undefined> {
-  if (params.content.trim() !== "<media:audio>") {
+  if (params.messageType !== "audio" || params.content.trim()) {
     return undefined;
   }
-  const audioMedia = params.mediaList.filter((media) => media.contentType?.startsWith("audio/"));
+  const audioMedia = params.mediaList.filter(
+    (media) =>
+      Boolean(media.path) && (media.kind === "audio" || media.contentType?.startsWith("audio/")),
+  );
   if (audioMedia.length === 0) {
     return undefined;
   }
@@ -148,8 +151,7 @@ async function resolveFeishuAudioPreflightTranscript(params: {
     const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
     return await transcribeFirstAudio({
       ctx: {
-        MediaPaths: audioMedia.map((media) => media.path),
-        MediaTypes: audioMedia.map((media) => media.contentType).filter(Boolean) as string[],
+        media: audioMedia,
         ChatType: params.chatType,
       },
       cfg: params.cfg,
@@ -161,8 +163,7 @@ async function resolveFeishuAudioPreflightTranscript(params: {
 }
 
 /**
- * Build media payload for inbound context.
- * Similar to Discord's buildDiscordMediaPayload().
+ * Parse an inbound Feishu event into its caption and routing metadata.
  */
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
@@ -964,7 +965,7 @@ export async function handleFeishuMessage(params: {
 
     // Resolve media from message
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
-    const mediaResolution = await resolveFeishuMediaList({
+    const mediaList = await resolveFeishuMediaList({
       cfg,
       messageId: ctx.messageId,
       messageType: event.message.message_type,
@@ -973,17 +974,12 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaList = mediaResolution.media;
-    const mediaFailurePresentation = resolveFeishuMediaFailurePresentation(
-      event.message.content,
-      event.message.message_type,
-    );
+    const unavailableMediaCount = mediaList.filter((media) => !media.path).length;
     const mediaFailureContent =
-      mediaResolution.unavailableCount > 0
+      unavailableMediaCount > 0
         ? formatInboundMediaUnavailableText({
-            body: mediaFailurePresentation.unavailableBody ?? ctx.content,
-            mediaPlaceholder: mediaFailurePresentation.mediaPlaceholder,
-            notice: `[feishu ${mediaResolution.unavailableCount > 1 ? `${mediaResolution.unavailableCount} attachments` : "attachment"} unavailable]`,
+            body: ctx.content,
+            notice: `[feishu ${unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"} unavailable]`,
           })
         : ctx.content;
     // Fetch quoted/replied message content before the empty-message guard
@@ -1045,13 +1041,16 @@ export async function handleFeishuMessage(params: {
       cfg: effectiveCfg,
       mediaList,
       content: ctx.content,
+      messageType: event.message.message_type,
       chatType: isGroup ? "group" : "direct",
       log,
     });
     const preflightAudioIndex =
       audioTranscript === undefined
         ? -1
-        : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
+        : mediaList.findIndex(
+            (media) => media.kind === "audio" || media.contentType?.startsWith("audio/"),
+          );
     const inboundMedia = toInboundMediaFacts(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     });
@@ -1409,6 +1408,7 @@ export async function handleFeishuMessage(params: {
           rawBody: commandFacingContent,
           commandBody: commandFacingContent,
         },
+        sessionTranscript: { historyLimit: isGroup ? historyLimit : 0 },
         access: {
           mentions: {
             canDetectMention: isGroup,

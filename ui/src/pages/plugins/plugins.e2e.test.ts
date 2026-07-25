@@ -482,6 +482,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await workboardCard.waitFor({ state: "visible" });
       const listCountBeforeEnable = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeEnable = (await gateway.getRequests("config.get")).length;
+      const connectCountBeforeEnable = (await gateway.getRequests("connect")).length;
       const enableCountBefore = (await gateway.getRequests("plugins.setEnabled")).length;
       await gateway.deferNext("plugins.list");
       await gateway.deferNext("config.get");
@@ -505,8 +506,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       );
       expect(requestParams(postEnableListRequest)).toEqual({});
       expect(requestParams(postEnableConfigRequest)).toEqual({});
+      await gateway.setMethodResponse("plugins.list", finalInventory);
+      await gateway.setMethodResponse("config.get", configSnapshot(true));
       await gateway.resolveDeferred("plugins.list", finalInventory);
       await gateway.resolveDeferred("config.get", configSnapshot(true));
+      await waitForNextRequest(gateway, "connect", connectCountBeforeEnable);
       await expect.poll(() => workboardCard.getAttribute("aria-busy")).toBe("false");
 
       await page
@@ -566,15 +570,19 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       }
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.waitFor({ state: "visible" });
-      const moreButton = sidebar.getByRole("button", { name: "More" });
-      if ((await moreButton.getAttribute("aria-expanded")) !== "true") {
-        await moreButton.click();
+      const workboardSidebarItem = sidebar.locator(
+        '.sidebar-zone-entry[data-sidebar-entry="route:workboard"] > .nav-item',
+      );
+      await workboardSidebarItem.waitFor({ state: "visible" });
+      expect(await workboardSidebarItem.getAttribute("href")).toBe("/workboard");
+      if (updateScreenshots) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "07-workboard-sidebar.png"),
+        });
       }
-      const workboardMenuItem = sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .locator('wa-dropdown-item[value="workboard"] a');
-      await workboardMenuItem.waitFor({ state: "visible" });
-      expect(await workboardMenuItem.getAttribute("href")).toBe("/workboard");
     } finally {
       await context.close();
     }

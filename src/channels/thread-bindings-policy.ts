@@ -181,11 +181,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
 }): ThreadBindingSpawnPolicy {
   const channel = normalizeChannelId(params.channel);
   const accountId = normalizeAccountId(params.accountId);
-  const { root, account } = resolveChannelThreadBindings({
-    cfg: params.cfg,
-    channel,
-    accountId,
-  });
+  const { root, account } = resolveChannelThreadBindings({ cfg: params.cfg, channel, accountId });
   const enabled =
     normalizeBoolean(account?.enabled) ??
     normalizeBoolean(root?.enabled) ??

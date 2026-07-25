@@ -1,6 +1,7 @@
 // Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { scheduleDetachedLaunchdRestartHandoff } from "../daemon/launchd-restart-handoff.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
@@ -12,6 +13,7 @@ type GatewayRespawnResult = {
   mode: RespawnMode;
   pid?: number;
   detail?: string;
+  handoffSpawned?: Promise<boolean>;
 };
 
 type GatewayUpdateRespawnResult = GatewayRespawnResult & {
@@ -60,6 +62,17 @@ function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
   return { child, pid: child.pid ?? undefined };
 }
 
+function scheduleLaunchdRestartAfterExit(): GatewayRespawnResult {
+  const handoff = scheduleDetachedLaunchdRestartHandoff({
+    mode: "start-after-exit",
+    waitForPid: process.pid,
+  });
+  if (!handoff.ok) {
+    return { mode: "failed", detail: handoff.error };
+  }
+  return { mode: "supervised", handoffSpawned: handoff.value };
+}
+
 /**
  * Attempt to restart this process with a fresh PID.
  * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
@@ -75,9 +88,9 @@ export function restartGatewayProcessWithFreshPid(
   }
   const supervisor = detectGatewayRespawnSupervisor(process.env);
   if (supervisor) {
-    // On macOS launchd, exit cleanly and let KeepAlive relaunch the service.
-    // Avoid detached kickstart/start handoffs here so restart timing stays tied
-    // to launchd's native supervision rather than a second helper process.
+    if (supervisor === "launchd") {
+      return scheduleLaunchdRestartAfterExit();
+    }
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
@@ -127,6 +140,9 @@ export function respawnGatewayProcessForUpdate(
   if (supervisor) {
     // Managed update handoffs require the original PID to exit before the
     // detached helper can mutate the install, even when respawn is disabled.
+    if (supervisor === "launchd") {
+      return scheduleLaunchdRestartAfterExit();
+    }
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {

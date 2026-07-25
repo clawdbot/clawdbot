@@ -6,6 +6,7 @@ import {
   createSetupTranslator,
   createStandardChannelSetupStatus,
   defineTokenCredential,
+  mergeAllowFromEntries,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -16,7 +17,6 @@ import {
 import {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
-  createLegacyCompatChannelDmPolicy,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
@@ -114,11 +114,44 @@ export function createDiscordSetupWizardBase(handlers: {
     NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
   >;
 }) {
-  const discordDmPolicy: ChannelSetupDmPolicy = createLegacyCompatChannelDmPolicy({
+  const discordDmPolicy: ChannelSetupDmPolicy = {
     label: "Discord",
     channel,
+    policyKey: "channels.discord.dmPolicy",
+    allowFromKey: "channels.discord.allowFrom",
+    resolveConfigKeys: (_cfg, accountId) =>
+      accountId && accountId !== DEFAULT_ACCOUNT_ID
+        ? {
+            policyKey: `channels.discord.accounts.${accountId}.dmPolicy`,
+            allowFromKey: `channels.discord.accounts.${accountId}.allowFrom`,
+          }
+        : {
+            policyKey: "channels.discord.dmPolicy",
+            allowFromKey: "channels.discord.allowFrom",
+          },
+    getCurrent: (cfg, accountId) =>
+      resolveDiscordSetupAccountConfig({ cfg, accountId }).config.dmPolicy ?? "pairing",
+    setPolicy: (cfg, policy, accountId) => {
+      const resolved = resolveDiscordSetupAccountConfig({ cfg, accountId });
+      return patchChannelConfigForAccount({
+        cfg,
+        channel,
+        accountId: resolved.accountId,
+        patch: {
+          dmPolicy: policy,
+          ...(policy === "open"
+            ? { allowFrom: mergeAllowFromEntries(resolved.config.allowFrom ?? [], ["*"]) }
+            : {}),
+          dm: {
+            ...resolved.config.dm,
+            enabled:
+              typeof resolved.config.dm?.enabled === "boolean" ? resolved.config.dm.enabled : true,
+          },
+        },
+      });
+    },
     promptAllowFrom: handlers.promptAllowFrom,
-  });
+  };
 
   return {
     channel,

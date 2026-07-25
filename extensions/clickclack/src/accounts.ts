@@ -23,6 +23,7 @@ import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } f
 const DEFAULT_RECONNECT_MS = 1_500;
 const MIN_RECONNECT_MS = 100;
 const MAX_RECONNECT_MS = 60_000;
+const DEFAULT_DISCUSSIONS_SECTION = "Sessions";
 
 const {
   listAccountIds: listClickClackAccountIds,
@@ -53,6 +54,7 @@ export function resolveClickClackAccountConfig(
     accounts: channel?.accounts,
     accountId,
     omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["discussions"],
     normalizeAccountId,
   });
   const account = resolveNormalizedAccountEntry(channel?.accounts, accountId, normalizeAccountId);
@@ -161,6 +163,9 @@ export function resolveClickClackAccount(params: {
     env: params.env,
   });
   const workspace = merged.workspace?.trim() ?? "";
+  const discussionsWorkspace = merged.discussions?.workspace?.trim() || workspace;
+  const controlUrlBase = merged.discussions?.controlUrlBase?.trim();
+  const apiEndpoint = merged.apiBaseUrl?.trim().replace(/\/$/, "") || baseUrl;
   return {
     accountId,
     enabled,
@@ -174,7 +179,6 @@ export function resolveClickClackAccount(params: {
     replyMode: merged.replyMode === "model" ? "model" : "agent",
     model: normalizeOptionalString(merged.model),
     systemPrompt: normalizeOptionalString(merged.systemPrompt),
-    timeoutSeconds: merged.timeoutSeconds,
     toolsAllow: merged.toolsAllow,
     defaultTo: merged.defaultTo?.trim() || "channel:general",
     allowFrom: merged.allowFrom ?? ["*"],
@@ -189,10 +193,17 @@ export function resolveClickClackAccount(params: {
     // Command-menu sync is best effort and current bot:write tokens include
     // commands:write, so resolved accounts default on unless explicitly disabled.
     commandMenu: merged.commandMenu !== false,
+    discussions: {
+      enabled: merged.discussions?.enabled === true,
+      workspace: discussionsWorkspace,
+      ...(controlUrlBase ? { controlUrlBase } : {}),
+      section: merged.discussions?.section?.trim() || DEFAULT_DISCUSSIONS_SECTION,
+    },
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],
     },
+    apiEndpoint,
   };
 }
 

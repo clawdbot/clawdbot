@@ -1,6 +1,3 @@
-// Transport stream shared tests cover payload sanitization, header merging, and
-// final/error stream termination helpers used by provider transports.
-import { describe, expect, it, vi } from "vitest";
 import {
   assignTransportErrorDetails,
   failTransportStream,
@@ -8,7 +5,10 @@ import {
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
-} from "./transport-stream-shared.js";
+} from "@openclaw/ai/transports";
+// Transport stream shared tests cover payload sanitization, header merging, and
+// final/error stream termination helpers used by provider transports.
+import { describe, expect, it, vi } from "vitest";
 
 describe("transport stream shared helpers", () => {
   it("sanitizes unpaired surrogate code units", () => {

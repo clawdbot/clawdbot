@@ -1,9 +1,9 @@
 // Whatsapp tests cover deliver reply plugin behavior.
-import fsSync from "node:fs";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
@@ -14,7 +14,7 @@ import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { withWhatsAppSocketOperationTimeout } from "../socket-timing.js";
 
 const hoisted = vi.hoisted(() => ({
-  runFfmpeg: vi.fn(),
+  transcodeAudioBufferToOpus: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
@@ -23,7 +23,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   );
   return {
     ...actual,
-    runFfmpeg: hoisted.runFfmpeg,
+    transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus,
   };
 });
 
@@ -927,10 +927,7 @@ describe("deliverWebReply", () => {
 
   it("transcodes mp3 audio media before sending a ptt voice note", async () => {
     vi.clearAllMocks();
-    hoisted.runFfmpeg.mockImplementation(async (args: string[]) => {
-      fsSync.writeFileSync(args.at(-1) ?? "", Buffer.from("opus-output"));
-      return "";
-    });
+    hoisted.transcodeAudioBufferToOpus.mockResolvedValue(Buffer.from("opus-output"));
     const msg = makeMsg();
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -950,16 +947,16 @@ describe("deliverWebReply", () => {
       skipLog: true,
     });
 
-    const ffmpegArgs = mockCallArg(hoisted.runFfmpeg, 0, 0, "runFfmpeg");
-    expect(Array.isArray(ffmpegArgs)).toBe(true);
-    const ffmpegArgList = ffmpegArgs as unknown[];
-    expect(ffmpegArgList).toContain("-c:a");
-    expect(ffmpegArgList).toContain("libopus");
-    expect(ffmpegArgList).toContain("-ar");
-    expect(ffmpegArgList).toContain("48000");
-    expect(ffmpegArgList).toContain("-b:a");
-    expect(ffmpegArgList).toContain("64k");
-    expect(ffmpegArgList.slice(-3, -1)).toEqual(["-f", "ogg"]);
+    expect(hoisted.transcodeAudioBufferToOpus).toHaveBeenCalledWith({
+      audioBuffer: Buffer.from("mp3"),
+      inputFileName: "voice.mp3",
+      tempPrefix: "whatsapp-voice-",
+      outputFileName: "voice.ogg",
+      maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+      sampleRateHz: 48000,
+      channels: 1,
+      bitrate: "64k",
+    });
     const mediaPayload = requireRecord(
       mockCallArg(msg.platform.sendMedia, 0, 0, "sendMedia"),
       "sendMedia payload",

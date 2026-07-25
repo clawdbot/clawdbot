@@ -28,7 +28,6 @@ import {
   DEFAULT_MEMORY_READ_LINES,
   isFileMissingError,
   type MemoryReadResult,
-  requireNodeSqlite,
   statRegularFile,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
@@ -50,6 +49,7 @@ import {
   type PluginStateLeaseContext,
   type PluginStateLeaseRunner,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   uniqueValues,
@@ -1004,7 +1004,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (params.from !== undefined || params.lines !== undefined) {
       const startLine = normalizePositiveInteger(params.from, 1);
       const requestedCount = normalizePositiveInteger(
-        params.lines ?? contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
+        params.lines ?? DEFAULT_MEMORY_READ_LINES,
         DEFAULT_MEMORY_READ_LINES,
       );
       const partial = await this.readPartialText(absPath, startLine, requestedCount);
@@ -1029,7 +1029,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       relPath,
       from: params.from,
       lines: params.lines,
-      defaultLines: contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
+      defaultLines: DEFAULT_MEMORY_READ_LINES,
       maxChars: contextLimits?.memoryGetMaxChars,
       suggestReadFallback: isDefaultMemoryPath(relPath),
     });
@@ -1308,7 +1308,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       count,
       "paths",
       "Large QMD collections can make OpenClaw run out of file watchers or open files.",
-      "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      "Remove large collections, or set memory.search.sync.watch to false and refresh memory manually.",
       (message) => log.warn(message),
     );
   }
@@ -1806,8 +1806,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (this.db) {
       return this.db;
     }
-    const { DatabaseSync } = requireNodeSqlite();
-    this.db = new DatabaseSync(this.indexPath, { readOnly: true });
+    this.db = openNodeSqliteDatabase(this.indexPath, { readOnly: true });
     // busy_timeout is per-connection; set it on every open so concurrent
     // processes retry instead of failing immediately with SQLITE_BUSY.
     // Use a lower value than the write path (5 s) because this read-only

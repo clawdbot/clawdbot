@@ -85,6 +85,41 @@ describe("telegram doctor", () => {
     lookupTelegramChatIdMock.mockReset();
   });
 
+  it("strips retired tuning knobs at root, account, group, and topic scope", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            timeoutSeconds: 1,
+            mediaGroupFlushMs: 2,
+            pollingStallThresholdMs: 3,
+            retry: { attempts: 4 },
+            errorCooldownMs: 5,
+            accounts: {
+              work: { timeoutSeconds: 6, retry: { attempts: 7 } },
+            },
+            groups: {
+              "-100": {
+                errorCooldownMs: 8,
+                topics: { "1": { errorCooldownMs: 9, requireMention: true } },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram).toEqual({
+      accounts: { work: {} },
+      groups: { "-100": { topics: { "1": { requireMention: true } } } },
+    });
+    expect(result.changes).toContain("Removed retired Telegram tuning knobs.");
+  });
+
   it("normalizes legacy telegram streaming aliases into the nested streaming shape", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
     if (!normalize) {
@@ -198,7 +233,12 @@ describe("telegram doctor", () => {
       } as never,
     });
 
-    const telegram = result.config.channels?.telegram;
+    const telegram = result.config.channels?.telegram as
+      | (NonNullable<typeof result.config.channels>["telegram"] & {
+          dm?: unknown;
+          accounts?: Record<string, { dm?: unknown; direct?: Record<string, unknown> }>;
+        })
+      | undefined;
     expect(telegram?.dm).toBeUndefined();
     expect(telegram?.direct?.["123"]).toEqual({ requireTopic: true });
     expect(telegram?.accounts?.work?.dm).toBeUndefined();
@@ -232,7 +272,12 @@ describe("telegram doctor", () => {
       } as never,
     });
 
-    const telegram = result.config.channels?.telegram;
+    const telegram = result.config.channels?.telegram as
+      | (NonNullable<typeof result.config.channels>["telegram"] & {
+          dm?: unknown;
+          accounts?: Record<string, { dm?: unknown }>;
+        })
+      | undefined;
     expect(telegram?.dm).toBeUndefined();
     expect(telegram?.accounts?.work?.dm).toBeUndefined();
     expect(result.changes).toEqual([

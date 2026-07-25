@@ -124,6 +124,123 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
+  it("shows phone presentations without changing raw config values", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        fromNumber: { type: "string" },
+        target: { type: "string" },
+        accounts: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              allowFrom: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          fromNumber: { presentation: "phone-number" },
+          target: { presentation: "phone-number" },
+          "accounts.*.allowFrom.*": { presentation: "phone-number" },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {
+          fromNumber: "+4930123456",
+          target: "token-value",
+          accounts: { work: { allowFrom: ["+81312345678"] } },
+        },
+        onPatch,
+      }),
+      container,
+    );
+
+    const phoneInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>(".settings-phone-presentation input"),
+    );
+    expect(phoneInputs.map((input) => input.value)).toEqual(
+      expect.arrayContaining(["+4930123456", "+81312345678", "token-value"]),
+    );
+    expect(phoneInputs).toHaveLength(3);
+    expect(
+      Array.from(container.querySelectorAll(".settings-phone-presentation__value")).map((node) =>
+        node.textContent?.trim(),
+      ),
+    ).toEqual(expect.arrayContaining(["Germany · +49 30 123456", "Japan · +81 3 1234 5678"]));
+    const tokenInput = expectElement(
+      Array.from(container.querySelectorAll<HTMLInputElement>("input.settings-input")).find(
+        (input) => input.value === "token-value",
+      ),
+      "token input",
+    );
+    const tokenPresentation = expectElement(
+      tokenInput.closest(".settings-phone-presentation"),
+      "token phone presentation wrapper",
+    );
+    expect(tokenPresentation.querySelector(".settings-phone-presentation__value")).toBeNull();
+
+    const fromNumberInput = expectElement(
+      phoneInputs.find((input) => input.value === "+4930123456"),
+      "from number input",
+    );
+    fromNumberInput.value = " +4930123456 ";
+    fromNumberInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["fromNumber"], " +4930123456 ");
+    fromNumberInput.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["fromNumber"], "+4930123456");
+  });
+
+  it("keeps phone inputs focused while presentation appears and disappears", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: { phone: { type: "string" } },
+    });
+    const renderValue = (phone: string) => {
+      render(
+        renderConfigForm({
+          schema: analysis.schema,
+          uiHints: { phone: { presentation: "phone-number", advanced: false } },
+          unsupportedPaths: analysis.unsupportedPaths,
+          value: { phone },
+          onPatch: vi.fn(),
+        }),
+        container,
+      );
+    };
+
+    renderValue("+123");
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input.settings-input"),
+      "phone input",
+    );
+    input.focus();
+
+    renderValue("+4930123456");
+    expect(container.querySelector(".settings-phone-presentation__value")?.textContent).toContain(
+      "+49 30 123456",
+    );
+    expect(container.querySelector("input.settings-input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+
+    renderValue("+123");
+    expect(container.querySelector(".settings-phone-presentation__value")).toBeNull();
+    expect(container.querySelector("input.settings-input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    container.remove();
+  });
+
   it("renders subsection labels exactly once", () => {
     const container = document.createElement("div");
     render(
@@ -532,7 +649,7 @@ describe("config form renderer", () => {
           type: "array",
           items: { type: "string" },
         },
-        chatMessageMaxWidth: {
+        displayWidth: {
           type: "string",
         },
       },
@@ -550,7 +667,7 @@ describe("config form renderer", () => {
           lastTouchedAt: "2026-05-05T00:00:00.000Z",
           setupCommand: "apt-get update",
           allowedDomains: ["example.com"],
-          chatMessageMaxWidth: "960px",
+          displayWidth: "960px",
         },
         onPatch: vi.fn(),
       }),

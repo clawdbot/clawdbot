@@ -56,7 +56,7 @@
       }
     },
     "discovery": {
-      "cerebras": "static"
+      "cerebras": "refreshable"
     }
   },
   "setup": {

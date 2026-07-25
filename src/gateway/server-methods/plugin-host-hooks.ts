@@ -6,6 +6,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  missingScopeErrorShape,
   validatePluginsSessionActionParams,
   validatePluginsSessionActionResult,
   validatePluginsUiDescriptorsParams,
@@ -153,11 +154,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE)),
     );
     if (missingScope) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${missingScope}`),
-      );
+      respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));
       return;
     }
     try {

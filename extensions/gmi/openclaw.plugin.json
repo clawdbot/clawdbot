@@ -160,6 +160,9 @@
           }
         ]
       }
+    },
+    "discovery": {
+      "gmi": "refreshable"
     }
   }
 }

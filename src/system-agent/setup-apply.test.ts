@@ -99,7 +99,7 @@ vi.mock("../infra/exec-approvals.js", () => ({
 vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveAgentDir: (config: OpenClawConfig, agentId: string) =>
-    config.agents?.list?.find((agent) => agent.id === agentId)?.agentDir ?? `/agents/${agentId}`,
+    config.agents?.entries?.[agentId]?.agentDir ?? `/agents/${agentId}`,
 }));
 
 import { applySystemAgentModelSelection, applySystemAgentSetup } from "./setup-apply.js";
@@ -191,9 +191,8 @@ describe("applySystemAgentModelSelection", () => {
             "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
           },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             default: true,
             model: "openai/gpt-5.5",
             models: {
@@ -203,7 +202,7 @@ describe("applySystemAgentModelSelection", () => {
               },
             },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 
@@ -213,8 +212,8 @@ describe("applySystemAgentModelSelection", () => {
     });
 
     expect(result.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toBeUndefined();
-    expect(result.agents?.list?.[0]?.models?.["openai/gpt-5.5"]).toEqual({ alias: "primary" });
-    expect(result.agents?.list?.[0]?.model).toBe("openai/gpt-5.5");
+    expect(result.agents?.entries?.work?.models?.["openai/gpt-5.5"]).toEqual({ alias: "primary" });
+    expect(result.agents?.entries?.work?.model).toBe("openai/gpt-5.5");
   });
 
   it("pins the verified credential without creating a global visibility map", async () => {
@@ -328,6 +327,63 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     });
   });
 
+  it("does not mistake a proposal-created roster for an existing fleet", async () => {
+    const absent = snapshot(null, {});
+    mocks.state.initialSnapshot = absent;
+    mocks.state.commitConfig = {};
+    mocks.state.commitSnapshot = absent;
+    mocks.state.commitPreviousHash = null;
+
+    await applySystemAgentSetup(
+      baseParams({
+        expectedConfigHash: null,
+        workspace: "/tmp/requested-workspace",
+        configPatch: { agents: { entries: { main: {} } } },
+      }),
+    );
+
+    expect(mocks.state.persistedConfig?.agents).toMatchObject({
+      defaults: { workspace: "/tmp/requested-workspace" },
+      entries: { main: {} },
+    });
+  });
+
+  it("keeps the fleet workspace and provisions the configured default agent", async () => {
+    const config = {
+      agents: {
+        defaults: { workspace: "/tmp/current-workspace" },
+        entries: {
+          main: {},
+          ops: {
+            default: true,
+            agentDir: "/agents/ops",
+            workspace: "/tmp/ops-workspace",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+
+    await applySystemAgentSetup(
+      baseParams({
+        workspace: "/tmp/requested-workspace",
+        configPatch: {
+          agents: { defaults: { workspace: "/tmp/patch-workspace" }, entries: null },
+        },
+      }),
+    );
+
+    expect(mocks.state.persistedConfig?.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
+    expect(mocks.state.persistedConfig?.agents?.entries).toEqual(config.agents.entries);
+    expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
+      "/tmp/ops-workspace",
+      runtime,
+      expect.objectContaining({ agentId: "ops" }),
+    );
+  });
+
   it("rejects invalid config before any setup mutation", async () => {
     mocks.state.initialSnapshot = {
       ...snapshot("invalid", {}),
@@ -345,7 +401,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     const config = {
       agents: {
         defaults: { model: "openai/gpt-5.5" },
-        list: [{ id: "OpenClaw" }],
+        entries: { OpenClaw: {} },
       },
     } satisfies OpenClawConfig;
     mocks.state.initialSnapshot = snapshot("reserved", config);
@@ -361,7 +417,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     const config = {
       agents: {
         defaults: { model: "openai/gpt-5.5" },
-        list: [{ id: "crestodian" }], // reserved retired id
+        entries: { crestodian: {} }, // reserved retired id
       },
     } satisfies OpenClawConfig;
     mocks.state.initialSnapshot = snapshot("reserved-retired", config);
@@ -389,7 +445,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       runtimeConfig: {
         agents: {
           defaults: { model: { primary: "openai/gpt-5.5" } },
-          list: [{ id: "other", default: true }],
+          entries: { other: { default: true } },
         },
       },
       error: "default agent changed",
@@ -418,12 +474,14 @@ describe("applySystemAgentSetup transaction boundaries", () => {
   });
 
   it("rejects same-revision agent credential directory drift in the final snapshot", async () => {
-    mocks.state.commitSnapshot = snapshot("probe", {
+    const movedConfig: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.5" } },
-        list: [{ id: "main", default: true, agentDir: "/agents/moved" }],
+        entries: { main: { default: true, agentDir: "/agents/moved" } },
       },
-    });
+    };
+    mocks.state.commitConfig = movedConfig;
+    mocks.state.commitSnapshot = snapshot("probe", movedConfig);
 
     await expect(
       applySystemAgentSetup(

@@ -252,15 +252,6 @@ export function repairStaleAgentModelRefs(
       baseAvailableProviders.add(normalized);
     }
   }
-  for (const backendId of Object.keys(
-    isRecord(cfg.agents?.defaults?.cliBackends) ? cfg.agents.defaults.cliBackends : {},
-  )) {
-    const normalized = normalizeProviderId(backendId);
-    if (normalized) {
-      baseAvailableProviders.add(normalized);
-    }
-  }
-
   const config = structuredClone(cfg);
   const changes: string[] = [];
   const warnings = [...pluginProviders.warnings];

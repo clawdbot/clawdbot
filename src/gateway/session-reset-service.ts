@@ -14,7 +14,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
+import {
+  clearBootstrapSnapshot,
+  clearBootstrapSnapshotOnSessionBoundary,
+} from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
@@ -29,13 +32,22 @@ import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-clea
 import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionWorkStartError,
-  snapshotSessionOrigin,
   type SessionEntry,
+  deleteSessionEntryLifecycle,
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import {
+  buildSessionCreationStamp,
+  type SessionCreatedActor,
+  type SessionCreatedVia,
+} from "../config/sessions/session-entry-provenance.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesTarget,
+} from "../config/sessions/sqlite-marker.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -46,6 +58,7 @@ import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
+  isIncognitoSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -62,7 +75,11 @@ import {
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
-import { handleSessionStateSessionReset } from "../sessions/session-state-events.js";
+import {
+  handleSessionStateSessionDeleted,
+  handleSessionStateSessionReset,
+  recordSessionCreated,
+} from "../sessions/session-state-events.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -91,9 +108,10 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  incognito?: boolean;
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
-  if (!params.sessionId) {
+  if (!params.sessionId || params.incognito === true) {
     return [];
   }
   return archiveSessionTranscriptsDetailed({
@@ -908,7 +926,10 @@ export async function performGatewaySessionReset(params: {
   clearSpawnedCwd?: boolean;
   reason: "new" | "reset";
   commandSource: string;
+  /** Trusted provenance for a reset that materializes a previously missing row. */
+  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   assertCurrent?: () => void;
+  assertAuthorizedInstance?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
   | {
@@ -918,6 +939,13 @@ export async function performGatewaySessionReset(params: {
       resolved: { modelProvider: string; model: string };
       agentId: string;
       storePath: string;
+    }
+  | {
+      ok: true;
+      key: string;
+      agentId: string;
+      storePath: string;
+      incognitoDeleted: true;
     }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
@@ -1023,6 +1051,7 @@ export async function performGatewaySessionReset(params: {
     // lets aborted runs finish admission cleanup without deadlocking reset.
     prepare: async () => {
       params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       admittedWorkReleased = await interruptSessionWorkAdmissions({
         scope: resetTarget.storePath,
         identities: resetLifecycleIdentities,
@@ -1070,6 +1099,7 @@ export async function performGatewaySessionReset(params: {
         };
       }
       const hadExistingEntry = Boolean(entry);
+      const resetLifecycleRevision = entry?.lifecycleRevision;
       const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const resetPluginRegistry = getActivePluginRegistry();
@@ -1095,8 +1125,10 @@ export async function performGatewaySessionReset(params: {
         },
       );
       params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       // Cleanup below is destructive. Once it starts, finish rotating the same
       // session even if gateway ownership changes; otherwise runtime state can be
       // reset while the persisted session still points at the old conversation.
@@ -1161,19 +1193,132 @@ export async function performGatewaySessionReset(params: {
           })
         : undefined;
 
-      const lifecycle = await resetSessionEntryLifecycle({
+      const incognito = entry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
+      if (incognito) {
+        if (!entry) {
+          return {
+            ok: false,
+            error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
+          };
+        }
+        await emitGatewayBeforeResetPluginHook({
+          cfg,
+          key: params.key,
+          messages: beforeResetMessages,
+          target,
+          storePath,
+          entry,
+          reason: params.reason,
+        });
+        const deleted = await deleteSessionEntryLifecycle({
+          agentId: target.agentId,
+          archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
+          expectedEntry: entry,
+          expectedSessionId: entry.sessionId,
+          expectedUpdatedAt: entry.updatedAt,
+          storePath,
+          target: {
+            canonicalKey: target.canonicalKey,
+            storeKeys: target.storeKeys,
+          },
+        });
+        if (!deleted.deleted) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `Session ${params.key} changed before reset. Retry.`,
+            ),
+          };
+        }
+        handleSessionStateSessionDeleted(target.canonicalKey, agentId);
+        emitGatewaySessionEndPluginHook({
+          cfg,
+          sessionKey: target.canonicalKey,
+          sessionId: entry.sessionId,
+          storePath,
+          sessionFile: entry.sessionFile,
+          agentId: target.agentId,
+          reason: params.reason,
+          archivedTranscripts: [],
+        });
+        await emitSessionUnboundLifecycleEvent({
+          targetSessionKey: target.canonicalKey,
+          reason: "session-reset",
+        });
+        return {
+          ok: true,
+          key: target.canonicalKey,
+          agentId: target.agentId,
+          storePath,
+          incognitoDeleted: true,
+        };
+      }
+
+      let createdNewEntry = false;
+      params.assertAuthorizedInstance?.();
+      const boundaryEntry = loadSessionEntry(
+        params.key,
+        requestedAgentId ? { agentId: requestedAgentId } : undefined,
+      ).entry;
+      if (boundaryEntry?.sessionId !== entry?.sessionId) {
+        params.assertCurrent?.();
+        throw new Error(`Session ${params.key} changed before reset boundary append.`);
+      }
+      const resetSessionFile = boundaryEntry?.sessionId
+        ? ((sqliteSessionFileMarkerMatchesTarget(boundaryEntry.sessionFile, {
+            agentId,
+            sessionId: boundaryEntry.sessionId,
+            storePath,
+          })
+            ? boundaryEntry.sessionFile
+            : undefined) ??
+          formatSqliteSessionFileMarker({
+            agentId,
+            sessionId: boundaryEntry.sessionId,
+            storePath,
+          }))
+        : undefined;
+      let resetBoundaryAppended = false;
+      let resetSkipped = false;
+      const lifecyclePromise = resetSessionEntryLifecycle({
+        archivePreviousTranscript: false,
         agentId: target.agentId,
+        resetBoundaryReason: boundaryEntry ? params.reason : undefined,
         storePath,
         target: {
           canonicalKey: target.canonicalKey,
-          storeKeys: target.storeKeys,
+          storeKeys: [
+            ...new Set(
+              [...target.storeKeys, canonicalKey, legacyKey, params.key].filter(
+                (key): key is string => Boolean(key),
+              ),
+            ),
+          ],
         },
         buildNextEntry: ({ currentEntry, primaryKey }) => {
-          if (!isResetLifecycleCurrent() && currentEntry?.sessionId !== entry?.sessionId) {
-            // A newer owner already replaced or removed the session while cleanup
-            // targeted the old id. Preserve that newer state instead of resetting it.
+          params.assertAuthorizedInstance?.();
+          createdNewEntry = currentEntry === undefined;
+          if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
+            if (currentEntry) {
+              resetSkipped = true;
+              return currentEntry;
+            }
             params.assertCurrent?.();
+            throw new Error(`Session ${params.key} changed before reset boundary commit.`);
           }
+          if (
+            currentEntry &&
+            !isResetLifecycleCurrent() &&
+            currentEntry.lifecycleRevision !== resetLifecycleRevision
+          ) {
+            // A newer owner already replaced or removed the session while cleanup
+            // targeted the old lifecycle. Preserve that newer state instead of resetting it.
+            resetSkipped = true;
+            return currentEntry;
+          }
+          resetBoundaryAppended = currentEntry !== undefined;
           const parsed = parseAgentSessionKey(primaryKey);
           const sessionAgentId = normalizeAgentId(
             parsed?.agentId ?? target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
@@ -1182,16 +1327,29 @@ export async function performGatewaySessionReset(params: {
             entry: currentEntry,
           });
           const now = Date.now();
-          const nextSessionId = randomUUID();
-          const sessionFile = formatSqliteSessionFileMarker({
-            agentId: sessionAgentId,
-            sessionId: nextSessionId,
-            storePath,
-          });
+          const nextSessionId = currentEntry?.sessionId ?? randomUUID();
+          const sessionFile =
+            (currentEntry ? resetSessionFile : undefined) ??
+            formatSqliteSessionFileMarker({
+              agentId: sessionAgentId,
+              sessionId: nextSessionId,
+              storePath,
+            });
+          const creationStamp = currentEntry
+            ? {
+                createdVia: currentEntry.createdVia,
+                createdActor: currentEntry.createdActor,
+                createdAt: currentEntry.createdAt,
+              }
+            : params.creation
+              ? buildSessionCreationStamp(params.creation)
+              : {};
           const nextEntry: SessionEntry = {
             sessionId: nextSessionId,
             sessionFile,
+            lifecycleRevision: randomUUID(),
             updatedAt: now,
+            sessionStartedAt: now,
             systemSent: false,
             abortedLastRun: false,
             thinkingLevel: currentEntry?.thinkingLevel,
@@ -1227,8 +1385,7 @@ export async function performGatewaySessionReset(params: {
             groupActivation: currentEntry?.groupActivation,
             groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
             chatType: currentEntry?.chatType,
-            compactionCount: currentEntry?.compactionCount,
-            compactionCheckpoints: currentEntry?.compactionCheckpoints,
+            compactionCount: 0,
             sendPolicy: currentEntry?.sendPolicy,
             queueMode: currentEntry?.queueMode,
             queueDebounceMs: currentEntry?.queueDebounceMs,
@@ -1243,26 +1400,24 @@ export async function performGatewaySessionReset(params: {
               ? undefined
               : (params.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
-            forkedFromParent: currentEntry?.forkedFromParent,
+            ...creationStamp,
+            forkSource: currentEntry?.forkSource,
+            forkedFromParent: sessionEntryForkedFromParent(currentEntry) ? true : undefined,
             spawnDepth: currentEntry?.spawnDepth,
             subagentRole: currentEntry?.subagentRole,
             subagentControlScope: currentEntry?.subagentControlScope,
             label: currentEntry?.label,
             displayName: currentEntry?.displayName,
-            channel: currentEntry?.channel,
+            delivery: currentEntry?.delivery,
             groupId: currentEntry?.groupId,
             subject: currentEntry?.subject,
             groupChannel: currentEntry?.groupChannel,
             space: currentEntry?.space,
-            origin: snapshotSessionOrigin(currentEntry),
-            deliveryContext: currentEntry?.deliveryContext,
             cliSessionBindings: currentEntry?.cliSessionBindings,
             cliSessionIds: currentEntry?.cliSessionIds,
             claudeCliSessionId: currentEntry?.claudeCliSessionId,
-            lastChannel: currentEntry?.lastChannel,
-            lastTo: currentEntry?.lastTo,
-            lastAccountId: currentEntry?.lastAccountId,
-            lastThreadId: currentEntry?.lastThreadId,
+            usageFamilyKey: currentEntry?.usageFamilyKey,
+            usageFamilySessionIds: currentEntry?.usageFamilySessionIds,
             // Do not carry the cached skills catalog across /new. Long-lived channel
             // sessions (Signal DMs/groups in particular) otherwise keep advertising a
             // stale <available_skills> block even after reset/restart, because the
@@ -1278,7 +1433,7 @@ export async function performGatewaySessionReset(params: {
           // regression fix intentionally protects CLI continuity for
           // orchestration-driven resets. Non-subagent sessions that happen to set
           // `parentSessionKey` (e.g. dashboard children) are not exempt.
-          if (!isSubagentSessionKey(primaryKey)) {
+          if (resetBoundaryAppended && !isSubagentSessionKey(primaryKey)) {
             clearAllCliSessions(nextEntry);
           } else {
             nextEntry.cliSessionBindings = rebindCliSessionReseedReceiptsForReset(
@@ -1289,6 +1444,20 @@ export async function performGatewaySessionReset(params: {
           return nextEntry;
         },
         afterEntryMutation: async (mutation) => {
+          if (resetSkipped) {
+            return;
+          }
+          clearBootstrapSnapshotOnSessionBoundary({
+            boundaryAppended: resetBoundaryAppended,
+            sessionKey: target.canonicalKey ?? params.key,
+          });
+          if (createdNewEntry) {
+            recordSessionCreated({
+              sessionKey: target.canonicalKey ?? params.key,
+              agentId,
+              entry: mutation.nextEntry,
+            });
+          }
           let committedAcpResetState: { sessionKey: string; meta: SessionAcpMeta } | undefined;
           if (deferredAcpResetState) {
             const identity = deferredAcpResetState.meta.identity;
@@ -1306,6 +1475,7 @@ export async function performGatewaySessionReset(params: {
               writeAcpSessionMetaForMigration({
                 sessionKey: committedAcpResetState.sessionKey,
                 sessionId: mutation.nextEntry.sessionId,
+                lifecycleRevision: mutation.nextEntry.lifecycleRevision,
                 meta: committedAcpResetState.meta,
               });
             }
@@ -1338,7 +1508,11 @@ export async function performGatewaySessionReset(params: {
           });
         },
       });
-      handleSessionStateSessionReset(target.canonicalKey ?? params.key);
+      const lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>> =
+        await lifecyclePromise;
+      if (!resetSkipped) {
+        handleSessionStateSessionReset(target.canonicalKey ?? params.key);
+      }
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
       const resolved = {
@@ -1356,27 +1530,29 @@ export async function performGatewaySessionReset(params: {
       const oldSessionFile = lifecycle.previousSessionFile;
 
       const archivedTranscripts = lifecycle.archivedTranscripts;
-      emitGatewaySessionEndPluginHook({
-        cfg,
-        sessionKey: target.canonicalKey ?? params.key,
-        sessionId: oldSessionId,
-        storePath,
-        sessionFile: oldSessionFile,
-        agentId: target.agentId,
-        reason: params.reason,
-        archivedTranscripts,
-        nextSessionId: next.sessionId,
-      });
-      emitGatewaySessionStartPluginHook({
-        cfg,
-        sessionKey: target.canonicalKey ?? params.key,
-        sessionId: next.sessionId,
-        resumedFrom: oldSessionId,
-        storePath,
-        sessionFile: next.sessionFile,
-        agentId: target.agentId,
-      });
-      if (hadExistingEntry) {
+      if (!resetSkipped) {
+        emitGatewaySessionEndPluginHook({
+          cfg,
+          sessionKey: target.canonicalKey ?? params.key,
+          sessionId: oldSessionId,
+          storePath,
+          sessionFile: oldSessionFile,
+          agentId: target.agentId,
+          reason: params.reason,
+          archivedTranscripts,
+          nextSessionId: next.sessionId,
+        });
+        emitGatewaySessionStartPluginHook({
+          cfg,
+          sessionKey: target.canonicalKey ?? params.key,
+          sessionId: next.sessionId,
+          resumedFrom: oldSessionId,
+          storePath,
+          sessionFile: next.sessionFile,
+          agentId: target.agentId,
+        });
+      }
+      if (hadExistingEntry && !resetSkipped) {
         await emitSessionUnboundLifecycleEvent({
           targetSessionKey: target.canonicalKey ?? params.key,
           reason: "session-reset",

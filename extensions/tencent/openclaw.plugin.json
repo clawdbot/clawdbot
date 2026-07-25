@@ -90,8 +90,8 @@
       }
     },
     "discovery": {
-      "tencent-tokenhub": "static",
-      "tencent-tokenplan": "static"
+      "tencent-tokenhub": "refreshable",
+      "tencent-tokenplan": "refreshable"
     }
   },
   "setup": {

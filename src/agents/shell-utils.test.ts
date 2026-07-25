@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
   buildShellCommandInvocation,
+  createStreamingBinaryOutputSanitizer,
   detectRuntimeShell,
   getBashShellConfig,
   getBashShellEnv,
@@ -39,6 +40,16 @@ describe("sanitizeBinaryOutput", () => {
     expect(sanitizeBinaryOutput("a\u0000\u0007\u007f\u0080b\t\n")).toBe(
       "a\\x00\\x07\\x7f\\x80b\t\n",
     );
+  });
+});
+
+describe("createStreamingBinaryOutputSanitizer", () => {
+  it("carries ANSI state across process-output chunks", () => {
+    const sanitize = createStreamingBinaryOutputSanitizer();
+
+    expect(sanitize("A\u001b]0;title")).toBe("A");
+    expect(sanitize("\u0007B\u001b[31")).toBe("B");
+    expect(sanitize("mC")).toBe("C");
   });
 });
 

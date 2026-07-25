@@ -3,6 +3,7 @@
  * This bypasses shared model runtime's content type system which does not have a "document" type.
  */
 
+import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
 import {
   postJsonRequest,
@@ -12,7 +13,6 @@ import {
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
 import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
 import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";

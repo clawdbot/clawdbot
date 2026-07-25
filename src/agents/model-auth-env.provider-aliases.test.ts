@@ -25,8 +25,8 @@ const pluginMetadataMocks = vi.hoisted(() => {
         providerAuthAliases: {
           "cloud-alias": "external-cloud",
         },
-        providerAuthEnvVars: {
-          "external-cloud": ["EXTERNAL_CLOUD_API_KEY"],
+        setup: {
+          providers: [{ id: "external-cloud", envVars: ["EXTERNAL_CLOUD_API_KEY"] }],
         },
       },
     ],

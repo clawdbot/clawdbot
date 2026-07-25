@@ -208,8 +208,61 @@ catalog, API-key auth, and dynamic model resolution.
 
     ### Live model discovery
 
-    If your provider exposes a `/models`-style API, keep the provider-specific
-    endpoint and row projection in your plugin and use
+    If your provider exposes an OpenAI-compatible `/models` API, opt the
+    single-provider helper into shared discovery:
+
+    ```typescript
+    catalog: {
+      buildProvider: () => ({
+        api: "openai-completions",
+        baseUrl: "https://api.acme-ai.com/v1",
+        models: [...STATIC_MODELS],
+      }),
+      buildStaticProvider: () => ({
+        api: "openai-completions",
+        baseUrl: "https://api.acme-ai.com/v1",
+        models: [...STATIC_MODELS],
+      }),
+      liveModelDiscovery: true,
+    },
+    ```
+
+    `liveModelDiscovery: true` is a public Plugin SDK contract with these
+    behaviors:
+
+    | Area | Contract |
+    | --- | --- |
+    | Credentials | Discovery uses the catalog's resolved provider credential, preferring `discoveryApiKey` when auth supplies one. Secret-reference markers are never sent as tokens. The default request uses `Authorization: Bearer <token>`; use `buildRequestHeaders` for another vendor auth scheme. |
+    | Endpoint | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor. |
+    | Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect. |
+    | Cache | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached. |
+    | Filtering | Exact live IDs keep their trusted static metadata. New rows are projected conservatively as text/chat models. Disabled, archived, deprecated, explicitly non-chat, embedding, reranking, moderation, speech, image-only, and video-only rows are excluded. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog. |
+    | Failure | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider. |
+
+    For a non-Bearer or nonstandard list endpoint, pass options instead of
+    `true`:
+
+    ```typescript
+    liveModelDiscovery: {
+      endpointPath: "model-catalog",
+      buildRequestHeaders: ({ apiKey, discoveryApiKey }) => ({
+        "vendor-version": "2026-01-01",
+        "x-api-key": discoveryApiKey ?? apiKey ?? "",
+      }),
+      readRows: (body) =>
+        body && typeof body === "object" &&
+        Array.isArray((body as { models?: unknown }).models)
+          ? (body as { models: unknown[] }).models
+          : [],
+    },
+    ```
+
+    Do not use `endpointUrl` as an unconditional alternate host. Its
+    `requireBaseUrl` check is the credential-isolation boundary for providers
+    whose model-list host differs from their inference host.
+
+    If the provider needs custom model semantics rather than the conservative
+    OpenAI-compatible projection, keep that projection in the plugin and use
     `openclaw/plugin-sdk/provider-catalog-live-runtime` for the shared fetch
     lifecycle. The helper gives you guarded HTTP fetches, provider-auth headers,
     structured HTTP errors, TTL caching, and static fallback behavior without

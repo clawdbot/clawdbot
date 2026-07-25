@@ -10,12 +10,12 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {
   applyAuthorizationHeaderForUrl,
-  inferPlaceholder,
   isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
   resolveAttachmentFetchPolicy,
+  resolveMSTeamsMediaKind,
   safeFetchWithPolicy,
 } from "./shared.js";
 import type {
@@ -113,7 +113,7 @@ async function fetchBotFrameworkAttachmentInfo(params: {
     return undefined;
   }
   if (!response.ok) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     params.logger?.warn?.("msteams botFramework attachmentInfo non-ok", {
       status: response.status,
     });
@@ -173,7 +173,7 @@ async function saveBotFrameworkAttachmentView(params: {
     return undefined;
   }
   if (!response.ok) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     params.logger?.warn?.("msteams botFramework attachmentView non-ok", {
       status: response.status,
     });
@@ -183,14 +183,14 @@ async function saveBotFrameworkAttachmentView(params: {
   try {
     contentLength = parseMediaContentLength(response.headers.get("content-length"));
   } catch (err) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     params.logger?.warn?.("msteams botFramework attachmentView invalid content-length", {
       error: err instanceof Error ? err.message : String(err),
     });
     return undefined;
   }
   if (contentLength !== null && contentLength > params.maxBytes) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     return undefined;
   }
   try {
@@ -331,7 +331,7 @@ async function downloadMSTeamsBotFrameworkAttachment(params: {
   return {
     path: saved.path,
     contentType: saved.contentType,
-    placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: fileNameHint }),
+    kind: resolveMSTeamsMediaKind({ contentType: saved.contentType, fileName: fileNameHint }),
   };
 }
 
@@ -394,9 +394,12 @@ export async function downloadMSTeamsBotFrameworkAttachments(params: {
         logger: params.logger,
       });
       if (item) {
-        media.push(item);
+        media.push({ ...item, sourceId: attachmentId });
+      } else {
+        media.push({ kind: "document", sourceId: attachmentId });
       }
     } catch (err) {
+      media.push({ kind: "document", sourceId: attachmentId });
       params.logger?.warn?.("msteams botFramework attachment download failed", {
         error: err instanceof Error ? err.message : String(err),
         attachmentId,

@@ -4,7 +4,10 @@ import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
+  handleChatAttachmentDrop,
   handleChatAttachmentPaste,
+  isEditableDropTarget,
+  isFileDrag,
   renderAttachmentPreview,
   renderChatAttachmentInputs,
   renderChatAttachmentMenu,
@@ -23,11 +26,22 @@ type NewSessionComposerOptions = {
   requiresModifier: boolean;
   submitting: boolean;
   messageLocked?: boolean;
+  incognito?: boolean;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
+  onToggleIncognito?: () => void;
   onSubmit: () => void;
 };
+
+export function renderDraftError(message: string) {
+  return html`
+    <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
+      <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
+      <span class="callout__content new-session-page__alert-message">${message}</span>
+    </div>
+  `;
+}
 
 function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposerOptions) {
   if (
@@ -59,8 +73,69 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     onPendingReadsChange: options.onPendingReadsChange,
     readSignal: options.readSignal,
   };
+  const enabled = !options.submitting && !options.messageLocked;
+  // Nested dragenter/dragleave events must stay balanced so crossing composer
+  // children does not flicker the file drop affordance.
+  let attachmentDragDepth = 0;
+  const setAttachmentDropActive = (event: DragEvent, active: boolean) => {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (active) {
+      if (!enabled || !isFileDrag(event.dataTransfer)) {
+        return;
+      }
+      attachmentDragDepth += 1;
+    } else {
+      attachmentDragDepth = Math.max(0, attachmentDragDepth - 1);
+    }
+    target.toggleAttribute("data-attachment-drop-active", attachmentDragDepth > 0);
+  };
+  const clearAttachmentDropActive = (event: DragEvent) => {
+    attachmentDragDepth = 0;
+    const target = event.currentTarget;
+    if (target instanceof HTMLElement) {
+      target.removeAttribute("data-attachment-drop-active");
+    }
+  };
   return html`
-    <div class="agent-chat__composer-shell new-session-page__composer">
+    <div
+      class="agent-chat__composer-shell new-session-page__composer"
+      @drop=${(event: DragEvent) => {
+        // Text/URL drops stay native only inside the textarea; elsewhere they
+        // are cancelled so a dropped link cannot navigate the app away. File
+        // drops are cancelled even while disabled for the same reason.
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+          }
+          return;
+        }
+        event.preventDefault();
+        clearAttachmentDropActive(event);
+        if (enabled) {
+          handleChatAttachmentDrop(event, attachmentProps);
+        }
+      }}
+      @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
+      @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
+      @dragover=${(event: DragEvent) => {
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+            if (event.dataTransfer) {
+              event.dataTransfer.dropEffect = "none";
+            }
+          }
+          return;
+        }
+        event.preventDefault();
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = enabled ? "copy" : "none";
+        }
+      }}
+    >
       <div class="agent-chat__input">
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">
@@ -96,13 +171,26 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
             </openclaw-tooltip>
           </div>
         </div>
-        ${options.modelControl && options.modelControl !== nothing
-          ? html`<div class="agent-chat__composer-footer">
-              <div class="agent-chat__composer-controls">
-                <div class="chat-composer-model-control">${options.modelControl}</div>
-              </div>
-            </div>`
-          : nothing}
+        <div class="agent-chat__composer-footer">
+          <div class="agent-chat__composer-controls">
+            ${options.modelControl && options.modelControl !== nothing
+              ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
+              : nothing}
+            <button
+              type="button"
+              class="new-session-page__incognito ${options.incognito
+                ? "new-session-page__incognito--active"
+                : ""}"
+              role="switch"
+              aria-checked=${String(options.incognito === true)}
+              ?disabled=${options.submitting || options.messageLocked}
+              title=${t("newSession.incognitoDescription")}
+              @click=${() => options.onToggleIncognito?.()}
+            >
+              <span aria-hidden="true">${icons.lock}</span>${t("newSession.incognito")}
+            </button>
+          </div>
+        </div>
         ${options.pendingAttachmentReads > 0
           ? html`<span class="agent-chat__sr-only" role="status"
               >${t("newSession.readingAttachment")}</span
@@ -121,11 +209,13 @@ export function renderNewSessionDraftComposer(options: {
   context: import("../../app/context.ts").ApplicationContext | undefined;
   isCatalogTarget: boolean;
   message: string;
+  incognito?: boolean;
   modelControl: NewSessionModelControl;
   requiresModifier: boolean;
   submitting: boolean;
   messageLocked?: boolean;
   onInput: (message: string) => void;
+  onToggleIncognito?: () => void;
   onSubmit: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
@@ -134,6 +224,7 @@ export function renderNewSessionDraftComposer(options: {
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
     message: options.message,
+    incognito: options.incognito,
     modelControl: options.isCatalogTarget
       ? nothing
       : options.modelControl.render({
@@ -154,6 +245,7 @@ export function renderNewSessionDraftComposer(options: {
     },
     onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
     onInput: options.onInput,
+    onToggleIncognito: options.onToggleIncognito,
     onSubmit: options.onSubmit,
   });
 }

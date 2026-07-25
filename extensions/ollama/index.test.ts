@@ -75,6 +75,10 @@ beforeEach(() => {
   ensureOllamaModelPulledMock.mockClear();
   buildOllamaProviderMock.mockReset();
   queryOllamaModelShowInfoMock.mockReset();
+  queryOllamaModelShowInfoMock.mockResolvedValue({
+    contextWindow: 32_768,
+    capabilities: ["completion", "tools"],
+  });
   buildOllamaModelDefinitionMock.mockClear();
   createConfiguredOllamaStreamFnMock.mockClear();
 });
@@ -356,6 +360,45 @@ describe("ollama plugin", () => {
         detail: "qwen3.5:4b at http://127.0.0.1:11434",
       },
     );
+  });
+
+  it("skips preferred models whose measured context is below 16k", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [
+        { id: "llama3.3:70b", name: "llama3.3:70b", compat: { supportsTools: true } },
+        { id: "qwen3.5:4b", name: "qwen3.5:4b", compat: { supportsTools: true } },
+      ],
+    });
+    queryOllamaModelShowInfoMock.mockImplementation(async (_baseUrl: string, modelId: string) => ({
+      contextWindow: modelId === "qwen3.5:4b" ? 8_192 : 16_384,
+      capabilities: ["completion", "tools"],
+    }));
+
+    await expect(provider.auth[0].appGuidedSetup?.detect({ config: {}, env: {} })).resolves.toEqual(
+      {
+        modelRef: "ollama/llama3.3:70b",
+        detail: "llama3.3:70b at http://127.0.0.1:11434",
+      },
+    );
+  });
+
+  it("does not auto-detect a model without measured context metadata", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [{ id: "qwen3.5:4b", name: "qwen3.5:4b", compat: { supportsTools: true } }],
+    });
+    queryOllamaModelShowInfoMock.mockResolvedValue({
+      capabilities: ["completion", "tools"],
+    });
+
+    await expect(
+      provider.auth[0].appGuidedSetup?.detect({ config: {}, env: {} }),
+    ).resolves.toBeNull();
   });
 
   it("uses configured Ollama access while discovering installed models", async () => {
@@ -892,14 +935,13 @@ describe("ollama plugin", () => {
               fallbacks: ["ollama/global-fallback:cloud"],
             },
           },
-          list: [
-            {
-              id: "ops",
+          entries: {
+            ops: {
               model: {
                 primary: "ollama/per-agent:cloud@work",
               },
             },
-          ],
+          },
         },
       },
       env: process.env,

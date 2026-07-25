@@ -42,6 +42,10 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
+import {
+  resolveOpenAICompletionsCompat,
+  type ResolvedOpenAICompletionsCompat,
+} from "./openai-completions-compat.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 
 const baseModel: Model<"openai-completions"> = {
@@ -68,6 +72,27 @@ function createModel(
   return { ...baseModel, ...overrides };
 }
 
+const defaultResolvedCompat = {
+  supportsStore: true,
+  supportsDeveloperRole: true,
+  supportsReasoningEffort: true,
+  supportsUsageInStreaming: true,
+  maxTokensField: "max_completion_tokens",
+  requiresToolResultName: false,
+  requiresAssistantAfterToolResult: false,
+  requiresThinkingAsText: false,
+  requiresReasoningContentOnAssistantMessages: false,
+  thinkingFormat: "openai",
+  openRouterRouting: undefined,
+  vercelGatewayRouting: {},
+  zaiToolStream: false,
+  supportsStrictMode: true,
+  cacheControlFormat: undefined,
+  sessionAffinity: "none",
+  supportsPromptCacheKey: false,
+  supportsLongCacheRetention: true,
+} satisfies ResolvedOpenAICompletionsCompat;
+
 function chunk(delta: Record<string, unknown>, finishReason?: string): unknown {
   return {
     id: "chatcmpl-test",
@@ -84,6 +109,92 @@ beforeEach(() => {
 });
 
 describe("OpenAI-compatible completions compatibility", () => {
+  it.each([
+    {
+      name: "OpenRouter Anthropic",
+      model: createModel({
+        id: "anthropic/claude-sonnet-4.6",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: { sendSessionAffinityHeaders: true },
+      }),
+      expected: {
+        ...defaultResolvedCompat,
+        thinkingFormat: "openrouter",
+        cacheControlFormat: "anthropic",
+        sessionAffinity: "openrouter",
+      },
+    },
+    {
+      name: "OpenRouter Kimi",
+      model: createModel({
+        id: "moonshotai/kimi-k2.6",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+      }),
+      expected: {
+        ...defaultResolvedCompat,
+        supportsDeveloperRole: false,
+        thinkingFormat: "openrouter",
+      },
+    },
+    {
+      name: "Z.AI GLM",
+      model: createModel({
+        id: "glm-5",
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+      }),
+      expected: {
+        ...defaultResolvedCompat,
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+        thinkingFormat: "zai",
+      },
+    },
+    {
+      name: "OpenAI",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      expected: defaultResolvedCompat,
+    },
+    {
+      name: "Azure OpenAI",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/deployments/luna",
+      }),
+      expected: defaultResolvedCompat,
+    },
+    {
+      name: "custom proxy",
+      model: createModel(),
+      expected: defaultResolvedCompat,
+    },
+    {
+      name: "custom proxy with OpenRouter routing",
+      model: createModel({
+        compat: {
+          openRouterRouting: { only: ["google-vertex"] },
+          sendSessionAffinityHeaders: true,
+        },
+      }),
+      expected: {
+        ...defaultResolvedCompat,
+        openRouterRouting: { only: ["google-vertex"] },
+        sessionAffinity: "openrouter",
+      },
+    },
+  ])("resolves the $name compat record", ({ model, expected }) => {
+    expect(resolveOpenAICompletionsCompat(model)).toEqual(expected);
+  });
+
   it("buffers encrypted reasoning details until their tool call arrives", async () => {
     const reasoningDetail = {
       type: "reasoning.encrypted",

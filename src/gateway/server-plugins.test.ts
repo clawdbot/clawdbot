@@ -842,7 +842,7 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
-  test("provides subagent runtime with sessions.get method aliases", async () => {
+  test("provides subagent runtime session messages through sessions.get", async () => {
     const runtime = await createSubagentRuntime(serverPluginsModule);
     serverPluginsModule.setFallbackGatewayContext(createTestContext("sessions-get-aliases"));
     handleGatewayRequest
@@ -853,20 +853,12 @@ describe("loadGatewayPlugins", () => {
       })
       .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
         expect(opts.req.method).toBe("sessions.get");
-        expect(opts.req.params).toEqual({ key: "s-legacy" });
-        opts.respond(true, { messages: [{ id: "m-2" }] });
-      })
-      .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
-        expect(opts.req.method).toBe("sessions.get");
         expect(opts.req.params).toEqual({ key: "s-limited", limit: 1_000 });
         opts.respond(true, { messages: [{ id: "m-3" }] });
       });
 
     await expect(runtime.getSessionMessages({ sessionKey: "s-read" })).resolves.toEqual({
       messages: [{ id: "m-1" }],
-    });
-    await expect(runtime.getSession({ sessionKey: "s-legacy" })).resolves.toEqual({
-      messages: [{ id: "m-2" }],
     });
     await expect(
       runtime.getSessionMessages({
@@ -922,6 +914,23 @@ describe("loadGatewayPlugins", () => {
         "agent",
         { sessionKey: "agent:main:cron:job:run:run-1" },
         { allowSyntheticCronRunContinuation: true, forceSyntheticClient: true },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
+  test("carries delegated tool-policy handoffs only in synthetic client context", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("delegated-tool-policy"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.req.params).not.toHaveProperty("delegatedToolPolicyHandoff");
+      expect(opts.client?.internal?.delegatedToolPolicyHandoff).toBe(true);
+      opts.respond(true, { status: "ok" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "agent:main:main" },
+        { delegatedToolPolicyHandoff: true, forceSyntheticClient: true },
       ),
     ).resolves.toEqual({ status: "ok" });
   });
@@ -1055,7 +1064,7 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext({
-      getRuntimeConfig: () => ({ gateway: { nodes: { denyCommands: [command] } } }),
+      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { deny: [command] } } } }),
       nodeRegistry: {
         get: () => ({
           nodeId: "node-policy",
@@ -1490,6 +1499,7 @@ describe("loadGatewayPlugins", () => {
             pluginId: "other-plugin",
             toolNames: ["other_plugin_tool"],
           },
+          delegatedToolPolicyHandoff: true,
         },
       } as unknown as GatewayRequestOptions["client"],
       isWebchatConnect: () => false,
@@ -1506,6 +1516,7 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
     expect(getLastDispatchedClientInternal().runtimePluginToolGrant).toBeUndefined();
+    expect(getLastDispatchedClientInternal().delegatedToolPolicyHandoff).toBeUndefined();
   });
 
   test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {

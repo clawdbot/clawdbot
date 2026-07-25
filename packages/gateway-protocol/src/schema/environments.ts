@@ -66,7 +66,7 @@ export const EnvironmentSummarySchema = createEnvironmentSummarySchema();
 export const EnvironmentsListParamsSchema = closedObject({});
 
 /** Configured worker target exposed without provider settings or credentials. */
-export const WorkerEnvironmentProfileSummarySchema = closedObject({
+const WorkerEnvironmentProfileSummarySchema = closedObject({
   id: NonEmptyString,
   providerId: NonEmptyString,
 });
@@ -105,7 +105,6 @@ export type EnvironmentStatus = Static<typeof EnvironmentStatusSchema>;
 export type WorkerEnvironmentState = Static<typeof WorkerEnvironmentStateSchema>;
 export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
-export type WorkerEnvironmentProfileSummary = Static<typeof WorkerEnvironmentProfileSummarySchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
 export type EnvironmentsCreateResult = Static<typeof EnvironmentsCreateResultSchema>;

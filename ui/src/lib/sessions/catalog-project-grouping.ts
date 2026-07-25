@@ -17,11 +17,32 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
   groups: CatalogProjectGroup[];
   ungrouped: SessionCatalogSession[];
 } {
-  const groups: CatalogProjectGroup[] = [];
+  // Custom groups are collected separately so they sort ahead of project groups
+  // regardless of session order; interleaving by first-seen would make section
+  // order depend on the roster's sort.
+  const customGroups: CatalogProjectGroup[] = [];
+  const projectGroups: CatalogProjectGroup[] = [];
   const groupsByPath = new Map<string, CatalogProjectGroup>();
   const ungrouped: SessionCatalogSession[] = [];
 
   for (const session of sessions) {
+    const customGroup = session.customGroup?.trim();
+    if (customGroup) {
+      const key = `custom:${customGroup}`;
+      let group = groupsByPath.get(key);
+      if (!group) {
+        group = {
+          key,
+          label: customGroup,
+          title: `Custom group: ${customGroup}`,
+          sessions: [],
+        };
+        groupsByPath.set(key, group);
+        customGroups.push(group);
+      }
+      group.sessions.push(session);
+      continue;
+    }
     // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
     // session roots; after trimming they fall to the ungrouped flat tail by design.
     let projectPath = session.cwd?.trim().replace(/[\\/]+$/, "");
@@ -46,10 +67,10 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         sessions: [],
       };
       groupsByPath.set(projectPath, group);
-      groups.push(group);
+      projectGroups.push(group);
     }
     group.sessions.push(session);
   }
 
-  return { groups, ungrouped };
+  return { groups: [...customGroups, ...projectGroups], ungrouped };
 }

@@ -5,6 +5,7 @@ import uiNodeConfig from "../ui/vitest.node.config.ts";
 
 type ExpectedTestConfig = {
   isolate?: boolean;
+  name?: string;
   pool?: string;
   projects?: unknown[];
   runner?: string;
@@ -18,17 +19,17 @@ function requireTestConfig(config: unknown): ExpectedTestConfig {
 }
 
 describe("ui package vitest config", () => {
-  it("keeps the standalone ui package on thread workers without isolation", () => {
+  it("keeps the standalone ui package on thread workers without broad isolation", () => {
     const testConfig = requireTestConfig(uiConfig);
 
     expect(testConfig.pool).toBe("threads");
     expect(testConfig.isolate).toBe(false);
-    expect(testConfig.projects).toHaveLength(3);
+    expect(testConfig.projects).toHaveLength(4);
 
     for (const project of testConfig.projects ?? []) {
       const projectTestConfig = requireTestConfig(project);
       expect(projectTestConfig.pool).toBe("threads");
-      expect(projectTestConfig.isolate).toBe(false);
+      expect(projectTestConfig.isolate).toBe(projectTestConfig.name === "unit-mock-registry");
       expect(projectTestConfig.runner).toBeUndefined();
     }
   });

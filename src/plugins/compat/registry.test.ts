@@ -21,24 +21,7 @@ const deprecatedTargetParserCompatFiles = new Set([
   "src/infra/outbound/outbound-session.test-helpers.ts",
   "src/plugins/compat/registry.test.ts",
 ]);
-const publicSdkContractNarrowingTiers = [
-  {
-    name: "fully unused subpath",
-    codeSuffix: "-unused-subpath",
-    count: 5,
-    replacement: "none needed — no known consumers; the subpath is removed without successor",
-    releaseNote: /no known consumers.*removal without a successor/u,
-  },
-  {
-    name: "bundled-only public export",
-    codeSuffix: "-public-demotion",
-    count: 157,
-    replacement:
-      "subpath becomes internal (private-local-only); no external successor — no known external consumers",
-    releaseNote: /public export.*module stays available for bundled plugins.*private-local-only/u,
-  },
-] as const;
-
+const removalDatePendingCompatCodes = new Set<string>();
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
   for (const value of values) {
@@ -68,7 +51,11 @@ describe("plugin compatibility registry", () => {
       if (record.status === "deprecated") {
         expect(record.deprecated, record.code).toMatch(datePattern);
         expect(record.warningStarts, record.code).toMatch(datePattern);
-        expect(record.removeAfter, record.code).toMatch(datePattern);
+        if (removalDatePendingCompatCodes.has(record.code)) {
+          expect(record.removeAfter, record.code).toBeUndefined();
+        } else {
+          expect(record.removeAfter, record.code).toMatch(datePattern);
+        }
         expect(record.replacement, record.code).toMatch(/\S/u);
       }
       expectNonEmptyStringList(record.surfaces, `${record.code}: surfaces`);
@@ -80,30 +67,26 @@ describe("plugin compatibility registry", () => {
     }
   });
 
-  it.each(publicSdkContractNarrowingTiers)(
-    "keeps the $name tier on its registry-backed window",
-    ({ codeSuffix, count, replacement, releaseNote }) => {
-      const records = listPluginCompatRecords().filter((record) =>
-        record.code.endsWith(codeSuffix),
-      );
+  it("keeps shipped public contracts pending until their runtime blockers clear", () => {
+    const records = listPluginCompatRecords().filter(
+      (record) =>
+        record.status === "removal-pending" &&
+        record.removeAfter !== undefined &&
+        record.removeAfter <= "2026-07-30",
+    );
 
-      expect(records).toHaveLength(count);
-      for (const record of records) {
-        expect(record).toMatchObject({
-          status: "deprecated",
-          owner: "sdk",
-          introduced: "2026-07-15",
-          deprecated: "2026-07-15",
-          warningStarts: "2026-07-15",
-          removeAfter: "2026-07-30",
-          replacement,
-          docsPath: "/plugins/sdk-migration",
-        });
-        expect(record.surfaces).toEqual([expect.stringMatching(/^openclaw\/plugin-sdk\//u)]);
-        expect(record.releaseNote).toMatch(releaseNote);
-      }
-    },
-  );
+    expect(records.map((record) => record.code)).toEqual([
+      "plugin-sdk-media-understanding-public-demotion",
+      "plugin-sdk-memory-host-core-public-demotion",
+      "plugin-sdk-plugin-config-runtime-public-demotion",
+      "plugin-sdk-tool-plugin-public-demotion",
+      "agent-harness-sdk-alias",
+    ]);
+    for (const record of records) {
+      expect(record.replacement).toMatch(/retain the public/u);
+      expect(record.releaseNote).toBeUndefined();
+    }
+  });
 
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
     expect(deprecatedTargetParserOffenders).toEqual([]);

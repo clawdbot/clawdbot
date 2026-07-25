@@ -125,6 +125,31 @@ describe("feishuPlugin metadata", () => {
   });
 });
 
+describe("feishuPlugin config", () => {
+  it.each([
+    {
+      accountId: "default",
+      expected: { enabled: false },
+    },
+    {
+      accountId: "ops",
+      expected: { accounts: { ops: { enabled: false } } },
+    },
+  ])(
+    "writes $accountId account enablement in the shared hybrid shape",
+    ({ accountId, expected }) => {
+      const setAccountEnabled = feishuPlugin.config.setAccountEnabled;
+      if (!setAccountEnabled) {
+        throw new Error("Feishu setAccountEnabled unavailable");
+      }
+
+      expect(setAccountEnabled({ cfg: {}, accountId, enabled: false }).channels?.feishu).toEqual(
+        expected,
+      );
+    },
+  );
+});
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
@@ -499,6 +524,7 @@ describe("feishuPlugin actions", () => {
       },
       cfg: {
         ...cfg,
+        channels: undefined,
         messages: { responsePrefix: "[Nexus]" },
       },
       accountId: undefined,
@@ -677,7 +703,10 @@ describe("feishuPlugin actions", () => {
       },
       cfg: {
         ...cfg,
-        messages: { responsePrefix: "[Nexus]" },
+        channels: {
+          ...cfg.channels,
+          feishu: { ...cfg.channels?.feishu, responsePrefix: "[Nexus]" },
+        },
       },
       accountId: undefined,
       toolContext: {},

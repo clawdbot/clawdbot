@@ -2,8 +2,10 @@
 <resources>
     <string name="app_name">OpenClaw</string>
     <string name="chat">Chat</string>
-    <string name="agents">Agents</string>
-    <string name="sessions">Sessions</string>
+    <string name="session">Session</string>
+    <string name="model">Model</string>
+    <string name="previous_item">Previous %1$s</string>
+    <string name="next_item">Next %1$s</string>
     <string name="controls">Controls</string>
     <string name="talk">Talk</string>
     <string name="real_time_audio_failed">Watch audio failed</string>
@@ -15,6 +17,7 @@
     <string name="tap">Tap</string>
     <string name="double_tap">Double tap</string>
     <string name="no_live_conversation">Start Live to see the conversation here.</string>
+    <string name="new_messages">New</string>
     <string name="type">Type</string>
     <string name="message">Message</string>
     <string name="message_agent">Message agent</string>
@@ -36,14 +39,7 @@
     <string name="system">System</string>
     <string name="start_conversation">Start a conversation</string>
     <string name="start_conversation_detail">Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.</string>
-    <string name="no_agents">No agents available</string>
-    <string name="no_agents_detail">Open OpenClaw on the paired phone and refresh.</string>
-    <string name="active_agent">Active agent</string>
-    <string name="available_agent">Available on paired phone</string>
-    <string name="no_sessions">No sessions available</string>
-    <string name="no_sessions_detail">Start or open a session in OpenClaw on the paired phone.</string>
     <string name="current_session">Current session</string>
-    <string name="open_session">Open session</string>
     <string name="appearance">Appearance</string>
     <string name="theme_dark">Dark</string>
     <string name="theme_light">Light</string>

@@ -16,6 +16,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
@@ -47,7 +48,6 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
   formatModelFooter,
-  formatRemoteConnectionHostFooter,
   sanitizeRenderableText,
   formatTokens,
 } from "./tui-formatters.js";
@@ -97,10 +97,8 @@ const OPENCLAW_CLI_WRAPPER_PATH = fileURLToPath(new URL("../../openclaw.mjs", im
 const OPENCLAW_RUN_NODE_SCRIPT_PATH = fileURLToPath(
   new URL("../../scripts/run-node.mjs", import.meta.url),
 );
-const OPENCLAW_DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
-const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
-  new URL("../../dist/entry.mjs", import.meta.url),
-);
+const DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
+const DIST_ENTRY_MJS_PATH = fileURLToPath(new URL("../../dist/entry.mjs", import.meta.url));
 
 const OPENAI_CODEX_PROVIDER = "openai";
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
@@ -146,8 +144,7 @@ export function resolveLocalAuthCliInvocation(params?: {
   hasRunNodeScript?: boolean;
 }): { command: string; args: string[] } {
   const hasDistEntry =
-    params?.hasDistEntry ??
-    (existsSync(OPENCLAW_DIST_ENTRY_JS_PATH) || existsSync(OPENCLAW_DIST_ENTRY_MJS_PATH));
+    params?.hasDistEntry ?? (existsSync(DIST_ENTRY_JS_PATH) || existsSync(DIST_ENTRY_MJS_PATH));
   const hasRunNodeScript = params?.hasRunNodeScript ?? existsSync(OPENCLAW_RUN_NODE_SCRIPT_PATH);
   const command = params?.execPath ?? process.execPath;
   const wrapperPath = params?.wrapperPath ?? OPENCLAW_CLI_WRAPPER_PATH;
@@ -220,16 +217,6 @@ export function resolveTuiSessionKey(params: {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
-}
-
-export function resolveTuiFooterHostLabel(params: {
-  config: OpenClawConfig;
-  connectionUrl: string;
-}): string | null {
-  if (params.config.tui?.footer?.showRemoteHost !== true) {
-    return null;
-  }
-  return formatRemoteConnectionHostFooter(params.connectionUrl);
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -418,6 +405,60 @@ type TuiProcessExitTimer = {
 
 type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProcessExitTimer;
 
+type TuiShutdownTask = () => void | Promise<void>;
+
+export function beginTuiShutdown(params: {
+  stopClient: TuiShutdownTask;
+  stopTui: TuiShutdownTask;
+  stopStatusTimeout: () => void;
+  requestFinish: () => void;
+  forceExit: () => void;
+  hardExitMs: number;
+  keepHardExitArmed?: boolean;
+  onError: (error: unknown) => void;
+  clearTimeoutFn?: (timer: TuiProcessExitTimer) => void;
+  setTimeoutFn?: TuiProcessExitTimeout;
+}): TuiProcessExitTimer {
+  const setTimeoutFn =
+    params.setTimeoutFn ??
+    ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
+  const hardExitTimer = setTimeoutFn(params.forceExit, params.hardExitMs);
+  hardExitTimer.unref?.();
+  void Promise.resolve()
+    .then(params.stopClient)
+    .then(params.stopTui)
+    .finally(() => {
+      if (params.keepHardExitArmed !== true) {
+        const clearTimeoutFn =
+          params.clearTimeoutFn ??
+          ((timer) => clearTimeout(timer as unknown as ReturnType<typeof setTimeout>));
+        clearTimeoutFn(hardExitTimer);
+      }
+      params.stopStatusTimeout();
+    })
+    .catch(params.onError)
+    .finally(params.requestFinish);
+
+  // For the standalone command, settled teardown is not proof that runTui
+  // returned. Its unref keeps clean exits fast while preserving the deadline.
+  return hardExitTimer;
+}
+
+export function createTuiSignalHandlers(params: {
+  handleCtrlC: () => void;
+  requestExit: () => void;
+}): {
+  sigintHandler: () => void;
+  sigtermHandler: () => void;
+  sighupHandler: () => void;
+} {
+  return {
+    sigintHandler: params.handleCtrlC,
+    sigtermHandler: params.requestExit,
+    sighupHandler: params.requestExit,
+  };
+}
+
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
     try {
@@ -572,6 +613,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
+  const thinkingLevelOverride = normalizeThinkLevel(opts.thinking);
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = { ...emptySessionInfoDefaults };
   let dynamicSlashCommands: CommandEntry[] = [];
@@ -1238,7 +1280,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = formatModelFooter(sessionInfo);
+    const modelLabel = formatModelFooter({
+      model: sessionInfo.model,
+      thinkingLevel: thinkingLevelOverride ?? sessionInfo.thinkingLevel,
+    });
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const fastLabel =
       sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
@@ -1246,9 +1291,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
-    const hostLabel = resolveTuiFooterHostLabel({ config, connectionUrl: client.connection.url });
     const footerParts = [
-      hostLabel,
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,
@@ -1375,19 +1418,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     };
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();
-    const hardExitTimer = setTimeout(
+    beginTuiShutdown({
+      stopClient: () => client.stop(),
+      stopTui: () => drainAndStopTuiSafely(tui),
+      stopStatusTimeout,
+      requestFinish: deferredFinish.requestFinish,
       forceExit,
-      resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
-    );
-    hardExitTimer.unref?.();
-    void Promise.resolve()
-      .then(() => client.stop())
-      .then(() => drainAndStopTuiSafely(tui))
-      .finally(() => {
-        clearTimeout(hardExitTimer);
-        stopStatusTimeout();
-      })
-      .catch((err: unknown) => {
+      hardExitMs: resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
+      keepHardExitArmed: opts.forceProcessExitOnReturn === true,
+      onError: (err) => {
         if (!isTuiTerminalLossError(err)) {
           try {
             process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
@@ -1395,10 +1434,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
             // Best effort only; exit must still complete.
           }
         }
-      })
-      .finally(() => {
-        deferredFinish.requestFinish();
-      });
+      },
+    });
   };
   const exitAwareClient = client as TuiBackend & {
     setRequestExitHandler?: (handler: () => void) => void;
@@ -1690,15 +1727,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   updateHeader();
   setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");
   updateFooter();
-  const sigintHandler = () => {
-    handleCtrlC();
-  };
-  const sigtermHandler = () => {
-    requestExit();
-  };
-  const sighupHandler = () => {
-    requestExit();
-  };
+  const { sigintHandler, sigtermHandler, sighupHandler } = createTuiSignalHandlers({
+    handleCtrlC,
+    requestExit,
+  });
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
   process.on("SIGHUP", sighupHandler);

@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.wear.shared.WearConnectionFailure
 import ai.openclaw.wear.shared.WearDecodeResult
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
@@ -178,6 +179,7 @@ internal class WearProxyBridge(
   fun publishConnection(
     connected: Boolean,
     status: String,
+    failure: WearConnectionFailure? = null,
   ) {
     synchronized(overflowLock) {
       if (!connected) chatStreamProjector.reset()
@@ -186,6 +188,7 @@ internal class WearProxyBridge(
         buildJsonObject {
           put("connected", connected)
           put("status", status)
+          failure?.let { put("failure", it.wireValue) }
         },
       )
     }
@@ -210,6 +213,12 @@ internal class WearProxyBridge(
     }
   }
 
+  fun publishResync() {
+    synchronized(overflowLock) {
+      publishEventLocked(WearEventType.Resync)
+    }
+  }
+
   /** Test-only actor barrier; proves every operation queued before this call has settled. */
   internal suspend fun awaitIdleForTests() {
     val completion = CompletableDeferred<Unit>()
@@ -220,7 +229,7 @@ internal class WearProxyBridge(
   /** Projection/reset, sequence allocation, and actor insertion share [overflowLock]. */
   private fun publishEventLocked(
     type: WearEventType,
-    payload: JsonElement,
+    payload: JsonElement? = null,
     terminal: Boolean = false,
   ) {
     val event =
@@ -480,6 +489,18 @@ internal class WearProxyBridge(
     const val PEER_DISCOVERY_RETRY_MILLIS = 30_000L
   }
 }
+
+internal fun wearConnectionFailure(
+  problemCode: String?,
+  status: String,
+): WearConnectionFailure =
+  when {
+    problemCode == "PROTOCOL_MISMATCH" -> WearConnectionFailure.Incompatible
+    // Protocol v1 shipped with status-only disconnect events. Keep that exact
+    // staggered-update signal while newer peers use the typed failure field.
+    status.contains("update", ignoreCase = true) -> WearConnectionFailure.Incompatible
+    else -> WearConnectionFailure.GatewayOffline
+  }
 
 private data class PeerRegistration(
   val nodeId: String,

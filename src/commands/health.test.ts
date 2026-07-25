@@ -572,6 +572,25 @@ describe("formatDeliveryQueueHealthLine", () => {
     );
   });
 
+  it("summarizes dead-lettered ingress entries per channel account", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [],
+      ingressFailed: [
+        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
+        { channelId: "telegram", accountId: "ops", count: 2 },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
+    );
+  });
+
   it("returns null when no dead-lettered entries are reported", () => {
     const summary = createHealthSummary({
       channels: {},

@@ -132,7 +132,7 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
-  it("disables implicit provider expansion when mediaGenerationAutoProviderFallback=false", () => {
+  it("keeps implicit provider expansion enabled when the retired opt-out is present", () => {
     let listProviderCalls = 0;
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
@@ -158,8 +158,11 @@ describe("media-generation runtime shared candidates", () => {
       },
     });
 
-    expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
-    expect(listProviderCalls).toBe(0);
+    expect(candidates).toEqual([
+      { provider: "google", model: "gemini-3.1-flash-image-preview" },
+      { provider: "openai", model: "gpt-image-1" },
+    ]);
+    expect(listProviderCalls).toBe(1);
   });
 
   it("treats an explicit model override as exact-only", () => {

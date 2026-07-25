@@ -18,7 +18,7 @@ import {
   getRuntimeConfig,
 } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -219,7 +219,11 @@ async function waitForSessionEntry(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: "codex" });
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const entry = loadSessionStore(storePath)[params.sessionKey];
+    const entry = loadSessionEntry({
+      agentId: "codex",
+      storePath,
+      sessionKey: params.sessionKey,
+    });
     if (entry) {
       return entry;
     }

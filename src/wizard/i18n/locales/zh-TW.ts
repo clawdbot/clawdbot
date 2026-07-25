@@ -161,8 +161,12 @@ export const zh_TW = {
       option: "{name} — {reason}（偵測到：{app}）",
       optionThirdParty:
         "{name} — {reason}（偵測到：{app}）— 第三方 ClawHub 技能；將安裝其發佈者的程式碼",
-      scanning:
-        "正在掃描已安裝的應用程式 — 應用程式名稱會透過你設定的模型與 ClawHub 搜尋進行比對（可透過 wizard.appRecommendations 停用）…",
+      scanDisclosure:
+        "應用程式名稱會使用你設定的模型和 ClawHub 搜尋進行比對（可透過 wizard.appRecommendations 停用）。",
+      scanning: "正在掃描已安裝的應用程式…",
+      scanningCandidate: "找到 1 個應用程式 — 正在為 {sample} 搜尋插件和技能…",
+      scanningCandidates: "找到 {count} 個應用程式 — 正在為 {sample} 搜尋插件和技能…",
+      scanningMatch: "正在請你的模型挑選最佳配對…",
       select: "安裝推薦的插件和技能",
       skillTrust: "信任並安裝 ClawHub 技能 {name}？",
       skipped: "已略過應用程式推薦：{reason}",
@@ -301,6 +305,8 @@ export const zh_TW = {
       completeWithoutAi: "OpenClaw 設定已儲存。連接 AI 後再開啟聊天。",
       detected: "AI 偵測完成。",
       detectedCandidate: "{label} — {detail}{recommended}",
+      detectedGroupLabel: "在這台機器上偵測到的 AI",
+      detectedGroupPrompt: "要使用哪個偵測到的 AI？",
       detectedTitle: "找到的 AI",
       detecting: "正在尋找你已使用的 AI…",
       enterApiKey: "輸入 API key — {label}",
@@ -345,6 +351,8 @@ export const zh_TW = {
       ttyRequired:
         "Onboarding 需要互動式 TTY。自動化請使用 `openclaw onboard --non-interactive --accept-risk ...`。",
       welcomeTitle: "設定選項",
+      workspaceConflictClassic:
+        "本次驗證保留了已設定的工作區。執行 `{command}` 以檢視並明確核准移動現有 agent fleet。",
     },
     setup: {
       authChoiceFailedRetry: "請選擇其他提供商或認證方式，或選擇暫時跳過。",
@@ -407,10 +415,16 @@ export const zh_TW = {
       testAiSuccess: "AI 存取正常，在 {seconds} 秒內回覆。",
       testAiTitle: "AI 存取測試",
       whatSetup: "你想設定什麼？",
+      workspaceConflictConfirm: "要將現有 agent fleet 移動到要求的工作區嗎？",
+      workspaceConflictNotice:
+        "現有 agent 目前使用 {current}。要求的工作區是 {requested}。變更此 fleet-wide 預設值可能會使 agent 與其記憶和 bootstrap 檔案中斷連線。",
+      workspaceConflictTitle: "現有 agent 工作區",
       workspaceDirectory: "工作區目錄",
     },
     security: {
       askForHelp: "啟用工具或暴露到網際網路之前，請找有經驗的人協助。",
+      attribution:
+        "OpenClaw 是由 OpenClaw 基金會（非營利組織）開發的開源助手，會與你一同學習成長。",
       baselineDmSessions:
         "共享收件箱：隔離 DM 工作階段（session.dmScope: per-channel-peer），並盡量減少工具存取權限。",
       baselinePairing: "配對/允許清單 + @ 提及門控。",
@@ -419,7 +433,6 @@ export const zh_TW = {
       baselineSharedInbox:
         "多使用者/共享收件箱：拆分信任邊界（分離 gateway/憑證，最好使用獨立 OS 使用者/主機）。",
       baselineStrongModel: "對啟用工具或面對不可信收件箱的 bot，使用可用的最強模型。",
-      beta: "OpenClaw 是一個興趣專案，仍處於 beta 階段。請預期會有邊緣問題。",
       confirm: "我理解 OpenClaw 預設面向個人使用；共享/多使用者使用需要加固。繼續？",
       hardeningRequired: "如果你不熟悉安全加固和存取控制，請不要執行 OpenClaw。",
       learnMore: "了解更多",

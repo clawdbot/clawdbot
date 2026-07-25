@@ -13,6 +13,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import {
   formatInboundMediaUnavailableText,
   formatLocationText,
+  type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
@@ -60,7 +61,7 @@ import { isRecentOutboundMessage, rememberRecentOutboundMessage } from "./dedupe
 import {
   createWhatsAppDurableInboundMessageId,
   createWhatsAppDurableInboundQueue,
-  createWhatsAppIngressDrain,
+  createWhatsAppIngressMonitor,
   enqueueWhatsAppDurableInbound,
   type WhatsAppDurableInboundPayload,
   type WhatsAppDurableInboundQueue,
@@ -72,13 +73,14 @@ import {
   extractExternalAdReplyContext,
   extractLocationData,
   extractContactContext,
-  extractMediaPlaceholder,
+  extractMediaKind,
   extractMentionedJids,
   extractText,
   hasInboundUserContent,
 } from "./extract.js";
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
+import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
 import {
   normalizeWebInboundMessage,
@@ -439,6 +441,7 @@ export async function attachWebInboxToSocket(
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
   const pendingMessageHandlers = new Set<Promise<void>>();
+  let durableIngressActive = false;
   // Close-path coordination: resolve waiters when debounce work appears so
   // shutdown can force-flush without timer-driven polling (fake-timer safe).
   const debounceWorkWaiters = new Set<() => void>();
@@ -471,7 +474,10 @@ export async function attachWebInboxToSocket(
   let nextReceiveOrder = 0;
   const publishPendingWorkState = (at = Date.now()) => {
     options.onPendingWorkChanged?.(
-      pendingMessageHandlers.size + pendingDebounceKeys.size + activeInboundFlushes.size,
+      pendingMessageHandlers.size +
+        pendingDebounceKeys.size +
+        activeInboundFlushes.size +
+        (durableIngressActive ? 1 : 0),
       at,
     );
   };
@@ -1198,6 +1204,8 @@ export async function attachWebInboxToSocket(
     mediaPath?: string;
     mediaType?: string;
     mediaFileName?: string;
+    mediaKind?: NonNullable<ReturnType<typeof extractMediaKind>>;
+    nativeMedia?: MediaPlaceholderTextFact;
   };
 
   const enrichInboundMessage = async (msg: WAMessage): Promise<EnrichedInboundMessage | null> => {
@@ -1205,22 +1213,23 @@ export async function attachWebInboxToSocket(
     const locationText = location ? formatLocationText(location) : undefined;
     const contactContext = extractContactContext(msg.message ?? undefined);
     const externalAdReplyContext = extractExternalAdReplyContext(msg.message ?? undefined);
-    const mediaPlaceholder = extractMediaPlaceholder(msg.message ?? undefined);
+    let mediaKind = extractMediaKind(msg.message ?? undefined);
     let body = extractText(msg.message ?? undefined);
     if (locationText) {
       body = [body, locationText].filter(Boolean).join("\n").trim();
     }
-    if (!body) {
-      body = mediaPlaceholder;
-      if (!body) {
-        return null;
-      }
+    if (!body && !mediaKind) {
+      return null;
     }
+    body = body ?? "";
     const commandBody = body;
     const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
 
     let mediaPath: string | undefined;
-    let mediaType: string | undefined;
+    let mediaType = mediaKind
+      ? resolveInboundMediaMimetype(msg.message as proto.IMessage)
+      : undefined;
+    const nativeMedia = mediaKind ? { contentType: mediaType, kind: mediaKind } : undefined;
     let mediaFileName: string | undefined;
     const maxMb =
       typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0 ? options.mediaMaxMb : 50;
@@ -1242,15 +1251,16 @@ export async function attachWebInboxToSocket(
       logWhatsAppVerbose(options.verbose, `Inbound media download failed: ${String(err)}`);
       body = formatInboundMediaUnavailableText({
         body,
-        mediaPlaceholder,
         notice: "[whatsapp attachment unavailable]",
       });
     }
-    if (!mediaPath && replyContext) {
+    if (!mediaPath && !mediaKind && replyContext?.media) {
       try {
         await saveInboundMedia(
           await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
         );
+        mediaKind = replyContext.media.kind ?? undefined;
+        mediaType = mediaType ?? replyContext.media.contentType ?? undefined;
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Quoted media download failed: ${String(err)}`);
         body = formatInboundMediaUnavailableText({
@@ -1270,6 +1280,8 @@ export async function attachWebInboxToSocket(
       mediaPath,
       mediaType,
       mediaFileName,
+      mediaKind,
+      nativeMedia,
     };
   };
 
@@ -1334,11 +1346,12 @@ export async function attachWebInboxToSocket(
       "inbound message",
     );
     const media =
-      enriched.mediaPath || enriched.mediaType || enriched.mediaFileName
+      enriched.mediaPath || enriched.mediaType || enriched.mediaFileName || enriched.mediaKind
         ? {
             path: enriched.mediaPath,
             type: enriched.mediaType,
             fileName: enriched.mediaFileName,
+            kind: enriched.mediaKind,
           }
         : undefined;
     const groupMentions = mentionedJids ? { jids: mentionedJids } : undefined;
@@ -1351,6 +1364,16 @@ export async function attachWebInboxToSocket(
           }
         : undefined;
     const untrustedStructuredContext = [
+      ...(enriched.nativeMedia
+        ? [
+            {
+              label: "WhatsApp media",
+              source: "whatsapp",
+              type: "media",
+              payload: enriched.nativeMedia,
+            },
+          ]
+        : []),
       ...(enriched.contactContext
         ? [
             {
@@ -1412,6 +1435,7 @@ export async function attachWebInboxToSocket(
             context: enriched.replyContext,
             id: enriched.replyContext.id,
             body: enriched.replyContext.body,
+            media: enriched.replyContext.media,
             sender: {
               displayName: enriched.replyContext.sender?.label ?? undefined,
               jid: enriched.replyContext.sender?.jid ?? undefined,
@@ -1446,6 +1470,7 @@ export async function attachWebInboxToSocket(
               ? inboundMessage.platform.senderE164
               : undefined,
           body: inboundMessage.payload.body,
+          media: enriched.nativeMedia,
           fromMe: inboundMessage.platform.fromMe,
         },
       );
@@ -1453,7 +1478,7 @@ export async function attachWebInboxToSocket(
     await debouncer.enqueue(inboundMessage);
   };
 
-  const dispatchInboundMessage = async (
+  const processDurableInboundMessage = async (
     msg: WAMessage,
     context: Pick<
       WhatsAppDurableInboundPayload,
@@ -1515,97 +1540,30 @@ export async function attachWebInboxToSocket(
     return "deferred";
   };
 
-  let durableDrainPass: Promise<void> | undefined;
-  let durableDrainRequested = false;
-  let durableDrainClosed = false;
-  const requestDurableInboundDrain = (): Promise<void> => {
-    if (durableDrainClosed) {
-      return Promise.resolve();
-    }
-    durableDrainRequested = true;
-    if (!durableDrainPass) {
-      let passFailed = false;
-      const task = (async () => {
-        await durableInboundDrain.recoverStaleClaims();
-        while (durableDrainRequested) {
-          durableDrainRequested = false;
-          const result = await durableInboundDrain.drainOnce();
-          if (result.started > 0) {
-            await durableInboundDrain.waitForIdle();
-            durableDrainRequested = true;
-          }
-        }
-      })().catch((error: unknown) => {
-        passFailed = true;
-        throw error;
-      });
-      durableDrainPass = task;
-      pendingMessageHandlers.add(task);
-      publishPendingWorkState();
-      void task
-        .finally(() => {
-          if (durableDrainPass === task) {
-            durableDrainPass = undefined;
-          }
-          pendingMessageHandlers.delete(task);
-          publishPendingWorkState();
-          if (durableDrainRequested && !passFailed) {
-            void requestDurableInboundDrain().catch((error: unknown) => {
-              inboundLogger.error(
-                { error: formatError(error) },
-                "whatsapp durable inbound drain failed",
-              );
-            });
-          }
-        })
-        .catch(() => undefined);
-    }
-    return durableDrainPass;
-  };
-  const requestDrainAfterLaneSettlement = () => {
-    void requestDurableInboundDrain().catch((error: unknown) => {
-      inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed");
-    });
-  };
-  const continueDrainAfterLaneSettlement = (
-    lifecycle: WhatsAppIngressLifecycle,
-  ): WhatsAppIngressLifecycle => ({
-    abortSignal: lifecycle.abortSignal,
-    onAdopted: async () => {
-      await lifecycle.onAdopted();
-      requestDrainAfterLaneSettlement();
-    },
-    onDeferred: lifecycle.onDeferred,
-    onAdoptionFinalizing: lifecycle.onAdoptionFinalizing,
-    onAbandoned: async () => {
-      await lifecycle.onAbandoned();
-      requestDrainAfterLaneSettlement();
-    },
-  });
-  // Lazy closures above only run post-start, so the const-after-use is TDZ-safe.
-  const durableInboundDrain = createWhatsAppIngressDrain({
+  const durableInboundMonitor = createWhatsAppIngressMonitor({
     queue: durableInboundQueue,
     dispatch: async (msg, payload, lifecycle) => {
       const remoteJid = msg.key?.remoteJid;
       const id = msg.key?.id;
       return {
-        kind: await dispatchInboundMessage(msg, {
+        kind: await processDurableInboundMessage(msg, {
           ...payload,
           ...(remoteJid && id
             ? { eventId: createWhatsAppDurableInboundMessageId({ remoteJid, id }) }
             : {}),
-          lifecycle: continueDrainAfterLaneSettlement(lifecycle),
+          lifecycle,
         }),
       };
     },
+    pollIntervalMs: WHATSAPP_INGRESS_DRAIN_INTERVAL_MS,
     onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
+    onError: (error) =>
+      inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed"),
+    onActivityChange: (active) => {
+      durableIngressActive = active;
+      publishPendingWorkState();
+    },
   });
-  const durableDrainTimer = setInterval(() => {
-    void requestDurableInboundDrain().catch((error: unknown) => {
-      inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed");
-    });
-  }, WHATSAPP_INGRESS_DRAIN_INTERVAL_MS);
-  durableDrainTimer.unref?.();
 
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") {
@@ -1672,10 +1630,8 @@ export async function attachWebInboxToSocket(
       };
       let result: { kind: string } | undefined;
       let appendError: unknown;
-      // Bounded retry for transient store blips. The retired live-dispatch
-      // fallback is gone deliberately: with the replay guard deleted it
-      // bypassed drain dedupe and lane serialization, trading a duplicate
-      // reply/session race for availability against an already-broken store.
+      // Admission stays local because the prepared-context map needs enqueue's
+      // atomic accepted/pending/completed result; the shared monitor hides it.
       for (const delayMs of [0, 100, 300]) {
         if (delayMs > 0) {
           await new Promise((resolve) => {
@@ -1732,12 +1688,7 @@ export async function attachWebInboxToSocket(
           // keepForDrain avoids orphaning a second map entry forever.
           finishPreparation(undefined);
         }
-        void requestDurableInboundDrain().catch((error: unknown) => {
-          inboundLogger.error(
-            { error: formatError(error) },
-            "whatsapp durable inbound drain failed",
-          );
-        });
+        durableInboundMonitor.requestDrain();
       }
     }
   };
@@ -1770,7 +1721,6 @@ export async function attachWebInboxToSocket(
   };
   const drainInboundBeforeSocketClose = async () => {
     groupMetadataCacheClosed = true;
-    clearInterval(durableDrainTimer);
     // Interleave force-flush with event-driven wait for drain dispatch so close
     // cannot deadlock inside the debounce window. Debounce semantics stay intact.
     for (;;) {
@@ -1789,13 +1739,16 @@ export async function attachWebInboxToSocket(
       }
     }
     await drainDebouncedInboundMessages();
-    // Claims must finish (or release) before a successor monitor starts.
-    try {
-      await durableInboundDrain.waitForIdle();
-    } finally {
-      durableDrainClosed = true;
-      durableInboundDrain.dispose();
+    // A flush can adopt one claim and wake the next row in the same lane.
+    // Alternate until neither the monitor nor debounce layer can create more work.
+    for (;;) {
+      await durableInboundMonitor.waitForIdle();
+      if (pendingDebounceKeys.size === 0 && activeInboundFlushes.size === 0) {
+        break;
+      }
+      await drainDebouncedInboundMessages();
     }
+    await durableInboundMonitor.stop();
   };
   const drainInboundBeforeSocketCloseWithTimeout = async () => {
     let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -1817,12 +1770,9 @@ export async function attachWebInboxToSocket(
       if (timeout) {
         clearTimeout(timeout);
       }
-      // A drain timeout abandons the graceful path before its own dispose
-      // runs; a successor monitor must never share this account queue with a
-      // still-live drain. dispose() is idempotent, so the graceful path's own
-      // cleanup stays harmless.
-      durableDrainClosed = true;
-      durableInboundDrain.dispose();
+      // Start abort/dispose even when channel work ignored the graceful bound;
+      // a successor must not share this account queue with a live owner.
+      void durableInboundMonitor.stop();
     }
   };
   const handleConnectionUpdate = (update: Partial<import("baileys").ConnectionState>) => {
@@ -1922,10 +1872,7 @@ export async function attachWebInboxToSocket(
     forgetFullGroupMetadata(update.id);
   }) as unknown as (...args: unknown[]) => void);
 
-  void requestDurableInboundDrain().catch((err: unknown) => {
-    inboundLogger.error({ error: String(err) }, "failed replaying durable WhatsApp inbound");
-    inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
-  });
+  durableInboundMonitor.start();
 
   const groupHydrationTask = (async () => {
     try {
@@ -2007,7 +1954,7 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
-  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming(options.cfg);
+  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming();
   const recentMessageKeys: WhatsAppBaileysMessageCache = options.recentMessageKeys ?? new Map();
   const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache =
     options.baileysGroupMetaCache ?? new Map();

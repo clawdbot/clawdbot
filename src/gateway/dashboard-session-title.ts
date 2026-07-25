@@ -1,6 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Dashboard session titles use the shared utility-model completion path.
-import { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { generateConversationLabelWithFallback } from "../auto-reply/reply/conversation-label-generator.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,7 +24,8 @@ function hasExplicitSessionName(entry: SessionEntry | undefined): boolean {
     entry?.label?.trim() ||
     entry?.displayName?.trim() ||
     entry?.subject?.trim() ||
-    entry?.origin?.label?.trim(),
+    entry?.groupChannel?.trim() ||
+    entry?.space?.trim(),
   );
 }
 
@@ -36,6 +41,27 @@ export function isDashboardSessionTitleCandidate(params: {
   return Boolean(
     sourceText && !sourceText.startsWith("/") && isDashboardSessionKey(params.sessionKey),
   );
+}
+
+function resolveDashboardTitleAuthProfile(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: SessionEntry | undefined;
+  regularProvider: string;
+}): string | undefined {
+  const sessionProfile = params.entry?.authProfileOverride?.trim();
+  if (sessionProfile) {
+    return sessionProfile;
+  }
+  const configuredRef = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)?.trim();
+  const configuredProfile = configuredRef
+    ? splitTrailingAuthProfile(configuredRef).profile
+    : undefined;
+  if (!configuredProfile) {
+    return undefined;
+  }
+  const configuredModel = resolveSessionModelRef(params.cfg, undefined, params.agentId);
+  return configuredModel.provider === params.regularProvider ? configuredProfile : undefined;
 }
 
 function normalizeDashboardSessionTitle(raw: string): string | null {
@@ -80,11 +106,31 @@ export async function maybeGenerateDashboardSessionTitle(params: {
   }
   dashboardTitleRequests.add(requestKey);
   try {
-    const generated = await generateConversationLabel({
+    const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+    const preferredProfile = resolveDashboardTitleAuthProfile({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      entry: params.entry,
+      regularProvider: regularModel.provider,
+    });
+    const regularModelRef = `${regularModel.provider}/${regularModel.model}${
+      preferredProfile ? `@${preferredProfile}` : ""
+    }`;
+    const utilityModelRef = resolveUtilityModelRefForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      primaryProvider: regularModel.provider,
+      primaryModelRef: regularModelRef,
+    });
+    const generated = await generateConversationLabelWithFallback({
       userMessage: truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS),
       prompt: DASHBOARD_SESSION_TITLE_PROMPT,
       cfg: params.cfg,
       agentId: params.agentId,
+      ...(utilityModelRef ? { utilityModelRef } : {}),
+      regularModelRef,
+      ...(preferredProfile ? { preferredProfile } : {}),
+      normalizeLabel: normalizeDashboardSessionTitle,
       maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
     });
     const displayName = generated ? normalizeDashboardSessionTitle(generated) : null;

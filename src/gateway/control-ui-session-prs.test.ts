@@ -29,7 +29,9 @@ function requestUrl(input: RequestInfo | URL | undefined): string {
   return input?.url ?? "";
 }
 
-function routedFetch(routes: Array<{ match: string; response: () => Response }>) {
+function routedFetch(
+  routes: Array<{ match: string; response: () => Response | Promise<Response> }>,
+) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = requestUrl(input);
     const route = routes.find((candidate) => url.includes(candidate.match));
@@ -116,6 +118,21 @@ describe("parseControlUiSessionPullRequestsParams", () => {
     expect(parseControlUiSessionPullRequestsParams({ sessionKey: "global", agentId: " " })).toEqual(
       { sessionKey: "global" },
     );
+  });
+
+  it("accepts only an explicit refresh request", () => {
+    expect(
+      parseControlUiSessionPullRequestsParams({
+        sessionKey: "agent:main:main",
+        refresh: true,
+      }),
+    ).toEqual({ sessionKey: "agent:main:main", refresh: true });
+    expect(
+      parseControlUiSessionPullRequestsParams({
+        sessionKey: "agent:main:main",
+        refresh: false,
+      }),
+    ).toEqual({ sessionKey: "agent:main:main" });
   });
 });
 
@@ -332,6 +349,22 @@ describe("loadControlUiSessionPullRequests", () => {
     );
     expect(stale.rateLimited).toBe(true);
     expect(stale.pullRequests).toEqual(fresh.pullRequests);
+
+    const callsDuringBackoff = fetchImpl.mock.calls.length;
+    const explicitRefresh = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(explicitRefresh).toEqual(stale);
+    expect(fetchImpl.mock.calls).toHaveLength(callsDuringBackoff);
+
+    vi.advanceTimersByTime(61_000);
+    const stillBackedOff = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(stillBackedOff).toEqual(stale);
+    expect(fetchImpl.mock.calls).toHaveLength(callsDuringBackoff);
   });
 
   it("degrades permission 403s on optional fetches to chips without checks", async () => {
@@ -364,6 +397,105 @@ describe("loadControlUiSessionPullRequests", () => {
     );
     expect(result).toEqual({ pullRequests: [], rateLimited: false });
     expect(fetchImpl.mock.calls).toHaveLength(0);
+  });
+
+  it("refreshes a cached empty result after the assistant creates a PR", async () => {
+    let pulls: Record<string, unknown>[] = [];
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson(pulls) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+
+    const initial = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(initial.pullRequests).toEqual([]);
+
+    pulls = [pullListItem({ merged_at: "2026-07-09T10:00:00Z" })];
+    const cached = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(cached.pullRequests).toEqual([]);
+
+    const forcedRefresh = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+    const ordinaryFollower = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    const duplicateForcedRefresh = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+    const refreshed = await Promise.all([forcedRefresh, ordinaryFollower, duplicateForcedRefresh]);
+    expect(refreshed.map((result) => result.pullRequests.map((item) => item.number))).toEqual([
+      [103469],
+      [103469],
+      [103469],
+    ]);
+    expect(
+      fetchImpl.mock.calls.filter((call) =>
+        requestUrl(call[0] as RequestInfo | URL).includes("/pulls?head="),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("queues one forced refresh behind an ordinary in-flight lookup", async () => {
+    let resolveInitialPulls!: (response: Response) => void;
+    let signalInitialPullStarted!: () => void;
+    const initialPulls = new Promise<Response>((resolve) => {
+      resolveInitialPulls = resolve;
+    });
+    const initialPullStarted = new Promise<void>((resolve) => {
+      signalInitialPullStarted = resolve;
+    });
+    let pullListCalls = 0;
+    const fetchImpl = routedFetch([
+      {
+        match: "/pulls?head=",
+        response: () => {
+          pullListCalls += 1;
+          if (pullListCalls === 1) {
+            signalInitialPullStarted();
+            return initialPulls;
+          }
+          return githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z" })]);
+        },
+      },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+
+    const initial = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    await initialPullStarted;
+    const forcedRefresh = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+    await Promise.resolve();
+    const ordinaryFollower = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    const duplicateForcedRefresh = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+
+    resolveInitialPulls(githubJson([]));
+    expect((await initial).pullRequests).toEqual([]);
+    expect(
+      (await Promise.all([forcedRefresh, ordinaryFollower, duplicateForcedRefresh])).map((result) =>
+        result.pullRequests.map((item) => item.number),
+      ),
+    ).toEqual([[103469], [103469], [103469]]);
+    expect(pullListCalls).toBe(2);
   });
 
   it("keeps branch metadata when the very first GitHub fetch is rate limited", async () => {

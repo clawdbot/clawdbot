@@ -87,7 +87,7 @@ type BlockStreamingChunking = {
   flushOnParagraph?: boolean;
 };
 
-export function clampPositiveInteger(
+function clampPositiveInteger(
   value: unknown,
   fallback: number,
   bounds: { min: number; max: number },

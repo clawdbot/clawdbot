@@ -88,19 +88,56 @@ function normalizeBaseUrl(url: string): string {
   return `${parsed.protocol}//${parsed.host}${pathname}`;
 }
 
+class SignalRestTimeoutError extends Error {
+  constructor() {
+    super("Signal REST request timed out");
+    this.name = "SignalRestTimeoutError";
+  }
+}
+
+function signalRestRequestTimeoutError(): SignalRestTimeoutError {
+  return new SignalRestTimeoutError();
+}
+
+type SignalRestDeadline = {
+  signal: AbortSignal;
+  timeoutMs: () => number;
+};
+
+/** Keep one absolute deadline across headers and every bounded body reader. */
+async function withSignalRestDeadline<T>(
+  timeoutMs: number,
+  run: (deadline: SignalRestDeadline) => Promise<T>,
+): Promise<T> {
+  const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+  const deadlineAtMs = Date.now() + safeTimeoutMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(signalRestRequestTimeoutError()), safeTimeoutMs);
+  timer.unref?.();
+  try {
+    return await run({
+      signal: controller.signal,
+      timeoutMs: () => {
+        const remainingMs = deadlineAtMs - Date.now();
+        if (remainingMs <= 0) {
+          throw signalRestRequestTimeoutError();
+        }
+        return Math.max(1, Math.min(safeTimeoutMs, remainingMs));
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
-  const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), safeTimeoutMs);
-  try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  return await withSignalRestDeadline(timeoutMs, async ({ signal }) =>
+    fetchImpl(url, { ...init, signal }),
+  );
 }
 
 function normalizeMaxResponseBytes(value: number | undefined): number {
@@ -122,20 +159,32 @@ function signalAttachmentIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: 
   return new Error(`Signal REST attachment response body stalled after ${chunkTimeoutMs}ms`);
 }
 
-async function readSignalRestText(res: Response, bodyIdleTimeoutMs: number): Promise<string> {
+async function readSignalRestText(
+  res: Response,
+  bodyIdleTimeoutMs: number,
+  bodyTimeoutMs: () => number,
+): Promise<string> {
   const bytes = await readResponseWithLimit(res, SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES, {
     chunkTimeoutMs: bodyIdleTimeoutMs,
     onIdleTimeout: signalRestIdleTimeoutError,
+    timeoutMs: bodyTimeoutMs,
+    onTimeout: signalRestRequestTimeoutError,
     onOverflow: ({ maxBytes }) => new Error(`Signal REST: text response exceeds ${maxBytes} bytes`),
   });
   return new TextDecoder().decode(bytes);
 }
 
-async function readSignalRestErrorText(res: Response, bodyIdleTimeoutMs: number): Promise<string> {
+async function readSignalRestErrorText(
+  res: Response,
+  bodyIdleTimeoutMs: number,
+  bodyTimeoutMs: () => number,
+): Promise<string> {
   return (
     await readResponseTextPrefix(res, SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES, {
       chunkTimeoutMs: bodyIdleTimeoutMs,
       onIdleTimeout: signalRestIdleTimeoutError,
+      timeoutMs: bodyTimeoutMs,
+      onTimeout: signalRestRequestTimeoutError,
     })
   ).text;
 }
@@ -144,6 +193,7 @@ async function readCappedResponseBuffer(
   res: Response,
   maxResponseBytes: number,
   bodyIdleTimeoutMs: number,
+  bodyTimeoutMs: () => number,
 ): Promise<Buffer> {
   const contentLength = readContentLength(res);
   if (contentLength !== undefined && contentLength > maxResponseBytes) {
@@ -152,6 +202,8 @@ async function readCappedResponseBuffer(
   return await readResponseWithLimit(res, maxResponseBytes, {
     chunkTimeoutMs: bodyIdleTimeoutMs,
     onIdleTimeout: signalAttachmentIdleTimeoutError,
+    timeoutMs: bodyTimeoutMs,
+    onTimeout: signalRestRequestTimeoutError,
     onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
   });
 }
@@ -281,32 +333,47 @@ async function containerRestRequest<T = unknown>(
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-  const res = await fetchWithTimeout(url, init, timeoutMs);
-
-  if (res.status === 204) {
-    return undefined as T;
+  const fetchImpl = resolveFetch();
+  if (!fetchImpl) {
+    throw new Error("fetch is not available");
   }
 
-  if (!res.ok) {
-    // Bound the error body: signal-cli-rest-api is an untrusted external container,
-    // and a hostile/buggy response must not let an error path buffer an unbounded body.
-    const errorText = await readSignalRestErrorText(res, bodyIdleTimeoutMs).catch(() => "");
-    throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
-  }
+  return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
+    const res = await fetchImpl(url, { ...init, signal });
+    if (res.status === 204) {
+      return undefined as T;
+    }
 
-  // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
-  // malicious/runaway container response cannot OOM the runtime (send/typing/version all
-  // funnel through here). Reuse the same bounded reader family as the attachment path.
-  const text = await readSignalRestText(res, bodyIdleTimeoutMs);
-  if (!text) {
-    return undefined as T;
-  }
+    if (!res.ok) {
+      // Bound the error body: signal-cli-rest-api is an untrusted external container,
+      // and a hostile/buggy response must not let an error path buffer an unbounded body.
+      let errorText = "";
+      try {
+        errorText = await readSignalRestErrorText(res, bodyIdleTimeoutMs, bodyTimeoutMs);
+      } catch (error) {
+        if (error instanceof SignalRestTimeoutError) {
+          throw error;
+        }
+      }
+      throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
+    }
 
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error("Signal REST returned malformed JSON");
-  }
+    // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
+    // malicious/runaway container response cannot OOM the runtime (send/typing/version all
+    // funnel through here). timeoutMs stays a total request+body deadline (localhost
+    // container, 10s default), so a slow-drip body cannot outlive it even while the idle
+    // chunk guard keeps resetting.
+    const text = await readSignalRestText(res, bodyIdleTimeoutMs, bodyTimeoutMs);
+    if (!text) {
+      return undefined as T;
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error("Signal REST returned malformed JSON");
+    }
+  });
 }
 
 /**
@@ -318,25 +385,33 @@ async function containerFetchAttachment(
 ): Promise<Buffer | null> {
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const url = `${baseUrl}/v1/attachments/${encodeURIComponent(attachmentId)}`;
-  let res: Response | undefined;
-
-  try {
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-    res = await fetchWithTimeout(url, { method: "GET" }, timeoutMs);
-
-    if (!res.ok) {
-      return null;
-    }
-
-    return await readCappedResponseBuffer(
-      res,
-      normalizeMaxResponseBytes(opts.maxResponseBytes),
-      bodyIdleTimeoutMs,
-    );
-  } finally {
-    await releaseUnreadResponseBody(res);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+  const fetchImpl = resolveFetch();
+  if (!fetchImpl) {
+    throw new Error("fetch is not available");
   }
+
+  return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
+    let res: Response | undefined;
+    try {
+      const fetched = await fetchImpl(url, { method: "GET", signal });
+      res = fetched;
+
+      if (!fetched.ok) {
+        return null;
+      }
+
+      return await readCappedResponseBuffer(
+        fetched,
+        normalizeMaxResponseBytes(opts.maxResponseBytes),
+        bodyIdleTimeoutMs,
+        bodyTimeoutMs,
+      );
+    } finally {
+      await releaseUnreadResponseBody(res);
+    }
+  });
 }
 
 /**

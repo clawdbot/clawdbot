@@ -105,6 +105,52 @@ describe("listMicrosoftVoices", () => {
     );
   });
 
+  it("returns an empty catalog for a malformed top-level payload", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response("null", { status: 200 }),
+      ) as unknown as typeof globalThis.fetch;
+
+    await expect(listVoicesThroughProvider()).resolves.toEqual([]);
+  });
+
+  it("skips malformed rows without discarding valid voices", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          null,
+          "unexpected",
+          [],
+          { ShortName: 42 },
+          {
+            ShortName: "en-US-AvaNeural",
+            FriendlyName: "Microsoft Ava Online (Natural) - English (United States)",
+            Locale: "en-US",
+            Gender: "Female",
+            VoiceTag: {
+              ContentCategories: [null, "General"],
+              VoicePersonalities: [false, "Friendly", "Positive"],
+            },
+          },
+        ]),
+        { status: 200 },
+      ),
+    ) as unknown as typeof globalThis.fetch;
+
+    await expect(listVoicesThroughProvider()).resolves.toEqual([
+      {
+        id: "en-US-AvaNeural",
+        name: "Microsoft Ava Online (Natural) - English (United States)",
+        category: "General",
+        description: "Friendly, Positive",
+        locale: "en-US",
+        gender: "Female",
+        personalities: ["Friendly", "Positive"],
+      },
+    ]);
+  });
+
   it("throws on Microsoft voice list failures", async () => {
     globalThis.fetch = vi
       .fn()

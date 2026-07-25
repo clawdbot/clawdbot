@@ -5,14 +5,18 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
+import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
   formatRateLimitOrOverloadedErrorCopy,
   isContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
+import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -22,6 +26,7 @@ import {
   registerAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
@@ -61,10 +66,37 @@ import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
+function resolveRunStartupPhase(
+  phase: EmbeddedAgentExecutionPhase,
+): ChatRunStartupPhase | undefined {
+  switch (phase) {
+    case "runner_entered":
+    case "workspace":
+    case "runtime_plugins":
+      return "preparing_workspace";
+    case "before_agent_reply":
+    case "model_resolution":
+    case "auth":
+    case "context_engine":
+    case "attempt_dispatch":
+    case "context_assembled":
+      return "preparing_context";
+    case "turn_accepted":
+    case "process_spawned":
+    case "model_call_started":
+      return "starting_model";
+    case "tool_execution_started":
+    case "assistant_output_started":
+      return undefined;
+  }
+  return undefined;
+}
+
 async function runAgentTurnWithFallbackInternalWithRetryState(
   params: AgentTurnParams,
   commitTerminalOutcome: () => void,
   overloadRetryState: OverloadRetryState,
+  commitMcpAppModelContext: () => void,
 ): Promise<AgentRunLoopResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -173,6 +205,7 @@ async function runAgentTurnWithFallbackInternalWithRetryState(
     throw error;
   }
   let didNotifyAgentRunStart = false;
+  let lastRunStartupPhase: ReturnType<typeof resolveRunStartupPhase>;
   const notifyAgentRunStart = () => {
     if (didNotifyAgentRunStart) {
       return;
@@ -183,6 +216,14 @@ async function runAgentTurnWithFallbackInternalWithRetryState(
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
   ) => {
+    const startupPhase = resolveRunStartupPhase(info.phase);
+    if (startupPhase && startupPhase !== lastRunStartupPhase) {
+      lastRunStartupPhase = startupPhase;
+      emitAgentRunStatusEvent({ runId, phase: startupPhase });
+    }
+    if (info.phase === "model_call_started" || info.phase === "process_spawned") {
+      commitMcpAppModelContext();
+    }
     if (info.phase === "tool_execution_started" || info.phase === "assistant_output_started") {
       markOverloadRetryUnsafeToReplay(overloadRetryState);
     }
@@ -413,6 +454,7 @@ async function runAgentTurnWithFallbackInternalWithRetryState(
 async function runAgentTurnWithFallbackInternal(
   params: AgentTurnParams,
   commitTerminalOutcome: () => void,
+  commitMcpAppModelContext: () => void,
 ): Promise<AgentRunLoopResult> {
   const overloadRetryState: OverloadRetryState = {
     retryCount: 0,
@@ -426,6 +468,7 @@ async function runAgentTurnWithFallbackInternal(
       params,
       commitTerminalOutcome,
       overloadRetryState,
+      commitMcpAppModelContext,
     );
   } finally {
     await cancelOverloadRetryNotice(overloadRetryState);
@@ -436,6 +479,28 @@ async function runAgentTurnWithFallbackInternal(
 export async function runAgentTurnWithFallback(
   params: AgentTurnParams,
 ): Promise<AgentRunLoopResult> {
+  // Gateway writes require exact view identity against this bare session runtime;
+  // requester-scoped and combined runtimes cannot cross the App view boundary.
+  const runtime = params.isHeartbeat
+    ? undefined
+    : peekSessionMcpRuntime({
+        sessionId: params.followupRun.run.sessionId,
+        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+      });
+  const modelContextLease = runtime
+    ? leaseMcpAppModelContextForTurn({
+        runtime,
+        prompt: params.commandBody,
+        transcriptPrompt: params.transcriptCommandBody,
+      })
+    : undefined;
+  const turnParams = modelContextLease
+    ? {
+        ...params,
+        commandBody: modelContextLease.prompt,
+        transcriptCommandBody: modelContextLease.transcriptPrompt,
+      }
+    : params;
   let terminalOutcomeCommitted = false;
   const commitTerminalOutcome = () => {
     if (terminalOutcomeCommitted) {
@@ -447,8 +512,13 @@ export async function runAgentTurnWithFallback(
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.opts?.runId ?? "");
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
     try {
-      return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
+      return await runAgentTurnWithFallbackInternal(
+        turnParams,
+        commitTerminalOutcome,
+        modelContextLease?.commit ?? (() => undefined),
+      );
     } finally {
+      modelContextLease?.rollback();
       commitTerminalOutcome();
     }
   });

@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { VERSION } from "../version.js";
 import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
@@ -74,8 +74,7 @@ function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: Databas
   const storePath = resolveQuarantineStorePath(env);
   const existed = existsSync(storePath);
   ensureQuarantineStoreDirectory(storePath);
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(storePath);
+  const database = openNodeSqliteDatabase(storePath);
   let completed = false;
   try {
     if (!existed) {
@@ -103,8 +102,7 @@ export function readOpenClawDatabaseQuarantine(
   if (!existsSync(storePath)) {
     return undefined;
   }
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(storePath);
+  const database = openNodeSqliteDatabase(storePath);
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS};`);
     const userVersion = readQuarantineSchemaVersion(database, storePath);

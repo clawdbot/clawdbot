@@ -4,6 +4,7 @@ import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js"
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
+import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
@@ -14,6 +15,7 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
@@ -32,6 +34,7 @@ type AttemptRuntime = {
   workspaceDir: string;
   isCanonicalWorkspace: boolean;
   agentDir: string;
+  preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
   contextEngine?: EmbeddedRunAttemptParams["contextEngine"];
   contextTokenBudget?: number;
   contextWindowInfo?: EmbeddedRunAttemptParams["contextWindowInfo"];
@@ -54,7 +57,6 @@ type AttemptRuntime = {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: EmbeddedRunAttemptParams["modelRegistry"];
   agentId: string;
-  beforeAgentStartResult: EmbeddedRunAttemptParams["beforeAgentStartResult"];
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"];
   fastMode: EmbeddedRunAttemptParams["fastMode"];
   fastModeStartedAtMs?: number;
@@ -99,6 +101,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
 }): Promise<{
   rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
   cancellationRequested: boolean;
+  preparedAttempt: EmbeddedRunAttemptParams;
 }> {
   const { params, runtime, control } = input;
   const observeToolTerminal = createToolTerminalObserver(params.runId);
@@ -160,7 +163,13 @@ export async function dispatchEmbeddedRunAttempt(input: {
   };
 
   let cancellationRequested = false;
-  const rawAttempt = await runEmbeddedAttemptWithBackend({
+  const promptMedia = await preparePluginHarnessPromptImages({
+    runParams: params,
+    runtime,
+    pluginHarnessOwnsTransport: control.pluginHarnessOwnsTransport,
+  });
+  const attemptParams: EmbeddedRunAttemptParams = {
+    operation: "attempt",
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
     conversationRecall: params.conversationRecall,
@@ -204,6 +213,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
     agentDir: runtime.agentDir,
+    preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(runtime.contextEngine
@@ -220,8 +230,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
-    images: params.images,
-    imageOrder: params.imageOrder,
+    images: promptMedia.images,
+    imageOrder: promptMedia.imageOrder,
+    media: promptMedia.media,
     clientTools: params.clientTools,
     disableTools: params.disableTools,
     provider: runtime.provider,
@@ -264,7 +275,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
     toolAuthProfileStore: runtime.toolAuthProfileStore,
     modelRegistry: runtime.modelRegistry,
     agentId: runtime.agentId,
-    beforeAgentStartResult: runtime.beforeAgentStartResult,
     thinkLevel: runtime.thinkLevel,
     onToolOutcome: control.onToolOutcome,
     allocateToolOutcomeOrdinal: control.allocateToolOutcomeOrdinal,
@@ -322,10 +332,17 @@ export async function dispatchEmbeddedRunAttempt(input: {
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt: params.extraSystemPrompt,
+    extraSystemPrompt: appendIncognitoSystemPrompt({
+      agentId: runtime.agentId,
+      extraSystemPrompt: params.extraSystemPrompt,
+      sessionKey: params.sessionKey,
+      storePath: params.sessionTarget?.storePath,
+    }),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
+    scheduledToolPolicy: params.scheduledToolPolicy,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
@@ -342,6 +359,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,
+    swarmCollector: params.swarmCollector,
+    swarmOutputSchema: params.swarmOutputSchema,
     forceRestartSafeTools: params.forceRestartSafeTools,
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
@@ -361,7 +380,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onUserMessagePersisted: control.onUserMessagePersisted,
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
-  })
+  };
+  const rawAttempt = await runEmbeddedAttemptWithBackend(attemptParams)
     .catch((err: unknown): never => {
       throw control.getPostCompactionAbortError() ?? err;
     })
@@ -376,5 +396,5 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
   }
-  return { rawAttempt, cancellationRequested };
+  return { rawAttempt, cancellationRequested, preparedAttempt: attemptParams };
 }

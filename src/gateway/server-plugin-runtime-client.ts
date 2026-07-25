@@ -10,6 +10,7 @@ import { normalizeToolName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
 export function createSyntheticPluginRuntimeClient(params?: {
@@ -20,6 +21,8 @@ export function createSyntheticPluginRuntimeClient(params?: {
   internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  delegatedToolPolicyHandoff?: boolean;
+  sessionCreation?: TrustedSessionCreation;
   scopes?: string[];
 }): NonNullable<GatewayRequestOptions["client"]> {
   const pluginRuntimeOwnerId =
@@ -40,6 +43,8 @@ export function createSyntheticPluginRuntimeClient(params?: {
       scopes: params?.scopes ?? [WRITE_SCOPE],
     },
     internal: {
+      syntheticClient: true,
+      ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
@@ -53,6 +58,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
       ...(params?.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
+        : {}),
+      ...(params?.delegatedToolPolicyHandoff === true
+        ? { delegatedToolPolicyHandoff: true as const }
         : {}),
     },
   };

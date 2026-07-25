@@ -5,6 +5,7 @@ import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { channelDocsUrl, channelHubMeta, renderChannelArt } from "./hub-meta.ts";
 import type {
   ChannelWizardState,
@@ -33,6 +34,10 @@ function stepKeyboardValue(step: ChannelWizardStep): string {
   return typeof step.initialValue === "string" ? step.initialValue : "";
 }
 
+function stepIsBusy(props: ChannelWizardViewProps): boolean {
+  return props.wizard.phase === "step" && props.wizard.busy;
+}
+
 function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) {
   const message = step.message?.trim() ?? "";
   const looksLikeCode = message.includes("{") || message.includes("  ");
@@ -48,18 +53,19 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     ${message
       ? html`
           <div class="channels-wizard__links">
-            <button
-              type="button"
-              class="btn btn--sm"
-              @click=${() => void navigator.clipboard?.writeText(message)}
-            >
+            <button type="button" class="btn btn--sm" @click=${() => void copyToClipboard(message)}>
               ${t("channels.setup.copyText")}
             </button>
           </div>
         `
       : nothing}
     <div class="channels-wizard__footer">
-      <button type="button" class="btn primary" @click=${() => props.onAnswer(null)}>
+      <button
+        type="button"
+        class="btn primary"
+        ?disabled=${stepIsBusy(props)}
+        @click=${() => props.onAnswer(null)}
+      >
         ${t("channels.setup.continue")}
       </button>
     </div>
@@ -75,6 +81,7 @@ function renderSelectStep(step: ChannelWizardStep, props: ChannelWizardViewProps
       label=${step.message ?? ""}
       orientation="vertical"
       .value=${selectedIndex >= 0 ? String(selectedIndex) : null}
+      ?disabled=${stepIsBusy(props)}
       @change=${(event: Event) => {
         const rawIndex = (event.currentTarget as HTMLElement & { value?: string | number | null })
           .value;
@@ -115,6 +122,7 @@ function renderMultiselectStep(step: ChannelWizardStep, props: ChannelWizardView
             type="button"
             class="channels-wizard__option"
             aria-pressed=${selected.has(option.value) ? "true" : "false"}
+            ?disabled=${stepIsBusy(props)}
             @click=${() => props.onToggleMultiselect(option.value)}
           >
             <span class="channels-wizard__option-label">
@@ -131,6 +139,7 @@ function renderMultiselectStep(step: ChannelWizardStep, props: ChannelWizardView
       <button
         type="button"
         class="btn primary"
+        ?disabled=${stepIsBusy(props)}
         @click=${() => props.onAnswer([...props.multiselectValues])}
       >
         ${t("channels.setup.continue")}
@@ -148,8 +157,11 @@ function renderTextStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
   };
   return html`
     <form @submit=${submit}>
-      <div class="channels-wizard__message">${step.message ?? ""}</div>
+      <div class="channels-wizard__message">
+        <label for="channel-wizard-text-input">${step.message ?? ""}</label>
+      </div>
       <input
+        id="channel-wizard-text-input"
         class="input"
         style="margin-top: 10px; width: 100%;"
         name="wizard-text"
@@ -157,9 +169,12 @@ function renderTextStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
         autocomplete=${step.sensitive ? "off" : "on"}
         placeholder=${step.placeholder ?? ""}
         .value=${stepKeyboardValue(step)}
+        ?disabled=${stepIsBusy(props)}
       />
       <div class="channels-wizard__footer" style="margin-top: 12px;">
-        <button type="submit" class="btn primary">${t("channels.setup.continue")}</button>
+        <button type="submit" class="btn primary" ?disabled=${stepIsBusy(props)}>
+          ${t("channels.setup.continue")}
+        </button>
       </div>
     </form>
   `;
@@ -169,10 +184,20 @@ function renderConfirmStep(step: ChannelWizardStep, props: ChannelWizardViewProp
   return html`
     <div class="channels-wizard__message">${step.message ?? ""}</div>
     <div class="channels-wizard__footer">
-      <button type="button" class="btn" @click=${() => props.onAnswer(false)}>
+      <button
+        type="button"
+        class="btn"
+        ?disabled=${stepIsBusy(props)}
+        @click=${() => props.onAnswer(false)}
+      >
         ${t("common.no")}
       </button>
-      <button type="button" class="btn primary" @click=${() => props.onAnswer(true)}>
+      <button
+        type="button"
+        class="btn primary"
+        ?disabled=${stepIsBusy(props)}
+        @click=${() => props.onAnswer(true)}
+      >
         ${t("common.yes")}
       </button>
     </div>

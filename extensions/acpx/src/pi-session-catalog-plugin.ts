@@ -20,8 +20,8 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  isExactPiSessionCursor,
   listLocalPiSessionPage,
-  optionalPiString,
   readLocalPiTranscriptPage,
   type PiSessionPage,
 } from "./pi-session-catalog.js";
@@ -35,7 +35,6 @@ const CAPABILITY = "pi-sessions";
 const LOCAL_HOST_ID = "gateway";
 const MAX_PAGE_LIMIT = 100;
 const MAX_HOSTS = 100;
-const MAX_CURSOR_LENGTH = 128;
 const NODE_TIMEOUT_MS = 20_000;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 const TRANSCRIPT_ITEM_TYPES = new Set([
@@ -78,7 +77,7 @@ function isNodeSession(value: unknown): value is SessionCatalogSession {
     isOptionalString(value.modelProvider) &&
     isOptionalString(value.cliVersion) &&
     isOptionalString(value.gitBranch) &&
-    isOptionalString(value.openClawSessionKey) &&
+    isOptionalString(value.sessionKey) &&
     isOptionalNumber(value.createdAt) &&
     isOptionalNumber(value.updatedAt) &&
     isOptionalNumber(value.recencyAt)
@@ -244,13 +243,17 @@ async function listPiNodeHost(
     };
   }
   try {
+    const cursor = query.cursors?.[hostId];
+    if (cursor !== undefined && !isExactPiSessionCursor(cursor)) {
+      throw new Error("cursor is invalid");
+    }
     const raw = await runtime.nodes.invoke({
       nodeId: node.nodeId,
       command: PI_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
         ...(query.search ? { searchTerm: query.search } : {}),
-        ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
       scopes: ["operator.write"],
@@ -283,11 +286,11 @@ function parseNodeSessionPage(value: unknown): PiSessionPage {
     throw new Error("Pi node returned an invalid session page");
   }
   const sessions = value.sessions;
-  const nextCursor = optionalPiString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if (value.nextCursor !== undefined && !nextCursor) {
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && !isExactPiSessionCursor(nextCursor)) {
     throw new Error("Pi node returned an invalid cursor");
   }
-  return { sessions, ...(nextCursor ? { nextCursor } : {}) };
+  return { sessions, ...(nextCursor !== undefined ? { nextCursor } : {}) };
 }
 
 function parseNodeTranscriptPage(value: unknown, threadId: string): SessionsCatalogReadResult {
@@ -300,15 +303,15 @@ function parseNodeTranscriptPage(value: unknown, threadId: string): SessionsCata
   ) {
     throw new Error("Pi node returned an invalid transcript page");
   }
-  const nextCursor = optionalPiString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if (value.nextCursor !== undefined && !nextCursor) {
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && !isExactPiSessionCursor(nextCursor)) {
     throw new Error("Pi node returned an invalid cursor");
   }
   return {
     hostId: LOCAL_HOST_ID,
     threadId,
     items: value.items,
-    ...(nextCursor ? { nextCursor } : {}),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }
 
@@ -457,11 +460,15 @@ async function readPiTranscript(
   runtime: PluginRuntime,
   request: Parameters<SessionCatalogProvider["read"]>[0],
 ): Promise<SessionsCatalogReadResult> {
+  const cursor = request.cursor;
+  if (cursor !== undefined && !isExactPiSessionCursor(cursor)) {
+    throw new Error("cursor is invalid");
+  }
   if (request.hostId === LOCAL_HOST_ID) {
     return await readLocalPiTranscriptPage({
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
-      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     });
   }
   if (!request.hostId.startsWith("node:")) {
@@ -483,7 +490,7 @@ async function readPiTranscript(
     params: {
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
-      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     },
     timeoutMs: NODE_TIMEOUT_MS,
     scopes: ["operator.write"],

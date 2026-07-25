@@ -169,6 +169,235 @@ class WearProxyControllerTest {
     }
 
   @Test
+  fun modelListAndSelectionStayBoundToTheRequestedSession() =
+    runTest {
+      var selection: Pair<String, String>? = null
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          models = {
+            listOf(
+              WearProxyModel(ref = "openai/gpt-a", name = "GPT A"),
+              WearProxyModel(ref = "openai/gpt-b", name = "GPT B"),
+            )
+          },
+          selectSessionModel = { sessionKey, modelRef ->
+            selection = sessionKey to modelRef
+            true
+          },
+        )
+
+      val listed = controller.handle(request(WearRpcMethod.ModelsList))
+      val selected =
+        controller.handle(
+          request(
+            WearRpcMethod.ModelsSelect,
+            buildJsonObject {
+              put("sessionKey", "agent:main:thread-7")
+              put("modelRef", "openai/gpt-b")
+            },
+          ),
+        )
+
+      assertEquals(
+        listOf("openai/gpt-a", "openai/gpt-b"),
+        checkNotNull(listed.result)
+          .jsonObject
+          .getValue("models")
+          .jsonArray
+          .map {
+            it.jsonObject
+              .getValue("ref")
+              .jsonPrimitive.content
+          },
+      )
+      assertTrue(selected.ok)
+      assertEquals("agent:main:thread-7" to "openai/gpt-b", selection)
+      assertEquals(
+        "openai/gpt-b",
+        checkNotNull(selected.result)
+          .jsonObject
+          .getValue("selectedModelRef")
+          .jsonPrimitive.content,
+      )
+    }
+
+  @Test
+  fun modelReferencesUseOneCanonicalNonLossyValue() =
+    runTest {
+      var selection: Pair<String, String>? = null
+      val overlongRef = "m".repeat(201)
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          selectedModelRef = { " openai/gpt-a " },
+          models = {
+            listOf(
+              WearProxyModel(ref = " openai/gpt-a ", name = "GPT A"),
+              WearProxyModel(ref = "openai/gpt-a", name = "Duplicate"),
+              WearProxyModel(ref = overlongRef, name = "Too long"),
+            )
+          },
+          selectSessionModel = { sessionKey, modelRef ->
+            selection = sessionKey to modelRef
+            true
+          },
+        )
+
+      val status = controller.handle(request(WearRpcMethod.ProxyStatus))
+      val listed = controller.handle(request(WearRpcMethod.ModelsList))
+      val selected =
+        controller.handle(
+          request(
+            WearRpcMethod.ModelsSelect,
+            buildJsonObject {
+              put("sessionKey", "agent:main:thread-7")
+              put("modelRef", "openai/gpt-a")
+            },
+          ),
+        )
+
+      assertEquals(
+        "openai/gpt-a",
+        checkNotNull(status.result)
+          .jsonObject
+          .getValue("selectedModelRef")
+          .jsonPrimitive
+          .content,
+      )
+      assertEquals(
+        listOf("openai/gpt-a"),
+        checkNotNull(listed.result)
+          .jsonObject
+          .getValue("models")
+          .jsonArray
+          .map {
+            it.jsonObject
+              .getValue("ref")
+              .jsonPrimitive
+              .content
+          },
+      )
+      assertTrue(selected.ok)
+      assertEquals("agent:main:thread-7" to "openai/gpt-a", selection)
+    }
+
+  @Test
+  fun modelListCapCentersAWindowOnTheWatchSelectedSessionsModel() =
+    runTest {
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          selectedModelRef = { "openai/gpt-0" },
+          models = {
+            (0 until 60).map { index ->
+              WearProxyModel(ref = "openai/gpt-$index", name = "GPT $index")
+            }
+          },
+        )
+
+      val listed =
+        controller.handle(
+          request(
+            WearRpcMethod.ModelsList,
+            buildJsonObject { put("selectedModelRef", "openai/gpt-59") },
+          ),
+        )
+      val refs =
+        checkNotNull(listed.result)
+          .jsonObject
+          .getValue("models")
+          .jsonArray
+          .map { model ->
+            model.jsonObject
+              .getValue("ref")
+              .jsonPrimitive
+              .content
+          }
+
+      assertEquals(50, refs.size)
+      assertTrue("openai/gpt-59" in refs)
+      assertEquals("openai/gpt-10", refs.first())
+      assertEquals("openai/gpt-59", refs.last())
+    }
+
+  @Test
+  fun modelListWindowKeepsAdjacentModelsReachableAcrossTheCap() =
+    runTest {
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          models = {
+            (0 until 120).map { index ->
+              WearProxyModel(ref = "openai/gpt-$index", name = "GPT $index")
+            }
+          },
+        )
+
+      val listed =
+        controller.handle(
+          request(
+            WearRpcMethod.ModelsList,
+            buildJsonObject { put("selectedModelRef", "openai/gpt-49") },
+          ),
+        )
+      val refs =
+        checkNotNull(listed.result)
+          .jsonObject
+          .getValue("models")
+          .jsonArray
+          .map { model ->
+            model.jsonObject
+              .getValue("ref")
+              .jsonPrimitive.content
+          }
+
+      val selectedIndex = refs.indexOf("openai/gpt-49")
+      assertEquals("openai/gpt-48", refs[selectedIndex - 1])
+      assertEquals("openai/gpt-50", refs[selectedIndex + 1])
+    }
+
+  @Test
+  fun modelSelectionRejectsAStaleModelBeforePatchingTheSession() =
+    runTest {
+      var selections = 0
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          models = { listOf(WearProxyModel(ref = "openai/gpt-a", name = "GPT A")) },
+          selectSessionModel = { _, _ ->
+            selections += 1
+            true
+          },
+        )
+
+      val response =
+        controller.handle(
+          request(
+            WearRpcMethod.ModelsSelect,
+            buildJsonObject {
+              put("sessionKey", "agent:main:thread-7")
+              put("modelRef", "openai/removed")
+            },
+          ),
+        )
+
+      assertFalse(response.ok)
+      assertEquals("not_found", response.error?.code)
+      assertEquals(0, selections)
+    }
+
+  @Test
   fun talkStartBindsTheWatchNodeAndSelectedSession() =
     runTest {
       var startArgs: List<String?>? = null
@@ -266,7 +495,7 @@ class WearProxyControllerTest {
             requestedMethod = method
             requestedParams = params
             json.parseToJsonElement(
-              """{"sessions":[{"key":"agent:main","displayName":"Main","updatedAt":7,"model":"secret-model","lastMessage":"hidden"}],"hasMore":true,"totalCount":9}""",
+              """{"sessions":[{"key":"agent:main","displayName":"Main","updatedAt":7,"modelProvider":"openai","model":"gpt-test","lastMessage":"hidden"}],"hasMore":true,"totalCount":9}""",
             )
           },
           isGatewayConnected = { true },
@@ -296,7 +525,8 @@ class WearProxyControllerTest {
           .jsonArray
           .single()
           .jsonObject
-      assertEquals(setOf("key", "agentId", "displayName", "updatedAt"), session.keys)
+      assertEquals(setOf("key", "agentId", "displayName", "updatedAt", "modelRef"), session.keys)
+      assertEquals("openai/gpt-test", session.getValue("modelRef").jsonPrimitive.content)
       assertEquals("main", result.getValue("activeAgentId").jsonPrimitive.content)
       assertEquals(
         true,
@@ -377,7 +607,7 @@ class WearProxyControllerTest {
           assertEquals("chat.history", method)
           requestedParams = params
           json.parseToJsonElement(
-            """{"sessionKey":"main","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"},{"type":"image","base64":"private"}],"timestamp":9}],"defaults":{"token":"hidden"},"offset":40,"nextOffset":60,"totalMessages":80,"hasMore":true}""",
+            """{"sessionKey":"main","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"},{"type":"image","base64":"private"}],"timestamp":9}],"sessionInfo":{"model":"${"m".repeat(201)}"},"defaults":{"token":"hidden"},"offset":40,"nextOffset":60,"totalMessages":80,"hasMore":true}""",
           )
         }
 
@@ -402,6 +632,7 @@ class WearProxyControllerTest {
       )
       val result = checkNotNull(response.result).jsonObject
       assertFalse("defaults" in result)
+      assertFalse("selectedModelRef" in result)
       assertEquals(
         40,
         result

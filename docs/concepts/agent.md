@@ -15,7 +15,7 @@ contain, which files get injected, and how sessions bootstrap against it.
 ## Workspace (required)
 
 Each agent uses a single workspace directory (`agents.defaults.workspace`, or
-`agents.list[].workspace` per agent) as its **only** working directory (`cwd`)
+`agents.entries.*.workspace` per agent) as its **only** working directory (`cwd`)
 for tools and context.
 
 Recommended: use `openclaw setup` to create `~/.openclaw/openclaw.json` if missing and initialize the workspace files.

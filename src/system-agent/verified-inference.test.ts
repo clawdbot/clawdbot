@@ -216,6 +216,8 @@ async function bindingFor(
     auth: {
       authProfileId: "openai:verified",
       authFingerprint,
+      modelId: route.model,
+      modelApi: route.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
       ...(agentHarnessId
         ? {
             agentHarnessId,
@@ -333,6 +335,91 @@ describe("verified OpenClaw inference binding", () => {
     ).rejects.toThrow("active secret unavailable");
   });
 
+  it("reuses the successful model transport facts for owner re-resolution", async () => {
+    // The successful run already resolved the model under its selected auth
+    // plan. Revalidation must carry that exact tuple forward instead of
+    // repeating catalog and provider discovery in the authority hot path.
+    const envConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.6",
+          models: { "openai/gpt-5.6": { agentRuntime: { id: "openclaw" } } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(envConfig);
+    if (!route) {
+      throw new Error("missing test route");
+    }
+    const envAuth = {
+      apiKey: "env-key",
+      source: "env: OPENAI_API_KEY",
+      mode: "api-key" as const,
+    };
+    const authFingerprint = fingerprintResolvedProviderAuth(envAuth);
+    if (!authFingerprint) {
+      throw new Error("missing test env fingerprint");
+    }
+    const resolveAuth = vi.fn(async () => envAuth);
+    const binding = await createSystemAgentVerifiedInferenceBinding({
+      configuredRoute: route,
+      executionRoute: route,
+      auth: {
+        authFingerprint,
+        agentHarnessId: "openclaw",
+        modelId: "gpt-5.6",
+        modelApi: "openai-responses",
+      },
+      deps: {
+        ...pluginArtifactDeps(),
+        resolveApiKeyForProvider: resolveAuth as never,
+      },
+    });
+
+    expect(binding.auth.authFingerprint).toBe(authFingerprint);
+    expect(resolveAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "gpt-5.6", modelApi: "openai-responses" }),
+    );
+  });
+
+  it("fails closed when a credential-backed run omits its model transport facts", async () => {
+    const envConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.6",
+          models: { "openai/gpt-5.6": { agentRuntime: { id: "openclaw" } } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(envConfig);
+    if (!route) {
+      throw new Error("missing test route");
+    }
+    const envAuth = {
+      apiKey: "env-key",
+      source: "env: OPENAI_API_KEY",
+      mode: "api-key" as const,
+    };
+    const authFingerprint = fingerprintResolvedProviderAuth(envAuth);
+    if (!authFingerprint) {
+      throw new Error("missing test env fingerprint");
+    }
+    const resolveAuth = vi.fn(async () => envAuth);
+
+    await expect(
+      createSystemAgentVerifiedInferenceBinding({
+        configuredRoute: route,
+        executionRoute: route,
+        auth: { authFingerprint, agentHarnessId: "openclaw" },
+        deps: {
+          ...pluginArtifactDeps(),
+          resolveApiKeyForProvider: resolveAuth as never,
+        },
+      }),
+    ).rejects.toThrow("no longer the active route owner");
+    expect(resolveAuth).not.toHaveBeenCalled();
+  });
+
   it("accepts and revalidates an opaque CLI owner emitted after a successful turn", async () => {
     const cliConfig = {
       agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },
@@ -384,55 +471,6 @@ describe("verified OpenClaw inference binding", () => {
         })) as never,
         ...cliRuntimeArtifactDeps(),
         resolveCliRuntimeOwnerFingerprint: resolveOwner,
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("invalidates an opaque CLI owner after backend config drift", async () => {
-    const cliConfig = {
-      agents: {
-        defaults: {
-          model: "claude-cli/claude-opus-4-8",
-          cliBackends: { "claude-cli": { command: "claude" } },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const changedConfig = {
-      agents: {
-        defaults: {
-          ...cliConfig.agents.defaults,
-          cliBackends: { "claude-cli": { command: "/opt/other/claude" } },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
-    if (!route || route.runner !== "cli") {
-      throw new Error("missing test CLI route");
-    }
-    const binding = await createSystemAgentVerifiedInferenceBinding({
-      configuredRoute: route,
-      executionRoute: route,
-      auth: {
-        runtimeOwnerFingerprint: "opaque-cli-owner",
-        runtimeOwnerKind: "cli-runtime",
-        runtimeOwnerId: "claude-cli",
-        ...cliRuntimeArtifactAuth,
-      },
-      deps: {
-        ...pluginArtifactDeps(),
-        ...cliRuntimeArtifactDeps(),
-        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
-      },
-    });
-
-    await expect(
-      resolveSystemAgentVerifiedInferenceRoute(binding, {
-        readConfigFileSnapshot: vi.fn(async () => ({
-          exists: true,
-          valid: true,
-          config: changedConfig,
-        })) as never,
-        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
       }),
     ).resolves.toBeNull();
   });
@@ -489,20 +527,22 @@ describe("verified OpenClaw inference binding", () => {
       },
       auth: { profiles: { [profileId]: { provider: "claude-cli", mode: "api_key" } } },
     } satisfies OpenClawConfig;
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
-    if (!route || route.runner !== "cli" || route.authProfileId !== profileId) {
-      throw new Error("missing test CLI SecretRef route");
-    }
     const credential = {
       type: "api_key" as const,
       provider: "claude-cli",
       keyRef: { source: "file" as const, provider: "vault", id: "/claude/work" },
     };
-    let activeKey = "materialized-a";
     const ensureStore = vi.fn(() => ({
       version: 1,
       profiles: { [profileId]: credential },
     })) as never;
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig, undefined, {
+      loadAuthProfileStoreForRuntime: ensureStore,
+    });
+    if (!route || route.runner !== "cli" || route.authProfileId !== profileId) {
+      throw new Error("missing test CLI SecretRef route");
+    }
+    let activeKey = "materialized-a";
     const resolveAuth = vi.fn(async () => ({
       apiKey: activeKey,
       profileId,
@@ -524,6 +564,7 @@ describe("verified OpenClaw inference binding", () => {
       deps: {
         ...pluginArtifactDeps(),
         ...cliRuntimeArtifactDeps(),
+        loadAuthProfileStoreForRuntime: ensureStore,
         ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,
         resolveCliAuthBindingFingerprint: resolveBinding as never,
@@ -547,6 +588,7 @@ describe("verified OpenClaw inference binding", () => {
           config: cliConfig,
         })) as never,
         ...cliRuntimeArtifactDeps(),
+        loadAuthProfileStoreForRuntime: ensureStore,
         ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,
         resolveCliAuthBindingFingerprint: resolveBinding as never,
@@ -838,6 +880,8 @@ describe("verified OpenClaw inference binding", () => {
         authProfileId: "openai:verified",
         authFingerprint,
         agentHarnessId: "openclaw",
+        modelId: configuredRoute.model,
+        modelApi: "openai-responses",
       },
       deps: { ...authDeps(), ...pluginArtifactDeps() },
     });
@@ -1003,6 +1047,8 @@ describe("verified OpenClaw inference binding", () => {
         authProfileId: "openai:verified",
         authFingerprint,
         agentHarnessId: "codex",
+        modelId: route.model,
+        modelApi: "openai-responses",
         runtimeOwnerKind: "plugin-harness",
         runtimeOwnerId: "codex",
         ...codexRuntimeArtifactAuth,

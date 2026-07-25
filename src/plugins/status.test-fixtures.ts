@@ -7,8 +7,6 @@ import type { PluginHookName } from "./types.js";
 
 export { createPluginRecord };
 
-export const LEGACY_BEFORE_AGENT_START_MESSAGE =
-  "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.";
 export const HOOK_ONLY_MESSAGE =
   "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.";
 export const DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE =
@@ -20,14 +18,6 @@ export function createCompatibilityNotice(
   params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
 ): PluginCompatibilityNotice {
   switch (params.code) {
-    case "legacy-before-agent-start":
-      return {
-        pluginId: params.pluginId,
-        code: params.code,
-        compatCode: "legacy-before-agent-start",
-        severity: "warn",
-        message: LEGACY_BEFORE_AGENT_START_MESSAGE,
-      };
     case "hook-only":
       return {
         pluginId: params.pluginId,

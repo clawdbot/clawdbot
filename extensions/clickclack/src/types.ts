@@ -3,11 +3,20 @@
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
+/** Session-linked ClickClack discussion settings for one account. */
+type ClickClackDiscussionsConfig = {
+  enabled?: boolean;
+  workspace?: string;
+  controlUrlBase?: string;
+  section?: string;
+};
+
 /** User-configurable settings for one ClickClack account. */
 export type ClickClackAccountConfig = {
   name?: string;
   enabled?: boolean;
   baseUrl?: string;
+  apiBaseUrl?: string;
   token?: unknown;
   tokenFile?: string;
   workspace?: string;
@@ -16,7 +25,6 @@ export type ClickClackAccountConfig = {
   replyMode?: "agent" | "model";
   model?: string;
   systemPrompt?: string;
-  timeoutSeconds?: number;
   toolsAllow?: string[];
   defaultTo?: string;
   allowFrom?: string[];
@@ -25,6 +33,8 @@ export type ClickClackAccountConfig = {
   agentActivity?: boolean;
   /** Publish the native command catalog to ClickClack composer autocomplete. */
   commandMenu?: boolean;
+  /** Create and synchronize one managed ClickClack channel per OpenClaw session. */
+  discussions?: ClickClackDiscussionsConfig;
 };
 
 /** Root ClickClack channel config with optional named accounts. */
@@ -47,6 +57,7 @@ export type ResolvedClickClackAccount = {
   configured: boolean;
   name?: string;
   baseUrl: string;
+  apiEndpoint: string;
   token: string;
   workspace: string;
   botUserId?: string;
@@ -54,13 +65,18 @@ export type ResolvedClickClackAccount = {
   replyMode: "agent" | "model";
   model?: string;
   systemPrompt?: string;
-  timeoutSeconds?: number;
   toolsAllow?: string[];
   defaultTo: string;
   allowFrom: string[];
   reconnectMs: number;
   agentActivity: boolean;
   commandMenu: boolean;
+  discussions: {
+    enabled: boolean;
+    workspace: string;
+    controlUrlBase?: string;
+    section: string;
+  };
   config: ClickClackAccountConfig;
 };
 
@@ -89,6 +105,8 @@ export type ClickClackBotCommand = {
 
 /** One-time bot token and installer context returned by setup-code claim. */
 export type ClickClackSetupCodeClaim = {
+  contract_version?: 1;
+  api_base_url?: string;
   token: string;
   bot: {
     id: string;
@@ -111,6 +129,7 @@ export type ClickClackSetupCodeClaim = {
 /** Workspace object returned by the ClickClack API. */
 export type ClickClackWorkspace = {
   id: string;
+  route_id: string;
   name: string;
   slug: string;
   created_at: string;
@@ -119,9 +138,15 @@ export type ClickClackWorkspace = {
 /** Channel object returned by the ClickClack API. */
 export type ClickClackChannel = {
   id: string;
+  route_id: string;
   workspace_id: string;
   name: string;
   kind: string;
+  external_managed?: boolean;
+  external_ref?: string;
+  external_url?: string;
+  sidebar_section?: string;
+  archived?: boolean;
   created_at: string;
 };
 
@@ -140,6 +165,12 @@ export type ClickClackMessage = {
   body_format: "markdown";
   created_at: string;
   author?: ClickClackUser;
+  thread_state?: {
+    root_message_id: string;
+    reply_count: number;
+    last_reply_at?: string;
+    last_reply_author_ids: string[];
+  };
 };
 
 /** Realtime event envelope returned by ClickClack polling/websocket APIs. */

@@ -18,11 +18,13 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import type { PluginHookToolRequesterContext } from "../../plugins/hook-types.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -105,6 +107,7 @@ type NativeHookRelayRegistration = {
   config?: OpenClawConfig;
   runId: string;
   channelId?: string;
+  requester?: PluginHookToolRequesterContext;
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
@@ -138,6 +141,7 @@ type RegisterNativeHookRelayParams = {
   config?: OpenClawConfig;
   runId: string;
   channelId?: string;
+  requester?: PluginHookToolRequesterContext;
   allowedEvents?: readonly NativeHookRelayEvent[];
   /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
   preToolUseLoopDetection?: boolean;
@@ -445,6 +449,7 @@ export function registerNativeHookRelay(
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
+    ...(params.requester ? { requester: params.requester } : {}),
     allowedEvents,
     preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
     expiresAtMs,
@@ -611,7 +616,7 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
       ? ["openclaw"]
       : [params.nodeExecutable ?? process.execPath, executable];
   const nicePrefix = resolveNativeHookRelayNicePrefix(params.nice);
-  return shellQuoteArgs([
+  const command = shellQuoteArgs([
     ...nicePrefix,
     ...argv,
     "hooks",
@@ -630,6 +635,9 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
     "--timeout",
     String(timeoutMs),
   ]);
+  // Codex kills the shell process when a hook times out. Replace that shell so
+  // the timeout targets this relay instead of leaving its Node child behind.
+  return process.platform === "win32" ? command : `exec ${command}`;
 }
 
 function nativePreToolUseMayRunLoopDetection(
@@ -1437,6 +1445,7 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
+      ...(params.registration.requester ? { requester: params.registration.requester } : {}),
       ...(params.invocation.cwd
         ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
         : {}),
@@ -2130,7 +2139,12 @@ async function waitForNativeHookRelayApprovalDecision(params: {
       "plugin.approval.waitDecision",
       { timeoutMs: params.timeoutMs + 10_000 },
       { id: params.approvalId },
-    );
+    ).catch((error: unknown) => {
+      if (isApprovalNotFoundError(error)) {
+        return undefined;
+      }
+      throw error;
+    });
   if (!params.signal) {
     return waitPromise;
   }

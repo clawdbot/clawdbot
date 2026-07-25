@@ -107,7 +107,11 @@ describe("package manager build policy", () => {
       "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
     });
     if (packages.has("lru-memoizer@3.0.0")) {
-      expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.0" });
+      const lruCacheVersion = (overrides["lru-memoizer@3.0.0"] as Record<string, string>)[
+        "lru-cache"
+      ];
+      expect(lruCacheVersion).toMatch(/^11\.\d+\.\d+$/u);
+      expect(packages.has(`lru-cache@${lruCacheVersion}`)).toBe(true);
     }
   });
 

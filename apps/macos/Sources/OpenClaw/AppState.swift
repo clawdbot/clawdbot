@@ -53,11 +53,8 @@ final class AppState {
     private var lastConfigFingerprint: Data?
     private var suppressVoiceWakeGlobalSync = false
     private var voiceWakeGlobalSyncTask: Task<Void, Never>?
-
-    private func ifNotPreview(_ action: () -> Void) {
-        guard !self.isPreview else { return }
-        action()
-    }
+    @ObservationIgnored private var activeComputerPresenceTask: Task<Void, Never>?
+    @ObservationIgnored private var activeComputerPresenceUpdateGeneration: UInt64 = 0
 
     var isPaused: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
@@ -73,15 +70,6 @@ final class AppState {
             else { return }
             self.ifNotPreview { Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) } }
         }
-    }
-
-    static func shouldPersistLaunchAtLoginChange(
-        isInitializing: Bool,
-        isHydrating: Bool,
-        isEnabling: Bool,
-        bundleLocationAllowsPersistentIntegration: Bool) -> Bool
-    {
-        !isInitializing && !isHydrating && (!isEnabling || bundleLocationAllowsPersistentIntegration)
     }
 
     var onboardingSeen: Bool {
@@ -258,6 +246,10 @@ final class AppState {
 
     var quickChatEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
+    }
+
+    var activeComputerPresenceEnabled: Bool {
+        didSet { self.scheduleActiveComputerPresenceUpdate() }
     }
 
     var execApprovalMode: ExecApprovalQuickMode
@@ -453,6 +445,7 @@ final class AppState {
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         self.quickChatEnabled = UserDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
+        self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.execApprovalMode = .deny
         self.execApprovalPolicyLoadState = .loading
         self.peekabooBridgeEnabled = UserDefaults.standard
@@ -863,6 +856,12 @@ final class AppState {
             self.swabbleEnabled = false
             return
         }
+        guard !enabled || SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
+            localeID: self.voiceWakeLocaleID)
+        else {
+            self.swabbleEnabled = false
+            return
+        }
 
         self.swabbleEnabled = enabled
         guard !self.isPreview else { return }
@@ -944,6 +943,20 @@ final class AppState {
 // MARK: - Exec approval settings
 
 extension AppState {
+    private func ifNotPreview(_ action: () -> Void) {
+        guard !self.isPreview else { return }
+        action()
+    }
+
+    static func shouldPersistLaunchAtLoginChange(
+        isInitializing: Bool,
+        isHydrating: Bool,
+        isEnabling: Bool,
+        bundleLocationAllowsPersistentIntegration: Bool) -> Bool
+    {
+        !isInitializing && !isHydrating && (!isEnabling || bundleLocationAllowsPersistentIntegration)
+    }
+
     var execApprovalPolicyAvailable: Bool {
         self.execApprovalPolicyLoadState.isAvailable
     }
@@ -1176,6 +1189,46 @@ extension AppState {
 }
 
 extension AppState {
+    static func resolveActiveComputerPresenceEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: activeComputerPresenceEnabledKey)
+    }
+
+    static func activeComputerPresenceUpdateIsCurrent(
+        capturedGeneration: UInt64,
+        currentGeneration: UInt64,
+        capturedEnabled: Bool,
+        currentEnabled: Bool,
+        isCancelled: Bool) -> Bool
+    {
+        !isCancelled &&
+            capturedGeneration == currentGeneration &&
+            capturedEnabled == currentEnabled
+    }
+
+    private func scheduleActiveComputerPresenceUpdate() {
+        self.ifNotPreview {
+            let enabled = self.activeComputerPresenceEnabled
+            UserDefaults.standard.set(enabled, forKey: activeComputerPresenceEnabledKey)
+            PresenceReporter.shared.sendImmediate(reason: "activity-sharing-changed")
+            self.activeComputerPresenceUpdateGeneration &+= 1
+            let generation = self.activeComputerPresenceUpdateGeneration
+            self.activeComputerPresenceTask?.cancel()
+            // Apply the newest privacy choice immediately. An older network-bound
+            // enable may resume later, but the reporter's generation guard contains it.
+            self.activeComputerPresenceTask = Task { @MainActor [weak self] in
+                guard let self,
+                      Self.activeComputerPresenceUpdateIsCurrent(
+                          capturedGeneration: generation,
+                          currentGeneration: self.activeComputerPresenceUpdateGeneration,
+                          capturedEnabled: enabled,
+                          currentEnabled: self.activeComputerPresenceEnabled,
+                          isCancelled: Task.isCancelled)
+                else { return }
+                await MacNodeModeCoordinator.shared.setPresenceActivityReportingEnabled(enabled)
+            }
+        }
+    }
+
     enum ConnectionMode: String {
         case unconfigured
         case local

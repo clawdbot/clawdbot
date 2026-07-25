@@ -116,6 +116,7 @@ describeControlUiE2e("Control UI app chrome interaction mocked Gateway E2E", () 
       expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
       await captureUiProof(page, "01-chat-selectable-transcript.png");
 
+      await page.setViewportSize({ height: 650, width: 1440 });
       await page.goto(`${server.baseUrl}settings/general`);
       const settingsSidebar = page.locator(".settings-sidebar");
       const settingsTitle = settingsSidebar.locator(".settings-sidebar__title");

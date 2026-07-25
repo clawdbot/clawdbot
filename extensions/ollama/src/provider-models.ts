@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -144,8 +144,9 @@ export async function queryOllamaModelShowInfo(
         method: "POST",
         headers,
         body: JSON.stringify({ name: modelName }),
-        signal: AbortSignal.timeout(3000),
       },
+      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+      timeoutMs: 3000,
       policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
       auditContext: "ollama-provider-models.show",
     });
@@ -255,6 +256,37 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
+type OllamaModelSource = "cloud" | "local";
+
+function parseOllamaModelSourceSuffix(
+  modelName: string,
+): { base: string; source: OllamaModelSource } | undefined {
+  const sourceSeparator = modelName.lastIndexOf(":");
+  if (sourceSeparator < 0) {
+    return undefined;
+  }
+  const source = modelName.slice(sourceSeparator + 1);
+  if (source === "cloud" || source === "local") {
+    return { base: modelName.slice(0, sourceSeparator), source };
+  }
+  if (!source.includes("/") && source.endsWith("-cloud")) {
+    return {
+      base: modelName.slice(0, sourceSeparator + 1) + source.slice(0, -"-cloud".length),
+      source: "cloud",
+    };
+  }
+  return undefined;
+}
+
+export function isOllamaCloudModel(modelName: string | undefined): boolean {
+  const normalized = modelName?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const parsed = parseOllamaModelSourceSuffix(normalized);
+  return parsed?.source === "cloud" && parseOllamaModelSourceSuffix(parsed.base) === undefined;
+}
+
 export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
@@ -303,7 +335,7 @@ export function buildOllamaModelDefinition(
 }
 
 export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelDefinitionConfig {
-  if (typeof model.contextWindow !== "number") {
+  if (isOllamaCloudModel(model.id) || typeof model.contextWindow !== "number") {
     return model;
   }
   return {
@@ -321,9 +353,16 @@ export function capLocalOllamaProviderContext(provider: ModelProviderConfig): Mo
   };
 }
 
+/** Optional test hooks so discovery can exercise the real guarded-fetch owner. */
+type OllamaModelsFetchDeps = {
+  fetchImpl?: typeof fetch;
+  lookupFn?: LookupFn;
+};
+
 export async function fetchOllamaModels(
   baseUrl: string,
   opts?: { apiKey?: string },
+  deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
@@ -331,10 +370,13 @@ export async function fetchOllamaModels(
       url: `${apiBase}/api/tags`,
       init: {
         headers: opts?.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : undefined,
-        signal: AbortSignal.timeout(5000),
       },
+      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+      timeoutMs: 5000,
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext: "ollama-provider-models.tags",
+      ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+      ...(deps?.lookupFn ? { lookupFn: deps.lookupFn } : {}),
     });
     try {
       if (!response.ok) {

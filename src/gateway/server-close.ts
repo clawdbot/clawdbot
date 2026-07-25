@@ -429,7 +429,7 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       entry.abortStopReason = "restart";
       entry.controller.abort(createAgentRunRestartAbortError());
       removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-      params.chatRunState.abortedRuns.set(runId, createChatAbortMarker());
+      params.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
       params.chatRunState.clearRun(runId);
       const removed = params.removeChatRun(runId, runId, entry.sessionKey);
       params.agentRunSeq.delete(runId);
@@ -439,14 +439,11 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       aborted += 1;
       continue;
     }
-    const result = abortTrackedChatRunById(
-      { ...params, chatRunBuffers: params.chatRunState.buffers },
-      {
-        runId,
-        sessionKey: entry.sessionKey,
-        stopReason: "restart",
-      },
-    );
+    const result = abortTrackedChatRunById(params, {
+      runId,
+      sessionKey: entry.sessionKey,
+      stopReason: "restart",
+    });
     if (result.aborted) {
       aborted += 1;
     }
@@ -679,7 +676,7 @@ export function createGatewayCloseHandler(
     postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
-    cron: { stop: () => void };
+    cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
     heartbeatRunner: HeartbeatRunner;
     updateCheckStop?: (() => void) | null;
     stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
@@ -883,7 +880,11 @@ export function createGatewayCloseHandler(
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
-      params.cron.stop();
+      if (params.cron.stopAndDrain) {
+        await params.cron.stopAndDrain();
+      } else {
+        params.cron.stop();
+      }
       params.heartbeatRunner.stop();
       await shutdownStep(
         "task-registry-maintenance",

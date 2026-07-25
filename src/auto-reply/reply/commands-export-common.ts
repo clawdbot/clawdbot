@@ -4,7 +4,7 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -56,7 +56,7 @@ export function resolveExportCommandSessionTarget(
     return { text: `❌ Failed to resolve agent for session: ${params.sessionKey}` };
   }
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
-  const entry = loadSessionEntry({
+  const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey: params.sessionKey,
     clone: false,

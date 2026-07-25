@@ -1,3 +1,4 @@
+// @vitest-environment node
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -44,8 +45,8 @@ function snapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
+    offlineStable: false,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -118,6 +119,25 @@ describe("route preload gateway provenance", () => {
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
   });
 
+  it("preloads a bounded session roster without an implicit recency filter", async () => {
+    const list = vi.fn(async (_options: unknown) => null);
+    await loadRoute<SessionsRouteData>(sessionsPage, {
+      gateway: mutableGateway(snapshot(null, false)).gateway,
+      sessions: { list },
+      runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
+      agentSelection: { state: { selectedId: null, scopeId: null } },
+    } as unknown as ApplicationContext);
+
+    expect(list).toHaveBeenCalledWith({
+      limit: 50,
+      search: undefined,
+      includeGlobal: true,
+      includeUnknown: false,
+      archivedFilter: "active",
+    });
+    expect(list.mock.calls[0]?.[0]).not.toHaveProperty("activeMinutes");
+  });
+
   it("keeps usage provenance from before its async preload", async () => {
     const client = {
       request: vi.fn(async () => ({})),
@@ -147,6 +167,16 @@ describe("route preload gateway provenance", () => {
     const mutable = mutableGateway(snapshot(originalClient, true));
     const request = loadRoute<ModelProvidersRouteData>(modelProvidersPage, {
       gateway: mutable.gateway,
+      agents: {
+        state: { agentsList: null },
+        ensureList: vi.fn(async () => ({
+          defaultId: "main",
+          mainKey: "main",
+          scope: "project",
+          agents: [{ id: "main" }],
+        })),
+      },
+      agentSelection: { state: { selectedId: null, scopeId: null } },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(replacementClient, true));

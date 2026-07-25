@@ -102,4 +102,26 @@ describe("whatsapp inbound context visibility", () => {
       },
     });
   });
+
+  it("renders structured quoted media only at the visible preview boundary", () => {
+    const msg = makeBlockedQuotedReplyMessage("msg-reply-media");
+    msg.quote = {
+      context: {
+        id: "quoted-sticker",
+        body: "",
+        media: { contentType: "image/webp", kind: "sticker" },
+        sender: { jid: "111@s.whatsapp.net", label: "Alice (+111)" },
+      },
+    };
+
+    const reply = resolveVisibleWhatsAppReplyContext({
+      msg,
+      mode: "allowlist",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+111"],
+    });
+
+    expect(reply?.body).toBe("<media:sticker>");
+    expect(reply?.media).toEqual({ contentType: "image/webp", kind: "sticker" });
+  });
 });

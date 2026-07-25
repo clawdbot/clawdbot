@@ -70,6 +70,7 @@ const RESPONSES_API_IDS = new Set([
   "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
 
@@ -848,10 +849,12 @@ export function handleMessageUpdate(
     !deliveryPhase &&
     Boolean(streamItemId) &&
     isResponsesApiAssistantMessage(partialAssistant);
-  // Anthropic commentary is known only at the tool boundary; keep early
-  // unphased deltas out of durable block replies until that phase is known.
+  // These transports resolve commentary only at the tool boundary. Withhold
+  // early unphased deltas from durable block replies until that decision exists.
   const isPhasePendingAnthropicText =
     evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
+  const isPhasePendingCompletionsText =
+    !deliveryPhase && isOpenAiCompletionsAssistantMessage(partialAssistant);
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -928,8 +931,10 @@ export function handleMessageUpdate(
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply && !isPhasePendingAnthropicText) {
-      appendBlockReplyChunk(ctx, chunk);
+    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
+      if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
+        appendBlockReplyChunk(ctx, chunk);
+      }
     }
   }
 

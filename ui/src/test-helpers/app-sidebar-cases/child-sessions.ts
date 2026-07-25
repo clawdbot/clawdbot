@@ -156,6 +156,77 @@ describe("AppSidebar agent chip", () => {
     );
   });
 
+  it("propagates loaded child workspace conflicts to a collapsed parent", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:parent"]);
+    harness.list.mockResolvedValue({
+      ts: 2,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [
+        {
+          key: "agent:worker:child",
+          spawnedBy: "agent:main:parent",
+          kind: "direct",
+          label: "Conflicted child",
+          updatedAt: 2,
+          placement: {
+            state: "reclaimed",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 2,
+            stateChangedAtMs: 2,
+            workspaceResultConflict: {
+              paths: ["src/local.ts", "src/other.ts"],
+              stagedResultRef: "refs/openclaw/worker-results/claim-child",
+            },
+          },
+        },
+      ],
+    });
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:parent",
+            kind: "direct",
+            label: "Parent task",
+            updatedAt: 1,
+            childSessions: ["agent:worker:child"],
+          },
+        ],
+      },
+    });
+    await sidebar.updateComplete;
+
+    const toggle = sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]");
+    toggle?.click();
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
+    await waitForFast(() =>
+      expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')).not.toBeNull(),
+    );
+
+    toggle?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')).toBeNull();
+    const parentBadge = sidebar.querySelector<HTMLElement>(
+      '[data-session-key="agent:main:parent"] .session-row-badge--cloud',
+    );
+    expect(parentBadge?.dataset.workspaceConflicts).toBe("2");
+    expect(parentBadge?.dataset.placementState).toBeUndefined();
+    expect(parentBadge?.hasAttribute("title")).toBe(false);
+    expect(
+      (parentBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+        ?.content,
+    ).toBe("Cloud worker children: 2 workspace conflicts");
+  });
+
   it("loads every child-session page before marking a parent complete", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:parent"]);

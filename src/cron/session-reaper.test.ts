@@ -1,12 +1,13 @@
 // Cron session reaper tests cover cleanup of sessions created by scheduled runs.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions } from "./session-reaper.js";
@@ -72,6 +73,7 @@ describe("isCronRunSessionKey", () => {
 });
 
 describe("sweepCronRunSessions", () => {
+  const tempDirs: string[] = [];
   let tmpDir: string;
   let storePath: string;
   const log = createTestLogger();
@@ -79,8 +81,14 @@ describe("sweepCronRunSessions", () => {
   beforeEach(async () => {
     resetReaperThrottle();
     taskStatusMocks.buildPendingSet.mockReset().mockReturnValue(new Set());
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-"));
+    tmpDir = makeTempDir(tempDirs, "cron-reaper-");
     storePath = path.join(tmpDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    cleanupTempDirs(tempDirs);
   });
 
   it("prunes expired cron run sessions", async () => {
@@ -88,7 +96,7 @@ describe("sweepCronRunSessions", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:cron:job1": {
         sessionId: "base-session",
-        updatedAt: now,
+        updatedAt: now - 25 * 3_600_000, // stale base row — preserve
       },
       "agent:main:cron:job1:run:old-run": {
         sessionId: "old-run",
@@ -132,7 +140,7 @@ describe("sweepCronRunSessions", () => {
     ]);
     expect(updated["agent:main:cron:job1"]).toMatchObject({
       sessionId: "base-session",
-      updatedAt: now,
+      updatedAt: now - 25 * 3_600_000,
     });
     expect(updated["agent:main:cron:job1:run:recent-run"]).toMatchObject({
       sessionId: "recent-run",
@@ -175,6 +183,7 @@ describe("sweepCronRunSessions", () => {
       [sessionKey]: {
         sessionId: "pending-run",
         updatedAt: now - 25 * 3_600_000,
+        delivery: { kind: "none" },
         cronRunContinuation: { lifecycleRevision: "revision-1", phase: "ready" },
       },
     };

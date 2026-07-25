@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 
-// v4 replaces ambient session-watch sentinel rows with cursor provenance.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 4;
+// v5 records durable cloud-worker result refs on pending workspace fences.
+export const OPENCLAW_STATE_SCHEMA_VERSION = 5;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -20,6 +20,8 @@ export type OpenClawStateDatabase = {
 export type OpenClawStateDatabaseOptions = {
   env?: NodeJS.ProcessEnv;
   path?: string;
+  database?: OpenClawStateDatabase;
+  readOnly?: boolean;
 };
 export type OpenClawStateDatabaseSchemaMigration = {
   kind:

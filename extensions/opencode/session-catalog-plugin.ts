@@ -31,14 +31,13 @@ import {
   openOpenCodeCatalogTerminal,
 } from "./session-catalog-terminal.js";
 import {
+  isExactOpenCodeSessionCursor,
   listLocalOpenCodeSessionPage,
-  optionalOpenCodeString,
   readLocalOpenCodeTranscriptPage,
   type OpenCodeSessionPage,
 } from "./session-catalog.js";
 
 const MAX_HOSTS = 100;
-const MAX_CURSOR_LENGTH = 128;
 const TRANSCRIPT_ITEM_TYPES = new Set([
   "userMessage",
   "agentMessage",
@@ -72,7 +71,7 @@ function isNodeSession(value: unknown): value is SessionCatalogSession {
     isOptionalString(value.modelProvider) &&
     isOptionalString(value.cliVersion) &&
     isOptionalString(value.gitBranch) &&
-    isOptionalString(value.openClawSessionKey) &&
+    isOptionalString(value.sessionKey) &&
     isOptionalNumber(value.createdAt) &&
     isOptionalNumber(value.updatedAt) &&
     isOptionalNumber(value.recencyAt)
@@ -231,13 +230,17 @@ async function listOpenCodeNodeHost(
     };
   }
   try {
+    const cursor = query.cursors?.[hostId];
+    if (cursor !== undefined && !isExactOpenCodeSessionCursor(cursor)) {
+      throw new Error("cursor is invalid");
+    }
     const raw = await runtime.nodes.invoke({
       nodeId: node.nodeId,
       command: OPENCODE_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
         ...(query.search ? { searchTerm: query.search } : {}),
-        ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
       scopes: ["operator.write"],
@@ -273,11 +276,11 @@ function parseNodeSessionPage(value: unknown): OpenCodeSessionPage {
     throw new Error("OpenCode node returned an invalid session page");
   }
   const sessions = value.sessions;
-  const nextCursor = optionalOpenCodeString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if (value.nextCursor !== undefined && !nextCursor) {
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && !isExactOpenCodeSessionCursor(nextCursor)) {
     throw new Error("OpenCode node returned an invalid cursor");
   }
-  return { sessions, ...(nextCursor ? { nextCursor } : {}) };
+  return { sessions, ...(nextCursor !== undefined ? { nextCursor } : {}) };
 }
 
 function parseNodeTranscriptPage(value: unknown, threadId: string): SessionsCatalogReadResult {
@@ -290,15 +293,15 @@ function parseNodeTranscriptPage(value: unknown, threadId: string): SessionsCata
   ) {
     throw new Error("OpenCode node returned an invalid transcript page");
   }
-  const nextCursor = optionalOpenCodeString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if (value.nextCursor !== undefined && !nextCursor) {
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && !isExactOpenCodeSessionCursor(nextCursor)) {
     throw new Error("OpenCode node returned an invalid cursor");
   }
   return {
     hostId: LOCAL_HOST_ID,
     threadId,
     items: value.items,
-    ...(nextCursor ? { nextCursor } : {}),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }
 
@@ -363,11 +366,15 @@ async function readOpenCodeTranscript(
   runtime: PluginRuntime,
   request: Parameters<SessionCatalogProvider["read"]>[0],
 ): Promise<SessionsCatalogReadResult> {
+  const cursor = request.cursor;
+  if (cursor !== undefined && !isExactOpenCodeSessionCursor(cursor)) {
+    throw new Error("cursor is invalid");
+  }
   if (request.hostId === LOCAL_HOST_ID) {
     return await readLocalOpenCodeTranscriptPage({
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
-      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     });
   }
   if (!request.hostId.startsWith("node:")) {
@@ -389,7 +396,7 @@ async function readOpenCodeTranscript(
     params: {
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
-      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     },
     timeoutMs: NODE_TIMEOUT_MS,
     scopes: ["operator.write"],

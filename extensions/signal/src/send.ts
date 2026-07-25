@@ -1,3 +1,4 @@
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 // Signal plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
@@ -19,7 +20,7 @@ import {
   appendSignalApprovalReactionHintForOutboundMessage,
   registerSignalApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
-import { signalRpcRequest } from "./client-adapter.js";
+import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
@@ -28,6 +29,7 @@ import { resolveSignalRpcContext } from "./rpc-context.js";
 export type SignalSendOpts = {
   cfg: OpenClawConfig;
   baseUrl?: string;
+  transportKind?: SignalTransportKind;
   account?: string;
   accountId?: string;
   mediaUrl?: string;
@@ -54,7 +56,7 @@ export type SignalSendResult = {
 
 export type SignalRpcOpts = Pick<
   SignalSendOpts,
-  "cfg" | "baseUrl" | "account" | "accountId" | "timeoutMs"
+  "cfg" | "baseUrl" | "transportKind" | "account" | "accountId" | "timeoutMs"
 >;
 
 export type SignalReceiptType = "read" | "viewed";
@@ -65,9 +67,6 @@ type SignalTarget =
   | { type: "username"; username: string };
 
 async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
-  if (opts.baseUrl?.trim() && opts.account?.trim()) {
-    return undefined;
-  }
   if (!opts.cfg) {
     throw new Error(
       "Signal RPC account resolution requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
@@ -237,7 +236,6 @@ export async function sendMessageSignal(
   opts: SignalSendOpts,
 ): Promise<SignalSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Signal send");
-  const apiMode = cfg.channels?.signal?.apiMode;
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -255,7 +253,7 @@ export async function sendMessageSignal(
     targetAuthorUuid,
   });
   let message = outboundText;
-  let messageFromPlaceholder = false;
+  let outboundMedia: MediaPlaceholderTextFact | undefined;
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
   const maxBytes = (() => {
@@ -279,15 +277,13 @@ export async function sendMessageSignal(
       readFile: opts.mediaReadFile,
     });
     attachments = [resolved.path];
-    const kind = kindFromMime(resolved.contentType ?? undefined);
-    if (!message && kind) {
-      // Avoid sending an empty body when only attachments exist.
-      message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
-      messageFromPlaceholder = true;
-    }
+    outboundMedia = {
+      contentType: resolved.contentType,
+      kind: kindFromMime(resolved.contentType ?? undefined) ?? "unknown",
+    };
   }
 
-  if (message.trim() && !messageFromPlaceholder) {
+  if (message.trim()) {
     if (textMode === "plain") {
       textStyles = opts.textStyles ?? [];
     } else {
@@ -333,7 +329,7 @@ export async function sendMessageSignal(
   const sendOpts = {
     baseUrl,
     timeoutMs: opts.timeoutMs,
-    apiMode,
+    transportKind: opts.transportKind ?? accountInfo.transport.kind,
     maxAttachmentBytes: maxBytes,
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
@@ -366,6 +362,7 @@ export async function sendMessageSignal(
       replyToId: messageId,
       author: replyAuthor,
       body: message,
+      media: outboundMedia ? [outboundMedia] : undefined,
       sourceTimestamp: timestamp,
     });
   }
@@ -396,7 +393,6 @@ export async function sendTypingSignal(
   opts: SignalRpcOpts & { stop?: boolean },
 ): Promise<boolean> {
   const accountInfo = await resolveSignalRpcAccountInfo(opts);
-  const cfg = requireRuntimeConfig(opts.cfg, "Signal typing");
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
     recipient: true,
@@ -415,7 +411,7 @@ export async function sendTypingSignal(
   await signalRpcRequest("sendTyping", params, {
     baseUrl,
     timeoutMs: opts.timeoutMs,
-    apiMode: cfg.channels?.signal?.apiMode,
+    transportKind: opts.transportKind ?? accountInfo.transport.kind,
   });
   return true;
 }
@@ -429,7 +425,6 @@ export async function sendReadReceiptSignal(
     return false;
   }
   const accountInfo = await resolveSignalRpcAccountInfo(opts);
-  const cfg = requireRuntimeConfig(opts.cfg, "Signal read receipt");
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
     recipient: true,
@@ -448,7 +443,7 @@ export async function sendReadReceiptSignal(
   await signalRpcRequest("sendReceipt", params, {
     baseUrl,
     timeoutMs: opts.timeoutMs,
-    apiMode: cfg.channels?.signal?.apiMode,
+    transportKind: opts.transportKind ?? accountInfo.transport.kind,
   });
   return true;
 }

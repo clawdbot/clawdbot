@@ -3,7 +3,8 @@ scenario:
   id: slack-codex-approval-exec-native
   surface: channels
   coverage:
-    primary: [channels.native-approval-prompts]
+    primary:
+      - channels.channel-native-approval-prompts
   execution:
     profiles: { "slack:default": 9 }
     kind: flow

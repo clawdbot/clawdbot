@@ -432,6 +432,17 @@
   outline-offset: -2px;
 }
 
+.session-data-row--archived {
+  opacity: 0.62;
+}
+
+.session-data-row--archived:hover,
+.session-data-row--archived:focus-visible,
+.session-data-row--archived.session-data-row--expanded,
+.session-data-row--archived.session-data-row--menu-open {
+  opacity: 0.82;
+}
+
 /* Keep the expanded row visually attached to its drawer. */
 .session-data-row--expanded > td,
 .session-data-row--menu-open > td {

@@ -8,12 +8,21 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
+import {
+  findAuthorizedSwarmCollectorRequest,
+  findSwarmCollectorSession,
+} from "../../agents/subagent-registry-memory.js";
+import { resolveSwarmConfig } from "../../agents/swarm-config.js";
+import { validateStructuredOutputSchema } from "../../agents/swarm-output-schema.js";
+import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../config/sessions.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isAcceptedAgentDedupePayload,
   readGatewayDedupeEntry,
@@ -71,6 +80,82 @@ export function prepareAgentRequestPreflight(
     return undefined;
   }
   const request = params.params as AgentRunRequest;
+  const cfg = params.context.getRuntimeConfig();
+  const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
+  const requestSessionKey = request.sessionKey?.trim();
+  const collectorSession = findSwarmCollectorSession(requestSessionKey);
+  // Collector children always use subagent session keys, so ordinary traffic
+  // must never pay the persisted-store read. The store fallback only covers a
+  // freshly restarted gateway whose in-memory registry has not reloaded yet.
+  const persistedCollectorSession =
+    !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
+      ? loadSessionEntry({
+          storePath: resolveStorePath(cfg.session?.store, {
+            agentId: resolveAgentIdFromSessionKey(requestSessionKey),
+          }),
+          sessionKey: requestSessionKey,
+        })?.swarmCollector === true
+      : false;
+  if (
+    collectorSession ||
+    persistedCollectorSession ||
+    request.swarmCollector === true ||
+    request.swarmOutputSchema !== undefined
+  ) {
+    const schemaError = request.swarmOutputSchema
+      ? validateStructuredOutputSchema(request.swarmOutputSchema)
+      : undefined;
+    if (request.swarmCollector !== true || schemaError) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          schemaError ?? "active swarm collector sessions require swarmCollector=true",
+        ),
+      );
+      return undefined;
+    }
+    const registeredCollector = findAuthorizedSwarmCollectorRequest({
+      childSessionKey: request.sessionKey,
+      idempotencyKey: request.idempotencyKey,
+      outputSchema: request.swarmOutputSchema,
+    });
+    const collectorDedupe = readGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      keys: resolveAgentDedupeKeys({ idempotencyKey: request.idempotencyKey }),
+    });
+    const swarmRequesterSessionKey =
+      registeredCollector?.swarmRequesterSessionKey ?? registeredCollector?.requesterSessionKey;
+    const swarmEnabled = resolveSwarmConfig(
+      cfg,
+      registeredCollector?.requesterAgentId ??
+        (swarmRequesterSessionKey
+          ? resolveAgentIdFromSessionKey(swarmRequesterSessionKey)
+          : undefined),
+    ).enabled;
+    const pendingCollectorLaunch =
+      registeredCollector?.swarmLaunchPending === true &&
+      !registeredCollector.collectorCompletion &&
+      typeof registeredCollector.endedAt !== "number";
+    if (
+      (!swarmEnabled && !collectorDedupe) ||
+      !canUseInternalRuntimeHandoff ||
+      request.lane !== "subagent" ||
+      !registeredCollector ||
+      (!pendingCollectorLaunch && !collectorDedupe)
+    ) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "swarm collector fields require an enabled, host-registered collector run",
+        ),
+      );
+      return undefined;
+    }
+  }
   if (request.cwd && !path.isAbsolute(request.cwd)) {
     params.respond(
       false,
@@ -88,7 +173,6 @@ export function prepareAgentRequestPreflight(
     return undefined;
   }
   const allowModelOverride = resolveAllowModelOverrideFromClient(params.client);
-  const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
   const canUseCronRunContinuation = resolveCanUseCronRunContinuation(params.client);
   const expectedSessionResult = resolveExpectedExistingSessionConstraint({
     canUseInternalRuntimeHandoff,
@@ -144,7 +228,6 @@ export function prepareAgentRequestPreflight(
     );
     return undefined;
   }
-  const cfg = params.context.getRuntimeConfig();
   const runId = request.idempotencyKey;
   const execApprovalFollowupApprovalId = parseExecApprovalFollowupApprovalId(runId);
   if (execApprovalFollowupApprovalId && !canUseInternalRuntimeHandoff) {

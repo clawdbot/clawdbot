@@ -254,6 +254,21 @@ describe("duckduckgo web search provider", () => {
     ]);
   });
 
+  it("keeps inline result markup from splitting words", () => {
+    const html = `
+      <a class="result__a" href="https://example.com/cafe">Caf<b>é</b> guide</a>
+      <a class="result__snippet">Find the best caf<b>é</b> near you.</a>
+    `;
+
+    expect(ddgClientTesting.parseDuckDuckGoHtml(html)).toEqual([
+      {
+        title: "Café guide",
+        url: "https://example.com/cafe",
+        snippet: "Find the best café near you.",
+      },
+    ]);
+  });
+
   it("detects bot challenge pages without flagging ordinary result snippets", () => {
     const challengeHtml = `
       <html>

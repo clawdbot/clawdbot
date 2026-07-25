@@ -5,13 +5,19 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import {
-  LOBSTER_LOGO_VISIT_EVENT,
+  LOBSTER_BOTTLE_FORTUNES,
+  pickLobsterEntrance,
+  planLobsterBottle,
+  planLobsterPasser,
+  resolveLobsterLoadIdentity,
+} from "./lobster-pet-plans.ts";
+import {
+  LOBSTER_PET_PALETTES,
   createLobsterPetLook,
   lobsterPetSeed,
   renderLobsterSvg,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
-  type LobsterLogoVisitDetail,
 } from "./lobster-pet.ts";
 
 type LobsterPetPaletteId = ReturnType<typeof createLobsterPetLook>["palette"]["id"];
@@ -27,8 +33,10 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
   "gold",
   "calico",
   "abyss",
+  "lumen",
   "ghost",
   "split",
+  "cottoncandy",
   "retro",
 ];
 
@@ -139,6 +147,9 @@ describe("lobster pet look", () => {
     const builds = new Set<string>();
     const clawSizes = new Set<string>();
     const tailFans = new Set<boolean>();
+    const crusherSides = new Set<string | null>();
+    const freckleRolls = new Set<boolean>();
+    const glints = new Set<string | null>();
     const neutralDate = new Date("2026-07-15T12:00:00");
     for (let seed = 0; seed < 300; seed++) {
       const look = createLobsterPetLook(seed, neutralDate);
@@ -147,12 +158,17 @@ describe("lobster pet look", () => {
       builds.add(look.build);
       clawSizes.add(look.clawSize);
       tailFans.add(look.tailFan);
+      crusherSides.add(look.crusherSide);
+      freckleRolls.add(look.freckles);
+      glints.add(look.glint);
       expect(LOBSTER_PET_PALETTE_IDS).toContain(look.palette.id);
       expect([1.7, 2, 2.5]).toContain(look.scale);
       expect(["none", "crown", "sprout", "patch"]).toContain(look.accessory);
       expect(["perky", "droopy"]).toContain(look.antennae);
       expect(["round", "squat", "slender"]).toContain(look.build);
       expect(["dainty", "regular", "mighty"]).toContain(look.clawSize);
+      expect([null, "left", "right"]).toContain(look.crusherSide);
+      expect([null, "#ffd166", "#ff8ac2", "#b79bff"]).toContain(look.glint);
       const zone = SPOT_ZONES[look.side];
       expect(look.spotPct).toBeGreaterThanOrEqual(zone[0]);
       expect(look.spotPct).toBeLessThanOrEqual(zone[1]);
@@ -163,25 +179,38 @@ describe("lobster pet look", () => {
     expect(builds.size).toBe(3);
     expect(clawSizes.size).toBe(3);
     expect(tailFans.size).toBe(2);
+    expect(crusherSides).toContain(null);
+    expect(crusherSides.size).toBeGreaterThan(1);
+    expect(freckleRolls.size).toBe(2);
+    expect(glints).toContain(null);
+    expect(glints.size).toBeGreaterThan(1);
   });
 
   it("hatches every rarity tier, with rares staying rare", () => {
     const counts = new Map<string, number>();
+    let shinies = 0;
     const total = 20_000;
     const neutralDate = new Date("2026-07-15T12:00:00");
     for (let seed = 0; seed < total; seed++) {
-      const id = createLobsterPetLook(seed, neutralDate).palette.id;
-      counts.set(id, (counts.get(id) ?? 0) + 1);
+      const look = createLobsterPetLook(seed, neutralDate);
+      counts.set(look.palette.id, (counts.get(look.palette.id) ?? 0) + 1);
+      if (look.shiny) {
+        shinies++;
+      }
     }
-    // Every palette, including the 1% grails, must be reachable.
+    // Every palette, including the sub-1% grails, must be reachable.
     for (const id of LOBSTER_PET_PALETTE_IDS) {
       expect(counts.get(id) ?? 0).toBeGreaterThan(0);
     }
-    // Grails stay grails: ghost/split roll ~1%, retro ~0.5%; commons dominate.
-    for (const grail of ["ghost", "split", "retro"]) {
+    // Grails stay grails: ghost/split ~1%, cottoncandy ~0.8%, retro ~0.5%;
+    // commons dominate.
+    for (const grail of ["ghost", "split", "cottoncandy", "retro"]) {
       expect(counts.get(grail) ?? 0).toBeLessThan(total * 0.03);
     }
     expect((counts.get("crimson") ?? 0) + (counts.get("coral") ?? 0)).toBeGreaterThan(total * 0.4);
+    // Shinies exist and stay near their 1-in-512 odds.
+    expect(shinies).toBeGreaterThan(0);
+    expect(shinies).toBeLessThan(total * 0.006);
   });
 
   it("derives distinct salted seeds per session key, stable within a load", () => {
@@ -207,6 +236,18 @@ describe("seasonal wardrobe", () => {
     expect(julySet.has("santa")).toBe(false);
     expect(julySet.has("pumpkin")).toBe(false);
     expect(julySet.has("party")).toBe(false);
+    expect(julySet.has("monocle")).toBe(false);
+  });
+
+  it("dresses fancy on National Lobster Day", () => {
+    const lobsterDaySet = new Set(
+      Array.from(
+        { length: 400 },
+        (_, seed) => createLobsterPetLook(seed, new Date("2026-09-25T12:00:00")).accessory,
+      ),
+    );
+    expect(lobsterDaySet.has("monocle")).toBe(true);
+    expect(lobsterDaySet.has("pumpkin")).toBe(false);
   });
 
   it("dresses everyone as the classic logo on the repo anniversary", () => {
@@ -749,138 +790,239 @@ describe("lobster pet element", () => {
   });
 });
 
-function trackLogoPhases(element: LobsterPetElement): LobsterLogoVisitDetail[] {
-  const phases: LobsterLogoVisitDetail[] = [];
-  element.addEventListener(LOBSTER_LOGO_VISIT_EVENT, (event) => {
-    phases.push((event as CustomEvent<LobsterLogoVisitDetail>).detail);
-  });
-  return phases;
-}
-
-describe("lobster pet logo stand-in", () => {
-  // Seed 70 is a planned logo load, not shy, first arrival ~25s.
-  const LOGO_SEED = 70;
-
-  it("spends the first visit in the brand slot, then returns to the ledge", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const element = createPet(LOGO_SEED);
-    const phases = trackLogoPhases(element);
-    await element.updateComplete;
-
-    const arrived = await advanceUntil(element, () => phases.length > 0, 200_000);
-    expect(arrived).toBe(true);
-    const firstPhase = expectDefined(phases[0], "first logo phase");
-    expect(firstPhase.phase).toBe("in");
-    expect(firstPhase.look).not.toBeNull();
-    expect(firstPhase.name).toBeTruthy();
-    // One crab, two homes: the ledge stays empty while it plays logo.
-    expect(spritePresent(element)).toBe(false);
-
-    const left = await advanceUntil(element, () => phases.some((p) => p.phase === "out"), 400_000);
-    expect(left).toBe(true);
-    expect(phases.map((p) => p.phase)).toEqual(["in", "leaving", "out"]);
-    expect(expectDefined(phases[2], "logo exit phase").look).toBeNull();
-
-    // Logo visits are once per load: the next arrival is a normal ledge perch.
-    const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);
-    expect(returned).toBe(true);
-    expect(phases.length).toBe(3);
+describe("lobster plans", () => {
+  it("keeps the passer gate near 9.5% while widening the traffic", () => {
+    const counts = new Map<string, number>();
+    const total = 20_000;
+    for (let seed = 0; seed < total; seed++) {
+      const plan = planLobsterPasser(seed);
+      if (!plan) {
+        continue;
+      }
+      counts.set(plan.kind, (counts.get(plan.kind) ?? 0) + 1);
+      expect(plan.atMs).toBeGreaterThanOrEqual(60_000);
+      expect(plan.atMs).toBeLessThanOrEqual(900_000);
+    }
+    for (const kind of ["stranger", "crab", "snail", "duck", "jellyfish"]) {
+      expect(counts.get(kind) ?? 0).toBeGreaterThan(0);
+    }
+    const passers = [...counts.values()].reduce((sum, count) => sum + count, 0);
+    expect(passers).toBeGreaterThan(total * 0.07);
+    expect(passers).toBeLessThan(total * 0.12);
+    // Strangers stay the most common traffic.
+    for (const kind of ["crab", "snail", "duck", "jellyfish"]) {
+      expect(counts.get("stranger") ?? 0).toBeGreaterThan(counts.get(kind) ?? 0);
+    }
   });
 
-  it("recalls the stand-in to ledge duty when the gateway drops", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const element = createPet(LOGO_SEED);
-    const phases = trackLogoPhases(element);
-    await advanceUntil(element, () => phases.length > 0, 200_000);
-    expect(phases.at(-1)?.phase).toBe("in");
-    expect(spritePresent(element)).toBe(false);
-
-    element.mode = "offline";
-    await element.updateComplete;
-    expect(phases.at(-1)?.phase).toBe("out");
-    expect(spritePresent(element)).toBe(true);
+  it("maps entrance rolls to their rarity bands", () => {
+    expect(pickLobsterEntrance(0.01)).toBe("balloon");
+    expect(pickLobsterEntrance(0.06)).toBe("bubble");
+    expect(pickLobsterEntrance(0.129)).toBe("bubble");
+    expect(pickLobsterEntrance(0.13)).toBe("walk");
+    expect(pickLobsterEntrance(0.9)).toBe("walk");
   });
 
-  it("sends offline summons to the ledge even on planned logo loads", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const element = createPet(LOGO_SEED, "offline");
-    const phases = trackLogoPhases(element);
-    await element.updateComplete;
-    expect(spritePresent(element)).toBe(true);
-    expect(phases).toEqual([]);
+  it("resolves rare elder identities deterministically", () => {
+    const neutralDate = new Date("2026-07-15T12:00:00");
+    const identityOf = (seed: number) =>
+      resolveLobsterLoadIdentity(seed, createLobsterPetLook(seed, neutralDate));
+    const elder = identityOf(644);
+    expect(elder.elder).toBe(true);
+    expect(elder.look.scale).toBe(3);
+    expect(elder.look.accessory).toBe("barnacle");
+    let elders = 0;
+    for (let seed = 0; seed < 3_000; seed++) {
+      if (identityOf(seed).elder) {
+        elders++;
+      }
+    }
+    expect(elders).toBeGreaterThan(0);
+    expect(elders).toBeLessThan(3_000 * 0.035);
   });
 
-  it("disabling visits mid-stand-in clears the brand slot immediately", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const element = createPet(LOGO_SEED);
-    const phases = trackLogoPhases(element);
-    await advanceUntil(element, () => phases.length > 0, 200_000);
-    expect(phases.at(-1)?.phase).toBe("in");
-
-    element.visitsEnabled = false;
-    await element.updateComplete;
-    expect(phases.at(-1)?.phase).toBe("out");
-    expect(spritePresent(element)).toBe(false);
+  it("returns old friends only from palettes the dex knows", () => {
+    vi.stubGlobal("localStorage", window.localStorage);
+    const neutralDate = new Date("2026-07-15T12:00:00");
+    const identityOf = (seed: number) =>
+      resolveLobsterLoadIdentity(seed, createLobsterPetLook(seed, neutralDate));
+    // An empty dex has no friends to bring back, whatever the roll says.
+    expect(identityOf(191).oldFriend).toBe(false);
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        gold: { firstSeenAt: 1, name: "Goldenrod" },
+        teal: { firstSeenAt: 2, name: "Minty" },
+      }),
+    );
+    const friend = identityOf(191);
+    expect(friend.oldFriend).toBe(true);
+    expect(friend.look.palette.id).toBe("gold");
+    expect(friend.friendName).toBe("Goldenrod");
+    // A seed whose friend roll misses stays a fresh stranger.
+    expect(identityOf(42).oldFriend).toBe(false);
   });
 
-  it("keeps unplanned loads on the ledge without logo events", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    // Seed 42 also rolls no logo scare on its first arrival, so a full visit
-    // passes with the brand mark untouched.
-    const element = createPet(42);
-    const phases = trackLogoPhases(element);
-
-    await arrive(element);
-
-    expect(spritePresent(element)).toBe(true);
-    expect(phases).toEqual([]);
+  it("beaches bottles rarely, with fortunes and spots in range", () => {
+    let bottles = 0;
+    const total = 20_000;
+    for (let seed = 0; seed < total; seed++) {
+      const plan = planLobsterBottle(seed);
+      if (!plan) {
+        continue;
+      }
+      bottles++;
+      expect(plan.atMs).toBeGreaterThanOrEqual(45_000);
+      expect(plan.spotPct).toBeGreaterThanOrEqual(15);
+      expect(plan.spotPct).toBeLessThanOrEqual(85);
+      expect(LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex]).toBeTruthy();
+    }
+    expect(bottles).toBeGreaterThan(0);
+    expect(bottles).toBeLessThan(total * 0.05);
   });
 });
 
-describe("lobster pet logo scare", () => {
-  // Seed 91: a normal ledge load (not a logo load), not shy, first arrival
-  // ~19s, and the first arrival's scare roll hits (~0.07 < 0.3).
-  const SCARE_SEED = 91;
-
-  it("hides the logo without a stand-in mid-visit, restoring after the exit", async () => {
+describe("rare lobster loads", () => {
+  // Probe seeds (deterministic per stream): 644 hosts the Elder; 191 rolls
+  // an old-friend return plus a balloon entrance; 916 hatches a shiny lumen;
+  // 104 is a shy load that beaches a bottle at ~194s; 37 is a shy load with
+  // a snail crossing at ~407s.
+  it("hosts the Elder: barnacled, renamed, and never molting", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const element = createPet(SCARE_SEED);
-    const phases = trackLogoPhases(element);
+    const element = createPet(644);
+    await arrive(element);
 
-    const scared = await advanceUntil(element, () => phases.length > 0, 200_000);
-    expect(scared).toBe(true);
-    // Unlike a perch, the crab stays on the ledge while the logo hides.
-    expect(spritePresent(element)).toBe(true);
-    const first = expectDefined(phases[0], "first scare phase");
-    expect(first.phase).toBe("in");
-    expect(first.look).toBeNull();
-    expect(first.name).toBeNull();
-
-    const left = await advanceUntil(element, () => phases.some((p) => p.phase === "out"), 400_000);
-    expect(left).toBe(true);
-    expect(phases.map((p) => p.phase)).toEqual(["in", "leaving", "out"]);
+    expect(spriteClasses(element)).toContain("lobster-pet--elder");
+    expect(element.querySelector(".lob-barnacles")).not.toBeNull();
+    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toBe(
+      "Methuselah · old as the tides",
+    );
   });
 
-  it("never scares the logo under reduced motion", async () => {
+  it("brings back an old friend from the Lobsterdex, balloon and all", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches: true }) as MediaQueryList),
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        gold: { firstSeenAt: 1, name: "Goldenrod" },
+        teal: { firstSeenAt: 2, name: "Minty" },
+      }),
     );
-    const element = createPet(SCARE_SEED);
-    const phases = trackLogoPhases(element);
+    const element = createPet(191);
+    await arrive(element);
 
-    const arrived = await advanceUntil(element, () => spritePresent(element), 200_000);
-    expect(arrived).toBe(true);
-    await vi.advanceTimersByTimeAsync(5_000);
+    // The seeded crimson look is repainted as the remembered gold visitor.
+    expect(spriteClasses(element)).toContain("lobster-pet--palette-gold");
+    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toBe(
+      "Goldenrod · an old friend",
+    );
+    // This seed also floats in under a balloon...
+    expect(spriteClasses(element)).toContain("lobster-pet--enter-balloon");
+    expect(element.querySelector(".lobster-pet__balloon")).not.toBeNull();
+    // ...and old friends greet even before the familiarity tier does.
+    const waved = await advanceUntil(
+      element,
+      () => spriteClasses(element).includes("lobster-pet--act-wave"),
+      5_000,
+      100,
+    );
+    expect(waved).toBe(true);
+  });
+
+  it("hatches shiny lobsters that sparkle and log in the Lobsterdex", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const element = createPet(916);
+    await arrive(element);
+
+    expect(spriteClasses(element)).toContain("lobster-pet--shiny");
+    expect(spriteClasses(element)).toContain("lobster-pet--palette-lumen");
+    expect(element.querySelectorAll(".lobster-pet__sparkle").length).toBeGreaterThan(0);
+    expect(element.querySelector(".lob-lumen")).not.toBeNull();
+    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toContain("✦");
+    expect(getLobsterdexEntries().get("lumen")?.shinySeenAt).not.toBeNull();
+  });
+
+  it("beaches a message in a bottle on its own clock, pet or no pet", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(104);
     await element.updateComplete;
-    expect(phases).toEqual([]);
+
+    // Seed 104 is a shy load: no pet ever, but the tide does not care.
+    const washedUp = await advanceUntil(
+      element,
+      () => element.querySelector(".lobster-bottle") !== null,
+      300_000,
+    );
+    expect(washedUp).toBe(true);
+    expect(spritePresent(element)).toBe(false);
+    expect(element.querySelector(".lobster-bottle")?.getAttribute("title")).toBe(
+      "a message in a bottle",
+    );
+
+    element.querySelector(".lobster-bottle")?.dispatchEvent(new Event("pointerdown"));
+    await element.updateComplete;
+    const opened = element.querySelector(".lobster-bottle");
+    expect(opened?.className).toContain("lobster-bottle--open");
+    expect(opened?.getAttribute("title")).toBe("a shell is just armor you outgrew");
+
+    // Read fortunes drift back out with the tide.
+    const ebbed = await advanceUntil(
+      element,
+      () => element.querySelector(".lobster-bottle") === null,
+      150_000,
+    );
+    expect(ebbed).toBe(true);
+  });
+
+  it("lets the snail take its sweet time crossing the ledge", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(37);
+    await element.updateComplete;
+
+    const appeared = await advanceUntil(
+      element,
+      () => element.querySelector(".lobster-pet--snail") !== null,
+      500_000,
+    );
+    expect(appeared).toBe(true);
+    // A regular passer's 11s crossing would be long over; the snail abides.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--snail")).not.toBeNull();
+    const gone = await advanceUntil(
+      element,
+      () => element.querySelector(".lobster-pet--snail") === null,
+      40_000,
+    );
+    expect(gone).toBe(true);
+  });
+
+  it("earns the golden ledge trim once the Lobsterdex is complete", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify(
+        Object.fromEntries(
+          LOBSTER_PET_PALETTES.map((palette) => [palette.id, { firstSeenAt: 1, name: "First" }]),
+        ),
+      ),
+    );
+    const element = createPet(42);
+    await element.updateComplete;
+    expect(element.hasAttribute("data-dex-complete")).toBe(true);
+
+    // The visits setting silences the trim like everything else.
+    element.visitsEnabled = false;
+    await element.updateComplete;
+    expect(element.hasAttribute("data-dex-complete")).toBe(false);
   });
 });

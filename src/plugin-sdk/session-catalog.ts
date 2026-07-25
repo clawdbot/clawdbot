@@ -16,6 +16,8 @@ export type {
   SessionCatalogCapabilities,
   SessionCatalogDescriptor,
   SessionCatalogHost,
+  SessionCatalogLocator,
+  SessionCatalogPullRequestSummary,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   SessionsCatalogArchiveParams,
@@ -27,6 +29,10 @@ export type {
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+export {
+  deleteSessionUpstreamLink,
+  upsertSessionUpstreamLink,
+} from "../sessions/session-upstream-links.js";
 export {
   classifyClaudeCliHistoryMessage,
   classifyClaudeCliHistoryLine,

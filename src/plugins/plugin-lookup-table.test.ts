@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import { clearLoadPluginMetadataSnapshotMemo } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
@@ -160,7 +159,6 @@ async function expectStaleMetadataSnapshotRebuild(params: {
 
 describe("loadPluginLookUpTable", () => {
   beforeEach(() => {
-    clearLoadPluginMetadataSnapshotMemo();
     listPotentialConfiguredChannelIds
       .mockReset()
       .mockImplementation((config: OpenClawConfig) => Object.keys(config.channels ?? {}));
@@ -263,6 +261,50 @@ describe("loadPluginLookUpTable", () => {
     expect(table.startup.channelPluginIds).toEqual(["telegram"]);
     expect(table.startup.configuredDeferredChannelPluginIds).toStrictEqual([]);
     expect(table.startup.pluginIds).toEqual(["telegram"]);
+  });
+
+  it("excludes ambient-only channels from the suppressed gateway startup plan", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const index = createIndex(plugins);
+    const manifestRegistry: PluginManifestRegistry = { plugins, diagnostics: [] };
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { ambientEnvTriggers?: string },
+      ) => (options?.ambientEnvTriggers === "suppress" ? [] : ["telegram"]),
+    );
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+    const config = { plugins: { slots: { memory: "none" } } } as OpenClawConfig;
+    const env = { TELEGRAM_FAKE_TEST_TRIGGER: "configured" } as NodeJS.ProcessEnv;
+
+    expect(loadPluginLookUpTable({ config, env, index }).startup.pluginIds).toEqual(["telegram"]);
+    expect(
+      loadPluginLookUpTable({
+        config,
+        env,
+        index,
+        ambientEnvTriggers: "suppress",
+      }).startup.pluginIds,
+    ).toStrictEqual([]);
+    expect(
+      loadPluginLookUpTable({
+        config: {
+          ...config,
+          channels: { telegram: { enabled: true } },
+        } as OpenClawConfig,
+        env,
+        index,
+        ambientEnvTriggers: "suppress",
+      }).startup.pluginIds,
+    ).toEqual(["telegram"]);
   });
 
   it("scopes metadata manifest reconstruction for restrictive startup allowlists", async () => {

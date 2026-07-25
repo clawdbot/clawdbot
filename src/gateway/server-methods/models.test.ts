@@ -4,6 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -49,13 +50,19 @@ function requestModelsList(params: {
   view: "default" | "configured" | "provider-config" | "all";
   respond?: ReturnType<typeof vi.fn>;
   runtimeConfig?: OpenClawConfig;
+  getRuntimeConfig?: () => OpenClawConfig;
   loadGatewayModelCatalog: (params?: {
+    agentId?: string;
+    agentDir?: string;
     readOnly?: boolean;
+    workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
   includeProviderCapabilities?: boolean;
 }) {
   const respond = params.respond ?? vi.fn();
+  const runtimeConfig = params.runtimeConfig ?? ({} as OpenClawConfig);
+  const getRuntimeConfig = params.getRuntimeConfig ?? (() => runtimeConfig);
   const request = expectDefined(
     modelsHandlers["models.list"],
     'modelsHandlers["models.list"] test invariant',
@@ -77,13 +84,20 @@ function requestModelsList(params: {
     client: null,
     isWebchatConnect: () => false,
     context: {
-      getRuntimeConfig: () => params.runtimeConfig ?? ({} as OpenClawConfig),
+      getRuntimeConfig,
       loadGatewayModelCatalog: params.loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot: async (
         loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
       ) => {
         const entries = await params.loadGatewayModelCatalog(loadParams);
-        return { entries, routeVariants: entries };
+        const config = getRuntimeConfig();
+        return {
+          agentId: loadParams?.agentId ?? resolveDefaultAgentId(config),
+          agentDir: "/tmp/models-list-agent",
+          config,
+          entries,
+          routeVariants: entries,
+        };
       },
       logGateway: {
         debug: vi.fn(),
@@ -94,6 +108,68 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it("uses the replacement owner config for the whole catalog projection", async () => {
+    const initialConfig = {
+      agents: { defaults: { models: { "test/old": {} } } },
+    } as OpenClawConfig;
+    const latestConfig = {
+      agents: { defaults: { models: { "test/demo": {} } } },
+    } as OpenClawConfig;
+    let currentConfig = initialConfig;
+    const loadGatewayModelCatalog = vi.fn(async () => {
+      if (currentConfig === initialConfig) {
+        currentConfig = latestConfig;
+      }
+      return [{ id: "demo", name: "Demo", provider: "test" }];
+    });
+
+    const { request, respond } = requestModelsList({
+      view: "configured",
+      getRuntimeConfig: () => currentConfig,
+      loadGatewayModelCatalog,
+    });
+    await request;
+
+    expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { models: [expect.objectContaining({ id: "demo", provider: "test" })] },
+      undefined,
+    );
+  });
+
+  it("escalates to the full owner when replacement config adds a provider wildcard", async () => {
+    const initialConfig = {
+      agents: { defaults: { models: { "test/demo": {} } } },
+    } as OpenClawConfig;
+    const latestConfig = {
+      agents: { defaults: { models: { "test/*": {} } } },
+    } as OpenClawConfig;
+    let currentConfig = initialConfig;
+    let firstLoad = true;
+    const loadGatewayModelCatalog = vi.fn(async (_params?: { readOnly?: boolean }) => {
+      if (firstLoad) {
+        firstLoad = false;
+        currentConfig = latestConfig;
+      }
+      return [{ id: "demo", name: "Demo", provider: "test" }];
+    });
+
+    const { request, respond } = requestModelsList({
+      view: "configured",
+      getRuntimeConfig: () => currentConfig,
+      loadGatewayModelCatalog,
+    });
+    await request;
+
+    expect(loadGatewayModelCatalog.mock.calls.map(([params]) => params?.readOnly)).toEqual([
+      true,
+      false,
+    ]);
+    expect(respond).toHaveBeenCalledWith(true, { models: [] }, undefined);
+  });
+
   it("reports API-key capability from provider auth contracts when requested", async () => {
     const { request, respond } = requestModelsList({
       view: "all",
@@ -211,7 +287,10 @@ describe("models.list", () => {
         },
         undefined,
       );
-      expect(loadGatewayModelCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
+      expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+      expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: true }),
+      );
     } finally {
       clearRuntimeConfigSnapshot();
     }
@@ -320,7 +399,9 @@ describe("models.list", () => {
           },
           undefined,
         );
-        expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: true });
+        expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ readOnly: true }),
+        );
       } finally {
         vi.useRealTimers();
       }
@@ -422,7 +503,9 @@ describe("models.list", () => {
           },
           undefined,
         );
-        expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
+        expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ readOnly: false }),
+        );
       } finally {
         vi.useRealTimers();
       }
@@ -518,7 +601,9 @@ describe("models.list", () => {
         },
         undefined,
       );
-      expect(loadConfiguredCatalog).toHaveBeenCalledWith({ readOnly: false });
+      expect(loadConfiguredCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: false }),
+      );
 
       const { request: allRequest, respond: allRespond } = requestModelsList({
         view: "all",

@@ -5,10 +5,13 @@ import { t } from "../i18n/index.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import {
   SIDEBAR_SESSION_SORT_OPTIONS,
+  SIDEBAR_SESSION_STATUS_OPTIONS,
   type SidebarSessionGroupMenuState,
   type SidebarSessionSortMode,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderSessionOwnerChip, type SessionCreatorOption } from "./session-owner-chip.ts";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
@@ -91,9 +94,14 @@ export function renderSidebarSessionSortMenu(params: {
   trigger: HTMLElement | null;
   grouping: SidebarSessionsGrouping;
   sortMode: SidebarSessionSortMode;
+  statusFilter: SidebarSessionStatusFilter;
   showCron: boolean;
+  creators: readonly SessionCreatorOption[];
+  creatorFilterId: string | null;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;
+  onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
+  onCreatorFilterChange: (creatorId: string | null) => void;
   onShowCronChange: (show: boolean) => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
@@ -122,6 +130,12 @@ export function renderSidebarSessionSortMenu(params: {
               params.onGroupingChange(value.slice("grouping:".length) as SidebarSessionsGrouping);
             } else if (value?.startsWith("sort:")) {
               params.onSortModeChange(value.slice("sort:".length) as SidebarSessionSortMode);
+            } else if (value?.startsWith("status:")) {
+              params.onStatusFilterChange(
+                value.slice("status:".length) as SidebarSessionStatusFilter,
+              );
+            } else if (value?.startsWith("creator:")) {
+              params.onCreatorFilterChange(value.slice("creator:".length) || null);
             } else if (value === "show-cron") {
               params.onShowCronChange(!params.showCron);
             }
@@ -176,6 +190,71 @@ export function renderSidebarSessionSortMenu(params: {
               </wa-dropdown-item>
             `,
           )}
+          <div class="session-menu__separator" role="separator"></div>
+          <div class="sidebar-session-sort-menu__title">${t("sessionsView.status")}</div>
+          ${SIDEBAR_SESSION_STATUS_OPTIONS.map(
+            (statusFilter) => html`
+              <wa-dropdown-item
+                class="sidebar-session-sort-menu__item"
+                value=${`status:${statusFilter}`}
+                role="menuitemradio"
+                aria-checked=${String(params.statusFilter === statusFilter)}
+                ${ref((element) =>
+                  syncDropdownItemRadio(element, params.statusFilter === statusFilter),
+                )}
+              >
+                <span slot="details" class="session-menu__check" aria-hidden="true"
+                  >${params.statusFilter === statusFilter ? icons.check : nothing}</span
+                >
+                <span class="session-menu__text"
+                  >${statusFilter === "active"
+                    ? t("common.active")
+                    : statusFilter === "archived"
+                      ? t("sessionsView.archived")
+                      : t("sessionsView.all")}</span
+                >
+              </wa-dropdown-item>
+            `,
+          )}
+          ${params.creators.length >= 2
+            ? html`
+                <div class="session-menu__separator" role="separator"></div>
+                <div class="sidebar-session-sort-menu__title">${t("sessionsView.people")}</div>
+                <wa-dropdown-item
+                  class="sidebar-session-sort-menu__item"
+                  value="creator:"
+                  role="menuitemradio"
+                  aria-checked=${String(params.creatorFilterId === null)}
+                  ${ref((element) =>
+                    syncDropdownItemRadio(element, params.creatorFilterId === null),
+                  )}
+                >
+                  <span slot="details" class="session-menu__check" aria-hidden="true"
+                    >${params.creatorFilterId === null ? icons.check : nothing}</span
+                  >
+                  <span class="session-menu__text">${t("sessionsView.allCreators")}</span>
+                </wa-dropdown-item>
+                ${params.creators.map(
+                  (creator) => html`
+                    <wa-dropdown-item
+                      class="sidebar-session-sort-menu__item"
+                      value=${`creator:${creator.id}`}
+                      role="menuitemradio"
+                      aria-checked=${String(params.creatorFilterId === creator.id)}
+                      ${ref((element) =>
+                        syncDropdownItemRadio(element, params.creatorFilterId === creator.id),
+                      )}
+                    >
+                      <span slot="details" class="session-menu__check" aria-hidden="true"
+                        >${params.creatorFilterId === creator.id ? icons.check : nothing}</span
+                      >
+                      ${renderSessionOwnerChip(creator, "row")}
+                      <span class="session-menu__text">${creator.label ?? creator.id}</span>
+                    </wa-dropdown-item>
+                  `,
+                )}
+              `
+            : nothing}
           <div class="session-menu__separator" role="separator"></div>
           <wa-dropdown-item
             class="sidebar-session-sort-menu__item"

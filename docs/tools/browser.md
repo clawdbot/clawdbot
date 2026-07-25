@@ -83,7 +83,7 @@ stage:
 }
 ```
 
-For a single agent, use `agents.list[].tools.alsoAllow: ["browser"]`.
+For a single agent, use `agents.entries.*.tools.alsoAllow: ["browser"]`.
 `tools.subagents.tools.allow: ["browser"]` alone is not enough because sub-agent
 policy is applied after profile filtering.
 
@@ -157,16 +157,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
       // allowedHostnames: ["localhost"],
     },
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
-    remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
-    remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
-    localLaunchTimeoutMs: 15000, // local managed Chrome discovery timeout (ms)
-    localCdpReadyTimeoutMs: 8000, // local managed post-launch CDP readiness timeout (ms)
-    actionTimeoutMs: 60000, // default browser act timeout (ms)
     tabCleanup: {
       enabled: true, // default: true
-      idleMinutes: 120, // set 0 to disable idle cleanup
-      maxTabsPerSession: 8, // set 0 to disable the per-session cap
-      sweepMinutes: 5,
     },
     // snapshotDefaults: { mode: "efficient" }, // default snapshot mode when the caller omits one
     defaultProfile: "openclaw",
@@ -204,6 +196,42 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 extraction mode when a caller does not pass an explicit `snapshotFormat` or
 `mode`; see [Browser control API](/tools/browser-control) for per-call
 snapshot options.
+
+### Tab cleanup ownership
+
+Session tab cleanup applies only to tabs created by the OpenClaw browser tool
+with `action: "open"`. OpenClaw does not adopt tabs that were already open,
+opened by the user, or otherwise have unknown ownership. The
+`browser.tabCleanup` block controls periodic idle and cap sweeps for primary
+sessions; disabling it does not disable explicit session lifecycle cleanup.
+
+For host-local opens, ownership with a stable native CDP target and browser
+identity is stored in the shared SQLite state. Those records survive a Gateway
+restart and remain eligible for `/new` and other session lifecycle cleanup;
+session lifecycle cleanup includes subagent, cron, and ACP session endings.
+Records whose tool-facing target is the native CDP target also remain eligible
+for idle and per-session cap sweeps after restart. Chrome MCP target handles are
+process-local, so cold existing-session records wait for lifecycle cleanup
+rather than risking an idle sweep against activity that cannot be attributed
+safely after restart. This durable path can cover OpenClaw-managed profiles,
+regular remote CDP profiles, and existing-session profiles with an explicit
+`cdpUrl`, provided OpenClaw can resolve both the native target and a stable
+browser identity. Before closing a durable record, OpenClaw verifies that the
+configured profile and browser instance still match.
+
+Chrome MCP `--autoConnect`, CDP endpoints whose `/json/version` response lacks
+a stable browser identity, and opens whose native target cannot be resolved
+remain process-local best-effort tracking. They can be cleaned up while that
+Gateway process is running, but they are not automatically closed after a
+Gateway restart. Tabs left open before durable tracking was available are not
+retroactively adopted; close those tabs manually.
+
+Cleanup is best-effort, not a guarantee that every eligible tab closes
+immediately. A transient ownership check or close failure leaves durable
+cleanup pending for a later retry. Retries are not unbounded: when the browser
+stays unreachable and the tab has gone unused for over a day, the tracking row
+is retired so the durable store cannot fill up with tabs that can never be
+verified again.
 
 ### Screenshot vision (text-only model support)
 
@@ -268,23 +296,13 @@ main model can read the screenshot directly.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` from a range starting 9 ports above the control port (default `18800`-`18899`); set those only for
   remote CDP profiles or existing-session endpoint attach. `cdpUrl` defaults to
   the managed local CDP port when unset.
-- `remoteCdpTimeoutMs` applies to remote and `attachOnly` CDP HTTP reachability
-  checks and tab-opening HTTP requests; `remoteCdpHandshakeTimeoutMs` applies to
-  their CDP WebSocket handshakes. Persistent remote Playwright tab enumeration
-  uses the larger of the two as its operation deadline.
-- `localLaunchTimeoutMs` is the budget for a locally launched managed Chrome
-  process to expose its CDP HTTP endpoint. `localCdpReadyTimeoutMs` is the
-  follow-up budget for CDP websocket readiness after the process is discovered.
-  Raise these on Raspberry Pi, low-end VPS, or older hardware where Chromium
-  starts slowly. Values must be positive integers up to `120000` ms; invalid
-  config values are rejected.
+- Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
+  managed-Chrome startup use built-in deadlines.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per
   profile. After several consecutive failures, OpenClaw pauses new launch
   attempts briefly instead of spawning Chromium on every browser tool call. Fix
   the startup problem, disable the browser if it is not needed, or restart the
   Gateway after repair.
-- `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
-- `tabCleanup` is best-effort cleanup for tabs opened by primary-agent browser sessions. Subagent, cron, and ACP lifecycle cleanup still closes their explicit tracked tabs at session end; primary sessions keep active tabs reusable, then close idle or excess tracked tabs in the background.
 
 </Accordion>
 
@@ -459,8 +477,6 @@ Example:
   browser: {
     enabled: true,
     defaultProfile: "browserless",
-    remoteCdpTimeoutMs: 2000,
-    remoteCdpHandshakeTimeoutMs: 4000,
     profiles: {
       browserless: {
         cdpUrl: "wss://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
@@ -553,8 +569,6 @@ proxies.
   browser: {
     enabled: true,
     defaultProfile: "browserbase",
-    remoteCdpTimeoutMs: 3000,
-    remoteCdpHandshakeTimeoutMs: 5000,
     profiles: {
       browserbase: {
         cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
@@ -587,8 +601,6 @@ WebSocket gateway.
   browser: {
     enabled: true,
     defaultProfile: "notte",
-    remoteCdpTimeoutMs: 3000,
-    remoteCdpHandshakeTimeoutMs: 5000,
     profiles: {
       notte: {
         cdpUrl: "wss://us-prod.notte.cc/sessions/connect?token=<NOTTE_API_KEY>",

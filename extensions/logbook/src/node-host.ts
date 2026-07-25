@@ -15,6 +15,8 @@ type LogbookSnapshotParams = {
 
 type LogbookSnapshotPayload = { format: "jpeg"; base64: string } | { error: string };
 
+const LOGBOOK_SNAPSHOT_EXEC_TIMEOUT_MS = 25_000;
+
 function readParams(value: unknown): LogbookSnapshotParams {
   if (!value || typeof value !== "object") {
     return {};
@@ -53,11 +55,14 @@ export async function handleLogbookSnapshot(rawParams: unknown): Promise<Logbook
     // Pre-create owner-only: screencapture truncates the existing inode, so
     // the capture never becomes world-readable even if the dir mode drifts.
     await writeFile(filePath, "", { mode: 0o600 });
+    // node.invoke stops waiting after 30 seconds but cannot reap node-host children.
+    // Share an earlier deadline so both commands terminate before that outer boundary.
+    const execSignal = AbortSignal.timeout(LOGBOOK_SNAPSHOT_EXEC_TIMEOUT_MS);
     // -x: no capture sound; -C: include cursor; -D is 1-based display index.
     await runExec(
       "screencapture",
       ["-x", "-C", "-D", String(screenIndex + 1), "-t", "jpg", filePath],
-      { logOutput: false },
+      { logOutput: false, signal: execSignal },
     );
     await runExec(
       "sips",
@@ -72,7 +77,7 @@ export async function handleLogbookSnapshot(rawParams: unknown): Promise<Logbook
         String(qualityPct),
         filePath,
       ],
-      { logOutput: false },
+      { logOutput: false, signal: execSignal },
     );
     const buffer = await readFile(filePath);
     return { format: "jpeg", base64: buffer.toString("base64") };

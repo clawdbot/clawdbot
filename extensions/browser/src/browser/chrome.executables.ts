@@ -25,6 +25,8 @@ const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
 const BROWSER_VERSION_TIMEOUT_MS = 6000;
 const MAC_PLISTBUDDY_TIMEOUT_MS = 800;
 const WINDOWS_FILE_METADATA_TIMEOUT_MS = 4000;
+const DEFAULT_WINDOWS_PROGRAM_FILES = "C:\\Program Files";
+const DEFAULT_WINDOWS_PROGRAM_FILES_X86 = "C:\\Program Files (x86)";
 
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
@@ -471,10 +473,37 @@ function readWindowsCommandForProgId(progId: string): string | null {
   return normalizeOptionalString(match?.[1]) ?? null;
 }
 
+function resolveWindowsBrowserInstallRoots() {
+  return {
+    localAppData:
+      normalizeOptionalString(process.env.LOCALAPPDATA) ??
+      path.win32.join(os.homedir(), "AppData", "Local"),
+    programFiles:
+      normalizeOptionalString(process.env.ProgramFiles) ?? DEFAULT_WINDOWS_PROGRAM_FILES,
+    // Must use bracket notation: variable name contains parentheses.
+    programFilesX86:
+      normalizeOptionalString(process.env["ProgramFiles(x86)"]) ??
+      DEFAULT_WINDOWS_PROGRAM_FILES_X86,
+  };
+}
+
 function expandWindowsEnvVars(value: string): string {
+  const installRoots = resolveWindowsBrowserInstallRoots();
+  const installRootByEnvName: Record<string, string> = {
+    localappdata: installRoots.localAppData,
+    programfiles: installRoots.programFiles,
+    "programfiles(x86)": installRoots.programFilesX86,
+  };
   return value.replace(/%([^%]+)%/g, (_match, name) => {
-    const key = normalizeOptionalString(name) ?? "";
-    return key ? (process.env[key] ?? `%${key}%`) : _match;
+    const key = normalizeOptionalString(name);
+    if (!key) {
+      return _match;
+    }
+    return (
+      normalizeOptionalString(process.env[key]) ??
+      installRootByEnvName[key.toLowerCase()] ??
+      `%${key}%`
+    );
   });
 }
 
@@ -666,10 +695,7 @@ function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
 
 /** Find the best Chromium-family executable on Windows. */
 function findChromeExecutableWindows(): BrowserExecutable | null {
-  const localAppData = process.env.LOCALAPPDATA ?? "";
-  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-  // Must use bracket notation: variable name contains parentheses.
-  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const { localAppData, programFiles, programFilesX86 } = resolveWindowsBrowserInstallRoots();
   const joinWin = path.win32.join;
   const candidates: Array<BrowserExecutable> = [];
 
@@ -736,9 +762,7 @@ function findChromeExecutableWindows(): BrowserExecutable | null {
 }
 
 function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
-  const localAppData = process.env.LOCALAPPDATA ?? "";
-  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const { localAppData, programFiles, programFilesX86 } = resolveWindowsBrowserInstallRoots();
   const joinWin = path.win32.join;
   const candidates: string[] = [];
 

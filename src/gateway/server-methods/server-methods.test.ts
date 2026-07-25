@@ -37,6 +37,7 @@ import {
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createChatRunState } from "../server-chat-state.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -834,24 +835,40 @@ describe("injectTimestamp", () => {
 
     expect(result).toMatch(/^\[Fri 2025-07-04 12:00 EDT\]/);
   });
-
-  it("leaves messages bare when config disables envelope timestamps", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          envelopeTimestamp: "off",
-          userTimezone: "America/New_York",
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(injectTimestamp("cache sensitive prompt", timestampOptsFromConfig(cfg))).toBe(
-      "cache sensitive prompt",
-    );
-  });
 });
 
 describe("sanitizeChatHistoryMessages", () => {
+  it("preserves bounded cloud workspace conflict details for Control UI history", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        content: "Cloud result applied with conflicts.",
+        details: {
+          paths: ["src/local.ts", "ui/src/app.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+          totalCount: 3,
+          internal: "discard",
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        content: "Cloud result applied with conflicts.",
+        details: {
+          paths: ["src/local.ts", "ui/src/app.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+          totalCount: 3,
+        },
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("truncates display text without splitting surrogate pairs", () => {
     const prefix = "a".repeat(7);
     const result = sanitizeChatHistoryMessages(
@@ -2645,21 +2662,14 @@ describe("timestampOptsFromConfig", () => {
     expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
   });
 
-  it("keeps timestamp injection enabled for upgraded configs unless explicitly disabled", () => {
+  it("keeps timestamp injection enabled for upgraded configs", () => {
     const upgradedConfigWithExistingDefaults = {
       agents: { defaults: { userTimezone: "America/Chicago" } },
     } as OpenClawConfig;
 
-    // Existing user configs do not store envelopeTimestamp; omission remains
-    // the shipped default even when other agent defaults are present, so no
-    // config migration is needed for this broadened use of the setting.
+    // Timestamp injection is fixed on even when other agent defaults exist.
     expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
     expect(timestampOptsFromConfig(upgradedConfigWithExistingDefaults).includeTimestamp).toBe(true);
-    expect(
-      timestampOptsFromConfig({
-        agents: { defaults: { envelopeTimestamp: "off" } },
-      } as OpenClawConfig).includeTimestamp,
-    ).toBe(false);
   });
 });
 
@@ -2737,6 +2747,7 @@ describe("exec approval handlers", () => {
   type ExecApprovalGetArgs = Parameters<ExecApprovalHandlers["exec.approval.get"]>[0];
   type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
   type ExecApprovalResolveArgs = Parameters<ExecApprovalHandlers["exec.approval.resolve"]>[0];
+  type ExecApprovalWaitArgs = Parameters<ExecApprovalHandlers["exec.approval.waitDecision"]>[0];
 
   const defaultExecApprovalRequestParams = {
     command: "echo ok",
@@ -2784,6 +2795,7 @@ describe("exec approval handlers", () => {
   function toExecApprovalRequestContext(context: {
     broadcast: (event: string, payload: unknown) => void;
     hasExecApprovalClients?: () => boolean;
+    chatAbortedRuns?: Map<string, number>;
   }): ExecApprovalRequestArgs["context"] {
     return context as unknown as ExecApprovalRequestArgs["context"];
   }
@@ -2914,6 +2926,25 @@ describe("exec approval handlers", () => {
     });
   }
 
+  async function waitExecApproval(params: {
+    handlers: ExecApprovalHandlers;
+    id: string;
+    respond: ReturnType<typeof vi.fn>;
+    context: object;
+  }) {
+    return expectDefined(
+      params.handlers["exec.approval.waitDecision"],
+      'params.handlers["exec.approval.waitDecision"] test invariant',
+    )({
+      params: { id: params.id },
+      respond: params.respond as unknown as ExecApprovalWaitArgs["respond"],
+      context: params.context as ExecApprovalWaitArgs["context"],
+      client: null,
+      req: { id: "req-wait", type: "req", method: "exec.approval.waitDecision" },
+      isWebchatConnect: execApprovalNoop,
+    });
+  }
+
   function createExecApprovalFixture(opts?: { config?: OpenClawConfig }) {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
@@ -2925,6 +2956,7 @@ describe("exec approval handlers", () => {
         broadcasts.push({ event, payload });
       },
       hasExecApprovalClients: () => true,
+      chatRunState: createChatRunState(),
     };
     return { manager, handlers, broadcasts, respond, context };
   }
@@ -3109,6 +3141,76 @@ describe("exec approval handlers", () => {
       reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
     });
     expect(broadcasts).toEqual([]);
+  });
+
+  it("rejects approval registration after the owning run was aborted", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    context.chatRunState.getOrCreate("run-aborted").abortMarker = Date.now();
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        runId: "run-aborted",
+        toolCallId: "tool-late",
+        host: "gateway",
+        command: "echo too-late",
+        commandArgv: ["echo", "too-late"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "approval run already aborted",
+    });
+    expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
+      reason: "EXEC_APPROVAL_RUN_ABORTED",
+    });
+    expect(manager.listPendingRecords()).toEqual([]);
+    expect(broadcasts).toEqual([]);
+  });
+
+  it("marks an allowed wait result run-aborted when abort wins before consumption", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        id: "approval-allowed-before-abort",
+        runId: "run-allowed-before-abort",
+        toolCallId: "tool-allowed-before-abort",
+        twoPhase: true,
+        host: "gateway",
+        command: "echo allowed",
+        commandArgv: ["echo", "allowed"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+    expect((await waitForRequestedExecApprovalPayload(broadcasts)).id).toBe(
+      "approval-allowed-before-abort",
+    );
+    expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
+    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker = Date.now();
+    await requestPromise;
+
+    const waitRespond = vi.fn();
+    await waitExecApproval({
+      handlers,
+      id: "approval-allowed-before-abort",
+      respond: waitRespond,
+      context,
+    });
+
+    expect(mockCallArg(waitRespond)).toBe(true);
+    expectRecordFields(mockCallArg(waitRespond, 0, 1), {
+      decision: "allow-once",
+      terminalReason: "run-aborted",
+    });
   });
 
   it("returns pending approval details for exec.approval.get", async () => {
@@ -4308,6 +4410,57 @@ describe("exec approval handlers", () => {
     });
     expect(lastMockCallArg(respond, 2)).toBeUndefined();
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it.each([
+    ["URL dot segment", ".."],
+    ["ANSI escape", "approval-\u001b[31mred"],
+    ["ASCII control", "approval-\u0000hidden"],
+    ["Unicode control", "approval-\u202Ehidden"],
+    ["lone surrogate", "approval-\ud800hidden"],
+    ["whitespace", "approval unsafe"],
+    ["surrounding whitespace", " approval-safe "],
+    ["whitespace-only value", " "],
+    ["embedded line feed", "approval-\nunsafe"],
+    ["overlong value", "a".repeat(129)],
+  ])("rejects an unsafe explicit approval id containing an %s", async (_label, id) => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id, host: "gateway" },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expect(mockCallArg(respond, 0, 2)).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: {
+        code: "EXEC_APPROVAL_ID_INVALID",
+        reason: "INVALID_APPROVAL_ID",
+      },
+    });
+    expect(manager.getSnapshot(id)).toBeNull();
+    expect(broadcasts).toEqual([]);
+  });
+
+  it("accepts an explicit approval id with a leading dash", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id: "-approval-123", host: "gateway", twoPhase: true },
+    });
+
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+    await requestPromise;
+    expect(id).toBe("-approval-123");
+    expect(manager.getSnapshot(id)).not.toBeNull();
+    expect(mockCallArg(respond)).toBe(true);
   });
 
   it("rejects explicit approval ids with the reserved plugin prefix", async () => {

@@ -4,6 +4,7 @@ import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heart
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
   CronTriggerEvaluationResult,
@@ -13,6 +14,7 @@ import type {
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
+  CronNextCheckProposal,
   CronJobCreate,
   CronJobPatch,
   CronRunDiagnostics,
@@ -75,10 +77,15 @@ export type CronServiceDeps = {
     job: CronJob;
     script: string;
     state: unknown;
+    streamBatch?: string;
     abortSignal?: AbortSignal;
   }) => Promise<CronTriggerEvaluationResult>;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
+  /** Resolve the current default when runtime config can change after startup. */
+  resolveDefaultAgentId?: () => string;
+  /** Revalidate agent ownership inside the cron mutation lock. */
+  isAgentAvailable?: (agentId: string) => boolean;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
@@ -167,6 +174,7 @@ export type CronServiceDeps = {
        */
       deliveryAttempted?: boolean;
       delivery?: CronDeliveryTrace;
+      nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome &
       CronRunTelemetry
   >;
@@ -176,6 +184,23 @@ export type CronServiceDeps = {
       deliveryAttempted?: boolean;
       deliveryError?: string;
       delivery?: CronDeliveryTrace;
+    } & CronRunOutcome
+  >;
+  runScriptJob?: (params: {
+    job: CronJob;
+    streamBatch?: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
+    {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      deliveryError?: string;
+      delivery?: CronDeliveryTrace;
+      notify?: string;
+      wake?: "now" | "next-heartbeat";
+      stateChanged?: boolean;
+      state?: unknown;
+      nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome
   >;
   cleanupTimedOutAgentRun?: (params: {
@@ -292,7 +317,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
-  /** @deprecated Legacy partition key; actual storage is SQLite. Use `sqlitePath`. */
+  /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   /** Storage backend identifier. */
   storage: "sqlite";
@@ -334,8 +359,16 @@ export type CronAddInput = CronJobCreate;
 export type CronAddOptions = {
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
+  /** Gateway-owned system payloads (heartbeat monitors) require this opt-in. */
+  systemOwned?: boolean;
+  /** Authenticated caller provenance stamped by the service, never public input. */
+  scheduledToolPolicy?: CronScheduledToolPolicy;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
+/** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
+export type CronUpdateOptions = {
+  scheduledToolPolicy?: CronScheduledToolPolicy;
+};
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

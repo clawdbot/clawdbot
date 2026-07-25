@@ -70,7 +70,7 @@
       }
     },
     "discovery": {
-      "fireworks": "static"
+      "fireworks": "refreshable"
     }
   },
   "configSchema": {

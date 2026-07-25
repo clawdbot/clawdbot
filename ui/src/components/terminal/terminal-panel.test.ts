@@ -78,7 +78,7 @@ const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-${crypto.rando
 // The full non-isolated UI suite can import the production panel before this
 // test. Override its factory instead of relying on a module mock import order.
 class TestTerminalPanel extends OpenClawTerminalPanel {
-  protected override createTerminal = createGhosttyTerminalMock as unknown as TerminalFactory;
+  override createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
 }
 
 customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
@@ -1043,11 +1043,14 @@ describe("OpenClawTerminalPanel", () => {
     const dispose = vi.fn(() => {
       throw new Error("dispose failed");
     });
-    const disposeTab = (
+    const terminalSessions = (
       panel as unknown as {
-        disposeTab(tab: { controller: { dispose(): void }; host: HTMLDivElement }): void;
+        terminalSessions: {
+          disposeTab(tab: { controller: { dispose(): void }; host: HTMLDivElement }): void;
+        };
       }
-    ).disposeTab.bind(panel);
+    ).terminalSessions;
+    const disposeTab = terminalSessions.disposeTab.bind(terminalSessions);
 
     expect(() => disposeTab({ controller: { dispose }, host })).not.toThrow();
     expect(dispose).toHaveBeenCalledOnce();

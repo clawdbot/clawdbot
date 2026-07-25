@@ -35,6 +35,7 @@
     "GIT_SSL_CAINFO",
     "GIT_SSL_CAPATH",
     "CC",
+    "CPP",
     "CXX",
     "CARGO_BUILD_RUSTC",
     "CARGO_BUILD_RUSTC_WRAPPER",

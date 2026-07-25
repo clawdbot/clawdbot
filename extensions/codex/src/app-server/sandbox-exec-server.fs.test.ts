@@ -327,11 +327,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   });
 
   it("routes recursive copies through the sandbox filesystem bridge", async () => {
+    const copyFile = vi.fn(async () => undefined);
     const mkdirp = vi.fn(async () => undefined);
-    const readFile = vi.fn(async ({ filePath }: { filePath: string }) =>
-      Buffer.from(`data:${filePath}`),
-    );
-    const writeFile = vi.fn(async () => undefined);
     const runShellCommand = vi.fn(async (_params?: { args?: string[] }) => ({
       stdout: Buffer.from("f\tfile.txt\nd\tsubdir\n"),
       stderr: Buffer.alloc(0),
@@ -347,15 +344,14 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       code: 0,
     }));
     const sandbox = createSandboxContext({
+      copyFile,
       mkdirp,
-      readFile,
       runShellCommand,
       stat: async ({ filePath }) => ({
         type: filePath.endsWith("source-dir") || filePath.endsWith("subdir") ? "directory" : "file",
         size: 1,
         mtimeMs: 1,
       }),
-      writeFile,
     });
     const client = createClient();
     await ensureCodexSandboxExecServerEnvironment({
@@ -374,14 +370,14 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/destination-dir" });
     expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/destination-dir/subdir" });
-    expect(writeFile).toHaveBeenCalledWith({
-      filePath: "/workspace/destination-dir/file.txt",
-      data: Buffer.from("data:/workspace/source-dir/file.txt"),
+    expect(copyFile).toHaveBeenCalledWith({
+      sourcePath: "/workspace/source-dir/file.txt",
+      destinationPath: "/workspace/destination-dir/file.txt",
       mkdir: true,
     });
-    expect(writeFile).toHaveBeenCalledWith({
-      filePath: "/workspace/destination-dir/subdir/nested.txt",
-      data: Buffer.from("data:/workspace/source-dir/subdir/nested.txt"),
+    expect(copyFile).toHaveBeenCalledWith({
+      sourcePath: "/workspace/source-dir/subdir/nested.txt",
+      destinationPath: "/workspace/destination-dir/subdir/nested.txt",
       mkdir: true,
     });
     expect(runShellCommand).toHaveBeenCalledWith(
@@ -390,6 +386,44 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     expect(runShellCommand).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["/workspace/source-dir/subdir"] }),
     );
+    socket.close();
+  });
+
+  it("streams oversized file copies through the fs bridge without buffering", async () => {
+    const copyFile = vi.fn(async () => undefined);
+    const readFile = vi.fn(async () => Buffer.from("too-large"));
+    const writeFile = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      copyFile,
+      readFile,
+      stat: async () => ({
+        type: "file",
+        size: 512 * 1024 * 1024 + 1,
+        mtimeMs: 1,
+      }),
+      writeFile,
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await rpc(socket, "fs/copy", {
+      sourcePath: "file:///workspace/huge.bin",
+      destinationPath: "file:///workspace/huge-copy.bin",
+    });
+
+    expect(copyFile).toHaveBeenCalledWith({
+      sourcePath: "/workspace/huge.bin",
+      destinationPath: "/workspace/huge-copy.bin",
+      mkdir: true,
+    });
+    expect(readFile).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
     socket.close();
   });
 

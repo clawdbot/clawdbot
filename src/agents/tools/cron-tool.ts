@@ -5,13 +5,16 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type, type TSchema } from "typebox";
+import { parseDurationMs } from "../../cli/parse-duration.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import type { CronDelivery } from "../../cron/types.js";
+import { parseCronPacingBounds } from "../../cron/pacing.js";
+import type { CronDelivery, CronPacing } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import { recordCronNextCheckProposal } from "../../infra/agent-events.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
@@ -68,12 +71,13 @@ const CRON_ACTIONS = [
   "remove",
   "run",
   "runs",
+  "next_check",
   "wake",
 ] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
@@ -124,9 +128,11 @@ function cronPayloadObjectSchema(params: {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
       text: Type.Optional(Type.String({ description: "systemEvent text" })),
       message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
+      script: Type.Optional(Type.String({ description: "Headless code-mode script" })),
       model: params.model,
       thinking: Type.Optional(Type.String({ description: "Thinking override" })),
       timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
+      toolBudget: optionalPositiveIntegerSchema({ description: "Maximum script tool calls" }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       fallbacks: params.fallbacks,
@@ -159,10 +165,45 @@ function createCronScheduleSchema(): TSchema {
           }),
         ),
         staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
+        command: Type.Optional(
+          Type.Array(Type.String({ minLength: 1 }), {
+            minItems: 1,
+            description: "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+          }),
+        ),
+        cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
+        mode: optionalStringEnum(["line", "match"] as const),
+        match: Type.Optional(Type.String({ description: "Regex source (stream match mode)" })),
+        batchMs: optionalNonNegativeIntegerSchema(),
+        maxBatchBytes: optionalNonNegativeIntegerSchema(),
       },
       { additionalProperties: true },
     ),
   );
+}
+
+function createCronPacingSchema(params: { nullableClears: boolean }): TSchema {
+  const pacing = Type.Object(
+    {
+      min: Type.Optional(Type.String({ description: "Minimum dynamic delay" })),
+      max: Type.Optional(Type.String({ description: "Maximum dynamic delay" })),
+    },
+    {
+      additionalProperties: false,
+      description: "Dynamic-cadence bounds; at least one of min or max is required",
+    },
+  );
+  return Type.Optional(params.nullableClears ? Type.Union([pacing, Type.Null()]) : pacing);
+}
+
+function assertCronPacingInput(value: unknown, params: { nullableClears: boolean }): void {
+  if (value === undefined || (params.nullableClears && value === null)) {
+    return;
+  }
+  if (!isRecord(value)) {
+    throw new Error("cron pacing must be an object");
+  }
+  parseCronPacingBounds(value as CronPacing);
 }
 
 function createCronPayloadSchema(): TSchema {
@@ -294,6 +335,7 @@ function createCronJobObjectSchema(): TSchema {
           ),
         ),
         schedule: createCronScheduleSchema(),
+        pacing: createCronPacingSchema({ nullableClears: false }),
         trigger: createCronTriggerSchema({ nullableClears: false }),
         sessionTarget: Type.Optional(
           Type.String({
@@ -326,6 +368,7 @@ function createCronPatchObjectSchema(): TSchema {
           }),
         ),
         schedule: createCronScheduleSchema(),
+        pacing: createCronPacingSchema({ nullableClears: true }),
         trigger: createCronTriggerSchema({ nullableClears: true }),
         sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES),
@@ -360,6 +403,11 @@ function createCronToolSchema(): TSchema {
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       patch: createCronPatchObjectSchema(),
+      in: Type.Optional(
+        Type.String({
+          description: 'Relative duration for action="next_check" (for example, "15m")',
+        }),
+      ),
       text: Type.Optional(Type.String()),
       mode: optionalStringEnum(CRON_WAKE_MODES),
       runMode: optionalStringEnum(CRON_RUN_MODES, {
@@ -508,6 +556,12 @@ function assertCronSelfRemoveScope(
   const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
   if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
     return;
+  }
+  if (action === "next_check") {
+    const id = readCronJobIdParam(params);
+    if (!id || id === selfRemoveOnlyJobId) {
+      return;
+    }
   }
   if (action === "get" || action === "remove" || action === "runs") {
     const id = readCronJobIdParam(params);
@@ -691,16 +745,17 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
 ACTIONS:
 - status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId
 - add job; update jobId+patch; remove jobId
-- run jobId (due only; runMode="force" now); runs jobId history
+- run jobId (due only; runMode="force" now); runs jobId history; next_check in (current paced job only)
 - wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.
 
 ADD JOB:
-{ "name":"...", "schedule":{...}, "trigger":{ "script":"...", "once":false }, "payload":{...}, "delivery":{...}, "sessionTarget":"main|isolated|current|session:<id>", "enabled":true }
+{ "name":"...", "schedule":{...}, "pacing":{ "min":"15m", "max":"4h" }, "trigger":{ "script":"...", "once":false }, "payload":{...}, "delivery":{...}, "sessionTarget":"main|isolated|current|session:<id>", "enabled":true }
 Required: schedule,payload. enabled default true. trigger only every/cron.
 
 TARGET/PAYLOAD:
-- main => systemEvent {kind:"systemEvent",text:"..."}; systemEvent defaults main.
+- main => systemEvent {kind:"systemEvent",text:"..."} or script; systemEvent defaults main.
 - isolated/current/session:<id> => agentTurn {kind:"agentTurn",message:"...",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.
+- script {kind:"script",script:"...",timeoutSeconds?,toolBudget?} supports main or isolated only and requires cron.triggers.enabled.
 - current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.
 
 SCHEDULE:
@@ -711,7 +766,9 @@ SCHEDULE:
 TRIGGER SCRIPT:
 - Requires cron.triggers.enabled; if off, explain and never model-poll fallback.
 - Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.
-- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success. Check reads; payload acts.
+- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success.
+- Fire on every actionable state, including failures/timeouts; success-only watchers go silent when broken, which looks healthy. Dedupe by comparing trigger.state and returning new state, never memory.
+- Keep scripts read-only; actions belong in payload. message must be self-contained: it is the fired run's entire context.
 - Silent watcher: top-level delivery.mode="none". Omitted delivery on isolated agentTurn announces and missing route may fail.
 - once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.
 - Hidden Code Mode tools: await tools.call("exec", {command:"..."}); unknown id => search/describe.
@@ -720,7 +777,7 @@ DELIVERY top-level: {mode:"none|announce|webhook",channel?,to?,threadId?,bestEff
 - Isolated agentTurn omitted delivery => announce. announce only isolated/current/session; channel/to optional; threadId chat topic. Specific chat: set channel/to; no messaging tool inside run.
 - webhook posts finished-run event to URL in to.
 
-Restricted isolated runs may only self status/list, current get/runs, and remove current job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.`,
+Restricted isolated runs may only self status/list, current get/runs/remove, and next_check for their own paced job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.`,
     parameters: createCronToolSchema(),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -735,7 +792,14 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
       const callerScope = resolveCronToolCallerScope(opts, runtimeConfig);
       const callerIdentity =
         callerScope && opts?.agentSessionKey?.trim()
-          ? { agentId: callerScope.agentId, sessionKey: opts.agentSessionKey.trim() }
+          ? {
+              agentId: callerScope.agentId,
+              sessionKey: opts.agentSessionKey.trim(),
+              turnSourceAccountId: opts.agentAccountId,
+              ...(readCronSelfRemoveOnlyJobId(opts)
+                ? { cronSelfManagementJobId: readCronSelfRemoveOnlyJobId(opts) }
+                : {}),
+            }
           : undefined;
 
       return await withGatewayToolCallerIdentity(callerIdentity, async () => {
@@ -827,6 +891,7 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
             const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
+            assertCronPacingInput(canonicalJob.pacing, { nullableClears: false });
             if (
               typeof canonicalJob.declarationKey === "string" &&
               canonicalJob.declarationKey.trim().length === 0
@@ -971,6 +1036,7 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
             );
             assertNoCronShellExecution(canonicalPatch);
             assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
+            assertCronPacingInput(canonicalPatch.pacing, { nullableClears: true });
             if (
               typeof canonicalPatch.displayName === "string" &&
               canonicalPatch.displayName.trim().length === 0
@@ -1032,6 +1098,25 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
                 id,
               }),
             );
+          }
+          case "next_check": {
+            const jobId = readCronSelfRemoveOnlyJobId(opts);
+            const runId = opts?.runId?.trim();
+            if (!jobId || !runId) {
+              throw new Error("cron next_check is only available to the currently running job");
+            }
+            const rawDuration = readStringParam(params, "in", { required: true });
+            let delayMs: number;
+            try {
+              delayMs = parseDurationMs(rawDuration);
+            } catch {
+              throw new Error("cron next_check in must be a positive duration");
+            }
+            if (delayMs <= 0) {
+              throw new Error("cron next_check in must be a positive duration");
+            }
+            recordCronNextCheckProposal(runId, jobId, delayMs);
+            return jsonResult({ ok: true, delayMs });
           }
           case "wake": {
             const text = readStringParam(params, "text", { required: true });

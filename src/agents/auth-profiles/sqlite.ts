@@ -13,7 +13,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -102,10 +102,9 @@ function inspectAuthProfileJsonCellReadOnly(
   pathname: string,
   target: "store" | "state",
 ): PersistedAuthProfileStoreInspection {
-  const sqlite = requireNodeSqlite();
   let db: DatabaseSync | undefined;
   try {
-    db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+    db = openNodeSqliteDatabase(pathname, { readOnly: true });
     // This short-lived reader bypasses the canonical agent DB bootstrap, but it
     // must share its busy policy so brief rollback-journal locks do not look
     // like missing credentials.
@@ -335,6 +334,11 @@ export function writePersistedAuthProfileStateRaw(
 export function runAuthProfileWriteTransaction<T>(
   agentDir: string | undefined,
   operation: (database: OpenClawAgentDatabase) => T,
+  options: { stateDir?: string } = {},
 ): T {
-  return runOpenClawAgentWriteTransaction(operation, resolveAuthProfileDatabaseOptions(agentDir));
+  const databaseOptions = resolveAuthProfileDatabaseOptions(agentDir);
+  return runOpenClawAgentWriteTransaction(operation, {
+    ...databaseOptions,
+    ...(options.stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.stateDir } } : {}),
+  });
 }

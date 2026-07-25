@@ -3,12 +3,12 @@ title: 100-turn runtime parity soak
 scenario:
   id: runtime-soak-100-turn
   surface: runtime
-  runtimeParityTier: soak
+  runtimePairLane: soak
   coverage:
     primary:
-      - runtime.long-run-stability
+      - agent-runtime.terminal-long-run-stability
     secondary:
-      - runtime.long-context
+      - session-memory.token-pressure-long-context
   objective: Provide an optional long-run soak that can be scheduled or run in Testbox without entering the maintainer default gate.
   successCriteria:
     - The same QA session accepts 100 sequential user turns.

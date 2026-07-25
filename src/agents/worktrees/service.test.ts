@@ -456,9 +456,7 @@ describe("ManagedWorktreeService", () => {
     });
 
     expect(await fs.readFile(path.join(created.path, "collision.txt"), "utf8")).toBe("from base\n");
-    if (process.platform !== "win32") {
-      expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o777).toBe(0o644);
-    }
+    expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
     expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
   });
 
@@ -514,6 +512,7 @@ describe("ManagedWorktreeService", () => {
     await git(repo, "add", ".gitignore", ".worktreeinclude");
     await git(repo, "commit", "-m", "configure worktree provisioning");
     await fs.writeFile(path.join(repo, "provisioned.env"), "source value\n");
+    const mode = (await fs.stat(path.join(repo, "provisioned.env"))).mode & 0o7777;
     const created = await service.create({ repoRoot: repo, name: "roundtrip" });
     const originalHead = await git(created.path, "rev-parse", "HEAD");
     await fs.writeFile(path.join(created.path, "README.md"), "changed\n");
@@ -525,7 +524,7 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "show-ref", "--verify", removed.snapshotRef!)).not.toBe("");
     const provisionedState = getRegistryWorktreeProvisionedState(env, created.id)!;
-    expect(provisionedState).toEqual([{ path: "provisioned.env", mode: 0o644, chunks: 1 }]);
+    expect(provisionedState).toEqual([{ path: "provisioned.env", mode, chunks: 1 }]);
     const snapshotFiles = await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!);
     expect(snapshotFiles).not.toContain("ignored.txt");
     expect(snapshotFiles).not.toContain("provisioned.env");
@@ -1113,17 +1112,8 @@ describe("ManagedWorktreeService", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
-  it("maps cleanup config onto limits with 0 and unset disabling each bound", () => {
-    expect(resolveWorktreeCleanupLimits(undefined)).toEqual({});
-    expect(resolveWorktreeCleanupLimits({ cleanup: { maxCount: 0, maxTotalSizeGb: 0 } })).toEqual(
-      {},
-    );
-    expect(resolveWorktreeCleanupLimits({ cleanup: { maxCount: 25, maxTotalSizeGb: 50 } })).toEqual(
-      { maxCount: 25, maxTotalSizeBytes: 50 * 1024 ** 3 },
-    );
-    expect(resolveWorktreeCleanupLimits({ cleanup: { maxTotalSizeGb: 0.5 } })).toEqual({
-      maxTotalSizeBytes: 512 * 1024 ** 2,
-    });
+  it("uses the fixed no-limit cleanup policy", () => {
+    expect(resolveWorktreeCleanupLimits()).toEqual({});
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

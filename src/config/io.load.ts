@@ -63,14 +63,10 @@ export function loadConfigFromContext(
       deps.env,
       deps.lowerPrecedenceEnv,
     );
-    const migration = context.migrateAndStripShippedPluginInstallConfigRecords(
-      readResolution.resolvedConfigRaw,
-      { persist: false, rootConfigRaw: parsed },
-    );
-    const effectiveConfigRaw = migration.config;
-    const validationConfigRaw = migration.validationConfig ?? effectiveConfigRaw;
-    const snapshotRaw = migration.persistedRootRaw ?? raw;
-    const snapshotParsed = migration.persistedRootParsed ?? parsed;
+    const effectiveConfigRaw = readResolution.resolvedConfigRaw;
+    const validationConfigRaw = effectiveConfigRaw;
+    const snapshotRaw = raw;
+    const snapshotParsed = parsed;
     const hash = hashConfigRaw(snapshotRaw);
     for (const warning of readResolution.envWarnings) {
       deps.logger.warn(

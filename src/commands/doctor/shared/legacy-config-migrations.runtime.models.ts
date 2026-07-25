@@ -1,7 +1,15 @@
 // Legacy model runtime config migrations for stale model refs, compat fields, and catalog data.
 import { isDeepStrictEqual } from "node:util";
+import type {
+  ModelCatalog,
+  NormalizedModelCatalogRow,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
+import {
+  modelTransportRoutesMatch,
+  resolveUniqueCatalogModelRoute,
+} from "../../../agents/model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import {
   defineLegacyConfigMigration,
@@ -10,8 +18,15 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import {
+  computeModelPolicyAllowlist,
+  hasModelPolicyAllowlistMigrationMarker,
+  MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER,
+} from "../../../config/model-policy-allowlist-migration.js";
 import { isModelThinkingFormat, type ModelDefinitionConfig } from "../../../config/types.models.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
+import { planManifestModelCatalogRows } from "../../../model-catalog/manifest-planner.js";
+import { listOpenClawPluginManifestMetadata } from "../../../plugins/manifest-metadata-scan.js";
 import {
   isLegacyCodexProviderId,
   legacyCodexProviderIdentityKey,
@@ -36,6 +51,212 @@ const STALE_CONTEXT_WINDOW_FIXES: Record<string, { stale: number; correct: numbe
   "xai/grok-4.20-reasoning": { stale: 2_000_000, correct: 1_000_000 },
   "xai/grok-4.20-non-reasoning": { stale: 2_000_000, correct: 1_000_000 },
 } as const;
+
+const DEAD_MODEL_COMPAT_KEYS = ["nativeWebSearchTool", "requiresMistralToolIds"] as const;
+
+type ModelCompatOverrideState = {
+  dead: number;
+  divergent: number;
+  matching: number;
+};
+
+function normalizedCatalogModelKey(provider: string, modelId: string): string {
+  // Keep doctor identity aligned with runtime catalog lookup and merge keys,
+  // which intentionally treat provider/model ids case-insensitively.
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedId = modelId.trim().toLowerCase();
+  const providerPrefix = `${normalizedProvider}/`;
+  return `${normalizedProvider}::${normalizedId.startsWith(providerPrefix) ? normalizedId.slice(providerPrefix.length) : normalizedId}`;
+}
+
+// Manifest metadata is process-stable; plugin installs/reloads restart the owning process.
+const modelCompatCatalogRowsByProvider = new Map<string, readonly NormalizedModelCatalogRow[]>();
+let modelCompatCatalogPlugins:
+  | Array<{ id: string; modelCatalog: ModelCatalog; providers: string[] }>
+  | undefined;
+
+function getModelCompatCatalogPlugins() {
+  modelCompatCatalogPlugins ??= listOpenClawPluginManifestMetadata().flatMap(({ manifest }) => {
+    const id = typeof manifest.id === "string" ? manifest.id.trim() : "";
+    const modelCatalog = getRecord(manifest.modelCatalog);
+    if (!id || !modelCatalog) {
+      return [];
+    }
+    return [
+      {
+        id,
+        providers: Array.isArray(manifest.providers)
+          ? manifest.providers.filter((value): value is string => typeof value === "string")
+          : [],
+        modelCatalog: modelCatalog as ModelCatalog,
+      },
+    ];
+  });
+  return modelCompatCatalogPlugins;
+}
+
+function buildConfiguredProviderCatalogRows(
+  providers: Record<string, unknown>,
+): Map<string, NormalizedModelCatalogRow[]> {
+  const rows = new Map<string, NormalizedModelCatalogRow[]>();
+  for (const providerId of Object.keys(providers)) {
+    const normalizedProviderId = normalizeProviderId(providerId);
+    let providerRows = modelCompatCatalogRowsByProvider.get(normalizedProviderId);
+    if (!providerRows) {
+      providerRows = planManifestModelCatalogRows({
+        registry: { plugins: getModelCompatCatalogPlugins() },
+        providerFilter: normalizedProviderId,
+      }).rows;
+      modelCompatCatalogRowsByProvider.set(normalizedProviderId, providerRows);
+    }
+    for (const row of providerRows) {
+      const key = normalizedCatalogModelKey(row.provider, row.id);
+      const variants = rows.get(key) ?? [];
+      variants.push(row);
+      rows.set(key, variants);
+    }
+  }
+  return rows;
+}
+
+function inspectModelCompatOverrides(
+  providersValue: unknown,
+  onEntry?: (params: {
+    catalogRow?: NormalizedModelCatalogRow;
+    compat: Record<string, unknown>;
+    model: Record<string, unknown>;
+    modelIndex: number;
+    provider: Record<string, unknown>;
+    providerId: string;
+    state: ModelCompatOverrideState;
+  }) => void,
+): ModelCompatOverrideState {
+  const providers = getRecord(providersValue);
+  const total = { dead: 0, divergent: 0, matching: 0 };
+  if (!providers) {
+    return total;
+  }
+  const hasCompat = Object.values(providers).some((providerValue) => {
+    const models = getRecord(providerValue)?.models;
+    return (
+      Array.isArray(models) &&
+      models.some((modelValue) => Boolean(getRecord(getRecord(modelValue)?.compat)))
+    );
+  });
+  if (!hasCompat) {
+    return total;
+  }
+  const catalogRows = buildConfiguredProviderCatalogRows(providers);
+  for (const [providerId, providerValue] of Object.entries(providers)) {
+    const provider = getRecord(providerValue);
+    const models = provider?.models;
+    if (!provider || !Array.isArray(models)) {
+      continue;
+    }
+    for (const [modelIndex, modelValue] of models.entries()) {
+      const model = getRecord(modelValue);
+      const compat = getRecord(model?.compat);
+      const modelId = typeof model?.id === "string" ? model.id : "";
+      if (!model || !compat || !modelId) {
+        continue;
+      }
+      const state = { dead: 0, divergent: 0, matching: 0 };
+      for (const key of DEAD_MODEL_COMPAT_KEYS) {
+        if (Object.hasOwn(compat, key)) {
+          state.dead += 1;
+        }
+      }
+      const configuredRoute = {
+        api: model.api ?? provider.api,
+        baseUrl: model.baseUrl ?? provider.baseUrl,
+      };
+      const catalogRow = resolveUniqueCatalogModelRoute(
+        catalogRows.get(normalizedCatalogModelKey(providerId, modelId)),
+        configuredRoute,
+      );
+      const catalogRouteMatches = catalogRow !== undefined;
+      if (catalogRouteMatches) {
+        const catalogCompat = catalogRow.compat ?? {};
+        for (const [key, value] of Object.entries(compat)) {
+          if ((DEAD_MODEL_COMPAT_KEYS as readonly string[]).includes(key)) {
+            continue;
+          }
+          if (isDeepStrictEqual(value, catalogCompat[key as keyof typeof catalogCompat])) {
+            state.matching += 1;
+          } else {
+            state.divergent += 1;
+          }
+        }
+      }
+      total.dead += state.dead;
+      total.divergent += state.divergent;
+      total.matching += state.matching;
+      onEntry?.({ catalogRow, compat, model, modelIndex, provider, providerId, state });
+    }
+  }
+  return total;
+}
+
+const MODEL_COMPAT_CATALOG_RULES: LegacyConfigRule[] = [
+  {
+    path: ["models", "providers"],
+    message:
+      'nativeWebSearchTool and requiresMistralToolIds are unused and retired; run "openclaw doctor --fix" to remove them.',
+    match: (value) => inspectModelCompatOverrides(value).dead > 0,
+  },
+  {
+    path: ["models", "providers"],
+    message:
+      'Catalog-known model compat values are provider-owned; run "openclaw doctor --fix" to remove matching config overrides.',
+    match: (value) => inspectModelCompatOverrides(value).matching > 0,
+  },
+  {
+    path: ["models", "providers"],
+    message:
+      "Catalog-known model compat differs from the provider catalog and was preserved for review. Use a distinct custom route when the endpoint really has different capabilities.",
+    match: (value) => inspectModelCompatOverrides(value).divergent > 0,
+  },
+];
+
+function migrateModelCompatCatalogOwnership(raw: Record<string, unknown>, changes: string[]): void {
+  const providers = getRecord(getRecord(raw.models)?.providers);
+  inspectModelCompatOverrides(
+    providers,
+    ({ catalogRow, compat, model, modelIndex, provider, providerId }) => {
+      const removed: string[] = [];
+      for (const key of DEAD_MODEL_COMPAT_KEYS) {
+        if (Object.hasOwn(compat, key)) {
+          delete compat[key];
+          removed.push(key);
+        }
+      }
+      if (
+        catalogRow &&
+        modelTransportRoutesMatch(catalogRow, {
+          api: model.api ?? provider.api ?? catalogRow.api,
+          baseUrl: model.baseUrl ?? provider.baseUrl ?? catalogRow.baseUrl,
+        })
+      ) {
+        const catalogCompat = catalogRow.compat ?? {};
+        for (const [key, value] of Object.entries(compat)) {
+          if (isDeepStrictEqual(value, catalogCompat[key as keyof typeof catalogCompat])) {
+            delete compat[key];
+            removed.push(key);
+          }
+        }
+      }
+      if (removed.length === 0) {
+        return;
+      }
+      if (Object.keys(compat).length === 0) {
+        delete model.compat;
+      }
+      changes.push(
+        `Removed models.providers.${providerId}.models.${modelIndex}.compat catalog/dead overrides: ${removed.toSorted().join(", ")}.`,
+      );
+    },
+  );
+}
 
 function resolveStaleContextWindowFix(params: {
   providerId: string;
@@ -828,13 +1049,16 @@ const MODEL_REF_ARRAY_KEYS = new Set([
   "imageModelFallbacks",
 ]);
 const MODEL_REF_MAP_KEYS = new Set(["models"]);
-
 function pathKey(path: string): string {
   return path.slice(path.lastIndexOf(".") + 1);
 }
 
 function isChannelModelOverridePath(path: string): boolean {
   return path.includes(".modelByChannel.");
+}
+
+function isModelPolicyAllowPath(path: string): boolean {
+  return path.endsWith(".modelPolicy.allow");
 }
 
 function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
@@ -847,7 +1071,9 @@ function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
   }
   if (Array.isArray(value)) {
     return value.some((entry, index) =>
-      typeof entry === "string" && key && MODEL_REF_ARRAY_KEYS.has(key)
+      typeof entry === "string" &&
+      key &&
+      (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
         ? Boolean(upgradeRetiredModelRef(entry))
         : scanKnownModelRefs(entry, undefined, `${path}.${index}`),
     );
@@ -861,6 +1087,48 @@ function scanKnownModelRefs(value: unknown, key?: string, path = ""): boolean {
   }
   return Object.entries(record).some(([childKey, child]) =>
     scanKnownModelRefs(child, childKey, `${path}.${childKey}`),
+  );
+}
+
+function collectLegacyDefaultModelAllowRefs(raw: Record<string, unknown>): string[] | null {
+  // Marker seeding at the config write boundary ships atomically with metadata-only
+  // model maps. Therefore an unmarked map is legacy even if a general write version advanced.
+  const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  return computeModelPolicyAllowlist({
+    root: raw,
+    defaults,
+  });
+}
+
+function migrateExplicitDefaultModelAllowPolicy(
+  raw: Record<string, unknown>,
+  changes: string[],
+): void {
+  if (hasModelPolicyAllowlistMigrationMarker(raw)) {
+    return;
+  }
+  const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  const defaultModelPolicy = getRecord(defaults?.modelPolicy);
+  const defaultNeedsEvaluation =
+    Boolean(getRecord(defaults?.models)) &&
+    !(defaultModelPolicy && Object.hasOwn(defaultModelPolicy, "allow"));
+  if (!defaultNeedsEvaluation) {
+    return;
+  }
+  const defaultAllow = collectLegacyDefaultModelAllowRefs(raw);
+  if (defaultAllow) {
+    const mutableDefaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+    const mutableModelPolicy = ensureRecord(mutableDefaults, "modelPolicy");
+    // The policy builder still retains configured defaults/fallbacks, so copying the
+    // original keys reproduces the legacy effective set, including wildcard expansion.
+    mutableModelPolicy.allow = defaultAllow;
+  }
+  const migrations = ensureRecord(ensureRecord(raw, "meta"), "migrations");
+  migrations[MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER] = true;
+  changes.push(
+    defaultAllow
+      ? "Copied the legacy default model map to agents.defaults.modelPolicy.allow."
+      : "Recorded the legacy default model map as unrestricted without creating modelPolicy.allow.",
   );
 }
 
@@ -1014,7 +1282,10 @@ function rewriteKnownModelRefs(
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((entry, index) => {
-      if (typeof entry === "string" && MODEL_REF_ARRAY_KEYS.has(key)) {
+      if (
+        typeof entry === "string" &&
+        (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
+      ) {
         const rewritten = rewriteModelRefString(entry, `${path}.${index}`, changes);
         changed ||= rewritten !== entry;
         return rewritten;
@@ -1192,15 +1463,56 @@ function getMergeableLegacyOpenAIModels(params: {
   });
 }
 
-function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boolean {
+function collectLegacyModelPolicyWildcardPaths(raw: unknown): Map<string, string[]> {
+  const pathsByProvider = new Map<string, string[]>();
+  const agents = getRecord(getRecord(raw)?.agents);
+  const scopes: Array<{ value: unknown; path: string }> = [
+    { value: getRecord(agents?.defaults)?.modelPolicy, path: "agents.defaults.modelPolicy" },
+  ];
+  const list = Array.isArray(agents?.list) ? agents.list : [];
+  for (const [index, agent] of list.entries()) {
+    scopes.push({
+      value: getRecord(agent)?.modelPolicy,
+      path: `agents.list.${index}.modelPolicy`,
+    });
+  }
+  for (const scope of scopes) {
+    const allow = getRecord(scope.value)?.allow;
+    if (!Array.isArray(allow)) {
+      continue;
+    }
+    for (const [index, entry] of allow.entries()) {
+      if (typeof entry !== "string" || !entry.trim().endsWith("/*")) {
+        continue;
+      }
+      const provider = normalizeProviderId(entry.trim().slice(0, -2));
+      if (!isLegacyCodexProviderId(provider)) {
+        continue;
+      }
+      const paths = pathsByProvider.get(provider) ?? [];
+      paths.push(`${scope.path}.allow.${index}`);
+      pathsByProvider.set(provider, paths);
+    }
+  }
+  return pathsByProvider;
+}
+
+function hasAutoFixableLegacyOpenAICodexProvider(
+  providersValue: unknown,
+  root?: Record<string, unknown>,
+): boolean {
   const providers = getRecord(providersValue);
   if (!providers) {
     return false;
   }
+  const wildcardPaths = collectLegacyModelPolicyWildcardPaths(root);
   const canonicalEntry = getCanonicalOpenAIProviderEntry(providers);
   for (const [providerId, providerValue] of Object.entries(providers)) {
     const provider = getRecord(providerValue);
     if (!provider || !isLegacyCodexProviderId(providerId)) {
+      continue;
+    }
+    if (wildcardPaths.has(normalizeProviderId(providerId))) {
       continue;
     }
     const normalized = normalizeLegacyOpenAIResponsesApi(providerId, provider, []);
@@ -1246,12 +1558,21 @@ export function collectBlockedLegacyOpenAICodexProviderPlan(
   const models = getRecord(getRecord(raw)?.models);
   const providers = getRecord(models?.providers);
   const canonicalEntry = providers ? getCanonicalOpenAIProviderEntry(providers) : undefined;
-  if (!providers || !canonicalEntry) {
-    return { blockedModelIdentities: [] };
-  }
-
   const blockedModelIdentities = new Set<LegacyCodexModelIdentity>();
   const warningLines: string[] = [];
+  for (const [providerId, paths] of collectLegacyModelPolicyWildcardPaths(raw)) {
+    const identity = legacyCodexProviderIdentityKey(providerId);
+    if (identity) {
+      blockedModelIdentities.add(identity);
+    }
+    warningLines.push(
+      `- ${paths.join(", ")} cannot migrate automatically because ${providerId}/* would become openai/* and authorize unrelated OpenAI models.`,
+    );
+  }
+  if (!providers || !canonicalEntry) {
+    return buildBlockedLegacyOpenAICodexProviderPlan(blockedModelIdentities, warningLines);
+  }
+
   for (const [providerId, providerValue] of Object.entries(providers)) {
     const provider = getRecord(providerValue);
     if (!provider || !isLegacyCodexProviderId(providerId)) {
@@ -1300,6 +1621,13 @@ export function collectBlockedLegacyOpenAICodexProviderPlan(
   // reconciled (the live codex provider is gone, and a hidden resolver/auth
   // shim is forbidden by policy). Only hand-authored models.providers.codex
   // definitions can reach this state; the warning names the exact repair.
+  return buildBlockedLegacyOpenAICodexProviderPlan(blockedModelIdentities, warningLines);
+}
+
+function buildBlockedLegacyOpenAICodexProviderPlan(
+  blockedModelIdentities: ReadonlySet<LegacyCodexModelIdentity>,
+  warningLines: string[],
+): BlockedLegacyOpenAICodexProviderPlan {
   return {
     blockedModelIdentities: [...blockedModelIdentities],
     ...(warningLines.length > 0
@@ -1478,9 +1806,13 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
   }
 
   let providersChanged = false;
+  const wildcardPaths = collectLegacyModelPolicyWildcardPaths(raw);
   for (const [providerId, providerValue] of Object.entries({ ...providers })) {
     const provider = getRecord(providers[providerId]) ?? getRecord(providerValue);
     if (!provider) {
+      continue;
+    }
+    if (isLegacyCodexProviderId(providerId) && wildcardPaths.has(normalizeProviderId(providerId))) {
       continue;
     }
 
@@ -1592,7 +1924,40 @@ const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
 }));
 
 /** Legacy config migration specs for model/provider runtime config compatibility. */
+const LEGACY_DEFAULT_MODEL_MIGRATION = defineLegacyConfigMigration({
+  id: "defaultModel->agents.defaults.model",
+  describe: "Move the retired root default model to agent defaults",
+  legacyRules: [
+    {
+      path: ["defaultModel"],
+      message: 'defaultModel moved to agents.defaults.model. Run "openclaw doctor --fix".',
+    },
+  ],
+  apply: (raw, changes) => {
+    if (!Object.hasOwn(raw, "defaultModel")) {
+      return;
+    }
+    const legacyDefaultModel = raw.defaultModel;
+    const currentDefaults = getRecord(getRecord(raw.agents)?.defaults);
+    if (currentDefaults?.model === undefined && typeof legacyDefaultModel === "string") {
+      const defaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+      defaults.model = legacyDefaultModel;
+      changes.push("Moved defaultModel → agents.defaults.model.");
+    } else {
+      changes.push("Removed defaultModel (agents.defaults.model already set or value invalid).");
+    }
+    delete raw.defaultModel;
+  },
+});
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[] = [
+  LEGACY_DEFAULT_MODEL_MIGRATION,
+  defineLegacyConfigMigration({
+    id: "models.providers.*.models.*.compat->provider-catalog",
+    describe: "Move known-model compatibility capability ownership into provider catalogs",
+    legacyRules: MODEL_COMPAT_CATALOG_RULES,
+    apply: migrateModelCompatCatalogOwnership,
+  }),
   defineLegacyConfigMigration({
     id: "models.providers.codex-routes->models.providers.openai",
     describe: "Move legacy Codex-route provider config to canonical OpenAI provider config",
@@ -1601,7 +1966,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
         path: ["models", "providers"],
         message:
           'models.providers.codex and models.providers.openai-codex are legacy; run "openclaw doctor --fix" to move them to models.providers.openai.',
-        match: (value) => hasAutoFixableLegacyOpenAICodexProvider(value),
+        match: (value, root) => hasAutoFixableLegacyOpenAICodexProvider(value, root),
       },
       {
         path: ["models", "providers"],
@@ -1643,6 +2008,19 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
         setRecordEntry(raw, key, value);
       }
     },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.defaults.models->agents.defaults.modelPolicy.allow",
+    describe: "Make the legacy model override restriction explicit",
+    legacyRules: [
+      {
+        path: ["agents", "defaults", "models"],
+        message:
+          'agents.defaults.models no longer restricts model overrides; run "openclaw doctor --fix" to preserve the previous restriction in agents.defaults.modelPolicy.allow.',
+        match: (_value, root) => collectLegacyDefaultModelAllowRefs(root) !== null,
+      },
+    ],
+    apply: migrateExplicitDefaultModelAllowPolicy,
   }),
   defineLegacyConfigMigration({
     id: "agents.defaults.models.vllm.params.qwenThinkingFormat->models.providers.vllm.models.compat.thinkingFormat",

@@ -1,7 +1,12 @@
 /**
  * Gateway tool-resolution exclusion tests.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type CreateOpenClawToolsArg = {
@@ -12,6 +17,21 @@ type CreateOpenClawToolsArg = {
   pluginToolDenylist?: string[];
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
+};
+
+type CreateOpenClawCodingToolsArg = {
+  runtimeToolAllowlist?: string[];
+  sessionKey?: string;
+  runSessionKey?: string;
+  workspaceDir?: string;
+  cwd?: string;
+  wrapBeforeToolCallHook?: boolean;
+  scheduledToolPolicy?: {
+    version: 1;
+    mode: "account";
+    ownerSessionKey: string;
+    ownerAccountId: string;
+  };
 };
 
 type LazyExecToolDefaults = {
@@ -52,6 +72,9 @@ const hoisted = vi.hoisted(() => {
     makeTool,
     createLazyExecToolMock,
     getLoadedChannelPluginMock: vi.fn(),
+    createOpenClawCodingToolsMock: vi.fn(
+      (_args: CreateOpenClawCodingToolsArg): ReturnType<typeof makeTool>[] => [],
+    ),
     createOpenClawToolsMock: vi.fn((_args: CreateOpenClawToolsArg) => [
       makeTool("read"),
       makeTool("sessions_spawn"),
@@ -64,6 +87,11 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../agents/openclaw-tools.js", () => ({
   createOpenClawTools: (args: CreateOpenClawToolsArg) => hoisted.createOpenClawToolsMock(args),
+}));
+
+vi.mock("../agents/agent-tools.js", () => ({
+  createOpenClawCodingTools: (args: CreateOpenClawCodingToolsArg) =>
+    hoisted.createOpenClawCodingToolsMock(args),
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -82,6 +110,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
   beforeEach(() => {
     hoisted.createOpenClawToolsMock.mockClear();
     hoisted.createLazyExecToolMock.mockClear();
+    hoisted.createOpenClawCodingToolsMock.mockReset();
+    hoisted.createOpenClawCodingToolsMock.mockReturnValue([]);
     hoisted.getLoadedChannelPluginMock.mockReset();
   });
 
@@ -123,6 +153,64 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(args.inheritedToolDenylist).toEqual([]);
   });
 
+  it("constructs exact coding tools for a server-minted mediated grant", () => {
+    hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce([hoisted.makeTool("write")]);
+
+    const result = resolveGatewayScopedTools({
+      cfg: { tools: { exec: { host: "node" } } } as OpenClawConfig,
+      sessionKey: "agent:main:cron:run-1",
+      runtimePolicySessionKey: "agent:main:qa-channel:group:ops",
+      runId: "run-1",
+      workspaceDir: "/workspace",
+      cwd: "/workspace/task",
+      surface: "loopback",
+      excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
+      mediatedToolNames: ["write"],
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:qa-channel:group:ops",
+        ownerAccountId: "default",
+      },
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toContain("write");
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeToolAllowlist: ["write"],
+        sessionKey: "agent:main:qa-channel:group:ops",
+        runSessionKey: "agent:main:cron:run-1",
+        workspaceDir: "/workspace",
+        cwd: "/workspace/task",
+        wrapBeforeToolCallHook: false,
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:qa-channel:group:ops",
+          ownerAccountId: "default",
+        },
+      }),
+    );
+    expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back when policy removes a mediated coding tool", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("write"),
+      hoisted.makeTool("cron"),
+    ]);
+
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:cron:run-1",
+      surface: "loopback",
+      mediatedToolNames: ["write"],
+      excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["cron"]);
+  });
+
   it("keeps owner-only core tools visible only for owner loopback callers", () => {
     const ownerResult = resolveGatewayScopedTools({
       cfg: {
@@ -161,6 +249,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "conversations_turn",
       "nodes",
       "computer",
+      "mobile_ui",
       "openclaw",
     ]);
     expect(args.inheritedToolDenylist).toEqual([
@@ -174,6 +263,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "conversations_turn",
       "nodes",
       "computer",
+      "mobile_ui",
       "openclaw",
     ]);
   });
@@ -403,6 +493,49 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
 
     expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
     expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+  });
+
+  it("uses persisted delegated policy instead of the sender wildcard", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-delegated-policy-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:gateway-child";
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "gateway-child-session",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+    } as SessionEntry);
+
+    try {
+      const result = resolveGatewayScopedTools({
+        cfg: {
+          session: { store: storePath },
+          tools: {
+            toolsBySender: {
+              "*": { deny: ["group:runtime", "group:fs"] },
+              "id:alice": {},
+            },
+          },
+        } as OpenClawConfig,
+        sessionKey,
+        surface: "loopback",
+        senderIsOwner: false,
+        messageProvider: "discord",
+        includeNodeExecTool: true,
+      });
+
+      expect(result.tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["read", "exec"]),
+      );
+      expect(readCreateToolsArgs().pluginToolDenylist).not.toEqual(
+        expect.arrayContaining(["read", "exec"]),
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("filters node exec through plugin group policy bound to group labels", () => {
@@ -658,6 +791,28 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
       { name: "read" },
       { name: "cron" },
+    ]);
+  });
+
+  it("passes unrestricted gateway tool surfaces to cron jobs", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("cron"),
+      hoisted.makeTool("exec"),
+    ]);
+
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec"]);
+    expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
+      { name: "read" },
+      { name: "cron" },
+      { name: "exec" },
     ]);
   });
 });

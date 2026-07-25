@@ -115,7 +115,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     const runId = params.idempotencyKey as string;
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    const mainSession = currentPage.locator(".sidebar-recent-session").filter({ hasText: "Main" });
+    const mainSession = currentPage.locator(".nav-item--home");
     await mainSession.waitFor({ state: "visible" });
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -161,7 +161,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       ],
       ts: activeUpdatedAt,
     });
-    await currentPage.getByText(staleActiveLabel, { exact: true }).waitFor();
+    await currentPage.locator(".chat-pane__session-title", { hasText: staleActiveLabel }).waitFor();
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
 
@@ -258,7 +258,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     const runId = params.idempotencyKey as string;
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    const mainSession = currentPage.locator(".sidebar-recent-session").filter({ hasText: "Main" });
+    const mainSession = currentPage.locator(".nav-item--home");
     await mainSession.waitFor({ state: "visible" });
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");

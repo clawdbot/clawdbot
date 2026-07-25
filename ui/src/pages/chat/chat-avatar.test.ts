@@ -145,3 +145,63 @@ describe("refreshChatAvatar", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe("attributed sender avatars", () => {
+  it("renders the sender's profile avatar route for user messages", () => {
+    const avatar = renderAvatar([
+      "user",
+      undefined,
+      { name: "Viewer", avatar: null },
+      "",
+      null,
+      { id: "c3e32452-0467-47e5-aafa-233cd5dae29f", name: "steipete" },
+    ]);
+    expect(avatar?.tagName).toBe("IMG");
+    expect(avatar?.getAttribute("src")).toBe(
+      "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
+    );
+    expect(avatar?.getAttribute("alt")).toBe("steipete");
+  });
+
+  it("renders identity-colored initials when the sender has no profile route", () => {
+    const avatar = renderAvatar([
+      "user",
+      undefined,
+      { name: "Viewer", avatar: null },
+      "",
+      null,
+      { id: "alice@example.com", name: "Alice Lovelace" },
+    ]);
+    expect(avatar?.tagName).toBe("DIV");
+    expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(true);
+    expect(avatar?.textContent?.trim()).toBe("AL");
+  });
+
+  it("keeps the local viewer identity when no sender is attributed", () => {
+    const avatar = renderAvatar(["user", undefined, { name: "Viewer", avatar: null }, "", null]);
+    expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(false);
+  });
+
+  it("swaps to identity initials when the derived avatar route errors", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatAvatar("user", undefined, undefined, "", null, {
+        id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+        name: "steipete",
+      }),
+      container,
+    );
+    const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
+    const image = slot?.querySelector("img");
+    expect(image).not.toBeNull();
+    expect(slot?.classList.contains("is-fallback")).toBe(false);
+
+    image?.dispatchEvent(new Event("error"));
+    expect(slot?.classList.contains("is-fallback")).toBe(true);
+    expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("S");
+
+    // A later successful load for a reused DOM part clears the error state.
+    image?.dispatchEvent(new Event("load"));
+    expect(slot?.classList.contains("is-fallback")).toBe(false);
+  });
+});

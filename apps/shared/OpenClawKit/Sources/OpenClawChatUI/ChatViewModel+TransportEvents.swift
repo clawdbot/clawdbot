@@ -33,6 +33,15 @@ extension OpenClawChatViewModel {
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
         case let .sessionsChanged(change):
+            let projectedSessions = ChatSessionSidebarModel.applying(
+                sessionChange: change,
+                to: self.sessions)
+            if let projectedSessions {
+                self.sessions = projectedSessions
+            } else if change.reason != "patch", change.reason != "command-metadata" {
+                let context = self.currentSessionSnapshot()
+                Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
+            }
             // Group-catalog mutations from any client arrive as reason "groups"
             // (mirrors web ui/src/lib/sessions); bump the revision so views keyed
             // on it refetch. Rename/delete also rewrite member sessions' category
@@ -43,9 +52,41 @@ extension OpenClawChatViewModel {
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
                 return
             }
+            if change.reason == "rewind" || change.reason == "branch-switch" {
+                guard let sessionKey = change.sessionKey,
+                      self.matchesCurrentSessionKey(
+                          incoming: sessionKey,
+                          agentId: change.agentId,
+                          current: self.sessionKey)
+                else { return }
+                self.replyTarget = nil
+                self.runMessageScopesByRunID.removeAll()
+                self.provisionalFinalMessagesByID.removeAll()
+                let context = self.beginHistoryRequest()
+                if change.reason == "branch-switch" {
+                    let switchActivity = self.beginSessionBranchSwitchActivity(for: context.session)
+                    Task {
+                        defer { self.endSessionBranchSwitchActivity(switchActivity) }
+                        await self.reconcileSessionBranchChange(
+                            switchActivity,
+                            confirmFromBranchRefresh: true)
+                    }
+                    return
+                }
+                Task {
+                    await self.refreshHistoryAfterRun(historyRequest: context)
+                    guard self.isCurrentSession(context.session) else { return }
+                    await self.refreshSessionBranches(confirmingBranchChange: true)
+                }
+                return
+            }
             guard change.reason == "patch" || change.reason == "command-metadata" else { return }
             let context = self.currentSessionSnapshot()
             Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
+        case let .sessionObserver(digest):
+            self.sessions = ChatSessionSidebarModel.applying(
+                observerDigest: digest,
+                to: self.sessions)
         case let .chat(chat):
             self.handleChatEvent(chat)
         case let .sessionMessage(message):
@@ -88,6 +129,7 @@ extension OpenClawChatViewModel {
         // still retire its durable row before this handler returns early.
         confirmOutboxCommands(in: [sanitized])
         guard isCurrentSession else { return }
+        self.observeOutboxTranscriptTip(sanitized, session: self.currentSessionSnapshot())
 
         self.invalidateHistorySnapshots()
         // The active client also receives the gateway's echo of the user turn it
@@ -271,7 +313,9 @@ extension OpenClawChatViewModel {
             toolName: message.toolName,
             usage: message.usage,
             stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
+            errorMessage: message.errorMessage,
+            details: message.details,
+            isError: message.isError)
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {

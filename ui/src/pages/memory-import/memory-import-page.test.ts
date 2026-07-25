@@ -60,8 +60,8 @@ function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "agent:research:main",
@@ -323,7 +323,7 @@ describe("MemoryImportPage", () => {
       expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
     );
 
-    context.gateway.snapshot.connected = false;
+    context.gateway.snapshot.phase = "stopped";
     context.gateway.snapshot.client = null;
     page.requestUpdate();
     await page.updateComplete;
@@ -332,7 +332,7 @@ describe("MemoryImportPage", () => {
 
     const replacementClient = { request } as unknown as GatewayBrowserClient;
     context.gateway.snapshot.client = replacementClient;
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     page.requestUpdate();
     await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
     expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
@@ -388,7 +388,7 @@ describe("MemoryImportPage", () => {
     await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
     const firstApply = request.mock.calls[1]?.[1] as { idempotencyKey?: string } | undefined;
 
-    context.gateway.snapshot.connected = false;
+    context.gateway.snapshot.phase = "stopped";
     context.gateway.snapshot.client = null;
     page.requestUpdate();
     await page.updateComplete;
@@ -398,7 +398,7 @@ describe("MemoryImportPage", () => {
 
     const replacementClient = { request } as unknown as GatewayBrowserClient;
     context.gateway.snapshot.client = replacementClient;
-    context.gateway.snapshot.connected = true;
+    context.gateway.snapshot.phase = "connected";
     page.requestUpdate();
     await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
     await waitForMemoryImport(() =>

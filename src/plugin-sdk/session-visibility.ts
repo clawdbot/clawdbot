@@ -35,8 +35,44 @@ export type SessionAccessAction = "history" | "send" | "list" | "status";
 
 /** Result of checking whether one session operation may target a session. */
 export type SessionAccessResult =
-  | { allowed: true }
+  | { allowed: true; expectedSessionId?: string }
   | { allowed: false; error: string; status: "forbidden" };
+
+type ScopedSessionAccessRequest = {
+  action: Exclude<SessionAccessAction, "list">;
+  requesterSessionKey: string;
+  targetSessionKey: string;
+};
+
+type ScopedSessionAccessGrant = { expectedSessionId: string };
+
+type ScopedSessionAccessProvider = (
+  request: ScopedSessionAccessRequest,
+) => ScopedSessionAccessGrant | undefined;
+
+const scopedSessionAccessProviders = new Set<ScopedSessionAccessProvider>();
+
+function registerScopedSessionAccessProvider(provider: ScopedSessionAccessProvider): () => void {
+  scopedSessionAccessProviders.add(provider);
+  return () => scopedSessionAccessProviders.delete(provider);
+}
+
+function resolveScopedSessionAccess(
+  request: ScopedSessionAccessRequest,
+): ScopedSessionAccessGrant | undefined {
+  for (const provider of scopedSessionAccessProviders) {
+    try {
+      const grant = provider(request);
+      const expectedSessionId = normalizeOptionalString(grant?.expectedSessionId);
+      if (expectedSessionId) {
+        return { expectedSessionId };
+      }
+    } catch {
+      // Access providers fail closed; normal visibility evaluation still runs.
+    }
+  }
+  return undefined;
+}
 
 /** Minimal session row metadata needed to evaluate ownership and cross-agent access. */
 export type SessionVisibilityRow = {
@@ -270,7 +306,7 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
 }
 
 /** Create a direct session-key visibility checker for one requester/action pair. */
-export function createSessionVisibilityChecker(params: {
+function createSessionVisibilityCheckerImpl(params: {
   action: SessionAccessAction;
   requesterAgentId?: string;
   requesterSessionKey: string;
@@ -288,6 +324,16 @@ export function createSessionVisibilityChecker(params: {
   });
 
   const check = (targetSessionKey: string): SessionAccessResult => {
+    if (params.action !== "list") {
+      const scoped = resolveScopedSessionAccess({
+        action: params.action,
+        requesterSessionKey: params.requesterSessionKey,
+        targetSessionKey,
+      });
+      if (scoped) {
+        return { allowed: true, expectedSessionId: scoped.expectedSessionId };
+      }
+    }
     const isSpawnedSession = spawnedKeys?.has(targetSessionKey) === true;
     return rowChecker.check({
       key: targetSessionKey,
@@ -297,6 +343,12 @@ export function createSessionVisibilityChecker(params: {
 
   return { check };
 }
+
+/** Direct-key visibility checker plus registration for narrow host-owned grants. */
+export const createSessionVisibilityChecker = Object.assign(createSessionVisibilityCheckerImpl, {
+  registerScopedAccessProvider: registerScopedSessionAccessProvider,
+  resolveScopedAccess: resolveScopedSessionAccess,
+});
 
 function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: string): boolean {
   return (

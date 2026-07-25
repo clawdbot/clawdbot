@@ -262,7 +262,7 @@ function resolveResponsesLimits(
   const images = config?.images;
   const fileLimits = resolveInputFileLimits(files);
   return {
-    maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
+    maxBodyBytes: DEFAULT_BODY_BYTES,
     maxUrlParts: resolveIntegerOption(config?.maxUrlParts, DEFAULT_MAX_URL_PARTS, { min: 0 }),
     files: {
       ...fileLimits,
@@ -454,9 +454,7 @@ export async function handleOpenResponsesHttpRequest(
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
     opts.maxBodyBytes ??
-    (opts.config?.maxBodyBytes
-      ? limits.maxBodyBytes
-      : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
+    Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",

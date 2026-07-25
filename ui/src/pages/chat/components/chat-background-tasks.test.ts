@@ -730,9 +730,9 @@ describe("running-tasks status row", () => {
       container,
     );
 
-    const preview = container.querySelector("wa-tooltip.chat-tasks-status__preview");
-    expect(preview?.getAttribute("for")).toBe("chat-tasks-status-test");
-    expect(container.querySelector(".chat-tasks-status")?.id).toBe("chat-tasks-status-test");
+    const preview = container.querySelector("openclaw-tooltip.chat-tasks-status__preview");
+    expect(preview?.querySelector(".chat-tasks-status")?.id).toBe("chat-tasks-status-test");
+    expect(preview?.querySelector('.chat-tasks-preview[slot="content"]')).not.toBeNull();
     const titles = [...container.querySelectorAll(".chat-tasks-preview__title")].map((el) =>
       el.textContent?.trim(),
     );

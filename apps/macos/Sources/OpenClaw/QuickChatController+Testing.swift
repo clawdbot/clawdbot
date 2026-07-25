@@ -23,7 +23,7 @@ extension QuickChatController {
                     agents: [])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "started" },
+            sendProvider: { _, _, _, _, _, _ in "started" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },

@@ -592,6 +592,7 @@ async function runMatrixConfigure(params: {
         normalizeStringifiedOptionalString(
           await params.prompter.text({
             message: "Matrix access token",
+            sensitive: true,
             validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
           }),
         ) ?? "";
@@ -622,6 +623,7 @@ async function runMatrixConfigure(params: {
         normalizeStringifiedOptionalString(
           await params.prompter.text({
             message: "Matrix password",
+            sensitive: true,
             validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
           }),
         ) ?? "";

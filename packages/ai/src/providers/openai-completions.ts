@@ -18,13 +18,13 @@ import {
   calculateCost,
   clampThinkingLevel,
 } from "../model-utils.js";
+import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import type {
   AssistantMessage,
   CacheRetention,
   Context,
   Message,
   Model,
-  OpenAICompletionsCompat,
   SimpleStreamOptions,
   StreamFunction,
   StreamOptions,
@@ -33,6 +33,12 @@ import type {
   Tool,
   ToolCall,
 } from "../types.js";
+import {
+  clearPendingCommentaryText,
+  rememberPendingCommentaryTags,
+  tagPendingCommentaryText,
+  type PendingCommentaryTags,
+} from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -52,6 +58,10 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import {
+  resolveOpenAICompletionsCompat,
+  type ResolvedOpenAICompletionsCompat,
+} from "./openai-completions-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import {
@@ -118,14 +128,6 @@ interface OpenAICompatCacheControl {
   ttl?: string;
 }
 
-type ResolvedOpenAICompletionsCompat = Omit<
-  Required<OpenAICompletionsCompat>,
-  "cacheControlFormat"
-> & {
-  cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
-  sessionAffinityFormat: "openai" | "openrouter";
-};
-
 type EncryptedReasoningDetail = {
   type: "reasoning.encrypted";
   id: string;
@@ -182,11 +184,12 @@ export const streamOpenAICompletions: StreamFunction<
       stopReason: "stop",
       timestamp: Date.now(),
     };
+    const provisionalCommentaryTags: PendingCommentaryTags = new Map();
 
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      const compat = getCompat(model);
+      const compat = resolveOpenAICompletionsCompat(model);
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
       const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
@@ -503,11 +506,15 @@ export const streamOpenAICompletions: StreamFunction<
             appendPartitionedContent(refusalText, Boolean(foundReasoningField));
           }
 
-          if (choiceDelta.tool_calls) {
+          if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
             flushPartitionedContent();
             // The tool-call lane is also a reasoning boundary; seal the thought
             // before toolcall_start so thinking_end never trails the action.
             sealNativeReasoningBeforeText();
+            rememberPendingCommentaryTags(
+              provisionalCommentaryTags,
+              tagPendingCommentaryText(output.content),
+            );
             for (const toolCall of choiceDelta.tool_calls) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
@@ -584,6 +591,12 @@ export const streamOpenAICompletions: StreamFunction<
       if (hasToolCalls && output.stopReason !== "toolUse") {
         output.content = output.content.filter((block) => block.type !== "toolCall");
       }
+      if (output.stopReason !== "toolUse") {
+        clearPendingCommentaryText(provisionalCommentaryTags);
+      }
+      if (output.stopReason === "toolUse") {
+        tagPendingCommentaryText(output.content);
+      }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
@@ -646,7 +659,7 @@ function createClient(
   apiKey?: string,
   optionsHeaders?: Record<string, string>,
   sessionId?: string,
-  compat: ResolvedOpenAICompletionsCompat = getCompat(model),
+  compat: ResolvedOpenAICompletionsCompat = resolveOpenAICompletionsCompat(model),
 ) {
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);
@@ -662,8 +675,8 @@ function createClient(
     Object.assign(headers, copilotHeaders);
   }
 
-  if (sessionId && compat.sendSessionAffinityHeaders) {
-    if (compat.sessionAffinityFormat === "openrouter") {
+  if (sessionId && compat.sessionAffinity !== "none") {
+    if (compat.sessionAffinity === "openrouter") {
       headers["x-session-id"] = sessionId;
     } else {
       headers.session_id = sessionId;
@@ -700,7 +713,7 @@ function buildParams(
   model: Model<"openai-completions">,
   context: Context,
   options?: OpenAICompletionsOptions,
-  compat: ResolvedOpenAICompletionsCompat = getCompat(model),
+  compat: ResolvedOpenAICompletionsCompat = resolveOpenAICompletionsCompat(model),
   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
 ) {
   const cacheControl = getCompatCacheControl(compat, cacheRetention);
@@ -802,57 +815,63 @@ function buildParams(
     }
   }
 
+  // Provider compat is authoritative; keep model-level and literal values as fallbacks
+  // for catalogs that have not adopted reasoningEffortMap.
+  const reasoningEffortMap = resolveOpenAIReasoningEffortMap(model);
+  const reasoningEffort =
+    options?.reasoningEffort === undefined
+      ? undefined
+      : (reasoningEffortMap[options.reasoningEffort] ??
+        model.thinkingLevelMap?.[options.reasoningEffort] ??
+        options.reasoningEffort);
+  const reasoningEnabled = reasoningEffort !== undefined;
+  const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
+
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.thinking = options?.reasoningEffort
+    params.thinking = reasoningEnabled
       ? { type: "enabled", clear_thinking: false }
       : { type: "disabled" };
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
-    params.enable_thinking = Boolean(options?.reasoningEffort);
+    params.enable_thinking = reasoningEnabled;
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
     params.chat_template_kwargs = {
-      enable_thinking: Boolean(options?.reasoningEffort),
+      enable_thinking: reasoningEnabled,
       preserve_thinking: true,
     };
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
-    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
-    if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-      params.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    params.thinking = { type: reasoningEnabled ? "enabled" : "disabled" };
+    if (reasoningEnabled && compat.supportsReasoningEffort) {
+      params.reasoning_effort = reasoningEffort;
     }
   } else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
     // OpenRouter normalizes reasoning across providers via a nested reasoning object.
     const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
-    if (options?.reasoningEffort) {
-      openRouterParams.reasoning = {
-        effort: model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort,
-      };
-    } else if (model.thinkingLevelMap?.off !== null) {
-      openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
+    if (reasoningEnabled) {
+      openRouterParams.reasoning = { effort: reasoningEffort };
+    } else if (offReasoningEffort !== null) {
+      openRouterParams.reasoning = { effort: offReasoningEffort ?? "none" };
     }
   } else if (compat.thinkingFormat === "together" && model.reasoning) {
     const togetherParams = params as Omit<typeof params, "reasoning_effort"> & {
       reasoning?: { enabled: boolean };
       reasoning_effort?: string;
     };
-    togetherParams.reasoning = { enabled: Boolean(options?.reasoningEffort) };
-    if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-      togetherParams.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    togetherParams.reasoning = { enabled: reasoningEnabled };
+    if (reasoningEnabled && compat.supportsReasoningEffort) {
+      togetherParams.reasoning_effort = reasoningEffort;
     }
-  } else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+  } else if (reasoningEnabled && model.reasoning && compat.supportsReasoningEffort) {
     // OpenAI-style reasoning_effort
-    params.reasoning_effort =
-      model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
-  } else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-    const offValue = model.thinkingLevelMap?.off;
-    if (typeof offValue === "string") {
-      params.reasoning_effort = offValue;
+    params.reasoning_effort = reasoningEffort;
+  } else if (model.reasoning && compat.supportsReasoningEffort) {
+    if (typeof offReasoningEffort === "string") {
+      params.reasoning_effort = offReasoningEffort;
     }
   }
 
   // OpenRouter provider routing preferences
-  if (model.compat?.openRouterRouting) {
-    params.provider = model.compat.openRouterRouting;
+  if (compat.openRouterRouting) {
+    params.provider = compat.openRouterRouting;
   }
 
   // Vercel AI Gateway provider routing preferences
@@ -1377,129 +1396,4 @@ function parseChunkUsage(
   return usage;
 }
 
-/**
- * Detect compatibility settings from provider and baseUrl for known providers.
- * Provider takes precedence over URL-based detection since it's explicitly configured.
- * Returns a fully resolved OpenAICompletionsCompat object with all fields set.
- */
-function detectCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
-  const provider = model.provider;
-  const baseUrl = model.baseUrl;
-
-  const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
-  const isTogether =
-    provider === "together" ||
-    baseUrl.includes("api.together.ai") ||
-    baseUrl.includes("api.together.xyz");
-  const isMoonshot =
-    provider === "moonshotai" || provider === "moonshotai-cn" || baseUrl.includes("api.moonshot.");
-  const isCloudflareWorkersAI =
-    provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
-  const isCloudflareAiGateway =
-    provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");
-  const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
-
-  const isNonStandard =
-    provider === "cerebras" ||
-    baseUrl.includes("cerebras.ai") ||
-    provider === "xai" ||
-    baseUrl.includes("api.x.ai") ||
-    isTogether ||
-    baseUrl.includes("chutes.ai") ||
-    baseUrl.includes("deepseek.com") ||
-    isZai ||
-    isMoonshot ||
-    provider === "opencode" ||
-    baseUrl.includes("opencode.ai") ||
-    isCloudflareWorkersAI ||
-    isCloudflareAiGateway;
-
-  const useMaxTokens =
-    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether || isZai;
-
-  const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
-  const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
-  const isXiaomi = provider === "xiaomi" || baseUrl.includes("xiaomimimo.com");
-  const supportsOpenRouterDeveloperRole =
-    isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
-  const usesOpenRouterSessionAffinity =
-    isOpenRouter ||
-    model.compat?.thinkingFormat === "openrouter" ||
-    model.compat?.openRouterRouting !== undefined;
-  const cacheControlFormat =
-    provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
-
-  return {
-    supportsStore: !isNonStandard,
-    supportsDeveloperRole: supportsOpenRouterDeveloperRole || (!isNonStandard && !isOpenRouter),
-    supportsReasoningEffort:
-      !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway,
-    supportsUsageInStreaming: true,
-    maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
-    requiresToolResultName: false,
-    requiresAssistantAfterToolResult: false,
-    requiresThinkingAsText: false,
-    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
-    thinkingFormat: isDeepSeek
-      ? "deepseek"
-      : isXiaomi
-        ? "deepseek"
-        : isZai
-          ? "zai"
-          : isTogether
-            ? "together"
-            : isOpenRouter
-              ? "openrouter"
-              : "openai",
-    openRouterRouting: {},
-    vercelGatewayRouting: {},
-    zaiToolStream: false,
-    supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
-    cacheControlFormat,
-    sendSessionAffinityHeaders: false,
-    sessionAffinityFormat: usesOpenRouterSessionAffinity ? "openrouter" : "openai",
-    supportsPromptCacheKey: false,
-    supportsLongCacheRetention: !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway),
-  };
-}
-
-/**
- * Get resolved compatibility settings for a model.
- * Uses explicit model.compat if provided, otherwise auto-detects from provider/URL.
- */
-function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
-  const detected = detectCompat(model);
-  if (!model.compat) {
-    return detected;
-  }
-
-  return {
-    supportsStore: model.compat.supportsStore ?? detected.supportsStore,
-    supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
-    supportsReasoningEffort:
-      model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
-    supportsUsageInStreaming:
-      model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
-    maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
-    requiresToolResultName: model.compat.requiresToolResultName ?? detected.requiresToolResultName,
-    requiresAssistantAfterToolResult:
-      model.compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
-    requiresThinkingAsText: model.compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
-    requiresReasoningContentOnAssistantMessages:
-      model.compat.requiresReasoningContentOnAssistantMessages ??
-      detected.requiresReasoningContentOnAssistantMessages,
-    thinkingFormat: model.compat.thinkingFormat ?? detected.thinkingFormat,
-    openRouterRouting: model.compat.openRouterRouting ?? {},
-    vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
-    zaiToolStream: model.compat.zaiToolStream ?? detected.zaiToolStream,
-    supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
-    cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
-    sendSessionAffinityHeaders:
-      model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
-    sessionAffinityFormat: detected.sessionAffinityFormat,
-    supportsPromptCacheKey: model.compat.supportsPromptCacheKey ?? detected.supportsPromptCacheKey,
-    supportsLongCacheRetention:
-      model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
-  };
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,9 +6,6 @@
   "enabledByDefault": true,
   "providers": ["deepinfra"],
   "providerCatalogEntry": "./provider-discovery.ts",
-  "providerAuthEnvVars": {
-    "deepinfra": ["DEEPINFRA_API_KEY"]
-  },
   "providerEndpoints": [
     {
       "endpointClass": "deepinfra-native",

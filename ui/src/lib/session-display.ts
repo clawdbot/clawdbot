@@ -1,4 +1,5 @@
 // Control UI module implements session display behavior.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -18,7 +19,7 @@ const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
   const trimmed = identifier.trim();
-  return trimmed.length <= 10 ? trimmed : `…${trimmed.slice(-6)}`;
+  return trimmed.length <= 10 ? trimmed : `…${sliceUtf16Safe(trimmed, -6)}`;
 }
 
 // Long hex/uuid runs inside keys and node ids are machine ids, not names;
@@ -109,7 +110,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
 
   // Main session.
   if (key === "main" || key === "agent:main:main") {
-    return { prefix: "", fallbackName: "Main Session" };
+    return { prefix: "", fallbackName: "Main Thread" };
   }
 
   // Subagent.
@@ -150,14 +151,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
+      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Thread` };
     }
   }
 
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
   // must not flash in the sidebar while that title is pending.
   if (/^agent:[^:]+:dashboard:/.test(key)) {
-    return { prefix: "", fallbackName: "New session" };
+    return { prefix: "", fallbackName: "New thread" };
   }
 
   // Remaining agent keys are named subsessions (CLI --session-id and friends):

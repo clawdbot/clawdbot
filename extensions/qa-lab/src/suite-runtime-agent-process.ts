@@ -53,6 +53,9 @@ const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g")
 const MANAGED_DREAMING_CRON_MARKER = "[managed-by=memory-core.short-term-promotion]";
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dream__";
+const QA_HISTORY_RETRY_DEFAULT_MS = 250;
+const QA_HISTORY_RETRY_MIN_MS = 100;
+const QA_HISTORY_RETRY_MAX_MS = 5_000;
 
 function stripAnsiCodes(text: string) {
   return text.replace(ANSI_ESCAPE_PATTERN, "");
@@ -442,6 +445,31 @@ async function readLatestAgentHistoryReply(
   return readLatestAssistantTextFromHistory(history);
 }
 
+function resolveRetryableHistoryDelayMs(error: unknown) {
+  let current: unknown = error;
+  // QA adds redacted logs in two wrapper layers. Walk their causes so retry
+  // policy consumes the protocol contract instead of parsing decorated text.
+  for (let depth = 0; depth < 4 && isRecord(current); depth += 1) {
+    const code = current.gatewayCode ?? current.code;
+    if (code === "UNAVAILABLE" && current.retryable === true) {
+      const detailMethod = isRecord(current.details) ? current.details.method : undefined;
+      if (typeof detailMethod !== "string" || detailMethod === "chat.history") {
+        const retryAfterMs = current.retryAfterMs;
+        const rawDelayMs =
+          typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs)
+            ? retryAfterMs
+            : QA_HISTORY_RETRY_DEFAULT_MS;
+        return Math.min(
+          Math.max(Math.floor(rawDelayMs), QA_HISTORY_RETRY_MIN_MS),
+          QA_HISTORY_RETRY_MAX_MS,
+        );
+      }
+    }
+    current = current.cause;
+  }
+  return null;
+}
+
 async function waitForAgentHistoryReply(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   sessionKey: string,
@@ -450,8 +478,21 @@ async function waitForAgentHistoryReply(
   intervalMs = 250,
 ) {
   const startedAt = Date.now();
+  let lastRetryableHistoryError: unknown;
   while (Date.now() - startedAt < timeoutMs) {
-    const text = await readLatestAgentHistoryReply(env, sessionKey);
+    let delayMs = intervalMs;
+    let text: string | undefined;
+    try {
+      text = await readLatestAgentHistoryReply(env, sessionKey);
+      lastRetryableHistoryError = undefined;
+    } catch (error) {
+      const retryDelayMs = resolveRetryableHistoryDelayMs(error);
+      if (retryDelayMs === null) {
+        throw error;
+      }
+      lastRetryableHistoryError = error;
+      delayMs = retryDelayMs;
+    }
     if (text && (await predicate(text))) {
       return { text };
     }
@@ -459,9 +500,12 @@ async function waitForAgentHistoryReply(
     if (remainingMs <= 0) {
       break;
     }
-    await sleep(Math.min(intervalMs, remainingMs));
+    await sleep(Math.min(delayMs, remainingMs));
   }
-  throw new Error(`timed out after ${timeoutMs}ms`);
+  const message = `timed out after ${timeoutMs}ms`;
+  throw lastRetryableHistoryError === undefined
+    ? new Error(message)
+    : new Error(message, { cause: lastRetryableHistoryError });
 }
 
 async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {

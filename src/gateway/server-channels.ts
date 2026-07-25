@@ -224,6 +224,7 @@ type ChannelManagerOptions = {
   startupTrace?: GatewayStartupTrace;
   deferStartupAccountStartsUntil?: Promise<void>;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
+  ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
 };
 
 type StopChannelOptions = {
@@ -256,6 +257,8 @@ export type ChannelManager = {
   stopChannel: (channel: ChannelId, accountId?: string, opts?: StopChannelOptions) => Promise<void>;
   setAutostartSuppression: (suppression: ChannelAutostartSuppression | null) => void;
   getAutostartSuppression: () => ChannelAutostartSuppression | null;
+  setAmbientAutostartSuppressedChannelIds: (channelIds: ReadonlySet<string>) => void;
+  isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
@@ -281,6 +284,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const recoveryStopTimedOut = new Set<string>();
   const recoveryStartRequested = new Set<string>();
   let autostartSuppression: ChannelAutostartSuppression | null = null;
+  let ambientAutostartSuppressedChannelIds = new Set(
+    opts.ambientAutostartSuppressedChannelIds ?? [],
+  );
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
   const ensureChannelLog = (channelId: ChannelId): SubsystemLogger => {
@@ -472,6 +478,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         setStoppedRuntime(channelId, id, {
           restartPending: false,
           lastError: autostartSuppression.message,
+        });
+      }
+      return;
+    }
+    if (ambientAutostartSuppressedChannelIds.has(channelId) && optsValue.manual !== true) {
+      for (const id of accountIds) {
+        setStoppedRuntime(channelId, id, {
+          configured: false,
+          restartPending: false,
+          lastError: "ambient channel credentials suppressed for dev gateway",
         });
       }
       return;
@@ -789,6 +805,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 if (store.aborts.get(id) === abort) {
                   store.aborts.delete(id);
                 }
+                // The settled task may have left background work racing on this
+                // signal. Abort before the replacement starts so two account
+                // instances can never share a live lifetime.
+                abort.abort();
                 try {
                   await startChannelInternal(channelId, id, {
                     preserveManualStop: true,
@@ -838,6 +858,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 if (store.aborts.get(id) === abort) {
                   store.aborts.delete(id);
                 }
+                // See the timed-out-stop restart above: never start the crash
+                // replacement while the predecessor's signal is unaborted.
+                abort.abort();
                 await startChannelInternal(channelId, id, {
                   preserveRestartAttempts: true,
                   preserveManualStop: true,
@@ -853,6 +876,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (store.aborts.get(id) === abort) {
                 store.aborts.delete(id);
               }
+              // Terminal paths (give-up, terminal disconnect, manual stop) end
+              // here without a restart; leave no unaborted lifetime behind.
+              abort.abort();
             });
           function isCurrentTask() {
             return store.tasks.get(id) === trackedPromise;
@@ -1109,6 +1135,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       autostartSuppression = suppression;
     },
     getAutostartSuppression: () => autostartSuppression,
+    setAmbientAutostartSuppressedChannelIds: (channelIds) => {
+      ambientAutostartSuppressedChannelIds = new Set(channelIds);
+    },
+    isAmbientAutostartSuppressed: (channelId) =>
+      ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStoppedFlag,
     resetRestartAttempts: resetRestartAttemptsForTest,

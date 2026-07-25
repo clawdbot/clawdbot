@@ -22,6 +22,8 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
+export type SessionArchivedFilter = "active" | "archived" | "all";
+
 type SessionNavigationInput = {
   result: SessionsListResult | null;
   resultAgentId?: string | null;
@@ -29,6 +31,7 @@ type SessionNavigationInput = {
   assistantAgentId?: string | null;
   hello?: GatewayHelloOk | null;
   showCron?: boolean;
+  archivedFilter?: SessionArchivedFilter;
   compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
 };
 
@@ -206,10 +209,10 @@ function canonicalVisibleSessionIdentity(
 
 export function filterSessionRows(
   result: SessionsListResult,
-  options: { showArchived: boolean },
+  options: { archivedFilter: SessionArchivedFilter },
 ): SessionsListResult {
   const sessions = result.sessions.filter(
-    (row) => row.key && (row.archived === true) === options.showArchived,
+    (row) => row.key && sessionMatchesArchivedFilter(row, options.archivedFilter),
   );
   return {
     ...result,
@@ -224,21 +227,37 @@ type VisibleSessionRowOptions = {
   defaultAgentId: string;
   filterByAgent?: boolean;
   showCron?: boolean;
+  archivedFilter?: SessionArchivedFilter;
 };
+
+export function sessionMatchesArchivedFilter(
+  row: GatewaySessionRow,
+  archivedFilter: SessionArchivedFilter = "active",
+): boolean {
+  if (archivedFilter === "all") {
+    return true;
+  }
+  return (row.archived === true) === (archivedFilter === "archived");
+}
 
 export function filterVisibleSessionRows(
   rows: readonly GatewaySessionRow[],
   options: VisibleSessionRowOptions,
 ): GatewaySessionRow[] {
   return rows.filter((row) => {
-    if (row.key === options.currentSessionKey) {
+    if (
+      row.key === options.currentSessionKey &&
+      ((options.archivedFilter ?? "active") === "active" ||
+        sessionMatchesArchivedFilter(row, options.archivedFilter))
+    ) {
       return true;
     }
     return (
-      !row.archived &&
+      sessionMatchesArchivedFilter(row, options.archivedFilter) &&
       row.kind !== "global" &&
       row.kind !== "unknown" &&
-      (options.showCron === true || (row.kind !== "cron" && !isCronSessionKey(row.key))) &&
+      (options.showCron === true ||
+        ((row.kind as string) !== "cron" && !isCronSessionKey(row.key))) &&
       !isSubagentSessionKey(row.key) &&
       !row.spawnedBy &&
       (!options.filterByAgent ||
@@ -292,13 +311,14 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     defaultAgentId,
     filterByAgent: shouldFilterByAgent,
     showCron: input.showCron,
+    archivedFilter: input.archivedFilter,
   }).toSorted(input.compareSessions ?? compareSessionRowsByUpdatedAt);
   // The sidebar is the session list, not a recent-session preview. Keep every
   // active row in its sorted slot so selecting a session never reshuffles or
   // hides another one behind a separate route.
   let visibleSessions = sortedSessions;
   let activeRow = visibleSessions.find(matchesCurrentSession);
-  if (!activeRow && activeSession) {
+  if (!activeRow && activeSession && input.archivedFilter !== "archived") {
     // Deep-linked and archived sessions still need a visible selected row.
     activeRow = sortedSessions.find(matchesCurrentSession) ?? activeSession;
     visibleSessions = [activeRow, ...visibleSessions.filter((row) => row !== activeRow)];

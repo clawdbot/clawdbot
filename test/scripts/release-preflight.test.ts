@@ -18,6 +18,7 @@ const CHECK_COMMANDS = [
   "pnpm plugin-sdk:api:check",
   "pnpm plugin-sdk:surface:check",
   "pnpm ui:i18n:check",
+  "pnpm native:i18n:check",
 ];
 const FIX_COMMANDS = [
   "node --import tsx scripts/sync-plugin-versions.ts",
@@ -215,6 +216,7 @@ describe("scripts/release-preflight.mjs", () => {
         "node scripts/generate-npm-shrinkwrap.mjs --all --check",
         "node scripts/generate-plugin-inventory-doc.mjs --check",
         "pnpm ui:i18n:check",
+        "pnpm native:i18n:check",
       ].toSorted(),
     );
     expect(result.stdout).toContain("(version, jobs=4)");

@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
@@ -934,7 +935,7 @@ describe("Code Mode", () => {
     expect(details.value).toEqual(["shared", "shared"]);
   });
 
-  it("rejects forged namespace bridge paths that were not serialized", async () => {
+  it("hides the raw host bridge while exposing serialized namespace members", async () => {
     const hidden = createCodeModeNamespaceTool("fake_noop", () => ({ value: "hidden" }));
     const scope = {
       exposed: createCodeModeNamespaceTool("fake_noop", () => ({ value: "visible" })),
@@ -964,7 +965,7 @@ describe("Code Mode", () => {
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
-        globalThis.__openclawHostRequest("namespace", JSON.stringify(["leaky", ["hidden"], []]));
+        if (typeof globalThis.__openclawHostRequest !== "undefined") throw new Error("raw bridge exposed");
         await yield_control("pause");
         const exposed = await Leaky.exposed();
         return exposed.input.value;
@@ -1911,6 +1912,42 @@ describe("Code Mode", () => {
     ]);
   });
 
+  it("allocates distinct replay identities when a later turn reuses a tool-call id", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const execTool = expectDefined(codeModeTools[0], "codeModeTools[0] test invariant");
+    const input = { code: 'await yield_control("pause"); return "done";' };
+    const executionContext = (turnId: string) =>
+      ({
+        assistantMessage: { responseId: " ", turnId },
+        toolCall: { type: "toolCall", id: "reused-call-id", name: "exec", arguments: input },
+      }) as never;
+
+    const first = resultDetails(
+      await runWithAgentToolExecutionContext(executionContext("response-turn-1"), () =>
+        execTool.execute("reused-call-id", input),
+      ),
+    );
+    const second = resultDetails(
+      await runWithAgentToolExecutionContext(executionContext("response-turn-2"), () =>
+        execTool.execute("reused-call-id", input),
+      ),
+    );
+
+    expect(first.status).toBe("waiting");
+    expect(second.status).toBe("waiting");
+    expect(second.runId).not.toBe(first.runId);
+    expect(testing.activeRuns.size).toBe(2);
+    expect(new Set([...testing.activeRuns.values()].map((state) => state.replayId)).size).toBe(2);
+  });
+
   it("keeps restart-safe mode across audited core reads", async () => {
     const targetTool = fakeTool("read", "Read");
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
@@ -2456,7 +2493,7 @@ describe("Code Mode", () => {
     expect(error.startsWith("at ")).toBe(false);
   });
 
-  it("does not duplicate host error headers or expose host stack frames", async () => {
+  it("does not expose the raw host request callback", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -2469,16 +2506,14 @@ describe("Code Mode", () => {
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-call-host-error",
-        {
-          code: 'return globalThis.__openclawHostRequest("unsupported", "[]");',
-        },
+        "code-hidden-host-request",
+        { code: "return typeof globalThis.__openclawHostRequest;" },
       ),
     );
 
     expect(details).toMatchObject({
-      status: "failed",
-      error: "Error: unsupported code mode bridge method",
+      status: "completed",
+      value: "undefined",
     });
   });
 

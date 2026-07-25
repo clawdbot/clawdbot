@@ -1,7 +1,8 @@
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 // Anthropic tests cover stream wrappers plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -16,6 +17,21 @@ const OAUTH_BETA = "oauth-2025-04-20";
 const DEFAULT_BETA_HEADER =
   "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
 const OAUTH_BETA_HEADER = `claude-code-20250219,${OAUTH_BETA},${DEFAULT_BETA_HEADER}`;
+const initialTransportHost = getAiTransportHost();
+
+beforeAll(() => {
+  configureAiTransportHost({
+    ...initialTransportHost,
+    resolveProviderRequestCapabilities: (input) => ({
+      ...initialTransportHost.resolveProviderRequestCapabilities(input),
+      allowsAnthropicServiceTier: input.provider === "anthropic",
+    }),
+  });
+});
+
+afterAll(() => {
+  configureAiTransportHost(initialTransportHost);
+});
 
 function runWrapper(apiKey: string | undefined): Record<string, string> | undefined {
   const captured: { headers?: Record<string, string> } = {};
@@ -109,6 +125,11 @@ describe("anthropic stream wrappers", () => {
     expect(captured.payload?.service_tier).toBeUndefined();
   });
 
+  it("skips unsupported service_tier for Claude Opus 5", () => {
+    const captured = runComposedAnthropicProviderStream("sk-ant-api-123", "claude-opus-5");
+    expect(captured.payload?.service_tier).toBeUndefined();
+  });
+
   it("skips unsupported service_tier for Claude Sonnet 5", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123", "claude-sonnet-5");
     expect(captured.payload?.service_tier).toBeUndefined();
@@ -154,6 +175,14 @@ describe("anthropic stream wrappers", () => {
 
     expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
+  });
+
+  it("uses Opus 5 identity boundaries for context1m beta wrapper activation", () => {
+    const opus5 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-opus-5");
+    const opus50 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-opus-50");
+
+    expect(opus5.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
+    expect(opus50.headers?.["anthropic-beta"]).toBeUndefined();
   });
 
   it("uses Fable 5 identity boundaries for context1m beta wrapper activation", () => {

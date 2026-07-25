@@ -187,7 +187,7 @@ describe("chutes-models", () => {
             input_modalities: ["text", "image"],
             context_length: 200000,
             max_output_length: 16384,
-            pricing: { prompt: 0.1, completion: 0.2 },
+            pricing: { prompt: 0.1, completion: 0.2, input_cache_read: 0.05 },
           },
           { id: "new-provider/simple-model" },
         ],
@@ -201,6 +201,12 @@ describe("chutes-models", () => {
         const secondModel = requireChutesModel(models, 1);
         expect(firstModel.id).toBe("zai-org/GLM-5-TEE");
         expect(secondModel.reasoning).toBe(true);
+        expect(secondModel.cost).toEqual({
+          input: 0.1,
+          output: 0.2,
+          cacheRead: 0.05,
+          cacheWrite: 0,
+        });
         if (!secondModel.compat) {
           throw new Error("expected Chutes API model compat");
         }

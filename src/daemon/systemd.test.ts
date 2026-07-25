@@ -1322,7 +1322,7 @@ describe("stageSystemdService", () => {
     });
   });
 
-  it("writes node file-backed managed values to the node env file instead of the unit", async () => {
+  it("matches differently-cased source metadata when writing node file-backed values", async () => {
     await withStageFixture(async ({ env, stateDir, unitPath, envFilePath, nodeEnvFilePath }) => {
       await fs.rm(stateDir, { recursive: true, force: true });
       const gatewayPassword = 'symbol " \\ $ `'; // pragma: allowlist secret
@@ -1342,9 +1342,9 @@ describe("stageSystemdService", () => {
           OPENCLAW_SERVICE_KIND: "node",
         },
         environmentValueSources: {
-          OPENCLAW_GATEWAY_TOKEN: "file",
-          OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
+          openclaw_gateway_token: "file",
+          openclaw_gateway_password: "file", // pragma: allowlist secret
+          openclaw_service_managed_env_keys: "inline",
         },
       });
 

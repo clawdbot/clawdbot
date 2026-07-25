@@ -52,6 +52,7 @@ import {
   type TelegramPromptContextSource,
 } from "./prompt-context-projection.js";
 import { editMessageTelegram } from "./send.js";
+import { resolveTelegramTargetChatType } from "./targets.js";
 
 export function createTelegramDeliveryController(params: {
   bot: Bot;
@@ -149,6 +150,7 @@ export function createTelegramDeliveryController(params: {
       ...(record.text ? { text: record.text } : {}),
       ...(record.projection ? { promptContextProjection: record.projection } : {}),
       ...(params.threadSpec.id !== undefined ? { messageThreadId: params.threadSpec.id } : {}),
+      successfulSendThread: params.threadSpec,
     });
   const createPromptContextSequence = (source?: TelegramPromptContextSource) =>
     createTelegramPromptContextProjectionSequence({
@@ -560,7 +562,11 @@ export function createTelegramDeliveryController(params: {
         delete payloadForPlan.isReasoning;
       }
       const normalized = projectPayloadForDelivery(payloadForPlan);
-      return normalized ? canonicalizeTelegramPresentationPayload(normalized) : undefined;
+      return normalized
+        ? canonicalizeTelegramPresentationPayload(normalized, {
+            allowWebAppButtons: resolveTelegramTargetChatType(String(context.chatId)) === "direct",
+          })
+        : undefined;
     },
     sendPayload,
     snapshot: deliveryState.snapshot,

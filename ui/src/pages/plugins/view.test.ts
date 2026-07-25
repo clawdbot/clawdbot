@@ -14,7 +14,7 @@ function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalog
   return {
     id: "workboard",
     name: "Workboard",
-    description: "Agent work queue and session handoff.",
+    description: "Agent work queue and thread handoff.",
     version: "1.0.0",
     kind: ["productivity"],
     origin: "bundled",
@@ -203,7 +203,8 @@ describe("renderPlugins", () => {
     vi.resetModules();
 
     try {
-      const { pluginMonogram } = await import("./presentation.ts");
+      const freshModulePath = "./presentation.ts?without-intl-segmenter";
+      const { pluginMonogram } = await import(/* @vite-ignore */ freshModulePath);
       expect(pluginMonogram("😀 Tools")).toBe("😀T");
       expect(pluginMonogram("👩‍💻 Tools")).toBe("👩T");
     } finally {
@@ -328,7 +329,7 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://api.githubcopilot.com/mcp/",
             auth: "oauth",
             toolFilter: false,
@@ -357,6 +358,7 @@ describe("renderPlugins", () => {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     expect(onMcpAdd).toHaveBeenCalledWith({
       name: "context7",
+      transport: "streamable-http",
       target: "https://mcp.context7.com/mcp",
     });
   });
@@ -455,7 +457,7 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://x",
             auth: "oauth",
             toolFilter: false,

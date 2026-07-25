@@ -24,7 +24,7 @@ function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): Gra
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.gradium.apiKey",
+      path: "tts.providers.gradium.apiKey",
     }),
     baseUrl: normalizeGradiumBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_GRADIUM_VOICE_ID,

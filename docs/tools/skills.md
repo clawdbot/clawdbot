@@ -113,9 +113,9 @@ regardless of where they are loaded from.
 <AccordionGroup>
   <Accordion title="Allowlist rules">
     - Omit `agents.defaults.skills` to leave all skills unrestricted by default.
-    - Omit `agents.list[].skills` to inherit `agents.defaults.skills`.
-    - Set `agents.list[].skills: []` to expose no skills for that agent.
-    - A non-empty `agents.list[].skills` list is the **final** set — it does not
+    - Omit `agents.entries.*.skills` to inherit `agents.defaults.skills`.
+    - Set `agents.entries.*.skills: []` to expose no skills for that agent.
+    - A non-empty `agents.entries.*.skills` list is the **final** set — it does not
       merge with defaults.
     - The effective allowlist applies across prompt building, slash-command
       discovery, sandbox sync, and skill snapshots.
@@ -555,13 +555,13 @@ aligned.
           extraDirs: ["~/Projects/agent-scripts/skills"],
           allowSymlinkTargets: ["~/Projects/manager/skills"],
           watch: true, // default
-          watchDebounceMs: 250, // default
         },
       },
     }
     ```
 
-    Use `allowSymlinkTargets` for intentional symlinked layouts where a skill
+    Watcher events use a built-in 250 ms debounce. Use `allowSymlinkTargets`
+    for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/Projects/manager/skills`.
     Enable `skills.workshop.allowSymlinkTargetWrites` only when Skill Workshop

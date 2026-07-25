@@ -123,8 +123,9 @@ function expectOllamaWebSearchRequest(
       method: string;
       headers: Record<string, string>;
       body: string;
-      signal: AbortSignal;
+      signal?: AbortSignal;
     };
+    timeoutMs?: number;
     policy: Record<string, unknown>;
     auditContext: string;
   };
@@ -137,12 +138,13 @@ function expectOllamaWebSearchRequest(
         query: params.query ?? "openclaw",
         max_results: params.maxResults ?? 5,
       }),
-      signal: request.init.signal,
     },
+    timeoutMs: 15_000,
     policy: params.policy,
     auditContext: "ollama-web-search.search",
   });
-  expect(request.init.signal).toBeInstanceOf(AbortSignal);
+  // The deadline must be guard-owned so it also bounds DNS/proxy preflight.
+  expect(request.init.signal).toBeUndefined();
 }
 
 function fetchCall(index = 0): unknown[] {

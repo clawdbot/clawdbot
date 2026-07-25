@@ -157,8 +157,8 @@
       }
     },
     "discovery": {
-      "stepfun": "static",
-      "stepfun-plan": "static"
+      "stepfun": "refreshable",
+      "stepfun-plan": "refreshable"
     }
   },
   "providerAuthChoices": [

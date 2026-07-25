@@ -31,7 +31,7 @@ function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
   return {
     basePath: "",
     gateway: {
-      snapshot: { client, connected: false },
+      snapshot: { client, phase: "stopped" },
       subscribe: () => () => undefined,
     },
     navigate: vi.fn(),
@@ -50,7 +50,7 @@ describe("LogsPage lifecycle", () => {
     page.context = {
       basePath: "",
       gateway: {
-        snapshot: { client: null, connected: false },
+        snapshot: { client: null, phase: "stopped" },
         subscribe: () => () => undefined,
       },
       navigate: vi.fn(),
@@ -147,7 +147,7 @@ describe("LogsPage lifecycle", () => {
     page.connected = true;
 
     const load = page.loadLogs({ reset: true });
-    page.applyGatewaySnapshot({ client, connected: false } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
     pending.resolve({ cursor: 1, lines: ["stale"], reset: true });
     await load;
 
@@ -217,12 +217,12 @@ describe("LogsPage lifecycle", () => {
     const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
     document.body.append(page);
     await page.updateComplete;
-    page.applyGatewaySnapshot({ client, connected: true } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "connected" } as ApplicationGatewaySnapshot);
     requestFrame.mockClear();
 
     page.scheduleScroll();
-    page.applyGatewaySnapshot({ client, connected: false } as ApplicationGatewaySnapshot);
-    page.applyGatewaySnapshot({ client, connected: true } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "connected" } as ApplicationGatewaySnapshot);
     await Promise.resolve();
 
     expect(requestFrame).not.toHaveBeenCalled();

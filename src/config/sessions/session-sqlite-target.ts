@@ -4,7 +4,7 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js
 /** SQLite database target resolved from a legacy session store path. */
 type ResolvedSqliteStoreTarget = {
   agentId?: string;
-  path?: string;
+  path: string;
 };
 
 function resolveCustomStoreSqlitePath(params: {

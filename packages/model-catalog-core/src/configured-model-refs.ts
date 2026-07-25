@@ -16,9 +16,6 @@ export const AGENT_MODEL_CONFIG_KEYS = [
   "model",
   "utilityModel",
   "imageModel",
-  "imageGenerationModel",
-  "videoGenerationModel",
-  "musicGenerationModel",
   "voiceModel",
   "pdfModel",
 ] as const;
@@ -56,6 +53,10 @@ export function collectConfiguredModelRefs(
     for (const key of AGENT_MODEL_CONFIG_KEYS) {
       collectModelConfig(`${path}.${key}`, agent[key]);
     }
+    const mediaModels = isRecord(agent.mediaModels) ? agent.mediaModels : {};
+    for (const capability of ["image", "video", "music"] as const) {
+      collectModelConfig(`${path}.mediaModels.${capability}`, mediaModels[capability]);
+    }
     pushModelRef(
       `${path}.heartbeat.model`,
       isRecord(agent.heartbeat) ? agent.heartbeat.model : undefined,
@@ -81,9 +82,9 @@ export function collectConfiguredModelRefs(
   const root = isRecord(config) ? config : {};
   const agents = isRecord(root.agents) ? root.agents : {};
   collectFromAgent("agents.defaults", agents.defaults);
-  if (Array.isArray(agents.list)) {
-    for (const [index, entry] of agents.list.entries()) {
-      collectFromAgent(`agents.list.${index}`, entry);
+  if (isRecord(agents.entries)) {
+    for (const [agentId, entry] of Object.entries(agents.entries)) {
+      collectFromAgent(`agents.entries.${agentId}`, entry);
     }
   }
   if (options.includeChannelModelOverrides !== false) {
@@ -105,12 +106,7 @@ export function collectConfiguredModelRefs(
     }
   }
   pushModelRef("hooks.gmail.model", isRecord(hooks.gmail) ? hooks.gmail.model : undefined);
-  pushModelRef(
-    "messages.tts.summaryModel",
-    isRecord(root.messages) && isRecord(root.messages.tts)
-      ? root.messages.tts.summaryModel
-      : undefined,
-  );
+  pushModelRef("tts.summaryModel", isRecord(root.tts) ? root.tts.summaryModel : undefined);
   pushModelRef(
     "channels.discord.voice.model",
     isRecord(root.channels) &&

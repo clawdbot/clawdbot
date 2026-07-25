@@ -13,6 +13,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -1706,14 +1707,9 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "telegram" });
     sessionStoreMocks.currentEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:999",
-        accountId: "acc-1",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:999",
-      lastAccountId: "acc-1",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "telegram:999", accountId: "acc-1" },
+      }),
     };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1764,22 +1760,21 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "feishu" });
     sessionStoreMocks.currentEntry = {
-      route: {
-        channel: "feishu",
-        accountId: "work",
-        target: { to: "user:ou_123", chatType: "channel" },
-        thread: { id: "thread:om_123", source: "explicit" },
-      },
       chatType: "channel",
-      deliveryContext: {
-        channel: "feishu",
-        to: "user:ou_123",
-        accountId: "work",
-        threadId: "thread:om_123",
-      },
-      lastChannel: "feishu",
-      lastTo: "user:ou_123",
-      lastAccountId: "work",
+      delivery: normalizeSessionDeliveryState({
+        route: {
+          channel: "feishu",
+          accountId: "work",
+          target: { to: "user:ou_123", chatType: "channel" },
+          thread: { id: "thread:om_123", source: "explicit" },
+        },
+        context: {
+          channel: "feishu",
+          to: "user:ou_123",
+          accountId: "work",
+          threadId: "thread:om_123",
+        },
+      }),
     };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1844,9 +1839,9 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     sessionStoreMocks.currentEntry = {
-      lastChannel: "discord",
-      lastTo: "channel:123",
-      lastAccountId: "default",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "channel:123", accountId: "default" },
+      }),
     };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();

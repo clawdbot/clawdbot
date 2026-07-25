@@ -38,6 +38,7 @@ import {
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
@@ -411,7 +412,7 @@ export function resolveSession(opts: {
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel ?? sessionEntry?.origin?.provider,
+    channel: sessionDeliveryChannel(sessionEntry),
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,
@@ -459,14 +460,14 @@ export function resolveSession(opts: {
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
   });
 
-  const persistedThinking =
-    fresh && sessionEntry?.thinkingLevel
-      ? normalizeThinkLevel(sessionEntry.thinkingLevel)
-      : undefined;
-  const persistedVerbose =
-    fresh && sessionEntry?.verboseLevel
-      ? normalizeVerboseLevel(sessionEntry.verboseLevel)
-      : undefined;
+  // Behavior overrides belong to the logical session, not one transcript id.
+  // Carry them across every rollover; explicit `default` directives clear them.
+  const persistedThinking = sessionEntry?.thinkingLevel
+    ? normalizeThinkLevel(sessionEntry.thinkingLevel)
+    : undefined;
+  const persistedVerbose = sessionEntry?.verboseLevel
+    ? normalizeVerboseLevel(sessionEntry.verboseLevel)
+    : undefined;
 
   return {
     sessionId,

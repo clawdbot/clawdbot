@@ -125,7 +125,7 @@ function buildSessionCaptureNotes(params: {
   recentUserText: string | null;
   lastAssistantText: string | null;
 }): string {
-  const lines = [`Session: ${params.session.key}`];
+  const lines = [`Thread: ${params.session.key}`];
   if (params.recentUserText) {
     lines.push("", `Recent user prompt: ${clampSessionCaptureText(params.recentUserText)}`);
   }

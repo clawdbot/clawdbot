@@ -192,7 +192,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.cameraSetupController = controller;
     let camera: MediaStream;
     try {
-      camera = await openRealtimeTalkCamera(controller.signal);
+      camera = await openRealtimeTalkCamera(this.ctx.videoDeviceId, {
+        signal: controller.signal,
+      });
     } catch (error) {
       if (this.closed || controller.signal.aborted) {
         return;
@@ -222,6 +224,33 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.captureVideo = captureVideo;
     this.ctx.callbacks.onVideoStream?.(camera);
     void captureVideo.play().catch(() => undefined);
+  }
+
+  async switchCamera(videoDeviceId: string | undefined): Promise<void> {
+    const nextDeviceId = videoDeviceId?.trim() || undefined;
+    const previousDeviceId =
+      this.cameraMedia?.getVideoTracks()[0]?.getSettings?.().deviceId?.trim() ||
+      this.ctx.videoDeviceId;
+    const shouldReacquire = this.cameraMedia !== null || this.cameraSetupController !== null;
+    this.ctx.videoDeviceId = nextDeviceId;
+    if (!shouldReacquire) {
+      return;
+    }
+
+    this.releaseCamera();
+    try {
+      await this.setVideoEnabled(true);
+    } catch (error) {
+      if (!this.closed && previousDeviceId !== nextDeviceId) {
+        this.ctx.videoDeviceId = previousDeviceId;
+        try {
+          await this.setVideoEnabled(true);
+        } catch {
+          // The original switch failure is the actionable error for the user.
+        }
+      }
+      throw error;
+    }
   }
 
   private async readOfferAnswer(

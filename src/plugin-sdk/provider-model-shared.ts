@@ -32,6 +32,7 @@ export {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
@@ -67,7 +68,6 @@ export {
   GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   normalizeGpt5PromptOverlayMode,
-  renderGpt5PromptOverlay,
   resolveGpt5PromptOverlayMode,
   resolveGpt5SystemPromptContribution,
   type Gpt5PromptOverlayMode,
@@ -76,7 +76,6 @@ export { resolveProviderEndpoint } from "../agents/provider-attribution.js";
 export {
   applyModelCompatPatch,
   hasToolSchemaProfile,
-  hasNativeWebSearchTool,
   normalizeModelCompat,
   resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,

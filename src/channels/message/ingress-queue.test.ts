@@ -519,7 +519,7 @@ describe("channel ingress queue", () => {
           last_attempt_at: null,
           last_error: "bad",
           metadata_json: null,
-          payload_json: "null",
+          payload_json: JSON.stringify({ text: "keep" }),
         },
         {
           event_id: "old",

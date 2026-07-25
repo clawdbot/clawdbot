@@ -8,7 +8,25 @@ import {
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
 } from "../avatar.ts";
-import { buildAgentContext, formatBytes, resolveEffectiveModelFallbacks } from "./display.ts";
+import {
+  buildAgentContext,
+  formatBytes,
+  listSelectableAgents,
+  resolveEffectiveModelFallbacks,
+} from "./display.ts";
+
+describe("listSelectableAgents", () => {
+  it("excludes semantic system rows without depending on identity", () => {
+    const agents = [
+      { id: "main", kind: "agent" as const },
+      { id: "ordinary-looking-id", kind: "system" as const },
+      { id: "legacy-gateway-row" },
+    ];
+
+    expect(listSelectableAgents(agents)).toEqual([agents[0], agents[2]]);
+    expect(agents).toHaveLength(3);
+  });
+});
 
 describe("formatBytes", () => {
   it("preserves the Control UI byte-size display contract", () => {

@@ -2,12 +2,12 @@ title: Active Memory pre-reply recall
 
 scenario:
   id: active-memory-preprompt-recall
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.active-recall
+      - session-memory.active-memory-active-recall
     secondary:
-      - memory.recall
+      - session-memory.active-memory-recall
   objective: Verify Active Memory surfaces a memory-only preference before the main reply, and that the same question stays unresolved when the plugin is off.
   plugins:
     - active-memory

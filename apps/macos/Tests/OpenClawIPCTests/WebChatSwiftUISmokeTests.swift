@@ -61,7 +61,8 @@ struct WebChatSwiftUISmokeTests {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             presentation: .window,
-            transport: TestTransport())
+            transport: TestTransport(),
+            windowTitle: "Studio — OpenClaw")
         let window = try #require(controller._testWindow)
         let capabilities = try #require(controller._testChatCapabilities)
 
@@ -71,6 +72,9 @@ struct WebChatSwiftUISmokeTests {
         #expect(window.toolbarStyle == .unified)
         #expect(window.titlebarSeparatorStyle == .none)
         #expect(window.isMovableByWindowBackground)
+        #expect(window.title == "Studio — OpenClaw")
+        window.title = "main"
+        #expect(window.title == "Studio — OpenClaw")
         #expect(controller._testSceneBridgingOptions?.contains(.toolbars) == true)
         #expect(controller._testSceneBridgingOptions?.contains(.title) == false)
         #expect(capabilities.hasTalkControl)
@@ -92,6 +96,36 @@ struct WebChatSwiftUISmokeTests {
             transport: TestTransport())
         controller.presentAnchored(anchorProvider: anchor)
         controller.close()
+    }
+
+    @Test func `closing a full window releases it and notifies its owner once`() {
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            presentation: .window,
+            transport: TestTransport())
+        var closeCount = 0
+        controller.onClosed = { closeCount += 1 }
+
+        controller.close()
+        controller.close()
+
+        #expect(controller._testWindow == nil)
+        #expect(closeCount == 1)
+    }
+
+    @Test func `one Gateway profile can own multiple independent windows`() async throws {
+        let manager = WebChatManager()
+        let profile = try MacGatewayProfile(
+            id: "same-gateway",
+            name: "Same Gateway",
+            url: #require(URL(string: "wss://same.example")))
+
+        try await manager.show(profile: profile)
+        try await manager.show(profile: profile)
+
+        #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
+        await manager.closeGatewayWindows(profileID: profile.id)
+        #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
     }
 
     @Test func `initial draft populates an empty composer without replacing user text`() {

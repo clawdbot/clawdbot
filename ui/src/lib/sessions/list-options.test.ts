@@ -25,7 +25,7 @@ function createSessions(client: GatewayBrowserClient, key: string) {
   return createSessionCapability({
     snapshot: {
       client,
-      connected: true,
+      phase: "connected" as const,
       sessionKey: key,
       assistantAgentId: "main",
       hello: null,
@@ -106,7 +106,7 @@ describe("session list replacement options", () => {
     await sessions.refresh({
       agentId: "main",
       search: "filtered",
-      showArchived: true,
+      archivedFilter: "archived",
       limit: 25,
       includeDerivedTitles: true,
       force: true,

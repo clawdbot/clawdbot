@@ -118,12 +118,14 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
     const resetCheckpoint = report.checkpoints.find(
       (checkpoint) => checkpoint.label === "after-sessions-reset",
     );
+    // Retained history: reset keeps the old generation's SQLite rows and
+    // writes no reset archive artifact.
     const resetArchive = resetCheckpoint?.archiveArtifacts.find(
       (artifact) =>
         artifact.archiveReason === "reset" && artifact.archiveSessionId === report.legacySessionId,
     );
-    expect(resetArchive?.messageTexts).toContain("legacy hello");
-    expect(resetArchive?.messageTexts).toContain("sqlite user-facing send before reset");
+    expect(resetArchive).toBeUndefined();
+    expect(resetCheckpoint?.sqlite.transcriptEvents ?? 0).toBeGreaterThan(0);
     expect(
       report.checkpoints.some(
         (checkpoint) =>

@@ -800,6 +800,33 @@ describe("before_tool_call loop detection behavior", () => {
     mockCallGateway.mockReset();
   });
 
+  it("returns a structured denial without an approval request in deny mode", async () => {
+    const onResolution = vi.fn();
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValueOnce({
+      requireApproval: { title: "Approve", description: "Approval required", onResolution },
+    });
+    const mockCallGateway = vi.mocked(callGatewayTool);
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook(
+      { name: "exec", execute } as unknown as AnyAgentTool,
+      { agentId: "main", sessionKey: "session-key", runId: "run-1" },
+      { approvalMode: "deny" },
+    );
+
+    const result = await tool.execute("tool-call-deny", { command: "private" });
+
+    expect(result.details).toEqual({
+      status: "blocked",
+      deniedReason: "plugin-approval",
+      reason: "approval_required",
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(mockCallGateway).not.toHaveBeenCalled();
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.DENY);
+    mockCallGateway.mockReset();
+  });
+
   it.each([
     {
       label: "failure",

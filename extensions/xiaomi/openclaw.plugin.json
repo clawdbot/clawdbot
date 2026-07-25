@@ -99,8 +99,8 @@
       }
     },
     "discovery": {
-      "xiaomi": "static",
-      "xiaomi-token-plan": "runtime"
+      "xiaomi": "refreshable",
+      "xiaomi-token-plan": "refreshable"
     }
   },
   "providerEndpoints": [
@@ -117,10 +117,6 @@
   "contracts": {
     "speechProviders": ["xiaomi"],
     "usageProviders": ["xiaomi", "xiaomi-token-plan"]
-  },
-  "providerAuthEnvVars": {
-    "xiaomi": ["XIAOMI_API_KEY"],
-    "xiaomi-token-plan": ["XIAOMI_TOKEN_PLAN_API_KEY"]
   },
   "providerAuthChoices": [
     {

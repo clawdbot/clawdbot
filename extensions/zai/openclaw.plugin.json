@@ -241,7 +241,7 @@
       }
     },
     "discovery": {
-      "zai": "static"
+      "zai": "refreshable"
     }
   },
   "modelPricing": {

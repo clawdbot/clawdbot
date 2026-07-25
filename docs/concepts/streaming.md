@@ -15,6 +15,21 @@ token-delta streaming** to channel messages today:
 - **Preview streaming (Telegram/Discord/Slack/Matrix/Mattermost/MS Teams):**
   update a temporary **preview message** while generating (send + edits/appends).
 
+## Control UI startup status
+
+After `chat.send` acknowledges an active run, the Gateway can send a typed,
+coarse startup status before assistant text or tool activity is visible. The
+Control UI shows this status beside the working indicator, with stages for
+workspace preparation, environment provisioning, context preparation, and
+model startup.
+
+The first assistant delta or tool start permanently replaces startup status for
+that run. Approval status takes precedence while a tool is waiting for operator
+action. Worktree creation and initial cloud dispatch happen before a chat run
+exists, so their pre-run RPC progress is not presented as run startup status;
+environment provisioning appears here only when an active run reprovisions a
+reclaimed worker.
+
 ## Block streaming (channel messages)
 
 Block streaming sends assistant output in coarse chunks as it becomes available.
@@ -120,7 +135,7 @@ replies, after the first block, so multi-bubble responses feel more natural.
 | `natural`                         | 800-2500ms random pause |
 | `custom`                          | `minMs`/`maxMs`         |
 
-Override per agent via `agents.list[].humanDelay`. Applies only to **block
+Override per agent via `agents.entries.*.humanDelay`. Applies only to **block
 replies**, not final replies or tool summaries.
 
 ## "Stream chunks or everything"

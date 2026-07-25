@@ -383,11 +383,14 @@ describe("Mattermost durable ingress", () => {
         }
         return await enqueue(...args);
       };
-      const ingress = startMonitor(queue, vi.fn());
+      const dispatch = vi.fn();
+      const ingress = startMonitor(queue, dispatch);
       try {
         // Two transient failures absorb into the bounded retry.
         await ingress.receive(postedEvent({ postId: "post-retry" }));
-        expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
+        await ingress.waitForIdle();
+        expect(failures).toBe(0);
+        expect(dispatch).toHaveBeenCalledOnce();
 
         // A persistent failure escalates so the websocket can tear down loudly.
         failures = Number.POSITIVE_INFINITY;

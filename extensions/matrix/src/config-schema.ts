@@ -33,8 +33,6 @@ const matrixThreadBindingsSchema = z
     maxAgeHours: z.number().nonnegative().optional(),
     spawnSessions: z.boolean().optional(),
     defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-    spawnSubagentSessions: z.boolean().optional(),
-    spawnAcpSessions: z.boolean().optional(),
   })
   .optional();
 
@@ -94,6 +92,7 @@ const matrixStreamingSchema = z
         maxLines: z.number().int().positive().optional(),
         maxLineChars: z.number().int().positive().optional(),
         toolProgress: z.boolean().optional(),
+        commandText: z.enum(["raw", "status"]).optional(),
       })
       .strict()
       .optional(),

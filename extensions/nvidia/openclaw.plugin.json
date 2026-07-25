@@ -237,7 +237,7 @@
       }
     },
     "discovery": {
-      "nvidia": "static"
+      "nvidia": "refreshable"
     }
   },
   "setup": {

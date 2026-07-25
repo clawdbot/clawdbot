@@ -525,7 +525,7 @@ class GatewaySessionInvokeTest {
         ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
 
       try {
-        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
         harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "device-token")
 
         connectNodeSession(
@@ -569,7 +569,7 @@ class GatewaySessionInvokeTest {
         ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
 
       try {
-        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
         harness.deviceAuthStore.saveToken(
           gatewayId = gatewayIdForPort(server.port),
           deviceId = deviceId,
@@ -603,7 +603,7 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun bootstrapConnect_filtersOperatorHandoffScopesFromConnectRequest() =
+  fun bootstrapConnect_requestsCanonicalLimitedOperatorHandoffScopes() =
     runBlocking {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
@@ -637,6 +637,7 @@ class GatewaySessionInvokeTest {
             listOf(
               "operator.approvals",
               "operator.pairing",
+              "operator.questions",
               "operator.read",
               "operator.talk.secrets",
               "operator.write",
@@ -656,6 +657,7 @@ class GatewaySessionInvokeTest {
         assertEquals(
           listOf(
             "operator.approvals",
+            "operator.questions",
             "operator.read",
             "operator.talk.secrets",
             "operator.write",
@@ -709,7 +711,7 @@ class GatewaySessionInvokeTest {
         ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
 
       try {
-        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
         harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "stored-device-token")
 
         connectNodeSession(
@@ -767,7 +769,7 @@ class GatewaySessionInvokeTest {
         )
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
-        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
         assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
         assertNull(harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "operator"))
       } finally {
@@ -812,7 +814,7 @@ class GatewaySessionInvokeTest {
         )
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
-        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
         val nodeEntry = harness.deviceAuthStore.loadEntry(gatewayIdForPort(server.port), deviceId, "node")
         val operatorEntry = harness.deviceAuthStore.loadEntry(gatewayIdForPort(server.port), deviceId, "operator")
         assertEquals("bootstrap-node-token", nodeEntry?.token)
@@ -870,7 +872,7 @@ class GatewaySessionInvokeTest {
         )
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
-        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
         assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
         assertNull(harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "operator"))
       } finally {
@@ -1328,7 +1330,7 @@ class GatewaySessionInvokeTest {
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
-        identityStore = DeviceIdentityStore(app),
+        identityStore = testDeviceIdentityStore(app),
         deviceAuthStore = deviceAuthStore,
         onConnected = {
           if (!connected.isCompleted) connected.complete(Unit)

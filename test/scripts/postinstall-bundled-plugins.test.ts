@@ -482,27 +482,35 @@ describe("bundled plugin postinstall", () => {
     );
   });
 
-  it("surfaces deprecated plugin registry migration break-glass warnings", async () => {
-    const warn = vi.fn();
-    const migratePluginRegistryForInstall = vi.fn(async () => ({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {
-        deprecationWarnings: ["OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated"],
-      },
-    }));
-    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
+  it("does not migrate operator plugin state from a source checkout", async () => {
+    const packageRoot = "/source";
+    const existingPaths = new Set([
+      path.join(packageRoot, ".git"),
+      path.join(packageRoot, "src"),
+      path.join(packageRoot, "extensions"),
+      path.join(
+        packageRoot,
+        "dist",
+        "commands",
+        "doctor",
+        "shared",
+        "plugin-registry-migration.js",
+      ),
+    ]);
+    const importModule = vi.fn();
 
-    await runPluginRegistryPostinstallMigration({
-      packageRoot: "/pkg",
-      existsSync: vi.fn(() => true),
-      importModule,
-      log: { log: vi.fn(), warn },
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot,
+        existsSync: vi.fn((filePath: string) => existingPaths.has(filePath)),
+        importModule,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toEqual({
+      status: "skipped",
+      reason: "source-checkout",
     });
-
-    expect(warn).toHaveBeenCalledWith(
-      "[postinstall] OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated",
-    );
+    expect(importModule).not.toHaveBeenCalled();
   });
 
   it("keeps plugin registry postinstall migration non-fatal when dist entries are unavailable", async () => {
@@ -519,54 +527,6 @@ describe("bundled plugin postinstall", () => {
       reason: "missing-dist-entry",
     });
     expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("honors plugin registry postinstall migration disable env", async () => {
-    const importModule = vi.fn(async () => {
-      throw new Error("dist migration module should not import when migration is disabled");
-    });
-    await expect(
-      runPluginRegistryPostinstallMigration({
-        packageRoot: "/pkg",
-        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "1" },
-        existsSync: vi.fn(() => true),
-        importModule,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).resolves.toEqual({
-      status: "disabled",
-      migrated: false,
-      reason: "disabled-env",
-    });
-    expect(importModule).not.toHaveBeenCalled();
-  });
-
-  it("does not disable plugin registry migration for falsey env flag strings", async () => {
-    const migratePluginRegistryForInstall = vi.fn(async () => ({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {},
-    }));
-    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
-
-    await expect(
-      runPluginRegistryPostinstallMigration({
-        packageRoot: "/pkg",
-        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
-        existsSync: vi.fn(() => true),
-        importModule,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).resolves.toEqual({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {},
-    });
-    expect(importModule).toHaveBeenCalledOnce();
-    expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
-      env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
-      packageRoot: "/pkg",
-    });
   });
 
   it("prunes stale dist files from packaged installs", async () => {

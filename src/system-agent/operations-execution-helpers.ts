@@ -1,4 +1,5 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
+import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
@@ -26,6 +27,7 @@ import type {
 import { formatSystemAgentPersistentPlan } from "./operations-parse.js";
 import type { SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 type ConfigModule = typeof import("../config/config.js");
 type ConfigFileSnapshot = Awaited<ReturnType<ConfigModule["readConfigFileSnapshot"]>>;
@@ -219,6 +221,8 @@ export type ExecuteOptions = {
    * immediately followed by the persistent effect it authorizes.
    */
   beforePersistentApply?: () => Promise<void>;
+  /** Adopt the exact final binding after a verified model-route write commits. */
+  onVerifiedInferenceChanged?: (binding: SystemAgentVerifiedInferenceBinding) => void;
 };
 
 /**
@@ -237,6 +241,7 @@ type PersistentApplyContext = {
 type PersistentApplyOutcome = {
   summary: string;
   bootstrapPending?: boolean;
+  agentId?: string;
   details?: Record<string, unknown>;
   /** Overrides the after-snapshot config path in the audit record. */
   configPath?: string;
@@ -286,6 +291,7 @@ export async function applyPersistentOperation(params: {
     ...(outcome.bootstrapPending === undefined
       ? {}
       : { bootstrapPending: outcome.bootstrapPending }),
+    ...(outcome.agentId ? { agentId: outcome.agentId } : {}),
   };
 }
 
@@ -566,6 +572,7 @@ export async function executeSetDefaultModel(
         );
       }
       let persistedVerification = initialVerification;
+      let persistedBinding: SystemAgentVerifiedInferenceBinding | undefined;
       let selectedRouteForCommit = verifiedRoute;
       const selectModel = await createSystemAgentModelSelectionUpdater({
         model: operation.model,
@@ -574,6 +581,7 @@ export async function executeSetDefaultModel(
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {
+          auditOrigin: "system-agent",
           preCommitRuntimePreflight: async (sourceConfig) => {
             const commitRoute = await projectRoute(sourceConfig);
             if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {
@@ -582,11 +590,22 @@ export async function executeSetDefaultModel(
               );
             }
             await opts.beforePersistentApply?.();
+            let latestBinding: SystemAgentVerifiedInferenceBinding | undefined;
             const latestVerification = await verifyInferenceConfig({
               config: sourceConfig,
               runtime: ctx.runtime,
               requireExecutionOwner: true,
               ...(targetAgentId ? { agentId: targetAgentId } : {}),
+              ...(opts.onVerifiedInferenceChanged
+                ? {
+                    onVerifiedExecution: (
+                      _auth: AgentExecutionAuthBinding,
+                      binding: SystemAgentVerifiedInferenceBinding,
+                    ) => {
+                      latestBinding = binding;
+                    },
+                  }
+                : {}),
             });
             if (!latestVerification.ok) {
               throw new Error(
@@ -598,10 +617,16 @@ export async function executeSetDefaultModel(
                 "The final live inference test did not verify the exact model route at the config commit boundary, so the requested model was not saved. Review model aliases and runtime routing, then retry.",
               );
             }
+            if (opts.onVerifiedInferenceChanged && !latestBinding) {
+              throw new Error(
+                "The final live inference test did not return a reusable session binding, so the requested model was not saved. Retry the model change.",
+              );
+            }
             // The live probe can outlive the original OpenClaw authority.
             // Re-check it last, immediately before the writer crosses to disk.
             await opts.beforePersistentApply?.();
             persistedVerification = latestVerification;
+            persistedBinding = latestBinding;
           },
         },
         mutate: async (cfg) => {
@@ -627,6 +652,9 @@ export async function executeSetDefaultModel(
           cfg.agents = selected.agents;
         },
       });
+      if (persistedBinding) {
+        opts.onVerifiedInferenceChanged?.(persistedBinding);
+      }
       ctx.runtime.log(`Updated ${result.path}`);
       ctx.runtime.log(
         targetAgentId

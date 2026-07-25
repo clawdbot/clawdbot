@@ -13,7 +13,7 @@ import type {
   ChannelMessageSendMediaContext,
   ChannelMessageSendTextContext,
 } from "../../channels/message/types.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
@@ -204,6 +204,45 @@ function withMatrixChannel(result: Awaited<ReturnType<MatrixSendFn>>) {
     channel: "matrix" as const,
     ...result,
   };
+}
+
+function setTestPlugin(
+  plugin: Pick<ChannelPlugin, "id"> & Partial<ChannelPlugin>,
+  pluginId = plugin.id,
+) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId, source: "test", plugin }]));
+}
+
+function createTestOutbound(
+  overrides: Partial<ChannelOutboundAdapter> = {},
+  id: Parameters<typeof createOutboundTestPlugin>[0]["id"] = "matrix",
+): ChannelOutboundAdapter {
+  return {
+    deliveryMode: "direct",
+    sendText: async () => ({ channel: id, messageId: "unused" }),
+    ...overrides,
+  };
+}
+
+function setTestOutbound(
+  overrides: Partial<ChannelOutboundAdapter>,
+  id: Parameters<typeof createOutboundTestPlugin>[0]["id"] = "matrix",
+) {
+  setTestPlugin(createOutboundTestPlugin({ id, outbound: createTestOutbound(overrides, id) }));
+}
+
+function setMatrixMessageAdapter(
+  message: NonNullable<ChannelPlugin["message"]>,
+  outbound?: Partial<ChannelOutboundAdapter>,
+) {
+  setTestPlugin(
+    outbound
+      ? {
+          ...createOutboundTestPlugin({ id: "matrix", outbound: createTestOutbound(outbound) }),
+          message,
+        }
+      : { id: "matrix", message },
+  );
 }
 
 const matrixOutboundForTest: ChannelOutboundAdapter = {
@@ -418,27 +457,15 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async () => ({ channel: "matrix", messageId: "m1" }),
-              deliveryCapabilities: {
-                durableFinal: {
-                  text: true,
-                },
-              },
-            },
-          }),
+    setTestOutbound({
+      deliveryMode: "direct",
+      sendText: async () => ({ channel: "matrix", messageId: "m1" }),
+      deliveryCapabilities: {
+        durableFinal: {
+          text: true,
         },
-      ]),
-    );
-
+      },
+    });
     await expect(
       resolveOutboundDurableFinalDeliverySupport({
         cfg: {},
@@ -456,47 +483,35 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("uses channel message adapter capabilities for durable final support", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "matrix",
-              outbound: {
-                deliveryMode: "direct",
-                sendText: async () => ({ channel: "matrix", messageId: "outbound" }),
-                deliveryCapabilities: {
-                  durableFinal: {
-                    text: true,
-                  },
-                },
-              },
-            }),
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                  silent: true,
-                },
-              },
-              send: {
-                text: async () => ({
-                  messageId: "message",
-                  receipt: createMessageReceiptFromOutboundResults({
-                    results: [{ channel: "matrix", messageId: "message" }],
-                    kind: "text",
-                  }),
-                }),
-              },
-            },
+    setMatrixMessageAdapter(
+      {
+        id: "matrix",
+        durableFinal: {
+          capabilities: {
+            text: true,
+            silent: true,
           },
         },
-      ]),
+        send: {
+          text: async () => ({
+            messageId: "message",
+            receipt: createMessageReceiptFromOutboundResults({
+              results: [{ channel: "matrix", messageId: "message" }],
+              kind: "text",
+            }),
+          }),
+        },
+      },
+      {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "matrix", messageId: "outbound" }),
+        deliveryCapabilities: {
+          durableFinal: {
+            text: true,
+          },
+        },
+      },
     );
-
     await expect(
       resolveOutboundDurableFinalDeliverySupport({
         cfg: {},
@@ -510,40 +525,29 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("requires a real reconciler for required unknown-send recovery support", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "matrix",
-              outbound: {
-                deliveryMode: "direct",
-                sendText: async () => ({ channel: "matrix", messageId: "outbound" }),
-              },
-            }),
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                  reconcileUnknownSend: true,
-                },
-              },
-              send: {
-                text: async () => ({
-                  messageId: "message",
-                  receipt: createMessageReceiptFromOutboundResults({
-                    results: [{ channel: "matrix", messageId: "message" }],
-                    kind: "text",
-                  }),
-                }),
-              },
-            },
+    setMatrixMessageAdapter(
+      {
+        id: "matrix",
+        durableFinal: {
+          capabilities: {
+            text: true,
+            reconcileUnknownSend: true,
           },
         },
-      ]),
+        send: {
+          text: async () => ({
+            messageId: "message",
+            receipt: createMessageReceiptFromOutboundResults({
+              results: [{ channel: "matrix", messageId: "message" }],
+              kind: "text",
+            }),
+          }),
+        },
+      },
+      {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "matrix", messageId: "outbound" }),
+      },
     );
 
     await expect(
@@ -563,43 +567,32 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("accepts required unknown-send recovery only when the adapter declares and implements it", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "matrix",
-              outbound: {
-                deliveryMode: "direct",
-                sendText: async () => ({ channel: "matrix", messageId: "outbound" }),
-              },
-            }),
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                  media: true,
-                  reconcileUnknownSend: true,
-                },
-                reconcileUnknownSendKinds: { text: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: {
-                text: async () => ({
-                  messageId: "message",
-                  receipt: createMessageReceiptFromOutboundResults({
-                    results: [{ channel: "matrix", messageId: "message" }],
-                    kind: "text",
-                  }),
-                }),
-              },
-            },
+    setMatrixMessageAdapter(
+      {
+        id: "matrix",
+        durableFinal: {
+          capabilities: {
+            text: true,
+            media: true,
+            reconcileUnknownSend: true,
           },
+          reconcileUnknownSendKinds: { text: true },
+          reconcileUnknownSend: async () => ({ status: "not_sent" }),
         },
-      ]),
+        send: {
+          text: async () => ({
+            messageId: "message",
+            receipt: createMessageReceiptFromOutboundResults({
+              results: [{ channel: "matrix", messageId: "message" }],
+              kind: "text",
+            }),
+          }),
+        },
+      },
+      {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "matrix", messageId: "outbound" }),
+      },
     );
 
     await expect(
@@ -631,34 +624,22 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("preserves global reconciliation declarations when the optional kind map is absent", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: { text: true, reconcileUnknownSend: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: {
-                text: async () => ({
-                  messageId: "message",
-                  receipt: createMessageReceiptFromOutboundResults({
-                    results: [{ channel: "matrix", messageId: "message" }],
-                    kind: "text",
-                  }),
-                }),
-              },
-            },
-          },
-        },
-      ]),
-    );
-
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, reconcileUnknownSend: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: {
+        text: async () => ({
+          messageId: "message",
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: "matrix", messageId: "message" }],
+            kind: "text",
+          }),
+        }),
+      },
+    });
     await expect(
       resolveOutboundDurableFinalDeliverySupport({
         cfg: {},
@@ -680,36 +661,14 @@ describe("deliverOutboundPayloads", () => {
       channel: "matrix" as const,
       messageId: "outbound-1",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "matrix",
-              outbound: {
-                deliveryMode: "direct",
-                chunker: chunkText,
-                sendText: outboundSendText,
-              },
-            }),
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                },
-              },
-              send: {
-                text: messageSendText,
-              },
-            },
-          },
-        },
-      ]),
+    setMatrixMessageAdapter(
+      {
+        id: "matrix",
+        durableFinal: { capabilities: { text: true } },
+        send: { text: messageSendText },
+      },
+      { chunker: chunkText, sendText: outboundSendText },
     );
-
     const results = await deliverOutboundPayloads({
       cfg: {},
       channel: "matrix",
@@ -770,39 +729,23 @@ describe("deliverOutboundPayloads", () => {
     const afterCommit = vi.fn((ctx: { attemptToken?: unknown; result: { messageId?: string } }) => {
       order.push(`commit:${String(ctx.attemptToken)}:${ctx.result.messageId ?? ""}`);
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                  reconcileUnknownSend: true,
-                  afterSendSuccess: true,
-                  afterCommit: true,
-                },
-                reconcileUnknownSendKinds: { text: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: {
-                lifecycle: {
-                  beforeSendAttempt,
-                  afterSendSuccess,
-                  afterCommit,
-                },
-                text: messageSendText,
-              },
-            },
-          },
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: {
+          text: true,
+          reconcileUnknownSend: true,
+          afterSendSuccess: true,
+          afterCommit: true,
         },
-      ]),
-    );
-
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: {
+        lifecycle: { beforeSendAttempt, afterSendSuccess, afterCommit },
+        text: messageSendText,
+      },
+    });
     const results = await deliverOutboundPayloads({
       cfg: {},
       channel: "matrix",
@@ -972,22 +915,11 @@ describe("deliverOutboundPayloads", () => {
       reason: "unsupported_enterprise_slack_delivery",
     }));
     const messageSendText = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: { admitDeferredDelivery },
-              send: { text: messageSendText },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { admitDeferredDelivery },
+      send: { text: messageSendText },
+    });
 
     const request = {
       cfg: {},
@@ -1031,22 +963,11 @@ describe("deliverOutboundPayloads", () => {
         }),
       };
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: { capabilities: { text: true } },
-              send: { text: messageSendText },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true } },
+      send: { text: messageSendText },
+    });
 
     await expect(
       deliverOutboundPayloads({
@@ -1071,22 +992,11 @@ describe("deliverOutboundPayloads", () => {
         kind: "text",
       }),
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: { capabilities: { text: true } },
-              send: { text: messageSendText },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true } },
+      send: { text: messageSendText },
+    });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -1104,26 +1014,15 @@ describe("deliverOutboundPayloads", () => {
 
   it("rejects explicitly reconciled multi-payload sends before enqueue or platform I/O", async () => {
     const messageSendText = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: { text: true, reconcileUnknownSend: true },
-                reconcileUnknownSendKinds: { text: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: { text: messageSendText },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: messageSendText },
+    });
 
     await expect(
       deliverOutboundPayloads({
@@ -1147,26 +1046,15 @@ describe("deliverOutboundPayloads", () => {
         kind: "media",
       }),
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: { text: true, media: true, reconcileUnknownSend: true },
-                reconcileUnknownSendKinds: { text: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: { text: vi.fn(), media: messageSendMedia },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, media: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: vi.fn(), media: messageSendMedia },
+    });
 
     await expect(
       deliverOutboundPayloads({
@@ -1188,26 +1076,15 @@ describe("deliverOutboundPayloads", () => {
         kind: "media",
       }),
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: { text: true, media: true, reconcileUnknownSend: true },
-                reconcileUnknownSendKinds: { media: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: { text: vi.fn(), media: messageSendMedia },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, media: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { media: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: vi.fn(), media: messageSendMedia },
+    });
 
     await expect(
       deliverOutboundPayloads({
@@ -1238,26 +1115,15 @@ describe("deliverOutboundPayloads", () => {
       },
     });
     const messageSendMedia = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: { text: true, media: true, reconcileUnknownSend: true },
-                reconcileUnknownSendKinds: { media: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: { text: vi.fn(), media: messageSendMedia },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, media: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { media: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: vi.fn(), media: messageSendMedia },
+    });
 
     await expect(
       deliverOutboundPayloads({
@@ -1293,26 +1159,15 @@ describe("deliverOutboundPayloads", () => {
         }),
       };
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: { text: true, reconcileUnknownSend: true },
-                reconcileUnknownSendKinds: { text: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: { text: messageSendText },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: messageSendText },
+    });
 
     await expect(
       deliverOutboundPayloads({
@@ -1342,31 +1197,20 @@ describe("deliverOutboundPayloads", () => {
     });
     const sendText = vi.fn();
     const sendMedia = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                  media: true,
-                  messageSendingHooks: true,
-                  reconcileUnknownSend: true,
-                },
-                reconcileUnknownSendKinds: { text: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: { text: sendText, media: sendMedia },
-            },
-          },
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: {
+          text: true,
+          media: true,
+          messageSendingHooks: true,
+          reconcileUnknownSend: true,
         },
-      ]),
-    );
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: sendText, media: sendMedia },
+    });
 
     await expect(
       deliverOutboundPayloads({
@@ -1396,29 +1240,15 @@ describe("deliverOutboundPayloads", () => {
         kind: "media",
       }),
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: { text: true, media: true, reconcileUnknownSend: true },
-                reconcileUnknownSendKinds: { text: true },
-                reconcileUnknownSend: async () => ({ status: "not_sent" }),
-              },
-              send: {
-                text: vi.fn(),
-                media: sendMedia,
-              },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, media: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: vi.fn(), media: sendMedia },
+    });
 
     for (const [index, queuePolicy] of ["best_effort", undefined].entries()) {
       await expect(
@@ -1491,95 +1321,32 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.markDeliveryPlatformOutcomeUnknown).not.toHaveBeenCalled();
   });
 
-  it("runs message adapter failure cleanup for failed sends with pending attempt tokens", async () => {
-    const messageSendText = vi.fn(async () => {
-      throw new Error("native send failed");
-    });
-    const afterSendFailure = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                  afterSendSuccess: true,
-                },
-              },
-              send: {
-                lifecycle: {
-                  beforeSendAttempt: () => "pending-2",
-                  afterSendFailure,
-                },
-                text: messageSendText,
-              },
-            },
-          },
-        },
-      ]),
-    );
-
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "hello" }],
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("native send failed");
-
-    const [failureParams] = expectDefined(
-      (afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0],
-      "(afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0] test invariant",
-    );
-    expect(failureParams?.kind).toBe("text");
-    expect(failureParams?.attemptToken).toBe("pending-2");
-    expect(failureParams?.error).toBeInstanceOf(Error);
-    const failDeliveryCall = requireMockCall(queueMocks.failDelivery, "failDelivery");
-    expect(failDeliveryCall[0]).toBe("mock-queue-id");
-    expect(String(failDeliveryCall[1])).toContain("native send failed");
-  });
-
-  it("preserves native send errors when failure cleanup throws", async () => {
+  it.each([
+    {
+      name: "runs message adapter failure cleanup for failed sends with pending attempt tokens",
+      cleanupError: undefined,
+    },
+    {
+      name: "preserves native send errors when failure cleanup throws",
+      cleanupError: "cleanup failed",
+    },
+  ])("$name", async ({ cleanupError }) => {
     const messageSendText = vi.fn(async () => {
       throw new Error("native send failed");
     });
     const afterSendFailure = vi.fn(async () => {
-      throw new Error("cleanup failed");
+      if (cleanupError) {
+        throw new Error(cleanupError);
+      }
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                  afterSendSuccess: true,
-                },
-              },
-              send: {
-                lifecycle: {
-                  beforeSendAttempt: () => "pending-2",
-                  afterSendFailure,
-                },
-                text: messageSendText,
-              },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true, afterSendSuccess: true } },
+      send: {
+        lifecycle: { beforeSendAttempt: () => "pending-2", afterSendFailure },
+        text: messageSendText,
+      },
+    });
 
     await expect(
       deliverOutboundPayloads({
@@ -1606,44 +1373,28 @@ describe("deliverOutboundPayloads", () => {
   it("preserves successful sends when the success hook throws", async () => {
     const afterSendFailure = vi.fn();
     const afterCommit = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                  afterSendSuccess: true,
-                  afterCommit: true,
-                },
-              },
-              send: {
-                lifecycle: {
-                  afterSendSuccess: async () => {
-                    throw new Error("success hook failed");
-                  },
-                  afterSendFailure,
-                  afterCommit,
-                },
-                text: async () => ({
-                  messageId: "message-adapter-1",
-                  receipt: createMessageReceiptFromOutboundResults({
-                    results: [{ channel: "matrix", messageId: "message-adapter-1" }],
-                    kind: "text",
-                  }),
-                }),
-              },
-            },
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, afterSendSuccess: true, afterCommit: true },
+      },
+      send: {
+        lifecycle: {
+          afterSendSuccess: async () => {
+            throw new Error("success hook failed");
           },
+          afterSendFailure,
+          afterCommit,
         },
-      ]),
-    );
-
+        text: async () => ({
+          messageId: "message-adapter-1",
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: "matrix", messageId: "message-adapter-1" }],
+            kind: "text",
+          }),
+        }),
+      },
+    });
     const results = await deliverOutboundPayloads({
       cfg: {},
       channel: "matrix",
@@ -1722,38 +1473,20 @@ describe("deliverOutboundPayloads", () => {
   it("runs afterCommit hooks after best-effort queue fallback direct sends", async () => {
     queueMocks.enqueueDelivery.mockRejectedValueOnce(new Error("queue offline"));
     const afterCommit = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: {
-                capabilities: {
-                  text: true,
-                  afterCommit: true,
-                },
-              },
-              send: {
-                lifecycle: {
-                  afterCommit,
-                },
-                text: async () => ({
-                  messageId: "message-adapter-1",
-                  receipt: createMessageReceiptFromOutboundResults({
-                    results: [{ channel: "matrix", messageId: "message-adapter-1" }],
-                    kind: "text",
-                  }),
-                }),
-              },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true, afterCommit: true } },
+      send: {
+        lifecycle: { afterCommit },
+        text: async () => ({
+          messageId: "message-adapter-1",
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: "matrix", messageId: "message-adapter-1" }],
+            kind: "text",
+          }),
+        }),
+      },
+    });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -2311,22 +2044,11 @@ describe("deliverOutboundPayloads", () => {
         }),
       })
       .mockRejectedValueOnce(new Error("second send failed"));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: { capabilities: { text: true, afterCommit: true } },
-              send: { lifecycle: { afterCommit }, text: messageSendText },
-            },
-          },
-        },
-      ]),
-    );
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true, afterCommit: true } },
+      send: { lifecycle: { afterCommit }, text: messageSendText },
+    });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -2804,29 +2526,17 @@ describe("deliverOutboundPayloads", () => {
       messageId: text,
       roomId: "!room",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              textChunkLimit: 2,
-              chunker: (text, limit) => {
-                const chunks: string[] = [];
-                for (let i = 0; i < text.length; i += limit) {
-                  chunks.push(text.slice(i, i + limit));
-                }
-                return chunks;
-              },
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      textChunkLimit: 2,
+      chunker: (text, limit) => {
+        const chunks: string[] = [];
+        for (let i = 0; i < text.length; i += limit) {
+          chunks.push(text.slice(i, i + limit));
+        }
+        return chunks;
+      },
+      sendText,
+    });
 
     const results = await deliverOutboundPayloads({
       cfg: { channels: { matrix: { textChunkLimit: 2 } } } as OpenClawConfig,
@@ -2850,23 +2560,11 @@ describe("deliverOutboundPayloads", () => {
       messageId: "prepared-1",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              textChunkLimit: 2,
-              chunker: (text, limit) => [text.slice(0, limit), text.slice(limit)],
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      textChunkLimit: 2,
+      chunker: (text, limit) => [text.slice(0, limit), text.slice(limit)],
+      sendText,
+    });
 
     await deliverOutboundPayloads({
       cfg: { channels: { matrix: { textChunkLimit: 2 } } } as OpenClawConfig,
@@ -2891,29 +2589,17 @@ describe("deliverOutboundPayloads", () => {
       messageId: text,
       roomId: "!room",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              textChunkLimit: 2,
-              chunker: (text, limit) => {
-                const chunks: string[] = [];
-                for (let i = 0; i < text.length; i += limit) {
-                  chunks.push(text.slice(i, i + limit));
-                }
-                return chunks;
-              },
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      textChunkLimit: 2,
+      chunker: (text, limit) => {
+        const chunks: string[] = [];
+        for (let i = 0; i < text.length; i += limit) {
+          chunks.push(text.slice(i, i + limit));
+        }
+        return chunks;
+      },
+      sendText,
+    });
 
     await deliverOutboundPayloads({
       cfg: { channels: { matrix: { textChunkLimit: 2 } } } as OpenClawConfig,
@@ -2936,21 +2622,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: text,
       roomId: "!room",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -2981,21 +2653,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: text,
       roomId: "!room",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -3027,21 +2685,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: "should-not-send",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -3094,21 +2738,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: "clean",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -3197,27 +2827,14 @@ describe("deliverOutboundPayloads", () => {
       messageId: "clean",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              normalizePayload: ({ payload }) => ({
-                ...payload,
-                channelData: { copiedText: payload.text },
-              }),
-              sendText: vi.fn(),
-              sendMedia: vi.fn(),
-              sendPayload,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      normalizePayload: ({ payload }) => ({
+        ...payload,
+        channelData: { copiedText: payload.text },
+      }),
+      sendMedia: vi.fn(),
+      sendPayload,
+    });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -3244,24 +2861,7 @@ describe("deliverOutboundPayloads", () => {
       roomId: "!room",
     });
     const cfg = { channels: { matrix: { enabled: true } } } as unknown as OpenClawConfig;
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              normalizePayload,
-              sendText: vi.fn(),
-              sendMedia: vi.fn(),
-              sendPayload,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ normalizePayload, sendMedia: vi.fn(), sendPayload });
 
     await deliverOutboundPayloads({
       cfg,
@@ -3281,49 +2881,63 @@ describe("deliverOutboundPayloads", () => {
     });
   });
 
+  it("passes ordered source indexes through adapter batch normalization", async () => {
+    const normalizePayloadBatch = vi.fn<
+      NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
+    >(({ payloads }) => [
+      {
+        ...payloads[0]?.payload,
+        channelData: { merged: payloads.map((entry) => entry.index) },
+      },
+      null,
+    ]);
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "merged",
+      roomId: "!room",
+    });
+    setTestOutbound({ normalizePayloadBatch, sendPayload });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "First" }, { text: "Second" }],
+    });
+
+    expect(normalizePayloadBatch).toHaveBeenCalledTimes(1);
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(sendPayload, "sendPayload").payload).toMatchObject({
+      text: "First",
+      channelData: { merged: [0, 1] },
+    });
+  });
+
   it("strips internal runtime scaffolding copied into rendered and normalized nested payloads", async () => {
     const sendPayload = vi.fn().mockResolvedValue({
       channel: "matrix" as const,
       messageId: "clean-nested",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              renderPresentation: ({ payload }) => ({
-                ...payload,
-                channelData: {
-                  renderedText: payload.text,
-                  renderedBlocks: [{ text: payload.text }],
-                },
-              }),
-              normalizePayload: ({ payload }) => {
-                const text = payload.text ?? "";
-                return {
-                  ...payload,
-                  channelData: {
-                    ...payload.channelData,
-                    normalizedText: text,
-                  },
-                  interactive: {
-                    blocks: [{ type: "text", text }],
-                  },
-                };
-              },
-              sendText: vi.fn(),
-              sendMedia: vi.fn(),
-              sendPayload,
-            },
-          }),
+    setTestOutbound({
+      renderPresentation: ({ payload }) => ({
+        ...payload,
+        channelData: {
+          renderedText: payload.text,
+          renderedBlocks: [{ text: payload.text }],
         },
-      ]),
-    );
+      }),
+      normalizePayload: ({ payload }) => {
+        const text = payload.text ?? "";
+        return {
+          ...payload,
+          channelData: { ...payload.channelData, normalizedText: text },
+          interactive: { blocks: [{ type: "text", text }] },
+        };
+      },
+      sendMedia: vi.fn(),
+      sendPayload,
+    });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -3365,36 +2979,23 @@ describe("deliverOutboundPayloads", () => {
       messageId: "adapted",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              presentationCapabilities: {
-                supported: true,
-                buttons: true,
-                limits: {
-                  actions: {
-                    maxActions: 1,
-                    maxLabelLength: 4,
-                    maxValueBytes: 8,
-                    supportsStyles: false,
-                  },
-                },
-              },
-              renderPresentation,
-              sendText: vi.fn(),
-              sendMedia: vi.fn(),
-              sendPayload,
-            },
-          }),
+    setTestOutbound({
+      presentationCapabilities: {
+        supported: true,
+        buttons: true,
+        limits: {
+          actions: {
+            maxActions: 1,
+            maxLabelLength: 4,
+            maxValueBytes: 8,
+            supportsStyles: false,
+          },
         },
-      ]),
-    );
+      },
+      renderPresentation,
+      sendMedia: vi.fn(),
+      sendPayload,
+    });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -3446,25 +3047,12 @@ describe("deliverOutboundPayloads", () => {
       messageId: "question-card",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              presentationCapabilities: { supported: true, buttons: true },
-              renderPresentation: nativeRender,
-              sendText: vi.fn(),
-              sendMedia: vi.fn(),
-              sendPayload,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      presentationCapabilities: { supported: true, buttons: true },
+      renderPresentation: nativeRender,
+      sendMedia: vi.fn(),
+      sendPayload,
+    });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -3500,18 +3088,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: "question-text",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -3536,25 +3113,10 @@ describe("deliverOutboundPayloads", () => {
 
   it("runs adapter after-delivery hooks with the payload delivery results", async () => {
     const afterDeliverPayload = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async ({ text }) => ({
-                channel: "matrix" as const,
-                messageId: text,
-              }),
-              afterDeliverPayload,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      sendText: async ({ text }) => ({ channel: "matrix" as const, messageId: text }),
+      afterDeliverPayload,
+    });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -3597,24 +3159,7 @@ describe("deliverOutboundPayloads", () => {
         messageId: `fmt-media:${text}`,
       }),
     );
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "line",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-              sendMedia,
-              sendFormattedText,
-              sendFormattedMedia,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText, sendMedia, sendFormattedText, sendFormattedMedia }, "line");
 
     const textResults = await deliverOutboundPayloads({
       cfg: { channels: { line: {} } } as OpenClawConfig,
@@ -3670,22 +3215,7 @@ describe("deliverOutboundPayloads", () => {
         throw new Error("second formatted chunk failed");
       },
     );
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "line",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async () => firstResult,
-              sendFormattedText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText: async () => firstResult, sendFormattedText }, "line");
 
     await expect(
       deliverOutboundPayloads({
@@ -3712,21 +3242,9 @@ describe("deliverOutboundPayloads", () => {
         return [result];
       },
     );
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "line",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async () => ({ channel: "line", messageId: "push" }),
-              sendFormattedText,
-            },
-          }),
-        },
-      ]),
+    setTestOutbound(
+      { sendText: async () => ({ channel: "line", messageId: "push" }), sendFormattedText },
+      "line",
     );
 
     const results = await deliverOutboundPayloads({
@@ -3760,22 +3278,7 @@ describe("deliverOutboundPayloads", () => {
         return result;
       },
     );
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "line",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async () => ({ channel: "line", messageId: "unused" }),
-              sendPayload,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendPayload }, "line");
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -3806,22 +3309,7 @@ describe("deliverOutboundPayloads", () => {
         return { channel: "line" as const, messageId: "push", receipt: aggregateReceipt };
       },
     );
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "line",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async () => ({ channel: "line", messageId: "unused" }),
-              sendPayload,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendPayload }, "line");
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -3861,22 +3349,7 @@ describe("deliverOutboundPayloads", () => {
         ];
       },
     );
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "line",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async () => ({ channel: "line", messageId: "unused" }),
-              sendFormattedText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendFormattedText }, "line");
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -3896,29 +3369,18 @@ describe("deliverOutboundPayloads", () => {
       results: [{ channel: "matrix", messageId: "message-adapter-1" }],
       kind: "text",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            id: "matrix",
-            message: {
-              id: "matrix",
-              durableFinal: { capabilities: { text: true, afterCommit: true } },
-              send: {
-                lifecycle: { afterCommit },
-                text: async (ctx: ChannelMessageSendTextContext) => {
-                  const result = { messageId: "message-adapter-1", receipt };
-                  await ctx.onDeliveryResult?.(result);
-                  return result;
-                },
-              },
-            },
-          },
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true, afterCommit: true } },
+      send: {
+        lifecycle: { afterCommit },
+        text: async (ctx: ChannelMessageSendTextContext) => {
+          const result = { messageId: "message-adapter-1", receipt };
+          await ctx.onDeliveryResult?.(result);
+          return result;
         },
-      ]),
-    );
+      },
+    });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -3952,22 +3414,10 @@ describe("deliverOutboundPayloads", () => {
 
   it("sends plugin media to an explicit target once instead of fanning out over allowFrom", async () => {
     const sendMedia = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "m1" });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: vi.fn().mockResolvedValue({ channel: "matrix", messageId: "text-1" }),
-              sendMedia,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      sendText: vi.fn().mockResolvedValue({ channel: "matrix", messageId: "text-1" }),
+      sendMedia,
+    });
 
     await deliverOutboundPayloads({
       cfg: {
@@ -4009,25 +3459,10 @@ describe("deliverOutboundPayloads", () => {
       messageId: "mx-1",
       roomId: "!room:example",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async ({ to, text }) => ({
-                channel: "matrix",
-                messageId: `${to}:${text}`,
-              }),
-              sendMedia,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      sendText: async ({ to, text }) => ({ channel: "matrix", messageId: `${to}:${text}` }),
+      sendMedia,
+    });
 
     await deliverOutboundPayloads({
       cfg: { channels: { matrix: {} } } as OpenClawConfig,
@@ -4057,22 +3492,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: "mx-voice",
       roomId: "!room:example",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: vi.fn(),
-              sendMedia,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText: vi.fn(), sendMedia });
 
     await deliverOutboundPayloads({
       cfg: { channels: { matrix: {} } } as OpenClawConfig,
@@ -4175,29 +3595,17 @@ describe("deliverOutboundPayloads", () => {
       messageId: text,
       roomId: "!room",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              chunker: (text, limit) => {
-                const chunks: string[] = [];
-                for (let i = 0; i < text.length; i += limit) {
-                  chunks.push(text.slice(i, i + limit));
-                }
-                return chunks;
-              },
-              textChunkLimit: 4000,
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      chunker: (text, limit) => {
+        const chunks: string[] = [];
+        for (let i = 0; i < text.length; i += limit) {
+          chunks.push(text.slice(i, i + limit));
+        }
+        return chunks;
+      },
+      textChunkLimit: 4000,
+      sendText,
+    });
 
     await deliverOutboundPayloads({
       cfg: { channels: { matrix: { textChunkLimit: 4000 } } } as OpenClawConfig,
@@ -4216,34 +3624,22 @@ describe("deliverOutboundPayloads", () => {
       messageId: text,
       roomId: "!room",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              chunker: (text, _limit, ctx) =>
-                text.split("\n").reduce<string[]>((chunks, line) => {
-                  const maxLines = ctx?.formatting?.maxLinesPerMessage;
-                  if (maxLines === 1) {
-                    chunks.push(line);
-                    return chunks;
-                  }
-                  chunks[chunks.length - 1] = chunks.length
-                    ? `${chunks[chunks.length - 1]}\n${line}`
-                    : line;
-                  return chunks;
-                }, []),
-              textChunkLimit: 4000,
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      chunker: (text, _limit, ctx) =>
+        text.split("\n").reduce<string[]>((chunks, line) => {
+          const maxLines = ctx?.formatting?.maxLinesPerMessage;
+          if (maxLines === 1) {
+            chunks.push(line);
+            return chunks;
+          }
+          chunks[chunks.length - 1] = chunks.length
+            ? `${chunks[chunks.length - 1]}\n${line}`
+            : line;
+          return chunks;
+        }, []),
+      textChunkLimit: 4000,
+      sendText,
+    });
 
     await deliverOutboundPayloadsInternal({
       cfg: { channels: { matrix: { textChunkLimit: 4000 } } } as OpenClawConfig,
@@ -4300,22 +3696,7 @@ describe("deliverOutboundPayloads", () => {
       roomId: "!room:example",
       text,
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sanitizeText: ({ text }) => `[safe] ${text}`,
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sanitizeText: ({ text }) => `[safe] ${text}`, sendText });
     const deliveredPayloads: Array<{ text: string; mediaUrls: string[] }> = [];
 
     await deliverOutboundPayloadsInternal({
@@ -4342,25 +3723,13 @@ describe("deliverOutboundPayloads", () => {
       messageId: text,
       roomId: "r1",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              chunker,
-              chunkerMode: "markdown",
-              textChunkLimit: 4000,
-              sendText,
-              sendMedia,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      chunker,
+      chunkerMode: "markdown",
+      textChunkLimit: 4000,
+      sendText,
+      sendMedia,
+    });
 
     const cfg: OpenClawConfig = {
       channels: { matrix: { textChunkLimit: 4000, chunkMode: "newline" } },
@@ -4385,25 +3754,13 @@ describe("deliverOutboundPayloads", () => {
       messageId: text,
       roomId: "r1",
     }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              chunker,
-              chunkerMode: "markdown",
-              chunkedTextFormatting: { parseMode: "HTML" },
-              textChunkLimit: 4000,
-              sendText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      chunker,
+      chunkerMode: "markdown",
+      chunkedTextFormatting: { parseMode: "HTML" },
+      textChunkLimit: 4000,
+      sendText,
+    });
 
     await deliverOutboundPayloads({
       cfg: matrixChunkConfig,
@@ -4420,15 +3777,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("passes config through for plugin media sends", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-media", roomId: "!room" });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForTest }),
-        },
-      ]),
-    );
+    setTestOutbound(matrixOutboundForTest);
     const cfg: OpenClawConfig = {
       agents: { defaults: { mediaMaxMb: 3 } },
     };
@@ -4471,18 +3820,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("extracts markdown images for channels that opt in", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-media", roomId: "!room" });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { ...matrixOutboundForTest, extractMarkdownImages: true },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ ...matrixOutboundForTest, extractMarkdownImages: true });
 
     await deliverOutboundPayloads({
       cfg: matrixChunkConfig,
@@ -5231,21 +4569,12 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("mirrors delivered output when mirror options are provided", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "line",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async ({ text }) => ({ channel: "line", messageId: text }),
-              sendMedia: async ({ text }) => ({ channel: "line", messageId: text }),
-            },
-          }),
-        },
-      ]),
+    setTestOutbound(
+      {
+        sendText: async ({ text }) => ({ channel: "line", messageId: text }),
+        sendMedia: async ({ text }) => ({ channel: "line", messageId: text }),
+      },
+      "line",
     );
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
 
@@ -5283,22 +4612,7 @@ describe("deliverOutboundPayloads", () => {
         throw new Error("second internal send failed");
       },
     );
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "line",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: async () => partialResult,
-              sendFormattedText,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText: async () => partialResult, sendFormattedText }, "line");
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     const results = await deliverOutboundPayloads({
@@ -5405,18 +4719,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: "mx-1",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -5449,18 +4752,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: "mx-3",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -5489,18 +4781,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: "mx-2",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -5528,18 +4809,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: "mx-sent-1",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -5566,18 +4836,7 @@ describe("deliverOutboundPayloads", () => {
       messageId: "mx-sent-2",
       roomId: "!room",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -5638,18 +4897,7 @@ describe("deliverOutboundPayloads", () => {
   it("keeps text-only error payloads on the normal text path by default", async () => {
     const sendPayload = vi.fn();
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendPayload, sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendPayload, sendText });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -5666,23 +4914,7 @@ describe("deliverOutboundPayloads", () => {
   it("routes text-only error payloads through sendPayload when the adapter opts in", async () => {
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     const sendText = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendPayload,
-              sendText,
-              sendTextOnlyErrorPayloads: true,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendPayload, sendText, sendTextOnlyErrorPayloads: true });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -5705,23 +4937,7 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "" });
     const sendText = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              sendPayload,
-              sendText,
-              sendTextOnlyErrorPayloads: true,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendPayload, sendText, sendTextOnlyErrorPayloads: true });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -5748,18 +4964,7 @@ describe("deliverOutboundPayloads", () => {
       .fn()
       .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-1" })
       .mockResolvedValueOnce({ channel: "matrix", messageId: "" });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -5795,18 +5000,7 @@ describe("deliverOutboundPayloads", () => {
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     const sendText = vi.fn();
     const sendMedia = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendPayload, sendText, sendMedia });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -5827,18 +5021,7 @@ describe("deliverOutboundPayloads", () => {
   it("does not fail successful sends when optional delivery pinning fails", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     const pinDeliveredMessage = vi.fn().mockRejectedValue(new Error("pin denied"));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText, pinDeliveredMessage },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText, pinDeliveredMessage });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -5869,18 +5052,7 @@ describe("deliverOutboundPayloads", () => {
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     const pinDeliveredMessage = vi.fn().mockRejectedValue(new Error("pin denied"));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText, pinDeliveredMessage },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText, pinDeliveredMessage });
 
     try {
       await expect(
@@ -5913,18 +5085,7 @@ describe("deliverOutboundPayloads", () => {
     const events: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "" });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     try {
       await expect(
@@ -5957,25 +5118,13 @@ describe("deliverOutboundPayloads", () => {
       .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-1" })
       .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-2" });
     const pinDeliveredMessage = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: {
-              deliveryMode: "direct",
-              chunker: chunkText,
-              chunkerMode: "text",
-              textChunkLimit: 2,
-              sendText,
-              pinDeliveredMessage,
-            },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({
+      chunker: chunkText,
+      chunkerMode: "text",
+      textChunkLimit: 2,
+      sendText,
+      pinDeliveredMessage,
+    });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -5998,18 +5147,7 @@ describe("deliverOutboundPayloads", () => {
       .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-1" })
       .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-2" });
     const pinDeliveredMessage = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText, sendMedia, pinDeliveredMessage },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText, sendMedia, pinDeliveredMessage });
 
     await deliverOutboundPayloads({
       cfg: {},
@@ -6035,18 +5173,7 @@ describe("deliverOutboundPayloads", () => {
     const sendPayload = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-1" });
     const sendText = vi.fn();
     const sendMedia = vi.fn();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "line",
-            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendPayload, sendText, sendMedia }, "line");
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -6066,18 +5193,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("falls back to sendText when plugin outbound omits sendMedia", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -6100,18 +5216,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("falls back to one sendText call for multi-media payloads when sendMedia is omitted", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-2" });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     const results = await deliverOutboundPayloads({
       cfg: {},
@@ -6140,18 +5245,7 @@ describe("deliverOutboundPayloads", () => {
   it("fails media-only payloads when plugin outbound omits sendMedia", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-3" });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    setTestOutbound({ sendText });
 
     await expect(
       deliverOutboundPayloads({

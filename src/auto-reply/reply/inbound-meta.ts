@@ -541,7 +541,7 @@ function resolveInboundSourceModality(ctx: TemplateContext): string | undefined 
     }
     return INBOUND_SOURCE_MODALITIES.has(mediaKind) ? mediaKind : undefined;
   };
-  return resolveMediaType(ctx.MediaType) ?? ctx.MediaTypes?.map(resolveMediaType).find(Boolean);
+  return ctx.media?.map((media) => resolveMediaType(media.contentType ?? media.kind)).find(Boolean);
 }
 
 function resolveInboundFormattingHints(

@@ -21,7 +21,16 @@ export type InternalConfigWriteResult = ConfigWriteResult & {
   [configWritePostCommitRollback]?: () => void;
 };
 
+export type ConfigWriteAuditOrigin =
+  | "doctor"
+  | "system-agent"
+  | "config-rpc"
+  | "plugin-install"
+  | "cli";
+
 export type ConfigWriteOptions = {
+  /** Semantic writer label recorded in the config audit journal. */
+  auditOrigin?: ConfigWriteAuditOrigin;
   /** Read-time env snapshot used to validate `${VAR}` restoration decisions. */
   envSnapshotForRestore?: Record<string, string | undefined>;
   /** Only use envSnapshotForRestore for the config path that produced it. */
@@ -133,13 +142,4 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = {
 export type BestEffortConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
-};
-
-export type ShippedPluginInstallConfigWriteMigration = { migrated: false } | { migrated: true };
-
-export type ShippedPluginInstallConfigReadMigration = {
-  config: unknown;
-  validationConfig?: unknown;
-  persistedRootParsed?: unknown;
-  persistedRootRaw?: string;
 };

@@ -44,6 +44,18 @@
     "target": "ClawHub"
   },
   {
+    "source": "Claws",
+    "target": "Claws"
+  },
+  {
+    "source": "Cron jobs",
+    "target": "定时任务"
+  },
+  {
+    "source": "MCP configuration",
+    "target": "MCP 配置"
+  },
+  {
     "source": "ClawRouter (managed multi-provider routing)",
     "target": "ClawRouter（托管式多提供商路由）"
   },
@@ -132,6 +144,14 @@
     "target": "Gateway RPC 参考"
   },
   {
+    "source": "Building a Gateway client",
+    "target": "构建 Gateway 客户端"
+  },
+  {
+    "source": "Embedding OpenClaw",
+    "target": "嵌入 OpenClaw"
+  },
+  {
     "source": "Secure file operations",
     "target": "安全文件操作"
   },
@@ -154,6 +174,10 @@
   {
     "source": "Code mode",
     "target": "代码模式"
+  },
+  {
+    "source": "Swarm",
+    "target": "Swarm"
   },
   {
     "source": "Codex harness",
@@ -788,6 +812,38 @@
     "target": "Google Meet 插件"
   },
   {
+    "source": "Google Meet plugin",
+    "target": "Google Meet 插件"
+  },
+  {
+    "source": "Meeting plugins",
+    "target": "会议插件"
+  },
+  {
+    "source": "Meeting plugins overview",
+    "target": "会议插件概览"
+  },
+  {
+    "source": "Microsoft Teams channel",
+    "target": "Microsoft Teams 频道"
+  },
+  {
+    "source": "Microsoft Teams meetings plugin",
+    "target": "Microsoft Teams 会议插件"
+  },
+  {
+    "source": "Zoom meetings plugin",
+    "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Voice call plugin",
+    "target": "语音通话插件"
+  },
+  {
+    "source": "Browser control",
+    "target": "浏览器控制"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },
@@ -1204,6 +1260,10 @@
     "target": "Discord 语音"
   },
   {
+    "source": "Discord voice channels",
+    "target": "Discord 语音频道"
+  },
+  {
     "source": "Plugin management",
     "target": "插件管理"
   },
@@ -1554,5 +1614,25 @@
   {
     "source": "Baseten (Inkling + Model APIs)",
     "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "Multi-user mode",
+    "target": "多用户模式"
+  },
+  {
+    "source": "The main session",
+    "target": "主会话"
+  },
+  {
+    "source": "Session management",
+    "target": "会话管理"
+  },
+  {
+    "source": "Presence",
+    "target": "在线状态"
+  },
+  {
+    "source": "Gateway security",
+    "target": "Gateway 安全"
   }
 ]

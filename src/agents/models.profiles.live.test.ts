@@ -1,5 +1,7 @@
 // Live-sweeps discovered model profiles with optional provider/model filters and probes.
 import { writeSync } from "node:fs";
+import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
+import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
@@ -71,7 +73,6 @@ import {
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
-import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -283,7 +284,6 @@ function enableLiveProviderPlugins(
       ...compatConfig.plugins,
       enabled: true,
       allow: [...allow].toSorted((left, right) => left.localeCompare(right)),
-      bundledDiscovery: compatConfig.plugins?.bundledDiscovery ?? "compat",
       entries,
     },
   };
@@ -347,6 +347,7 @@ async function ensureLiveProviderApisRegistered(params: {
   const providerConfig = params.config.models?.providers?.ollama;
   const providerBaseUrl = readConfiguredOllamaBaseUrl(providerConfig) || OLLAMA_DEFAULT_BASE_URL;
   ensureCustomApiRegistered(
+    defaultApiRegistry,
     "ollama",
     createLiveOllamaRuntimeStreamFn({
       createConfiguredOllamaStreamFn,
@@ -852,7 +853,6 @@ describe("explicit live model discovery scope", () => {
     const cfg = {
       plugins: {
         allow: ["openai"],
-        bundledDiscovery: "compat",
         entries: {
           openai: { enabled: true },
         },
@@ -867,15 +867,12 @@ describe("explicit live model discovery scope", () => {
 
     expect(result.plugins?.enabled).toBe(true);
     expect(result.plugins?.allow).toContain("deepseek");
-    expect(result.plugins?.bundledDiscovery).toBe("compat");
     expect(result.plugins?.entries?.deepseek).toEqual({ enabled: true });
   });
 
   it("hydrates Ollama Cloud provider settings from live env when Ollama is in scope", () => {
     const cfg = {
-      plugins: {
-        bundledDiscovery: "compat",
-      },
+      plugins: {},
     } satisfies OpenClawConfig;
 
     const result = applyLiveProviderDiscoveryPluginCompat({
@@ -897,9 +894,7 @@ describe("explicit live model discovery scope", () => {
 
   it("defaults Ollama live provider settings to the local endpoint", () => {
     const cfg = {
-      plugins: {
-        bundledDiscovery: "compat",
-      },
+      plugins: {},
     } satisfies OpenClawConfig;
 
     const result = applyLiveProviderDiscoveryPluginCompat({
@@ -919,9 +914,7 @@ describe("explicit live model discovery scope", () => {
 
   it("preserves configured Ollama provider endpoints when live env is absent", () => {
     const cfg = {
-      plugins: {
-        bundledDiscovery: "compat",
-      },
+      plugins: {},
       models: {
         providers: {
           ollama: {
@@ -949,9 +942,7 @@ describe("explicit live model discovery scope", () => {
 
   it("honors the documented Ollama baseURL alias when live env is absent", () => {
     const cfg = {
-      plugins: {
-        bundledDiscovery: "compat",
-      },
+      plugins: {},
       models: {
         providers: {
           ollama: {
@@ -980,9 +971,7 @@ describe("explicit live model discovery scope", () => {
 
   it("uses the local Ollama auth marker for self-hosted live env URLs", () => {
     const cfg = {
-      plugins: {
-        bundledDiscovery: "compat",
-      },
+      plugins: {},
     } satisfies OpenClawConfig;
 
     for (const baseUrl of [
@@ -1018,9 +1007,7 @@ describe("explicit live model discovery scope", () => {
 
     for (const apiKey of remoteApiKeyRefs) {
       const cfg = {
-        plugins: {
-          bundledDiscovery: "compat",
-        },
+        plugins: {},
         models: {
           providers: {
             ollama: {
@@ -1052,9 +1039,7 @@ describe("explicit live model discovery scope", () => {
 
   it("replaces configured Ollama auth when live env redirects to a different local endpoint", () => {
     const cfg = {
-      plugins: {
-        bundledDiscovery: "compat",
-      },
+      plugins: {},
       models: {
         providers: {
           ollama: {
@@ -1085,9 +1070,7 @@ describe("explicit live model discovery scope", () => {
 
   it("preserves configured Ollama auth for equivalent live env base URLs", () => {
     const cfg = {
-      plugins: {
-        bundledDiscovery: "compat",
-      },
+      plugins: {},
       models: {
         providers: {
           ollama: {
@@ -1119,9 +1102,7 @@ describe("explicit live model discovery scope", () => {
   it("keeps local Ollama live auth on the non-secret marker", async () => {
     const cfg = applyLiveProviderDiscoveryPluginCompat({
       config: {
-        plugins: {
-          bundledDiscovery: "compat",
-        },
+        plugins: {},
       },
       providers: ["ollama"],
       env: {
@@ -1154,9 +1135,7 @@ describe("explicit live model discovery scope", () => {
     try {
       const cfg = applyLiveProviderDiscoveryPluginCompat({
         config: {
-          plugins: {
-            bundledDiscovery: "compat",
-          },
+          plugins: {},
         },
         providers: ["ollama"],
         env: {
@@ -1195,9 +1174,7 @@ describe("explicit live model discovery scope", () => {
     try {
       const cfg = applyLiveProviderDiscoveryPluginCompat({
         config: {
-          plugins: {
-            bundledDiscovery: "compat",
-          },
+          plugins: {},
           models: {
             providers: {
               ollama: {
@@ -1244,9 +1221,7 @@ describe("explicit live model discovery scope", () => {
     try {
       const cfg = applyLiveProviderDiscoveryPluginCompat({
         config: {
-          plugins: {
-            bundledDiscovery: "compat",
-          },
+          plugins: {},
           models: {
             providers: {
               ollama: {
@@ -1436,6 +1411,7 @@ async function completeSimpleWithTimeout<TApi extends Api>(
   });
   try {
     const completionModel = prepareModelForSimpleCompletion({
+      apiRegistry: defaultApiRegistry,
       model,
       cfg: activeLiveCompletionConfig,
     });
@@ -1776,7 +1752,7 @@ describeLive("live models (profile keys)", () => {
         ? []
         : collectProviderApiKeys("anthropic");
       if (anthropicKeys.length > 0) {
-        process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
+        vi.stubEnv("ANTHROPIC_API_KEY", expectDefined(anthropicKeys[0], "Anthropic API key 1"));
         logProgress(`[live-models] anthropic keys loaded: ${anthropicKeys.length}`);
       }
 
@@ -1976,9 +1952,6 @@ describeLive("live models (profile keys)", () => {
             model.provider === "anthropic" && anthropicKeys.length > 0
               ? expectDefined(anthropicKeys[attempt], `Anthropic API key ${attempt + 1}`)
               : undefined;
-          if (anthropicApiKey) {
-            process.env.ANTHROPIC_API_KEY = anthropicApiKey;
-          }
           const apiKey = anthropicApiKey ?? requireApiKey(apiKeyInfo, model.provider);
           try {
             // Special regression: OpenAI requires replayed `reasoning` items for tool-only turns.

@@ -236,14 +236,12 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       shouldContinue: false,
       reply: { text: buildToolsMessage(result, { verbose }) },
     };
-  } catch (err) {
-    const message = String(err);
-    const text = message.includes("missing scope:")
-      ? "You do not have permission to view available tools."
-      : "Couldn't load available tools right now. Try again in a moment.";
+  } catch {
+    // Inventory resolves in-process after sender authorization; this path cannot receive
+    // gateway RPC scope errors, so failures here are local discovery failures.
     return {
       shouldContinue: false,
-      reply: { text },
+      reply: { text: "Couldn't load available tools right now. Try again in a moment." },
     };
   }
 };
@@ -293,6 +291,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     provider: params.provider,
     model: params.model,
     contextTokens: params.contextTokens,
+    thinkingCatalog: params.thinkingCatalog,
     workspaceDir: params.workspaceDir,
     resolvedThinkLevel: params.resolvedThinkLevel,
     resolvedFastMode: params.resolvedFastMode,

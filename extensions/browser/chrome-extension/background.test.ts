@@ -57,6 +57,12 @@ async function loadBackground() {
   const setBadgeBackgroundColor = vi.fn(async () => undefined);
   const chromeMock = {
     action: { setBadgeText, setBadgeBackgroundColor },
+    commands: { onCommand: { addListener } },
+    contextMenus: {
+      create: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+      onClicked: { addListener },
+    },
     alarms: {
       create: createAlarm,
       clear: clearAlarm,
@@ -96,6 +102,7 @@ async function loadBackground() {
         set: vi.fn(async () => undefined),
       },
     },
+    scripting: { executeScript: vi.fn(async () => []) },
     tabGroups: {
       query: vi.fn(async () => []),
       update: vi.fn(async () => undefined),

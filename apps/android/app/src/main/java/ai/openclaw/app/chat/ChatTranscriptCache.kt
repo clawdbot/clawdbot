@@ -1,17 +1,11 @@
 package ai.openclaw.app.chat
 
-import android.content.Context
 import androidx.room.Dao
-import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.room.migration.Migration
 import androidx.room.withTransaction
-import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -19,8 +13,6 @@ import java.util.UUID
 
 /** Upper bound of cached session rows per gateway across every agent owner. */
 internal const val MAX_CACHED_SESSIONS = 50
-
-internal const val CHAT_TRANSCRIPT_CACHE_DB_NAME = "chat-transcript-cache.db"
 
 /** Upper bound of cached transcript rows per session; only the newest messages are kept. */
 internal const val MAX_CACHED_MESSAGES_PER_SESSION = 200
@@ -83,6 +75,12 @@ internal data class CachedSessionEntity(
   val sessionKey: String,
   val displayName: String?,
   val updatedAtMs: Long?,
+  val status: String?,
+  val startedAt: Long?,
+  val endedAt: Long?,
+  val runtimeMs: Long?,
+  val outputTokens: Long?,
+  val hasRunMetadata: Boolean,
   // Preserves gateway list order so offline session rows render in the familiar order.
   val rowOrder: Int,
 )
@@ -226,165 +224,12 @@ internal interface ChatCacheDao {
   suspend fun evictGatewayOrphanedTranscripts(gatewayId: String)
 }
 
-@Database(
-  entities = [
-    CachedSessionEntity::class,
-    CachedMessageEntity::class,
-    OutboxCommandEntity::class,
-    OutboxAttachmentEntity::class,
-    OutboxAttachmentChunkEntity::class,
-    ComposerSendAdmissionEntity::class,
-    CachedGatewayOwnerEntity::class,
-  ],
-  version = 8,
-  exportSchema = false,
-)
-internal abstract class ChatCacheDatabase : RoomDatabase() {
-  abstract fun dao(): ChatCacheDao
-
-  abstract fun outboxDao(): ChatOutboxDao
-
-  companion object {
-    internal val MIGRATION_2_3 =
-      object : Migration(2, 3) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          // v2 persisted every post-dispatch exception as queued+lastError. Those rows may
-          // already have run, so upgrading must park them alongside crash-interrupted sends.
-          db.execSQL(
-            "UPDATE outbox_commands SET status = ?, lastError = ? " +
-              "WHERE status = ? OR (status = ? AND lastError IS NOT NULL)",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-              ChatOutboxStatus.Sending.dbValue,
-              ChatOutboxStatus.Queued.dbValue,
-            ),
-          )
-        }
-      }
-
-    internal val MIGRATION_3_4 =
-      object : Migration(3, 4) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `gatedEpoch` INTEGER")
-          // Legacy queued command-shaped rows predate connection epochs; the sentinel makes
-          // them park for explicit retry instead of silently replaying on the next reconnect.
-          db.execSQL(
-            "UPDATE outbox_commands SET gatedEpoch = ? WHERE status = ? AND text LIKE '/%'",
-            arrayOf<Any?>(OUTBOX_GATED_EPOCH_NEVER, ChatOutboxStatus.Queued.dbValue),
-          )
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, " +
-              "`position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
-              "`durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
-          )
-          db.execSQL("CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)")
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, " +
-              "`chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
-          )
-        }
-      }
-
-    internal val MIGRATION_4_5 =
-      object : Migration(4, 5) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `ownerAgentId` TEXT")
-          // Agent-qualified keys carry a durable owner in the key itself. Backfill it so session
-          // deletion and replay keep working after upgrade without consulting mutable defaults.
-          db.execSQL(
-            "UPDATE outbox_commands SET ownerAgentId = " +
-              "substr(sessionKey, 7, instr(substr(sessionKey, 7), ':') - 1) " +
-              "WHERE sessionKey LIKE 'agent:%:%' AND instr(substr(sessionKey, 7), ':') > 1",
-          )
-          // Earlier rows did not persist the default agent that owned an unscoped key. Never
-          // guess after upgrade: queued input stays visible for manual resend, while accepted
-          // input remains delivery-ambiguous and must not be replayed under a different owner.
-          db.execSQL(
-            "UPDATE outbox_commands SET status = ?, lastError = ? " +
-              "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_OWNER_CHANGED_ERROR,
-              ChatOutboxStatus.Queued.dbValue,
-            ),
-          )
-          db.execSQL(
-            "UPDATE outbox_commands SET status = ?, lastError = ? " +
-              "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-              ChatOutboxStatus.Accepted.dbValue,
-            ),
-          )
-        }
-      }
-
-    internal val MIGRATION_5_6 =
-      object : Migration(5, 6) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          // Session and transcript caches are disposable, and legacy unscoped rows have no
-          // provable owner. Rebuild both; the durable outbox remains intact across the upgrade.
-          db.execSQL("DROP TABLE IF EXISTS `cached_sessions`")
-          db.execSQL("DROP TABLE IF EXISTS `cached_messages`")
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_sessions` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
-              "`displayName` TEXT, `updatedAtMs` INTEGER, `rowOrder` INTEGER NOT NULL, " +
-              "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`))",
-          )
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_messages` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
-              "`rowOrder` INTEGER NOT NULL, `role` TEXT NOT NULL, `textPartsJson` TEXT NOT NULL, " +
-              "`timestampMs` INTEGER, `idempotencyKey` TEXT, " +
-              "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`, `rowOrder`))",
-          )
-        }
-      }
-
-    internal val MIGRATION_6_7 =
-      object : Migration(6, 7) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_gateway_owners` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, PRIMARY KEY(`gatewayId`))",
-          )
-        }
-      }
-
-    internal val MIGRATION_7_8 =
-      object : Migration(7, 8) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `composer_send_admissions` " +
-              "(`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `ownerAgentId` TEXT NOT NULL, " +
-              "`sessionKey` TEXT NOT NULL, PRIMARY KEY(`id`))",
-          )
-        }
-      }
-
-    fun open(
-      context: Context,
-      name: String = CHAT_TRANSCRIPT_CACHE_DB_NAME,
-    ): ChatCacheDatabase =
-      Room
-        .databaseBuilder(context, ChatCacheDatabase::class.java, name)
-        .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
-        // v1 has only disposable transcripts. Starting with v2, the outbox is user data, so every
-        // supported bump needs an explicit migration; destructive fallback remains for v1 only.
-        .fallbackToDestructiveMigrationFrom(true, 1)
-        .build()
-  }
-}
-
 /**
  * Room-backed [ChatTranscriptCache]. Callers bind every operation to the gateway scope captured
  * before their suspend point, so a connection switch cannot re-scope an old response.
  */
 class RoomChatTranscriptCache internal constructor(
-  private val database: ChatCacheDatabase,
+  private val database: GatewayCacheDatabase,
 ) : ChatTranscriptCache {
   private val json = Json
   private val textPartsSerializer = ListSerializer(String.serializer())
@@ -419,6 +264,12 @@ class RoomChatTranscriptCache internal constructor(
         updatedAtMs = row.updatedAtMs,
         ownerAgentId = agent,
         displayName = row.displayName,
+        status = row.status,
+        startedAt = row.startedAt,
+        endedAt = row.endedAt,
+        runtimeMs = row.runtimeMs,
+        outputTokens = row.outputTokens,
+        hasRunMetadata = row.hasRunMetadata,
       )
     }
   }
@@ -439,6 +290,8 @@ class RoomChatTranscriptCache internal constructor(
         content = decodeTextParts(row.textPartsJson).map { ChatMessageContent(type = "text", text = it) },
         timestampMs = row.timestampMs,
         idempotencyKey = row.idempotencyKey,
+        // Canonical tree ids stay live-only; cached rows regain actions after history refresh.
+        entryId = null,
       )
     }
   }
@@ -466,6 +319,12 @@ class RoomChatTranscriptCache internal constructor(
               sessionKey = entry.key,
               displayName = entry.displayName,
               updatedAtMs = entry.updatedAtMs,
+              status = entry.status,
+              startedAt = entry.startedAt,
+              endedAt = entry.endedAt,
+              runtimeMs = entry.runtimeMs,
+              outputTokens = entry.outputTokens,
+              hasRunMetadata = entry.hasRunMetadata,
               rowOrder = 0,
             )
           } ?: dao.session(gateway, agent, retainedKey)
@@ -481,6 +340,12 @@ class RoomChatTranscriptCache internal constructor(
             sessionKey = session.key,
             displayName = session.displayName,
             updatedAtMs = session.updatedAtMs,
+            status = session.status,
+            startedAt = session.startedAt,
+            endedAt = session.endedAt,
+            runtimeMs = session.runtimeMs,
+            outputTokens = session.outputTokens,
+            hasRunMetadata = session.hasRunMetadata,
             rowOrder = index,
           )
         }
@@ -541,6 +406,12 @@ class RoomChatTranscriptCache internal constructor(
               sessionKey = key,
               displayName = null,
               updatedAtMs = null,
+              status = null,
+              startedAt = null,
+              endedAt = null,
+              runtimeMs = null,
+              outputTokens = null,
+              hasRunMetadata = false,
               rowOrder = dao.nextSessionRowOrder(gateway, agent),
             ),
         ),

@@ -21,6 +21,8 @@ import {
   upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   buildProviderReplayFamilyHooks,
   normalizeModelCompat,
@@ -36,12 +38,20 @@ import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { isGlm52ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+function buildZaiCatalogProvider() {
+  return buildManifestModelProviderConfig({
+    providerId: PROVIDER_ID,
+    catalog: manifest.modelCatalog.providers.zai,
+  });
+}
 
 function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
@@ -384,7 +394,25 @@ export default definePluginEntry({
           endpoint: "cn",
         }),
       ],
+      catalog: {
+        order: "simple",
+        run: (ctx) =>
+          buildOpenAICompatibleProviderCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildZaiCatalogProvider,
+            allowExplicitBaseUrl: true,
+          }),
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({ provider: buildZaiCatalogProvider() }),
+      },
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+      matchesContextOverflowError: ({ errorMessage }) =>
+        /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
+          errorMessage,
+        ),
       ...buildProviderReplayFamilyHooks({
         family: "openai-compatible",
         dropReasoningFromHistory: false,

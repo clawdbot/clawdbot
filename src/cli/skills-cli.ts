@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -93,6 +94,10 @@ function resolveSkillClawHubRiskOptions(
 
 function formatSkillWarning(message: string): string {
   return message.includes("╭─") ? message : theme.warn(message);
+}
+
+function formatClawHubSearchText(value: string): string {
+  return sanitizeForLog(value.replace(/\s+/gu, " ")).trim();
 }
 
 function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
@@ -430,9 +435,13 @@ export function registerSkillsCli(program: Command) {
           return;
         }
         for (const entry of results) {
-          const version = entry.version ? ` v${entry.version}` : "";
-          const summary = entry.summary ? `  ${entry.summary}` : "";
-          defaultRuntime.log(`${entry.slug}${version}  ${entry.displayName}${summary}`);
+          const ownerHandle = normalizeOptionalString(entry.ownerHandle);
+          const slug = formatClawHubSearchText(entry.slug);
+          const skillRef = ownerHandle ? `@${formatClawHubSearchText(ownerHandle)}/${slug}` : slug;
+          const version = entry.version ? ` v${formatClawHubSearchText(entry.version)}` : "";
+          const summary = entry.summary ? `  ${formatClawHubSearchText(entry.summary)}` : "";
+          const displayName = formatClawHubSearchText(entry.displayName);
+          defaultRuntime.log(`${skillRef}${version}  ${displayName}${summary}`);
         }
       } catch (err) {
         defaultRuntime.error(String(err));

@@ -15,6 +15,22 @@ import { validateCommitmentCandidates } from "./extraction.test-support.js";
 import { readCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentCandidate, CommitmentExtractionItem } from "./types.js";
 
+vi.mock("./config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config.js")>()),
+  resolveCommitmentsConfig: () => ({
+    enabled: true,
+    maxPerDay: 3,
+    extraction: {
+      debounceMs: 15_000,
+      batchMaxItems: 8,
+      queueMaxItems: 64,
+      confidenceThreshold: 0.72,
+      careConfidenceThreshold: 0.86,
+      timeoutSeconds: 45,
+    },
+  }),
+}));
+
 describe("commitment extraction", () => {
   const tmpDirs: string[] = [];
   let stateDirEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -35,11 +51,7 @@ describe("commitment extraction", () => {
     tmpDirs.push(tmpDir);
     stateDirEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
-    return {
-      commitments: {
-        enabled: true,
-      },
-    };
+    return {};
   }
 
   function item(overrides?: Partial<CommitmentExtractionItem>): CommitmentExtractionItem {
@@ -155,7 +167,7 @@ describe("commitment extraction", () => {
   });
 
   it("rejects disabled, low-confidence, and non-future candidates", () => {
-    const cfg: OpenClawConfig = { commitments: { enabled: true } };
+    const cfg: OpenClawConfig = {};
     const valid = validateCommitmentCandidates({
       cfg,
       items: [item()],

@@ -1,6 +1,35 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { buildDraftSessionCreateParams, canStartSessionAsDraft } from "./create-params.ts";
+
+describe("create-as-draft availability", () => {
+  it("requires both draft policy and multiple creator identities", () => {
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared", "draft"],
+        hasMultipleIdentities: true,
+      }),
+    ).toBe(true);
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared"],
+        hasMultipleIdentities: true,
+      }),
+    ).toBe(false);
+    expect(canStartSessionAsDraft({ hasMultipleIdentities: true })).toBe(false);
+  });
+
+  it("stays dormant when the gateway has fewer than two identities", () => {
+    for (const hasMultipleIdentities of [undefined, false]) {
+      expect(
+        canStartSessionAsDraft({
+          allowedVisibilities: ["shared", "draft"],
+          hasMultipleIdentities,
+        }),
+      ).toBe(false);
+    }
+  });
+});
 
 describe("buildDraftSessionCreateParams", () => {
   it("keeps plain chats minimal", () => {
@@ -15,6 +44,32 @@ describe("buildDraftSessionCreateParams", () => {
         workspace: "/workspace",
       }),
     ).toEqual({ agentId: "main", message: "hello" });
+  });
+
+  it("adds incognito only when the draft toggle is on", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "private task",
+        incognito: true,
+        worktree: false,
+      }),
+    ).toEqual({ agentId: "main", message: "private task", incognito: true });
+  });
+
+  it("adds draft visibility only when selected", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "private work in progress",
+        worktree: false,
+        startAsDraft: true,
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "private work in progress",
+      visibility: "draft",
+    });
   });
 
   it("includes initial-message attachments", () => {
@@ -100,7 +155,42 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
-  it("sends cwd only for non-workspace folders and execNode when picked", () => {
+  it("sends a custom Gateway folder without requiring a worktree", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "bootstrap here",
+        worktree: false,
+        cwd: "/home",
+        workspace: "/workspace",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "bootstrap here",
+      cwd: "/home",
+    });
+  });
+
+  it("sends a custom Gateway checkout with an explicit worktree", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "isolated work",
+        worktree: true,
+        cwd: "/other/repo",
+        workspace: "/workspace",
+        baseRef: "main",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "isolated work",
+      cwd: "/other/repo",
+      worktree: true,
+      worktreeBaseRef: "main",
+    });
+  });
+
+  it("sends the selected folder and execNode for node sessions", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",

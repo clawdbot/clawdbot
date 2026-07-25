@@ -35,7 +35,7 @@ describe("QA scenario lane matching", () => {
   it("reports every declared mismatch in one decision", () => {
     const scenario = makeQaSuiteTestScenario("strict-live-lane", {
       channel: "matrix",
-      runtimeParityTier: "live-only",
+      runtimePairLane: "core",
       config: {
         requiredProviderMode: "live-frontier",
         requiredProvider: "claude-cli",
@@ -54,7 +54,6 @@ describe("QA scenario lane matching", () => {
         claudeCliAuthMode: "api-key",
       }),
     ).toEqual([
-      "live provider mode",
       "providerMode=live-frontier",
       "channel=matrix",
       "provider=claude-cli",

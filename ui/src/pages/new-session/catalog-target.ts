@@ -77,8 +77,8 @@ function renderTarget(data?: NewSessionRouteData) {
 export function renderBar(params: {
   data?: NewSessionRouteData;
   agentSelect: unknown;
-  folderSelect: unknown;
-  whereSelect: unknown;
+  placeSelect: unknown;
+  draftVisibilityControl: unknown;
   retrying: boolean;
   onRetry: () => void;
 }) {
@@ -86,7 +86,7 @@ export function renderBar(params: {
   return html`
     <div class="new-session-page__triggers">
       ${renderTarget(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}
-      ${params.folderSelect} ${params.whereSelect}
+      ${params.placeSelect} ${params.draftVisibilityControl}
       ${pending
         ? html`<span class="new-session-page__catalog-unavailable">
             ${t("newSession.catalogUnavailable")}

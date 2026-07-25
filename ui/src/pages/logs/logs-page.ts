@@ -1,3 +1,4 @@
+import "../../styles/logs.css";
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
@@ -134,14 +135,14 @@ class LogsPage extends OpenClawLightDomElement {
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
-    const connectionChanged = snapshot.connected !== this.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
     const clientChanged = resetForSourceBind || snapshot.client !== this.client;
     if (clientChanged || connectionChanged) {
       this.requestGeneration += 1;
       this.activeRequest = null;
     }
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     if (clientChanged) {
       this.resetServerState();
     } else if (connectionChanged) {

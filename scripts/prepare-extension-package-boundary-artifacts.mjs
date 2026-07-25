@@ -2,10 +2,16 @@
 // boundary imports resolve through public package surfaces.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
-import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
+import { pathToFileURL } from "node:url";
+import {
+  ensureRepoToolNodeModulesLink,
+  isLocalCheckEnabled,
+  resolveRepoToolBinPath,
+} from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { pluginSdkEntrypoints, productionPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -30,6 +36,17 @@ let nodeStepParentSignalForwardersInstalled = false;
 let exitingAfterParentSignal = false;
 let parentSignalExitCode = 1;
 let parentSignalExitTimer;
+
+/** Resolve tsx's loader through the selected checkout toolchain. */
+export function resolveTsxImportSpecifier({
+  resolveTool = resolveRepoToolBinPath,
+  createRequireFrom = createRequire,
+  ensureToolchain = ensureRepoToolNodeModulesLink,
+} = {}) {
+  const tsxBinPath = resolveTool("tsx");
+  ensureToolchain(tsxBinPath);
+  return pathToFileURL(createRequireFrom(tsxBinPath).resolve("tsx")).href;
+}
 
 function listPackageDtsOutputsFromExports({ packageDir, outputPrefix }) {
   const packageJson = JSON.parse(
@@ -81,6 +98,7 @@ function listSourceDtsOutputs({ sourceDir, outputPrefix }) {
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  "src/plugins/provider-runtime-model.types.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
   "packages/ai/src",
@@ -293,21 +311,18 @@ const ENTRY_SHIMS_INPUTS = [
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
 ];
-const ENTRY_SHIM_RUNTIME_OUTPUTS = ["dist/plugin-sdk/webhook-path.js"];
-
 /**
  * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
  */
 export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
   const entries =
-    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : publicPluginSdkEntrypoints;
-  return [
-    ...entries.flatMap((entry) => [
+    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : productionPluginSdkEntrypoints;
+  return entries
+    .flatMap((entry) => [
       `dist/plugin-sdk/${entry}.d.ts`,
       `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
-    ]),
-    ...ENTRY_SHIM_RUNTIME_OUTPUTS,
-  ].toSorted((a, b) => a.localeCompare(b));
+    ])
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function isRelevantTypeInput(filePath) {
@@ -1015,7 +1030,11 @@ async function main(argv = process.argv.slice(2)) {
     if (mode === "all" && (!entryShimsFresh || prerequisiteSteps.length > 0)) {
       await runNodeStep(
         "plugin-sdk boundary root shims",
-        ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
+        [
+          "--import",
+          resolveTsxImportSpecifier(),
+          resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts"),
+        ],
         ROOT_SHIMS_TIMEOUT_MS,
         { env: { NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS } },
       );

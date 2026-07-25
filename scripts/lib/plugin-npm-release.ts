@@ -6,11 +6,8 @@ import { join, resolve } from "node:path";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
-import {
-  collectReleaseVersionFloorErrors,
-  parseReleaseVersion,
-  resolveNpmPublishPlan,
-} from "./npm-publish-plan.mjs";
+import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
+import { collectReleaseVersionFloorErrors, parseReleaseVersion } from "./release-version.mjs";
 
 type PluginPackageJson = {
   name?: string;
@@ -112,6 +109,7 @@ type PublishablePluginPackageCandidate<TPackageJson extends PluginPackageJson = 
   };
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+const PLUGIN_NPM_VIEW_TIMEOUT_MS = 60_000;
 
 export function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {
   dependencies: RequiredLatestDependency[];
@@ -643,16 +641,34 @@ export function assertPluginReleaseVersionFloors(
 
 export type NpmLatestVersionResolver = (packageName: string) => string;
 
+function isNpmViewTimeoutError(error: unknown): error is Error & { code: "ETIMEDOUT" } {
+  return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
+}
+
 function runNpmView(args: string[]): string {
   const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-view-"));
   const userconfigPath = join(tempDir, "npmrc");
   writeFileSync(userconfigPath, "");
 
   try {
-    return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+    try {
+      return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: PLUGIN_NPM_VIEW_TIMEOUT_MS,
+      }).trim();
+    } catch (error) {
+      if (isNpmViewTimeoutError(error)) {
+        throw Object.assign(
+          new Error(`npm view timed out after ${PLUGIN_NPM_VIEW_TIMEOUT_MS}ms.`, {
+            cause: error,
+          }),
+          { code: "ETIMEDOUT" as const },
+        );
+      }
+      throw error;
+    }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -721,7 +737,10 @@ function isPluginVersionPublished(packageName: string, version: string): boolean
   try {
     runNpmView([`${packageName}@${version}`, "version"]);
     return true;
-  } catch {
+  } catch (error) {
+    if (isNpmViewTimeoutError(error)) {
+      throw error;
+    }
     return false;
   }
 }

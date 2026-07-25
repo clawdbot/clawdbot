@@ -17,11 +17,22 @@ import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-d
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
+const NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES = 1024 * 1024;
 const FLAT_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/provider-entry.d.ts";
 const DEEP_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts";
 const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
   name: "@openclaw/ai",
   version: "2026.6.11",
+  exports: {
+    ".": { import: "./dist/index.mjs" },
+    "./providers": { import: "./dist/providers.mjs" },
+    "./transports": { import: "./dist/transports.mjs" },
+    "./internal/*": { import: "./dist/internal/*.mjs" },
+  },
+});
+const LEGACY_AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
+  name: "@openclaw/ai",
+  version: "2026.7.2-beta.4",
   exports: {
     ".": { import: "./dist/index.mjs" },
     "./providers": { import: "./dist/providers.mjs" },
@@ -138,6 +149,36 @@ describe("check-openclaw-package-tarball", () => {
     expect(extra.status).not.toBe(0);
     expect(extra.stderr).toContain("Unexpected OpenClaw package tarball check argument: extra");
     expect(extra.stderr).not.toContain("OpenClaw package tarball does not exist");
+  });
+
+  it("accepts tarballs whose entry list exceeds Node's default spawn buffer", () => {
+    const longNameSuffix = "x".repeat(80);
+    const largeEntryList = Object.fromEntries(
+      Array.from({ length: 8_000 }, (_, index) => [
+        `dist/control-ui/assets/large-entry-list/asset-${String(index).padStart(5, "0")}-${longNameSuffix}.txt`,
+        "",
+      ]),
+    );
+
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n", ...largeEntryList },
+      (tarball) => {
+        const listing = spawnSync("tar", ["-tf", tarball], {
+          encoding: "utf8",
+          maxBuffer: NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES * 2,
+        });
+        expect(listing.status, listing.stderr).toBe(0);
+        expect(Buffer.byteLength(listing.stdout)).toBeGreaterThan(
+          NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES,
+        );
+
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+    );
   });
 
   it.runIf(process.platform !== "win32")(
@@ -650,6 +691,7 @@ describe("check-openclaw-package-tarball", () => {
         "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/transports.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
       (tarball) => {
@@ -672,6 +714,36 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("accepts frozen AI runtimes that predate an optional exported subpath", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": LEGACY_AI_RUNTIME_PACKAGE_JSON,
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.7.2-beta.4",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.7.2-beta.4" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
   it("rejects a missing required bundled AI runtime entry", () => {
     withTarball(
       ["dist/index.js"],
@@ -679,6 +751,7 @@ describe("check-openclaw-package-tarball", () => {
         "dist/index.js": "export {};\n",
         "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/transports.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
       (tarball) => {
@@ -719,6 +792,7 @@ describe("check-openclaw-package-tarball", () => {
         }),
         "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/transports.mjs": "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
       (tarball) => {

@@ -3,11 +3,12 @@ title: Subagent fanout synthesis
 scenario:
   id: subagent-fanout-synthesis
   surface: subagents
+  runtimePairLane: core
   coverage:
     primary:
-      - agents.subagents
+      - agent-runtime.subagent-turns-subagents
     secondary:
-      - agents.synthesis
+      - agent-runtime.subagent-turns-synthesis
   objective: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
   successCriteria:
     - Parent flow launches at least two bounded subagent tasks.

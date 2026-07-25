@@ -2,6 +2,7 @@
 export {
   hasConfiguredChannelsForReadOnlyScope,
   hasExplicitChannelConfig,
+  listAmbientOnlyConfiguredChannelIds,
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,

@@ -3,11 +3,12 @@
  */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { projectToolSearchTargetTranscriptMessages } from "../../tool-search.js";
-import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
+import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
@@ -28,6 +29,7 @@ import {
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
+  findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt.context-engine-helpers.js";
 import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
@@ -51,7 +53,7 @@ type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise
 
 type StreamSettleResult = {
   promptError: unknown;
-  promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+  promptErrorSource: AgentRunAttemptFailureSource | null;
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   messagesSnapshot: AgentMessage[];
@@ -74,7 +76,7 @@ export async function settleEmbeddedAttemptStream(input: {
   subscription: EmbeddedAttemptSubscription;
   state: {
     promptError: unknown;
-    promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+    promptErrorSource: AgentRunAttemptFailureSource | null;
     yieldAborted: boolean;
     sessionIdUsed: string;
   };
@@ -288,7 +290,6 @@ export async function settleEmbeddedAttemptStream(input: {
       prePromptMessageCount: input.prePromptMessageCount,
     });
     currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
-    const usageAssistant = currentAttemptCompletedAssistant ?? currentAttemptAssistant;
     attemptUsage = subscription.getUsageTotals();
     cacheBreak = input.cache.observabilityEnabled
       ? completePromptCacheObservation({
@@ -298,7 +299,22 @@ export async function settleEmbeddedAttemptStream(input: {
           usage: attemptUsage,
         })
       : null;
-    lastCallUsage = normalizeUsage(usageAssistant?.usage);
+    const transcriptUsageSnapshot = findLatestUncompactedAttemptUsageSnapshot({
+      messagesSnapshot,
+      prePromptMessageCount: input.prePromptMessageCount,
+      compactionOccurred: compactionOccurredThisAttempt,
+    });
+    const completedAssistantUsage = normalizeUsage(currentAttemptCompletedAssistant?.usage);
+    lastCallUsage =
+      subscription.getLastAssistantUsage() ??
+      (hasNonzeroUsage(completedAssistantUsage)
+        ? completedAssistantUsage
+        : transcriptUsageSnapshot?.usage);
+    // Keep cache timing bound to the assistant that supplied the exact usage.
+    // A terminal zero-usage abort must not advance TTL for the previous call.
+    const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
+      ? currentAttemptCompletedAssistant
+      : transcriptUsageSnapshot?.assistant;
     const promptCacheObservation =
       input.cache.observabilityEnabled &&
       (cacheBreak || input.cache.changesForTurn || typeof attemptUsage?.cacheRead === "number")

@@ -454,6 +454,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           (agentResult.details as Record<string, unknown>).mcpAppPreview = buildMcpAppCanvasPayload(
             {
               ...view,
+              ...(params.runtime.sessionKey ? { originSessionKey: params.runtime.sessionKey } : {}),
               ...(result["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
             },
           );

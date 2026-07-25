@@ -23,7 +23,11 @@ import {
   connectTestGatewayClient,
   ensurePairedTestGatewayClientIdentity,
 } from "./gateway-cli-backend.live-helpers.js";
+import { requireSuccessfulNativeCommandCompactionEvidence } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
+  buildCodexHarnessAppServerArgs,
+  buildCodexHarnessLargeOutputCommand,
+  CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexStatusCommandText,
@@ -82,20 +86,43 @@ const CODEX_HARNESS_RESUME_STRESS_RESTARTS = resolveBoundedPositiveIntEnv(
   3,
   10,
 );
-const CODEX_HARNESS_COMPACTION_STRESS = isTruthyEnvValue(
-  process.env.OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS,
-);
+type CodexCompactionStressMode =
+  | { kind: "off" }
+  | { kind: "reduced" }
+  | { kind: "full"; modelCatalogPath: string };
+
+function resolveCodexCompactionStressMode(): CodexCompactionStressMode {
+  if (isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT)) {
+    const modelCatalogPath = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG?.trim();
+    if (!modelCatalogPath) {
+      throw new Error(
+        "OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT requires OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG",
+      );
+    }
+    return { kind: "full", modelCatalogPath };
+  }
+  return isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS)
+    ? { kind: "reduced" }
+    : { kind: "off" };
+}
+
+const CODEX_HARNESS_COMPACTION_MODE = resolveCodexCompactionStressMode();
+const CODEX_HARNESS_FULL_CONTEXT = CODEX_HARNESS_COMPACTION_MODE.kind === "full";
+const CODEX_HARNESS_COMPACTION_STRESS = CODEX_HARNESS_COMPACTION_MODE.kind !== "off";
 const CODEX_HARNESS_COMPACTION_STRESS_TURNS = resolveBoundedPositiveIntEnv(
   "OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS",
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS,
-  4,
+  CODEX_HARNESS_FULL_CONTEXT ? 8 : 4,
   8,
 );
+if (CODEX_HARNESS_FULL_CONTEXT && CODEX_HARNESS_COMPACTION_STRESS_TURNS !== 8) {
+  throw new Error("full-context Codex stress requires exactly 8 compaction stress turns");
+}
 const CODEX_HARNESS_LARGE_OUTPUT_BYTES = resolveBoundedPositiveIntEnv(
   "OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES",
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES,
   300_000,
-  1_000_000,
+  CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   100_000,
 );
 const CODEX_HARNESS_SUBAGENT_COUNT = resolveBoundedPositiveIntEnv(
@@ -126,6 +153,9 @@ const CODEX_HARNESS_AGENT_TIMEOUT_SECONDS = Math.max(
 );
 const CODEX_HARNESS_AUTH_MODE =
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "api-key" : "codex-auth";
+if (CODEX_HARNESS_FULL_CONTEXT && CODEX_HARNESS_AUTH_MODE !== "api-key") {
+  throw new Error("OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT requires API-key auth");
+}
 const CODEX_HARNESS_THINKING = resolveCodexHarnessThinkingLevel(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_THINKING,
 );
@@ -342,6 +372,40 @@ function parseModelKey(modelKey: string): { provider: string; modelId: string } 
   return { provider: provider.trim(), modelId: modelId.trim() };
 }
 
+function buildCodexHarnessDenseContext(params: { marker: string; chars: number }): string {
+  const lines: string[] = [];
+  let length = 0;
+  for (let index = 0; length < params.chars; index += 1) {
+    const line =
+      `${params.marker}|Context stress record ${index}: the copper lighthouse tracks violet weather ` +
+      `while patient engineers preserve durable state across each compacted conversation.\n`;
+    lines.push(line);
+    length += line.length;
+  }
+  return lines.join("").slice(0, params.chars);
+}
+
+function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): string[] | undefined {
+  const overrides =
+    mode.kind === "full"
+      ? [
+          `model_catalog_json=${JSON.stringify(mode.modelCatalogPath)}`,
+          "model_context_window=922000",
+          "model_auto_compact_token_limit=700000",
+          "model_auto_compact_token_limit_scope=total",
+          "tool_output_token_limit=200000",
+        ]
+      : mode.kind === "reduced"
+        ? [
+            "model_auto_compact_token_limit_scope=body_after_prefix",
+            // One truncated 300 KB tool result is only a few thousand tokens.
+            "model_auto_compact_token_limit=4000",
+            "tool_output_token_limit=10000",
+          ]
+        : undefined;
+  return overrides ? buildCodexHarnessAppServerArgs(overrides) : undefined;
+}
+
 async function assertCodexHarnessSessionSelection(params: {
   client: GatewayClient;
   modelKey: string;
@@ -423,7 +487,7 @@ async function assertCodexHarnessTranscriptModelIdentity(params: {
 async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
-  compactionStress?: boolean;
+  compactionMode: CodexCompactionStressMode;
   loopDetectionPreToolUseRelay?: boolean;
   configPath: string;
   modelKey: string;
@@ -431,7 +495,8 @@ async function writeLiveGatewayConfig(params: {
   token: string;
   workspace: string;
 }): Promise<void> {
-  parseModelKey(params.modelKey);
+  const parsedModel = parseModelKey(params.modelKey);
+  const appServerArgs = buildCodexCompactionAppServerArgs(params.compactionMode);
   const cfg: OpenClawConfig = {
     gateway: {
       mode: "local",
@@ -446,23 +511,7 @@ async function writeLiveGatewayConfig(params: {
           config: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
-              ...(params.compactionStress
-                ? {
-                    args: [
-                      "-c",
-                      "model_auto_compact_token_limit_scope=body_after_prefix",
-                      "-c",
-                      // One truncated 300 KB tool result is only a few thousand
-                      // tokens after Codex applies its transcript output cap.
-                      "model_auto_compact_token_limit=4000",
-                      "-c",
-                      "tool_output_token_limit=10000",
-                      "app-server",
-                      "--listen",
-                      "stdio://",
-                    ],
-                  }
-                : {}),
+              ...(appServerArgs ? { args: appServerArgs } : {}),
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
               ...(params.loopDetectionPreToolUseRelay === false
                 ? { loopDetectionPreToolUseRelay: false }
@@ -489,17 +538,32 @@ async function writeLiveGatewayConfig(params: {
         models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         sandbox: { mode: "off" },
       },
-      list: [
-        {
-          id: "dev",
+      entries: {
+        dev: {
           default: true,
           workspace: params.workspace,
           thinkingDefault: CODEX_HARNESS_THINKING,
           model: { primary: params.modelKey },
           models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         },
-      ],
+      },
     },
+    ...(CODEX_HARNESS_AUTH_MODE === "api-key" && parsedModel.provider === "openai"
+      ? {
+          secrets: { providers: { default: { source: "env" } } },
+          models: {
+            mode: "merge",
+            providers: {
+              openai: {
+                api: "openai-responses",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        }
+      : {}),
   };
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
 }
@@ -802,7 +866,11 @@ function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
   if (!combined) {
     return "<none>";
   }
-  return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
+  if (combined.length <= maxChars) {
+    return combined;
+  }
+  const half = Math.floor(maxChars / 2);
+  return `${combined.slice(0, half)}\n...\n${combined.slice(-half)}`;
 }
 
 async function readCodexHarnessCompactionCount(params: {
@@ -826,11 +894,87 @@ async function readCodexHarnessCompactionCount(params: {
   return count;
 }
 
+async function verifyCodexFullContextStress(params: {
+  client: GatewayClient;
+  events: EventFrame[];
+  sessionKey: string;
+}): Promise<{ persistedCount: number }> {
+  const baselineCount = await readCodexHarnessCompactionCount({
+    client: params.client,
+    events: params.events,
+    minimum: 0,
+    sessionKey: params.sessionKey,
+  });
+  let persistedCount = baselineCount;
+  let maximumObservedModelContextWindow = 0;
+  let maximumObservedPromptTokens = 0;
+  for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
+    const acknowledgement = `CODEX-FULL-CONTEXT-${turn}-OK`;
+    const marker = `OPENCLAW-CODEX-FULL-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
+    const { text, events } = await requestAgentTextWithEvents({
+      client: params.client,
+      eventPrefix: "codex_app_server.",
+      sessionKey: params.sessionKey,
+      message: [
+        buildCodexHarnessDenseContext({ marker, chars: CODEX_HARNESS_LARGE_OUTPUT_BYTES }),
+        `Reply exactly ${acknowledgement} and nothing else.`,
+      ].join("\n\n"),
+    });
+    expect(text).toContain(acknowledgement);
+    recordCodexAttemptIdentity({ events, sessionKey: params.sessionKey });
+    for (const event of events) {
+      if (event.stream !== "codex_app_server.usage") {
+        continue;
+      }
+      const modelContextWindow = event.data?.modelContextWindow;
+      const promptTokens = event.data?.promptTokens;
+      if (typeof modelContextWindow === "number") {
+        maximumObservedModelContextWindow = Math.max(
+          maximumObservedModelContextWindow,
+          modelContextWindow,
+        );
+      }
+      if (typeof promptTokens === "number") {
+        maximumObservedPromptTokens = Math.max(maximumObservedPromptTokens, promptTokens);
+      }
+    }
+    if (turn % 4 === 0) {
+      await requestCodexCommandText({
+        client: params.client,
+        command: "/compact",
+        events: params.events,
+        expectedText: "Compaction",
+        sessionKey: params.sessionKey,
+      });
+      persistedCount = await readCodexHarnessCompactionCount({
+        client: params.client,
+        events: params.events,
+        minimum: persistedCount + 1,
+        sessionKey: params.sessionKey,
+      });
+    }
+  }
+  expect(maximumObservedModelContextWindow).toBe(875_900);
+  expect(maximumObservedPromptTokens).toBeGreaterThan(272_000);
+  expect(persistedCount - baselineCount).toBeGreaterThanOrEqual(2);
+  const continued = await requestAgentText({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    expectedReply: "CODEX-FULL-CONTEXT-CONTINUE-OK",
+    message: "Reply exactly CODEX-FULL-CONTEXT-CONTINUE-OK and nothing else.",
+  });
+  expect(continued.trim()).toBe("CODEX-FULL-CONTEXT-CONTINUE-OK");
+  return { persistedCount };
+}
+
 async function verifyCodexCompactionStress(params: {
   client: GatewayClient;
   events: EventFrame[];
   sessionKey: string;
-}): Promise<{ hiddenMarker: string; persistedCount: number }> {
+}): Promise<{ hiddenMarker?: string; persistedCount: number }> {
+  if (CODEX_HARNESS_FULL_CONTEXT) {
+    return await verifyCodexFullContextStress(params);
+  }
   const hiddenMarker = `CODEX-DURABLE-${randomBytes(6).toString("hex").toUpperCase()}`;
   await requestAgentText({
     client: params.client,
@@ -847,48 +991,57 @@ async function verifyCodexCompactionStress(params: {
     minimum: 0,
     sessionKey: params.sessionKey,
   });
+  await requestCodexCommandText({
+    client: params.client,
+    command: "/codex permissions yolo",
+    events: params.events,
+    expectedText: "Codex permissions set to full access.",
+    sessionKey: params.sessionKey,
+  });
 
-  const outputLines = Math.ceil(CODEX_HARNESS_LARGE_OUTPUT_BYTES / 90);
   let completedCompactions = 0;
   let reportedCompactions = 0;
   for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
-    const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-${randomBytes(3)
-      .toString("hex")
-      .toUpperCase()}`;
+    const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-OK`;
+    const commandMarker = `OPENCLAW-CODEX-LARGE-OUTPUT-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
+    const largeOutputCommand = buildCodexHarnessLargeOutputCommand({
+      commandMarker,
+      outputBytes: CODEX_HARNESS_LARGE_OUTPUT_BYTES,
+    });
+    const message = [
+      "Large-output compaction probe.",
+      "Use the native exec_command tool exactly once.",
+      `Run this exact command: ${largeOutputCommand}`,
+      "Set max_output_tokens to 10000.",
+      `After the tool completes, reply exactly ${acknowledgement} and nothing else.`,
+    ].join("\n");
     const { text, events, compactionCount } = await requestAgentTextWithEvents({
       client: params.client,
-      eventPrefixes: ["codex_app_server.", "compaction"],
+      eventPrefixes: ["codex_app_server.", "compaction", "tool"],
       sessionKey: params.sessionKey,
-      message: [
-        "Large-output compaction probe.",
-        "Use the native exec_command tool exactly once.",
-        `Run this exact command: node -e 'for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`,
-        "Set max_output_tokens to 10000.",
-        `After the tool completes, reply exactly ${acknowledgement} and nothing else.`,
-      ].join("\n"),
+      message,
     });
     expect(text).toContain(acknowledgement);
     recordCodexAttemptIdentity({ events, sessionKey: params.sessionKey });
-    completedCompactions += events.filter(
+    const turnCompletedCompactions = events.filter(
       (event) =>
         event.stream === "compaction" &&
         event.data?.phase === "end" &&
         event.data?.completed === true,
     ).length;
+    completedCompactions += turnCompletedCompactions;
     reportedCompactions += compactionCount;
-
     const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
       limit: 100,
     });
-    const serialized = JSON.stringify(history.messages ?? []);
-    const originalLengths = Array.from(serialized.matchAll(/original (\d+) chars/gu), (match) =>
-      Number(match[1]),
-    );
-    expect(
-      originalLengths.some((length) => length > 10_000),
-      `expected a truncated large native tool result; lengths=${JSON.stringify(originalLengths)}`,
-    ).toBe(true);
+    requireSuccessfulNativeCommandCompactionEvidence({
+      commandMarker,
+      events,
+      expectedCommand: largeOutputCommand,
+      messages: history.messages ?? [],
+      minimumOutputChars: Math.floor(CODEX_HARNESS_LARGE_OUTPUT_BYTES * 0.95),
+    });
   }
 
   expect(completedCompactions, "expected at least one native automatic compaction").toBeGreaterThan(
@@ -940,12 +1093,9 @@ async function waitForAssistantText(params: {
       limit: 24,
     });
     const assistantTexts = extractAssistantTexts(history.messages ?? []);
-    const normalizedContains = params.contains.toUpperCase();
+    const normalizedContains = normalizeAssistantTokenText(params.contains);
     const matched = assistantTexts.find((text) =>
-      text
-        .toUpperCase()
-        .replace(/[^A-F0-9]/g, "")
-        .includes(normalizedContains),
+      normalizeAssistantTokenText(text).includes(normalizedContains),
     );
     if (matched) {
       return matched;
@@ -962,6 +1112,10 @@ async function waitForAssistantText(params: {
       extractAssistantTexts(finalHistory.messages ?? []),
     )}`,
   );
+}
+
+function normalizeAssistantTokenText(text: string): string {
+  return text.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
 async function verifyCodexImageProbe(params: {
@@ -1033,7 +1187,7 @@ async function verifyCodexChatImageProbe(params: {
         {
           mimeType: "image/png",
           fileName: "codex-chat-image-probe.png",
-          content: renderBitmapTextPngBase64(token),
+          content: renderBitmapTextPngBase64(token, { scale: 12, padding: 24 }),
         },
       ],
       originatingChannel: "codex-harness-live",
@@ -1051,14 +1205,15 @@ async function verifyCodexChatImageProbe(params: {
     sessionKey: params.sessionKey,
     contains: token,
   });
-  const normalized = text.toUpperCase().replace(/[^A-F0-9]/g, "");
+  const normalized = normalizeAssistantTokenText(text);
   expect(normalized, `Expected Codex to read bitmap token ${token}; received:\n${text}`).toContain(
     token,
   );
 }
 
 function randomBitmapTextToken(length = 6): string {
-  const alphabet = "24567ACEF";
+  // Keep glyphs visually distinct so this checks image transport, not tiny-font OCR quality.
+  const alphabet = "247";
   return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
@@ -1176,6 +1331,9 @@ async function verifyCodexGuardianProbe(params: {
   const review = assertGuardianReviewCompleted({
     events: deniedResult.events,
     label: "ask-back probe",
+    // The strict projection path is proved above. Codex may refuse this risky
+    // prompt before creating a review, so its explicit ask-back is also valid.
+    requireEvents: false,
   });
   // The approve/deny call is Codex policy-owned and may change independently.
   // OpenClaw's strict projection contract is covered by the allow probe above.
@@ -1549,7 +1707,7 @@ describeLive("gateway live (Codex harness)", () => {
         workspace,
         codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
         codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
-        compactionStress: CODEX_HARNESS_COMPACTION_STRESS,
+        compactionMode: CODEX_HARNESS_COMPACTION_MODE,
         ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
       });
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
@@ -1747,7 +1905,13 @@ describeLive("gateway live (Codex harness)", () => {
 
             if (CODEX_HARNESS_CHAT_IMAGE_PROBE) {
               logCodexLiveStep("chat-image-probe:start", { sessionKey });
-              await verifyCodexChatImageProbe({ client: activeClient, sessionKey });
+              const unsubscribeChatImageDebugEvents =
+                await subscribeCodexLiveDebugEvents(sessionKey);
+              try {
+                await verifyCodexChatImageProbe({ client: activeClient, sessionKey });
+              } finally {
+                unsubscribeChatImageDebugEvents();
+              }
               logCodexLiveStep("chat-image-probe:done");
             }
 
@@ -1946,7 +2110,7 @@ describeLive("gateway live (Codex harness)", () => {
               sessionKey: resumeStressState.sessionKey,
             });
           }
-          if (CODEX_HARNESS_COMPACTION_STRESS) {
+          if (CODEX_HARNESS_COMPACTION_STRESS && !CODEX_HARNESS_FULL_CONTEXT) {
             const continued = await verifyCodexCompactionStress({
               client,
               events: gatewayEvents,

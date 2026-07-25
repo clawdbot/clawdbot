@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import {
@@ -27,6 +27,14 @@ const uiProofArtifactDir = path.join(
   "control-ui-e2e",
   "native-session-discovery",
 );
+
+async function expandCodingSection(page: Page) {
+  const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
+  await toggle.waitFor({ state: "visible" });
+  if ((await toggle.getAttribute("aria-expanded")) === "false") {
+    await toggle.click();
+  }
+}
 
 suite("Codex native session catalog", () => {
   beforeAll(async () => {
@@ -135,6 +143,7 @@ suite("Codex native session catalog", () => {
         },
       } satisfies SessionsCatalogHostEvent);
 
+      await expandCodingSection(page);
       await page.getByText("Progressive node result", { exact: true }).waitFor();
       expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
       if (captureUiProofEnabled) {
@@ -245,6 +254,7 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       const section = page.locator('[data-session-section="catalog:codex"]');
       await section.waitFor({ state: "visible" });
       await expect.poll(() => section.locator("[data-session-catalog-host]").count()).toBe(2);
@@ -441,6 +451,7 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       const warning = page.locator(
         '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
       );
@@ -555,6 +566,7 @@ suite("Codex native session catalog", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
         .toBe(1);
@@ -627,6 +639,7 @@ suite("Codex native session catalog", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
+    await expandCodingSection(page);
     await page.getByText("Release checklist", { exact: true }).click();
     await expect.poll(() => page.getByText("prepare release", { exact: true }).count()).toBe(1);
     const composer = page.locator(".agent-chat__composer-combobox > textarea");

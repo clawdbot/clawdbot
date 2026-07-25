@@ -149,10 +149,13 @@ hooks such as `SessionStart` and `UserPromptSubmit` remain Codex-level
 controls; they are not exposed as OpenClaw plugin hooks in the v1 contract.
 
 For OpenClaw dynamic tools, OpenClaw executes the tool after Codex asks for
-the call, so plugin and middleware behavior runs in the harness adapter. For
-Codex-native tools, Codex owns the canonical tool record; OpenClaw can mirror
-selected events but cannot rewrite the native thread unless Codex exposes that
-through app-server or native hook callbacks.
+the call, so plugin and middleware behavior runs in the harness adapter. Codex
+Code Mode receives generic dynamic results as text and serializes nested
+dynamic calls; callers must parse JSON-looking results and cannot rely on
+`Promise.all` for concurrent submission. For Codex-native tools, Codex owns the
+canonical tool record; OpenClaw can mirror selected events but cannot rewrite
+the native thread unless Codex exposes that through app-server or native hook
+callbacks.
 
 Codex app-server report-mode `PreToolUse` events defer plugin approval to the
 matching app-server approval. If an OpenClaw `before_tool_call` hook returns
@@ -317,8 +320,8 @@ writes an OpenClaw-owned session transcript tool result.
 
 OpenClaw continues to own media delivery and media provider selection. Image,
 video, music, PDF, TTS, and media understanding use matching provider/model
-settings such as `agents.defaults.imageGenerationModel`,
-`videoGenerationModel`, `pdfModel`, and `messages.tts`.
+settings such as `agents.defaults.mediaModels.image`,
+`agents.defaults.mediaModels.video`, `pdfModel`, and `tts`.
 
 Text, images, video, music, TTS, approvals, and messaging-tool output continue
 through the normal OpenClaw delivery path; media generation does not require

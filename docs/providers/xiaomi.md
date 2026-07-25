@@ -101,7 +101,7 @@ OpenClaw's [`/think` directive](/tools/thinking) with levels `off`,
 ## Text-to-speech
 
 The bundled `xiaomi` plugin also registers Xiaomi MiMo as a speech provider
-for `messages.tts`. It calls Xiaomi's chat-completions TTS contract with the
+for `tts`. It calls Xiaomi's chat-completions TTS contract with the
 text as an `assistant` message and optional style guidance as a `user`
 message.
 
@@ -115,18 +115,16 @@ message.
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "xiaomi",
-      providers: {
-        xiaomi: {
-          apiKey: "xiaomi_api_key",
-          model: "mimo-v2.5-tts",
-          speakerVoice: "mimo_default",
-          format: "mp3",
-          style: "Bright, natural, conversational tone.",
-        },
+  tts: {
+    auto: "always",
+    provider: "xiaomi",
+    providers: {
+      xiaomi: {
+        apiKey: "xiaomi_api_key",
+        model: "mimo-v2.5-tts",
+        speakerVoice: "mimo_default",
+        format: "mp3",
+        style: "Bright, natural, conversational tone.",
       },
     },
   },
@@ -145,15 +143,13 @@ model.
 
 ```json5
 {
-  messages: {
-    tts: {
-      provider: "xiaomi",
-      providers: {
-        xiaomi: {
-          model: "mimo-v2.5-tts-voicedesign",
-          format: "wav",
-          style: "Warm, natural female voice with clear pronunciation.",
-        },
+  tts: {
+    provider: "xiaomi",
+    providers: {
+      xiaomi: {
+        model: "mimo-v2.5-tts-voicedesign",
+        format: "wav",
+        style: "Warm, natural female voice with clear pronunciation.",
       },
     },
   },

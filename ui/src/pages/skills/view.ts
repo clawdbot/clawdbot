@@ -7,6 +7,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import "../../components/agent-select-registration.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/modal-dialog.ts";
@@ -20,6 +21,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
@@ -203,13 +205,6 @@ function verdictStatusKind(
   return status === "pending" || status === "not-run" ? "muted" : "warn";
 }
 
-type SkillsAgentOption = AgentsListResult["agents"][number];
-
-function agentOptionLabel(agent: SkillsAgentOption, defaultId: string | undefined): string {
-  const baseName = agent.identity?.name?.trim() || agent.name?.trim() || agent.id;
-  return agent.id === defaultId ? t("skillsPage.defaultAgent", { name: baseName }) : baseName;
-}
-
 function skillControlsLocked(props: SkillsProps): boolean {
   return props.loading || props.operation !== null;
 }
@@ -310,9 +305,12 @@ function renderSkillsToolbar(
   statusCounts: Record<SkillsStatusFilter, number>,
   shownCount: number,
 ) {
-  const agents = props.agentsList?.agents ?? [];
-  const selectedAgentId =
-    props.selectedAgentId ?? props.agentsList?.defaultId ?? agents[0]?.id ?? "";
+  const agents = listSelectableAgents(props.agentsList?.agents ?? []);
+  const selectedAgentId = agents.some((agent) => agent.id === props.selectedAgentId)
+    ? (props.selectedAgentId ?? "")
+    : agents.some((agent) => agent.id === props.agentsList?.defaultId)
+      ? (props.agentsList?.defaultId ?? "")
+      : (agents[0]?.id ?? "");
   return html`
     <div class="plugins-toolbar plugins-toolbar--fields">
       ${renderSettingsSegmented<SkillsStatusFilter>({
@@ -327,24 +325,28 @@ function renderSkillsToolbar(
       })}
       ${agents.length > 0
         ? html`
-            <label class="plugins-field skills-toolbar__agent">
+            <div class="plugins-field skills-toolbar__agent">
               <span>${t("usage.filters.agent")}</span>
-              <select
+              <openclaw-agent-select
+                class="agent-select--settings"
                 name="skills-agent"
-                class="settings-select"
+                .options=${agents.map((agent) => {
+                  const label = normalizeAgentLabel(agent);
+                  return {
+                    value: agent.id,
+                    label:
+                      agent.id === props.agentsList?.defaultId
+                        ? t("skillsPage.defaultAgent", { name: label })
+                        : label,
+                    agent,
+                  };
+                })}
                 .value=${selectedAgentId}
-                ?disabled=${skillControlsLocked(props) || !props.connected || agents.length < 2}
-                @change=${(e: Event) => props.onAgentChange((e.target as HTMLSelectElement).value)}
-              >
-                ${agents.map(
-                  (agent) => html`
-                    <option value=${agent.id} ?selected=${agent.id === selectedAgentId}>
-                      ${agentOptionLabel(agent, props.agentsList?.defaultId)}
-                    </option>
-                  `,
-                )}
-              </select>
-            </label>
+                .accessibleLabel=${t("usage.filters.agent")}
+                .disabled=${skillControlsLocked(props) || !props.connected || agents.length < 2}
+                .onSelect=${props.onAgentChange}
+              ></openclaw-agent-select>
+            </div>
           `
         : nothing}
       <label class="plugins-field skills-toolbar__search">

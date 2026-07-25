@@ -75,9 +75,9 @@ private enum class GatewayConnectAuthSource {
 }
 
 /**
- * Structured connect failure guidance from the gateway, preserved for reconnect and UI decisions.
+ * Structured gateway error details, preserved for reconnect, authorization, and UI decisions.
  */
-data class GatewayConnectErrorDetails(
+data class GatewayErrorDetails(
   val code: String?,
   val canRetryWithDeviceToken: Boolean,
   val recommendedNextStep: String?,
@@ -92,7 +92,16 @@ data class GatewayConnectErrorDetails(
   val clawhubTrustCode: String? = null,
   val clawhubWarning: String? = null,
   val clawhubVersion: String? = null,
+  val missingScope: String? = null,
+  val requiredScopes: List<String> = emptyList(),
 )
+
+data class GatewayMissingScopeErrorDetails(
+  val missingScope: String,
+  val requiredScopes: List<String>,
+)
+
+private val legacyMissingScopePattern = Regex("\\bmissing scope:\\s*([a-z0-9._-]+)", RegexOption.IGNORE_CASE)
 
 private val gatewayApprovalRequestIdPattern = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -214,8 +223,26 @@ class GatewaySession(
   data class ErrorShape(
     val code: String,
     val message: String,
-    val details: GatewayConnectErrorDetails? = null,
-  )
+    val details: GatewayErrorDetails? = null,
+  ) {
+    fun missingScopeDetails(): GatewayMissingScopeErrorDetails? {
+      val details = details ?: return null
+      val missingScope = details.missingScope?.trim().orEmpty()
+      val requiredScopes = details.requiredScopes.map { it.trim() }
+      if (details.code != "MISSING_SCOPE" || missingScope.isEmpty() || requiredScopes.any { it.isEmpty() }) {
+        return null
+      }
+      return requiredScopes.takeIf { it.isNotEmpty() }?.let {
+        GatewayMissingScopeErrorDetails(missingScope = missingScope, requiredScopes = it)
+      }
+    }
+
+    fun missingScope(): String? {
+      missingScopeDetails()?.let { return it.missingScope }
+      if (code != "FORBIDDEN" && code != "INVALID_REQUEST") return null
+      return legacyMissingScopePattern.find(message)?.groupValues?.getOrNull(1)
+    }
+  }
 
   /**
    * Structured RPC result used by callers that need error codes without exceptions.
@@ -1346,7 +1373,7 @@ class GatewaySession(
           val detailObj = wireError.details.asObjectOrNull()
           val details =
             detailObj?.let {
-              GatewayConnectErrorDetails(
+              GatewayErrorDetails(
                 code = it["code"].asStringOrNull(),
                 canRetryWithDeviceToken = it["canRetryWithDeviceToken"].asBooleanOrNull() == true,
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
@@ -1361,6 +1388,12 @@ class GatewaySession(
                 clawhubTrustCode = it["clawhubTrustCode"].asStringOrNull(),
                 clawhubWarning = it["warning"].asStringOrNull(),
                 clawhubVersion = it["version"].asStringOrNull(),
+                missingScope = it["missingScope"].asStringOrNull(),
+                requiredScopes =
+                  it["requiredScopes"]
+                    .asArrayOrNull()
+                    ?.mapNotNull { scope -> scope.asStringOrNull() }
+                    .orEmpty(),
               )
             }
           ErrorShape(wireError.code, wireError.message, details)

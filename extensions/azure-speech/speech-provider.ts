@@ -92,7 +92,7 @@ function normalizeAzureSpeechProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.azure-speech.apiKey",
+      path: "tts.providers.azure-speech.apiKey",
     }),
     region,
     endpoint,

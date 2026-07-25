@@ -3,13 +3,13 @@ title: Codex plugin cold install
 scenario:
   id: codex-plugin-cold-install
   surface: runtime
-  runtimeParityTier: standard
+  runtimePairLane: core
   runtimeParityUsage:
     expectation: not-applicable
     reason: Packaged CLI/plugin-lifecycle proof only; no assistant turn runs.
   coverage:
     primary:
-      - runtime.codex-plugin.lifecycle
+      - plugins.lifecycle-hot-install
   objective: Verify a package-installed OpenClaw in a clean Docker home downloads the official Codex runtime on demand during OpenAI onboarding and records a loadable managed install.
   successCriteria:
     - The prepared OpenClaw tarball and clean home contain neither @openclaw/codex nor @openai/codex before onboarding.

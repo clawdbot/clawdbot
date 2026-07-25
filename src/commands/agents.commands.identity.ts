@@ -2,7 +2,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { replaceConfigFile } from "../config/config.js";
@@ -111,6 +115,16 @@ export async function agentsSetIdentityCommand(
     agentId = matches[0];
   }
 
+  const resolvedAgentId = expectDefined(agentId, "agent id");
+  const resolvedAgentIds = listAgentIds(cfg).map((id) => normalizeAgentId(id));
+  if (!resolvedAgentIds.includes(resolvedAgentId)) {
+    runtime.error(`Agent "${resolvedAgentId}" not found. Create it with \`openclaw agents add\`.`);
+    runtime.exit(1);
+    return;
+  }
+  const list = listAgentEntries(cfg);
+  const index = findAgentEntryIndex(list, resolvedAgentId);
+
   let identityFromFile: AgentIdentity | null = null;
   if (wantsIdentityFile) {
     if (identityFilePath) {
@@ -158,9 +172,6 @@ export async function agentsSetIdentityCommand(
     return;
   }
 
-  const resolvedAgentId = expectDefined(agentId, "agent id");
-  const list = listAgentEntries(cfg);
-  const index = findAgentEntryIndex(list, resolvedAgentId);
   const base: AgentConfig =
     index >= 0 ? expectDefined(list[index], "agent config") : { id: resolvedAgentId };
   const nextIdentity: IdentityConfig = {
@@ -177,10 +188,7 @@ export async function agentsSetIdentityCommand(
   if (index >= 0) {
     nextList[index] = nextEntry;
   } else {
-    const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    if (nextList.length === 0 && resolvedAgentId !== defaultId) {
-      nextList.push({ id: defaultId });
-    }
+    // An empty list still resolves to the implicit default agent; materialize only that known id.
     nextList.push(nextEntry);
   }
 
@@ -188,7 +196,12 @@ export async function agentsSetIdentityCommand(
     ...cfg,
     agents: {
       ...cfg.agents,
-      list: nextList,
+      entries: Object.fromEntries(
+        nextList.map((entry) => {
+          const { id, ...config } = entry;
+          return [id, config];
+        }),
+      ),
     },
   };
 

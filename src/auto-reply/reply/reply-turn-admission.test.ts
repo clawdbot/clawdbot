@@ -425,6 +425,36 @@ describe("reply turn admission", () => {
     },
   );
 
+  it("admits a visible turn after clearing orphaned restart-recovery fences", async () => {
+    const sessionKey = "agent:main:telegram:topic:orphaned-recovery-fence";
+    const sessionId = "healthy-session";
+    const storePath = createSessionStore({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 100,
+        status: "running",
+        abortedLastRun: false,
+        restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "stale-generation" }],
+      },
+    });
+
+    const admission = await admitReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      storePath,
+      kind: "visible",
+      resetTriggered: false,
+    });
+    expect(admission.status).toBe("owned");
+    const persisted = await readSessionEntry(storePath, sessionKey);
+    expect(persisted?.restartRecoveryRuns).toBeUndefined();
+    expect(persisted?.mainRestartRecovery).toBeUndefined();
+    if (admission.status === "owned") {
+      admission.operation.complete();
+    }
+  });
+
   it("drops a queued followup for an admitted recovery fence", async () => {
     const sessionKey = "agent:main:telegram:topic:admitted-recovery";
     const sessionId = "admitted-recovery-session";

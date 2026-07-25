@@ -42,7 +42,9 @@ function createConfig(): OpenClawConfig {
   return {
     channels: {
       discord: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        dm: { enabled: true },
+        dmPolicy: "open",
+        allowFrom: ["*"],
       },
     },
   } as OpenClawConfig;
@@ -78,16 +80,17 @@ function createConfiguredAcpCase(params: {
 }) {
   return {
     cfg: {
-      commands: {
-        useAccessGroups: false,
-      },
+      agents: { entries: { [params.agentId ?? "codex"]: {} } },
+      commands: { allowFrom: { discord: ["user:owner"] } },
       ...(params.includeChannelAccess === false
         ? {}
         : params.channelType === ChannelType.DM
           ? {
               channels: {
                 discord: {
-                  dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+                  dm: { enabled: true },
+                  dmPolicy: "open",
+                  allowFrom: ["*"],
                 },
               },
             }
@@ -622,7 +625,9 @@ describe("Discord native plugin command dispatch", () => {
     const cfg = {
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["user:owner"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["user:owner"],
         },
       },
     } as OpenClawConfig;
@@ -647,7 +652,9 @@ describe("Discord native plugin command dispatch", () => {
       },
       channels: {
         discord: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     } as OpenClawConfig;
@@ -872,9 +879,9 @@ describe("Discord native plugin command dispatch", () => {
       },
       channels: {
         discord: {
+          dmPolicy: "open",
           dm: {
             enabled: true,
-            policy: "open",
             groupEnabled: true,
             groupChannels: ["allowed-group"],
           },
@@ -1044,9 +1051,6 @@ describe("Discord native plugin command dispatch", () => {
 
   it("forwards Discord thread metadata into direct plugin command execution", async () => {
     const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
       channels: {
         discord: {
           groupPolicy: "allowlist",
@@ -1112,9 +1116,6 @@ describe("Discord native plugin command dispatch", () => {
 
   it("preserves fetched thread parent metadata when interaction parentId getter throws", async () => {
     const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
       channels: {
         discord: {
           groupPolicy: "allowlist",
@@ -1216,9 +1217,8 @@ describe("Discord native plugin command dispatch", () => {
     const guildId = "1459246755253325866";
     const channelId = "1478836151241412759";
     const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
+      agents: { entries: { qwen: {} } },
+      commands: { allowFrom: { discord: ["user:owner"] } },
       bindings: [
         {
           agentId: "qwen",

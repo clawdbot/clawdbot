@@ -1,6 +1,7 @@
 // Control UI runtime config capability and shared config-domain mutations.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
@@ -76,7 +77,7 @@ const connectionEpochsByState = new WeakMap<object, number>();
 
 type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
-  connected: boolean;
+  phase: ApplicationGatewayPhase;
   sessionKey: string;
 };
 
@@ -107,6 +108,7 @@ export type RuntimeConfigCapability = {
   ensureAgentEntry: (agentId: string) => number;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
+  patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
   dispose: () => void;
@@ -122,6 +124,9 @@ type ConfigPatchOptions = {
   /** Array paths the caller intentionally shrinks; required by the gateway's destructive-array guard. */
   replacePaths?: string[];
 };
+
+type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
+type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
 
 type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -147,7 +152,7 @@ type ConfigGatewayState = Pick<
 function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>): ConfigState {
   return {
     client: snapshot?.client ?? null,
-    connected: snapshot?.connected ?? false,
+    connected: snapshot?.phase === "connected",
     applySessionKey: snapshot?.sessionKey ?? "main",
     configLoading: false,
     configRaw: "{\n}\n",
@@ -1467,9 +1472,10 @@ export function createRuntimeConfigCapability(
     state.configSchema ? Promise.resolve() : loadOnce("schema", () => loadConfigSchema(state));
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
-    const connectionChanged = state.connected !== snapshot.connected;
+    const connected = snapshot.phase === "connected";
+    const connectionChanged = state.connected !== connected;
     state.client = snapshot.client;
-    state.connected = snapshot.connected;
+    state.connected = connected;
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
       configLoad = null;
@@ -1581,6 +1587,30 @@ export function createRuntimeConfigCapability(
     }
     publish();
   });
+
+  const queueConfigPatch = (resolveOptions: () => ConfigPatchBuildResult): Promise<boolean> => {
+    cancelAppliedRefresh();
+    if (autoSaveTimer) {
+      cancelScheduledAutoSave();
+      runAutoSave();
+    }
+    return afterPendingWritesSettled(async () => {
+      // A drained autosave can start its own refresh while this patch waits.
+      cancelAppliedRefresh();
+      try {
+        const resolved = resolveOptions();
+        if ("error" in resolved) {
+          state.lastError = resolved.error;
+          return false;
+        }
+        return await patchConfig(state, resolved.options);
+      } finally {
+        reconcileAppliedRefresh();
+      }
+    }).finally(() => {
+      scheduleAutoSave();
+    });
+  };
 
   return {
     get state() {
@@ -1712,24 +1742,14 @@ export function createRuntimeConfigCapability(
     // Unlike save/apply, a patch does not submit the form draft — flush a
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
-    patch: (options) => {
-      cancelAppliedRefresh();
-      if (autoSaveTimer) {
-        cancelScheduledAutoSave();
-        runAutoSave();
-      }
-      return afterPendingWritesSettled(async () => {
-        // A drained autosave can start its own refresh while this patch waits.
-        cancelAppliedRefresh();
-        try {
-          return await patchConfig(state, options);
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      }).finally(() => {
-        scheduleAutoSave();
-      });
-    },
+    patch: (options) => queueConfigPatch(() => ({ options })),
+    patchFromSnapshot: (build) =>
+      queueConfigPatch(() => {
+        const config = resolveEditableSnapshotConfig(state.configSnapshot);
+        return config
+          ? build(config)
+          : { error: "Configuration is unavailable; refresh and try again." };
+      }),
     lookupSchemaPath: (path) => run(() => lookupConfigSchemaPath(state, path)),
     subscribe(listener) {
       listeners.add(listener);

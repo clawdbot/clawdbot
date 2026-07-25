@@ -11,7 +11,7 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar agent chip", () => {
-  it("opens the footer menu with agent switching and folded-in utilities", async () => {
+  it("opens the agent-scoped menu with its inline roster", async () => {
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKey = vi.fn();
     (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
@@ -20,7 +20,16 @@ describe("AppSidebar agent chip", () => {
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main"]),
       "panel",
-      TWO_AGENTS,
+      {
+        ...TWO_AGENTS,
+        agents: [
+          { id: "main", identity: { name: "Molty", emoji: "🦞" } },
+          {
+            id: "research",
+            identity: { avatarUrl: "data:image/png;base64,eA==" },
+          },
+        ],
+      },
     );
     const onNavigate = vi.fn();
     sidebar.connected = true;
@@ -34,48 +43,30 @@ describe("AppSidebar agent chip", () => {
 
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu).not.toBeNull();
-    expect(menu?.querySelector(".sidebar-pair-mobile")).not.toBeNull();
-    expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
-    expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
-    // External help links stay folded into Web Awesome's keyboard-navigable submenu.
-    const helpRow = [...(menu?.querySelectorAll<HTMLElement>("wa-dropdown-item") ?? [])].find(
-      (row) => row.textContent?.includes("Help"),
-    );
-    await (helpRow as (HTMLElement & { updateComplete?: Promise<unknown> }) | undefined)
-      ?.updateComplete;
-    expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
-    helpRow?.click();
-    await sidebar.updateComplete;
-
-    const linkHrefs = [
-      ...(menu?.querySelectorAll('wa-dropdown-item[slot="submenu"] a[href]') ?? []),
-    ].map((link) => link.getAttribute("href"));
-    expect(linkHrefs).toEqual([
-      "https://docs.openclaw.ai",
-      "https://docs.openclaw.ai/help",
-      "https://discord.gg/clawd",
-      "https://docs.openclaw.ai/releases",
+    expect(menu?.querySelector(".sidebar-pair-mobile")).toBeNull();
+    expect(menu?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
+    expect(menu?.querySelector("openclaw-theme-mode-toggle")).toBeNull();
+    expect(
+      [...(menu?.children ?? [])]
+        .filter((element) => element.localName === "wa-dropdown-item")
+        .map((element) => element.getAttribute("value")),
+    ).toEqual([
+      "agent:main",
+      "agent:research",
+      "command:new-agent",
+      "command:capabilities",
+      "command:agent-settings",
     ]);
-    const openExternal = vi.spyOn(window, "open").mockReturnValue(null);
-    menu?.querySelector<HTMLElement>('wa-dropdown-item[slot="submenu"]')?.click();
-    expect(openExternal).toHaveBeenCalledWith(
-      "https://docs.openclaw.ai/",
-      "_blank",
-      "noopener,noreferrer",
-    );
-    openExternal.mockRestore();
-    await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    const reopenedMenu = sidebar.querySelector(".sidebar-agent-menu");
-
-    const agentRows = [
-      ...(reopenedMenu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? []),
-    ];
+    const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? [])];
     expect(agentRows).toHaveLength(2);
-    expect(reopenedMenu?.querySelector(".sidebar-agent-menu__new")).toBeNull();
-    const switchMenu = reopenedMenu;
+    expect(menu?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+      "🦞",
+    );
+    expect(menu?.querySelector<HTMLImageElement>("img.agent-select__avatar")?.src).toContain(
+      "data:image/png;base64,eA==",
+    );
+    const switchMenu = menu;
     const researchRow = [
       ...(switchMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
     ].find((row) => row.textContent?.includes("research"));
@@ -91,6 +82,35 @@ describe("AppSidebar agent chip", () => {
       search: "?session=agent%3Aresearch%3Amain",
     });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+  });
+
+  it("collapses a single-agent roster to the three agent actions", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+        agents: [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
+      },
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector(".sidebar-agent-menu");
+    expect(menu?.querySelector(".sidebar-customize-menu__title")).toBeNull();
+    expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
+    expect(menu?.querySelector(".sidebar-agent-menu__agent-switch")).toBeNull();
+    expect(
+      [...(menu?.children ?? [])]
+        .filter((element) => element.localName === "wa-dropdown-item")
+        .map((element) => element.getAttribute("value")),
+    ).toEqual(["command:new-agent", "command:capabilities", "command:agent-settings"]);
   });
 
   it("navigates to the agents settings page with the active agent preselected", async () => {
@@ -161,7 +181,7 @@ describe("AppSidebar agent chip", () => {
     const labels = () =>
       [
         ...sidebar.querySelectorAll(
-          ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch .sidebar-customize-menu__text",
+          ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch .agent-select__option-label",
         ),
       ].map((el) => el.textContent?.trim());
     expect(labels()).toEqual(["agent-7", "agent-12", "agent-1"]);

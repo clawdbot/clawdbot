@@ -12,6 +12,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
+  ".github/actions/setup-node-env/verify-importers.mjs!",
   ".github/actions/register-bind-mount-cleanup/main.cjs!",
   ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
@@ -43,8 +44,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/openai-chat-tools/client.mjs!",
   "scripts/e2e/lib/openai-chat-tools/write-config.mjs!",
   "scripts/e2e/lib/package-git-fixture.mjs!",
-  "scripts/e2e/lib/parallels-package/build-info-commit.mjs!",
-  "scripts/e2e/lib/parallels-package/log-progress-extract.mjs!",
   "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
   "scripts/e2e/lib/plugin-update/registry-server.mjs!",
   "scripts/e2e/lib/plugins/npm-registry-server.mjs!",
@@ -56,6 +55,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
+  "scripts/ios-release-cut.ts!",
+  "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mjs!",
   "scripts/lib/docker-plugin-selection.mjs!",
   "scripts/lib/openclaw-test-state.mjs!",
@@ -68,7 +69,11 @@ const repositoryScriptEntries = [
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mjs!",
+  // Generates the checked-in native protocol models from core descriptor metadata.
+  "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mjs!",
+  "scripts/pr-lib/ci-dispatch.mjs!",
+  "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/qa-coverage-report.ts!",
@@ -106,6 +111,7 @@ const rootEntries = [
   "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
+  "scripts/bench-transcript-cursors.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
@@ -123,7 +129,6 @@ const rootEntries = [
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
-  "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
   // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
@@ -249,6 +254,9 @@ const rootToolingAndWorkspaceDependencies = [
   // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
+  // Root typecheck/test projects compile @openclaw/net-policy source directly.
+  // Keep its exact dependency available without externalizing it from packaged builds.
+  "ipaddr.js",
   "jscpd",
   "lit",
   "oxlint",
@@ -343,6 +351,25 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    // The full-tree companion config makes tests entrypoints; these contracts
+    // are intentionally test-only in the production graph.
+    "src/boards/board-layout.ts": ["types"],
+    "src/boards/board-notices.ts": ["exports"],
+    "src/boards/board-store.ts": ["exports"],
+    // Test and E2E callers reach these hooks through runtime.test-support.ts;
+    // the full-tree companion config still audits their actual consumers.
+    "src/commitments/runtime.ts": ["exports"],
+    "src/gateway/board-view-ticket.ts": ["exports"],
+    // GatewayBoardProvider and boardExists are constructed/asserted by the
+    // focused Control UI provider tests, not by a separate production module.
+    "ui/src/lib/board/provider.ts": ["exports"],
+    // Greeting cache/fact contracts (hash, alert text, store shapes) are
+    // asserted by the focused greeting unit tests, not by another prod module.
+    "src/system-agent/greeting.ts": ["exports", "types"],
+    // Focused tests consume these diagnostic/test seams; production code uses
+    // the surrounding runtime helpers rather than importing the exports.
+    "extensions/signal/src/setup-core.ts": ["exports"],
+    "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
     ".": {
@@ -351,6 +378,7 @@ const config = {
         // Docker packaging stages @openclaw/ai without nested dependencies after
         // verifying the root owns its exact runtime dependency versions.
         "@mistralai/mistralai",
+        "openai",
         "cross-spawn",
         "file-type",
         // Loaded via createRequire in src/agents/utils/syntax-highlight.ts because its
@@ -435,8 +463,6 @@ const config = {
         "src/types.ts!",
         "src/harness/messages.ts!",
         "src/harness/env/kill-tree.ts!",
-        "src/harness/compaction.ts!",
-        "src/harness/branch-summarization.ts!",
         "src/harness/prompt-template-arguments.ts!",
         "src/harness/utils/truncate.ts!",
       ],
@@ -457,6 +483,24 @@ const config = {
         "src/schema.ts!",
         "src/startup-unavailable.ts!",
         "src/version.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/normalization-core": {
+      // Mirror package.json exports; root and UI builds consume these source subpaths directly.
+      entry: [
+        "src/index.ts!",
+        "src/agent-id.ts!",
+        "src/boolean-coercion.ts!",
+        "src/error-coercion.ts!",
+        "src/expect.ts!",
+        "src/number-coercion.ts!",
+        "src/phone-presentation.ts!",
+        "src/record-coerce.ts!",
+        "src/result.ts!",
+        "src/string-coerce.ts!",
+        "src/string-normalization.ts!",
+        "src/utf16-slice.ts!",
       ],
       project: ["src/**/*.ts!"],
     },
@@ -540,7 +584,7 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/speech-core": {
-      entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
+      entry: ["runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
       project: ["**/*.ts!"],
       ignoreDependencies: ["openclaw"],
     },
@@ -631,7 +675,11 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
+      ...bundledPluginWorkspace(),
+      // LanceDB declares Arrow as a peer; the plugin provides it for runtime table values.
+      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "apache-arrow"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft-foundry`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-claude`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-hermes`]: bundledPluginWorkspace(),
@@ -698,6 +746,11 @@ const config = {
       "vault-secret-ref-resolver.js!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/voyage`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/whatsapp`]: {
+      ...bundledPluginWorkspace(),
+      // Baileys loads its optional audio decoder at runtime for supported media.
+      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "audio-decode"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xiaomi`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {

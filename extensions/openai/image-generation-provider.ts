@@ -14,7 +14,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import {
   ensureAuthProfileStore,
   hasConfiguredSecretInput,
@@ -66,6 +66,7 @@ const OPENAI_MAX_IMAGE_RESULTS = 4;
 const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
 const MAX_CODEX_IMAGE_SSE_EVENTS = 512;
 const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
+const STANDARD_BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const LOG_VALUE_MAX_CHARS = 256;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
@@ -577,7 +578,22 @@ function decodeCodexImagePayload(payload: string): Buffer {
   if (payload.length > MAX_CODEX_IMAGE_BASE64_CHARS) {
     throw new Error("OpenAI Codex image generation result exceeded size limit");
   }
-  return Buffer.from(payload, "base64");
+  // Rust's str::trim follows Unicode White_Space (including U+0085), while
+  // JavaScript's trim does not. Match Codex before enforcing canonical Base64.
+  const trimmedPayload = payload.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  const canonicalPayload = canonicalizeBase64(trimmedPayload);
+  const padding = canonicalPayload?.endsWith("==") ? 2 : canonicalPayload?.endsWith("=") ? 1 : 0;
+  const trailingBitsMask = padding === 2 ? 0x0f : padding === 1 ? 0x03 : 0;
+  const trailingValue =
+    padding > 0 ? STANDARD_BASE64_ALPHABET.indexOf(canonicalPayload?.at(-(padding + 1)) ?? "") : 0;
+  if (
+    !canonicalPayload ||
+    canonicalPayload !== trimmedPayload ||
+    (trailingValue & trailingBitsMask) !== 0
+  ) {
+    throw new Error("OpenAI Codex image generation returned malformed base64 image data");
+  }
+  return Buffer.from(canonicalPayload, "base64");
 }
 
 function toCodexImage(

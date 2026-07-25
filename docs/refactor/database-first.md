@@ -1138,9 +1138,8 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   the imported sources. Plugin target writebacks update matching `cron_jobs`
   rows instead of loading and replacing the whole cron store.
 - Gateway startup ignores legacy `notify: true` markers in the runtime
-  projection. Doctor translates them into explicit SQLite delivery when
-  `cron.webhook` is valid, removes inert markers when it is unset, and preserves
-  them with a warning when the configured webhook is invalid.
+  projection. Doctor reads the retired raw `cron.webhook` only while translating
+  those markers into explicit SQLite delivery, then removes the config key.
 - Outbound and session delivery queues now store queue status, entry kind,
   session key, channel, target, account id, retry count, last attempt/error,
   recovery state, and platform-send markers as typed columns in the shared
@@ -1411,7 +1410,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
-  snapshots databases with `VACUUM INTO`, omits live WAL/SHM sidecars, records
+  snapshots databases with online backup plus offline `VACUUM`, omits live WAL/SHM sidecars, records
   snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest. `openclaw backup
 create` validates the written archive by default; `--no-verify` is the
@@ -1853,8 +1852,9 @@ runtime contract:
   `patchSessionEntry`, `deleteSessionEntry`, and `listSessionEntries`.
 - Whole-store rewrite helpers, file writers, queue tests, alias pruning, and
   legacy-key deletion parameters are gone from runtime.
-- Deprecated root-package compatibility exports still adapt canonical
-  `sessions.json` paths onto the SQLite row APIs.
+- Deprecated root-package compatibility exports delegate to the doctor-only
+  `sessions.json` importer through 2026-10-12; Plugin SDK compatibility reads
+  continue to project canonical SQLite rows.
 - `sessions.json` parsing remains only in doctor migration/import code and
   doctor tests.
 - Runtime lifecycle fallback reads SQLite transcript headers, not JSONL first
@@ -1891,7 +1891,7 @@ The migration imports old JSONL files once, records counts/hashes in
 Backups remain one archive file:
 
 - Checkpoint every global and agent database.
-- Snapshot each DB with SQLite backup semantics or `VACUUM INTO`.
+- Snapshot each DB with SQLite online backup followed by offline `VACUUM`.
 - Archive compact DB snapshots, config, external credentials, and requested
   workspace exports.
 - Omit raw live `*.sqlite-wal` and `*.sqlite-shm` files.
@@ -1932,9 +1932,10 @@ doctor input or support/export output:
 Backups should be one archive file, but database capture should be
 SQLite-native:
 
-1. Stop long-running write activity or enter a short backup barrier.
-2. For every global and agent database, run a checkpoint.
-3. Snapshot databases with `VACUUM INTO` into a temporary backup directory.
+1. Keep write transactions bounded so online backup can make forward progress.
+2. Verify every live global and agent database before capture.
+3. Capture each database with SQLite online backup into a temporary backup
+   directory, then close the live connection and `VACUUM` the private copy.
    Plugin schemas that require owner-defined SQLite capabilities fail closed
    until the owner provides a safe snapshot contract.
 4. Archive the database snapshots, config file, credentials directory, selected
@@ -2035,8 +2036,6 @@ payload.
 6. Delete file-lock-shaped session mutation.
    - Done for runtime lock creation and runtime lock APIs.
    - The standalone legacy `.jsonl.lock` doctor cleanup lane is removed.
-   - `session.writeLock` is doctor-migrated legacy config, not a typed runtime
-     setting.
    - State integrity no longer has a separate orphan transcript-file pruning
      path; doctor migration imports/removes legacy JSONL sources in one place.
    - Gateway singleton coordination uses typed SQLite `state_leases` rows under
@@ -2059,8 +2058,8 @@ payload.
      lifetime and cancellation behavior are boring.
 
 8. Backup integration.
-   - Teach backup to snapshot global, agent, and plugin databases with
-     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset;
+   - Teach backup to snapshot global, agent, and plugin databases with online
+     backup followed by offline `VACUUM`. Done for discovered `*.sqlite` files under the state asset;
      plugin schemas requiring unavailable owner capabilities fail closed.
    - Add backup verification for canonical SQLite integrity and schema identity,
      plus generic file-shape validation for dedicated plugin snapshots. Done for
@@ -2241,7 +2240,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
   gateway startup, transient pending/bootstrap rows are dropped)
 - `nodes/pending.json` / `nodes/paired.json` (retired 2026.7: folded into paired device records at gateway startup)
 - `identity/device.json`
-- `identity/device-auth.json`
+- `identity/device-auth.json` (retired; Doctor-only import into `device_auth_tokens`)
 - `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
 - `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
 - `push/apns-registrations.json` (retired; Doctor-only import into `apns_registrations`)

@@ -5,6 +5,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
+  type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
@@ -15,11 +16,18 @@ type MattermostProbe = BaseProbeResult & {
   bot?: MattermostUser;
 };
 
+/** Optional test hooks so probe can exercise the real guarded-fetch owner. */
+type ProbeMattermostDeps = {
+  fetchImpl?: typeof fetch;
+  lookupFn?: LookupFn;
+};
+
 export async function probeMattermost(
   baseUrl: string,
   botToken: string,
   timeoutMs = 2500,
   allowPrivateNetwork = false,
+  deps?: ProbeMattermostDeps,
 ): Promise<MattermostProbe> {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
@@ -27,21 +35,19 @@ export async function probeMattermost(
   }
   const url = `${normalized}/api/v4/users/me`;
   const start = Date.now();
-  const resolvedTimeoutMs = timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 2500) : 0;
-  const controller = resolvedTimeoutMs > 0 ? new AbortController() : undefined;
-  let timer: NodeJS.Timeout | null = null;
-  if (controller) {
-    timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
-  }
+  // Guard-owned timeoutMs covers DNS/proxy preflight; init.signal alone does not.
+  const resolvedTimeoutMs = timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 2500) : undefined;
   try {
     const { response: res, release } = await fetchWithSsrFGuard({
       url,
       init: {
         headers: { Authorization: `Bearer ${botToken}` },
-        signal: controller?.signal,
       },
       auditContext: "mattermost-probe",
       policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
+      ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
+      ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+      ...(deps?.lookupFn ? { lookupFn: deps.lookupFn } : {}),
     });
     try {
       const elapsedMs = Date.now() - start;
@@ -72,9 +78,5 @@ export async function probeMattermost(
       error: message,
       elapsedMs: Date.now() - start,
     };
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
   }
 }

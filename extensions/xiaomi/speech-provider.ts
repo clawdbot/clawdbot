@@ -87,7 +87,7 @@ function normalizeXiaomiTtsProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.xiaomi.apiKey",
+      path: "tts.providers.xiaomi.apiKey",
     }),
     baseUrl: normalizeXiaomiTtsBaseUrl(
       trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.XIAOMI_BASE_URL),
@@ -118,7 +118,7 @@ function readXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsPro
     apiKey:
       normalizeResolvedSecretInputString({
         value: config.apiKey,
-        path: "messages.tts.providers.xiaomi.apiKey",
+        path: "tts.providers.xiaomi.apiKey",
       }) ?? normalized.apiKey,
     baseUrl: normalizeXiaomiTtsBaseUrl(trimToUndefined(config.baseUrl) ?? normalized.baseUrl),
     model: trimToUndefined(config.model) ?? trimToUndefined(config.modelId) ?? normalized.model,

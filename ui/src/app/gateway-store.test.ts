@@ -9,6 +9,18 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
 
+vi.mock("../build-info.ts", () => ({
+  CONTROL_UI_BUILD_INFO: {
+    version: "2026.7.19",
+    commit: null,
+    commitAt: null,
+    builtAt: null,
+    branch: null,
+    dirty: null,
+    buildId: "test",
+  },
+}));
+
 const HELLO: GatewayHelloOk = {
   type: "hello-ok",
   protocol: 1,
@@ -18,8 +30,11 @@ const HELLO: GatewayHelloOk = {
 class FakeGatewayClient {
   started = 0;
   stopped = 0;
+  readonly instanceId: string;
 
-  constructor(readonly opts: GatewayBrowserClientOptions) {}
+  constructor(readonly opts: GatewayBrowserClientOptions) {
+    this.instanceId = opts.instanceId ?? "";
+  }
 
   start() {
     this.started += 1;
@@ -62,7 +77,7 @@ function createStore(
   return { gateway, clients, current };
 }
 
-describe("createApplicationGateway reconnecting snapshot", () => {
+describe("createApplicationGateway connection phase", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
@@ -76,17 +91,29 @@ describe("createApplicationGateway reconnecting snapshot", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
-  it("keeps the first connect attempt on the login gate (not reconnecting)", () => {
+  it("follows stopped -> connecting -> connected -> reconnecting -> offline", () => {
     const { gateway, current } = createStore();
+
+    expect(gateway.snapshot.phase).toBe("stopped");
     gateway.start();
 
     expect(current().started).toBe(1);
-    expect(gateway.snapshot.connected).toBe(false);
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(current().opts.clientVersion).toBe("2026.7.19");
+    expect(gateway.snapshot.phase).toBe("connecting");
+
+    current().opts.onHello?.(HELLO);
+    expect(gateway.snapshot.phase).toBe("connected");
+
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+
+    current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
+    expect(gateway.snapshot.phase).toBe("offline");
   });
 
   it("stays on the gate when the first connect fails, even with auto-retry pending", () => {
@@ -95,21 +122,111 @@ describe("createApplicationGateway reconnecting snapshot", () => {
 
     current().opts.onClose?.({ code: 1006, reason: "refused", willRetry: true });
 
-    expect(gateway.snapshot.connected).toBe(false);
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(gateway.snapshot.phase).toBe("connecting");
     expect(gateway.snapshot.lastError).toContain("1006");
   });
 
-  it("marks transport drops after an established session as reconnecting", () => {
+  it("returns a never-connected terminal close to stopped", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
+
+    expect(gateway.snapshot.phase).toBe("stopped");
+    expect(gateway.snapshot.lastError).toContain("4008");
+  });
+
+  it.each(["stopped", "connecting", "connected", "reconnecting", "offline"] as const)(
+    "stop() resets %s to stopped",
+    (phase) => {
+      const { gateway, current } = createStore();
+      if (phase !== "stopped") {
+        gateway.start();
+      }
+      if (phase === "connected" || phase === "reconnecting" || phase === "offline") {
+        current().opts.onHello?.(HELLO);
+      }
+      if (phase === "reconnecting" || phase === "offline") {
+        current().opts.onClose?.({
+          code: 1006,
+          reason: "socket lost",
+          willRetry: phase === "reconnecting",
+        });
+      }
+      expect(gateway.snapshot.phase).toBe(phase);
+
+      gateway.stop();
+
+      expect(gateway.snapshot.phase).toBe("stopped");
+      expect(gateway.snapshot.client).toBeNull();
+      expect(gateway.snapshot.offlineStable).toBe(false);
+    },
+  );
+
+  it("publishes a stable offline state only after a sustained disconnect", async () => {
+    vi.useFakeTimers();
     const { gateway, current } = createStore();
     gateway.start();
     current().opts.onHello?.(HELLO);
-    expect(gateway.snapshot.connected).toBe(true);
 
     current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    expect(gateway.snapshot.offlineStable).toBe(false);
 
-    expect(gateway.snapshot.connected).toBe(false);
-    expect(gateway.snapshot.reconnecting).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(gateway.snapshot.offlineStable).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(gateway.snapshot.offlineStable).toBe(true);
+  });
+
+  it("does not publish offline before the gateway starts", async () => {
+    vi.useFakeTimers();
+    const { gateway } = createStore();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(gateway.snapshot.offlineStable).toBe(false);
+  });
+
+  it("keeps a sub-two-second connection blip quiet", async () => {
+    vi.useFakeTimers();
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    current().opts.onClose?.({ code: 1006, reason: "brief blip", willRetry: true });
+    await vi.advanceTimersByTimeAsync(1_999);
+    current().opts.onHello?.(HELLO);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(gateway.snapshot.offlineStable).toBe(false);
+  });
+
+  it("clears a stable offline state immediately on reconnect", async () => {
+    vi.useFakeTimers();
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(gateway.snapshot.offlineStable).toBe(true);
+
+    current().opts.onHello?.(HELLO);
+
+    expect(gateway.snapshot.offlineStable).toBe(false);
+  });
+
+  it("clears the pending offline timer when stopped", async () => {
+    vi.useFakeTimers();
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+
+    gateway.stop();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(gateway.snapshot.offlineStable).toBe(false);
   });
 
   it("drops back to the gate when the client gives up (credential rejection)", () => {
@@ -119,8 +236,7 @@ describe("createApplicationGateway reconnecting snapshot", () => {
 
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
 
-    expect(gateway.snapshot.connected).toBe(false);
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(gateway.snapshot.phase).toBe("offline");
   });
 
   it("keeps reconnecting across event-gap recovery with a fresh client", () => {
@@ -133,8 +249,7 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     expect(clients).toHaveLength(2);
     expect(clients[0]?.stopped).toBe(1);
     expect(current().started).toBe(1);
-    expect(gateway.snapshot.reconnecting).toBe(true);
-    expect(gateway.snapshot.connected).toBe(false);
+    expect(gateway.snapshot.phase).toBe("reconnecting");
   });
 
   it("resets the session lineage on stop so the next start uses the gate again", () => {
@@ -143,12 +258,12 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     current().opts.onHello?.(HELLO);
     gateway.stop();
 
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(gateway.snapshot.phase).toBe("stopped");
 
     gateway.start();
     current().opts.onClose?.({ code: 1006, reason: "refused", willRetry: true });
 
-    expect(gateway.snapshot.reconnecting).toBe(false);
+    expect(gateway.snapshot.phase).toBe("connecting");
   });
 
   it("ignores close callbacks from superseded clients", () => {
@@ -162,7 +277,93 @@ describe("createApplicationGateway reconnecting snapshot", () => {
     stale.opts.onClose?.({ code: 1006, reason: "stale", willRetry: false });
 
     // The superseded client cannot demote the fresh attempt's snapshot.
-    expect(gateway.snapshot.reconnecting).toBe(true);
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+  });
+
+  it("projects only this browser connection's optional presence identity", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const instanceId = current().opts.instanceId;
+    current().opts.onHello?.({
+      ...HELLO,
+      snapshot: {
+        presence: [
+          { instanceId: "someone-else", user: { id: "other", name: "Other" } },
+          {
+            instanceId,
+            user: { id: "profile-1", email: "ada@example.test", name: "Ada" },
+          },
+        ],
+      },
+    });
+
+    expect(gateway.snapshot.selfUser).toEqual({
+      id: "profile-1",
+      email: "ada@example.test",
+      name: "Ada",
+    });
+
+    gateway.updateSelfUser?.({ name: "Augusta Ada", avatarUrl: "/api/users/profile-1/avatar?v=2" });
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: "profile-1",
+      name: "Augusta Ada",
+      avatarUrl: "/api/users/profile-1/avatar?v=2",
+    });
+
+    current().opts.onEvent?.({
+      type: "event",
+      event: "presence",
+      payload: {
+        presence: [
+          {
+            instanceId,
+            user: {
+              id: "profile-1",
+              email: "ada@example.test",
+              name: "Ada Lovelace",
+              avatarUrl: "/api/users/profile-1/avatar?v=3",
+            },
+          },
+        ],
+      },
+      seq: 1,
+      stateVersion: { presence: 1, health: 1 },
+    });
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: "profile-1",
+      name: "Ada Lovelace",
+      avatarUrl: "/api/users/profile-1/avatar?v=3",
+    });
+
+    current().opts.onEvent?.({
+      type: "event",
+      event: "presence",
+      payload: { presence: [{ instanceId: "anonymous" }] },
+      seq: 2,
+      stateVersion: { presence: 2, health: 1 },
+    });
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: "profile-1",
+      name: "Ada Lovelace",
+      avatarUrl: "/api/users/profile-1/avatar?v=3",
+    });
+  });
+
+  it("clears identity while disconnected", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.({
+      ...HELLO,
+      snapshot: {
+        presence: [
+          { instanceId: current().opts.instanceId, user: { id: "profile-1", name: "Ada" } },
+        ],
+      },
+    });
+
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+
+    expect(gateway.snapshot.selfUser).toBeNull();
   });
 
   it("does not copy selected-remote settings into an ephemeral document Gateway", () => {

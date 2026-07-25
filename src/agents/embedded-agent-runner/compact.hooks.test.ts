@@ -703,10 +703,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({ config: {}, workspaceDir: "/tmp/workspace" }),
+    );
   });
 
   it("forwards gateway subagent binding opt-in during compaction bootstrap", async () => {
@@ -726,11 +725,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
+    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: "/tmp/workspace",
+        allowGatewaySubagentBinding: true,
+      }),
+    );
   });
 
   it("uses sandboxSessionKey only for compaction sandbox resolution", async () => {
@@ -742,11 +743,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(resolveSandboxContextMock).toHaveBeenCalledWith({
-      config: undefined,
-      sessionKey: "agent:main:telegram:default:direct:12345",
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(resolveSandboxContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        sessionKey: "agent:main:telegram:default:direct:12345",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
   });
 
   it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {
@@ -856,6 +859,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     await compactTesting.prepareCompactionSessionAgent({
       session: session as never,
+      llmRuntime: { streamSimple: vi.fn() } as never,
       providerStreamFn: vi.fn(),
       sessionId: "session-1",
       signal: new AbortController().signal,
@@ -921,6 +925,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         agent: { streamFn: vi.fn() },
         messages: [{ role: "user", content: "hello" }],
       } as never,
+      llmRuntime: { streamSimple: vi.fn() } as never,
       providerStreamFn: vi.fn(),
       sessionId: "session-1",
       signal: new AbortController().signal,
@@ -1407,7 +1412,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             },
           },
         },
-        agents: { defaults: { embeddedHarness: { runtime: "codex" } } },
       } as never,
     });
 
@@ -1506,14 +1510,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
           },
         },
-        agents: { defaults: { embeddedHarness: { runtime: "openclaw" } } },
       } as never,
     });
 
     expect(result.ok).toBe(true);
     expect(mockCallArg(resolveModelMock)).toBe("openai");
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
-    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toEqual({
+    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toMatchObject({
       authProfileMode: "api_key",
     });
   });
@@ -1538,10 +1541,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           },
         },
         agents: {
-          defaults: {
-            embeddedHarness: { runtime: "codex" },
-            compaction: { model: "openai/gpt-5.4-mini" },
-          },
+          defaults: { compaction: { model: "openai/gpt-5.4-mini" } },
         },
       } as never,
     });
@@ -2170,6 +2170,38 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("compacts an overflow transcript anchored by a compaction summary", async () => {
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      {
+        role: "compactionSummary",
+        summary: "The user asked for a long-running repository audit.",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "audit output" }],
+        isError: false,
+        timestamp: 3,
+      },
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({ trigger: "overflow" }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(sessionCompactImpl).toHaveBeenCalledOnce();
+  });
+
   it("skips compaction when the transcript only contains boilerplate replies and tool output", () => {
     const messages = [
       { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
@@ -2297,6 +2329,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: undefined,
       agentDir: "/tmp",
       effectiveWorkspace: "/tmp",
+      apiRegistry: {} as never,
     });
 
     expect(result).toBe(streamFn);

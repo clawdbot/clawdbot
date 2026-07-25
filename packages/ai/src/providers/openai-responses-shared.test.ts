@@ -1312,6 +1312,39 @@ describe("processResponsesStream", () => {
     });
   });
 
+  it("derives totalTokens from the split buckets when the payload omits it", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_no_total",
+            status: "completed",
+            usage: {
+              input_tokens: 30,
+              output_tokens: 12,
+              input_tokens_details: { cached_tokens: 5, cache_write_tokens: 3 },
+            },
+          },
+        },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    // Responses-compatible proxies routinely omit total_tokens; reporting 0 understates the turn.
+    expect(output.usage).toMatchObject({
+      input: 22,
+      output: 12,
+      cacheRead: 5,
+      cacheWrite: 3,
+      totalTokens: 42,
+    });
+  });
+
   it("reports content-filtered incomplete responses as errors", async () => {
     const output = createAssistantOutput();
 
@@ -3114,7 +3147,7 @@ describe("Azure OpenAI Responses content type support", () => {
           status: "completed",
           usage: {
             input_tokens: 10,
-            input_tokens_details: { cached_tokens: 0 },
+            input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
             output_tokens: 5,
             output_tokens_details: { reasoning_tokens: 0 },
             total_tokens: 15,
@@ -3219,7 +3252,7 @@ describe("Azure OpenAI Responses content type support", () => {
           status: "completed",
           usage: {
             input_tokens: 3,
-            input_tokens_details: { cached_tokens: 0 },
+            input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
             output_tokens: 3,
             output_tokens_details: { reasoning_tokens: 0 },
             total_tokens: 6,

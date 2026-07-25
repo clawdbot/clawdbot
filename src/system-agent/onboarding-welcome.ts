@@ -26,6 +26,7 @@ const READY_WELCOME_QUESTION: SystemAgentChatQuestion = {
     { label: "See all channels", reply: "channels" },
   ],
   isOther: true,
+  skipAction: "exit",
 };
 
 const SETUP_WELCOME_QUESTION: SystemAgentChatQuestion = {

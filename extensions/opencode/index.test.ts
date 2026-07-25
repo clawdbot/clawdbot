@@ -94,7 +94,9 @@ describe("opencode provider plugin", () => {
       "claude-sonnet-4-5",
       "claude-sonnet-4",
       "claude-haiku-4-5",
+      "gemini-3.6-flash",
       "gemini-3.5-flash",
+      "gemini-3.5-flash-lite",
       "gemini-3.1-pro",
       "gemini-3-flash",
       "gpt-5.6-sol",
@@ -208,6 +210,18 @@ describe("opencode provider plugin", () => {
     expect(requireMapEntry(models, "gemini-3.5-flash")).toMatchObject({
       api: "google-generative-ai",
       baseUrl: "https://opencode.ai/zen/v1",
+    });
+    expect(requireMapEntry(models, "gemini-3.6-flash")).toMatchObject({
+      name: "Gemini 3.6 Flash",
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+    });
+    expect(requireMapEntry(models, "gemini-3.5-flash-lite")).toMatchObject({
+      name: "Gemini 3.5 Flash-Lite",
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      cost: { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
     });
     expect(requireMapEntry(models, "minimax-m2.7")).toMatchObject({
       api: "openai-completions",
@@ -459,7 +473,7 @@ describe("opencode provider plugin", () => {
       throw new Error("expected OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(55);
+    expect(result.provider.models).toHaveLength(57);
     expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
     expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
     expect(result.provider.models.map((model) => model.id)).toContain("glm-5.2");
@@ -483,7 +497,7 @@ describe("opencode provider plugin", () => {
       throw new Error("expected registered OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(55);
+    expect(result.provider.models).toHaveLength(57);
     expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
     expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.6-sol");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");

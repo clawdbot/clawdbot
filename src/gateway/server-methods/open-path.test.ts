@@ -18,7 +18,7 @@ function fakeChild(result: Promise<unknown>) {
   const kill = vi.fn();
   const stderr = new PassThrough();
   return {
-    child: Object.assign(result, { kill, stderr, unref }),
+    child: Object.assign(result, { kill, stderr, nodeChildProcess: { unref } }),
     kill,
     stderr,
     unref,
@@ -134,5 +134,31 @@ describe("execOpenPath", () => {
     rejectChild(new Error("Command failed with exit code 3: xdg-open"));
 
     await expect(execution).rejects.toThrow("xdg-open: no method available");
+  });
+
+  it("keeps xdg-open stderr truncation surrogate-safe", async () => {
+    let rejectChild: (error: Error) => void = () => {};
+    const spawned = fakeChild(
+      new Promise((_, reject) => {
+        rejectChild = reject;
+      }),
+    );
+    spawnCommandMock.mockReturnValue(spawned.child);
+
+    const execution = execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux");
+    // 4095 ASCII chars plus one emoji: a plain slice for the final slot would
+    // keep only the emoji's high surrogate half.
+    spawned.stderr.write(`${"x".repeat(4095)}🤖`);
+    rejectChild(new Error("Command failed with exit code 3: xdg-open"));
+
+    const message = await execution.then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    const expectedMessage = `Command failed with exit code 3: xdg-open: ${"x".repeat(4_095)}`;
+    expect(message).toBe(expectedMessage);
+    expect(message).toHaveLength(expectedMessage.length);
   });
 });

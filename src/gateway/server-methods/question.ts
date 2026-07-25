@@ -1,5 +1,4 @@
 // Question gateway methods create, inspect, wait for, and resolve transient prompts.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -58,18 +57,18 @@ function managerError(error: unknown, respond: RespondFn): boolean {
 function normalizeQuestions(params: QuestionRequestParams): Question[] {
   const ids = new Set<string>();
   return params.questions.map((question) => {
-    if (ids.has(question.id)) {
-      throw new QuestionRequestValidationError(`duplicate question id '${question.id}'`);
+    if (ids.has(question.questionId)) {
+      throw new QuestionRequestValidationError(`duplicate question id '${question.questionId}'`);
     }
-    ids.add(question.id);
+    ids.add(question.questionId);
     if (question.options.length === 1) {
       throw new QuestionRequestValidationError(
-        `question '${question.id}' must have either no options or 2 to 4 options`,
+        `question '${question.questionId}' must have either no options or 2 to 4 options`,
       );
     }
     if (question.isSecret) {
       throw new QuestionRequestValidationError(
-        `question '${question.id}': secret questions are not supported yet`,
+        `question '${question.questionId}': secret questions are not supported yet`,
       );
     }
     const optionLabels = new Set<string>();
@@ -77,15 +76,12 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
       const normalizedLabel = option.label.trim().toLowerCase();
       if (optionLabels.has(normalizedLabel)) {
         throw new QuestionRequestValidationError(
-          `question '${question.id}' has duplicate option label '${option.label}'`,
+          `question '${question.questionId}' has duplicate option label '${option.label}'`,
         );
       }
       optionLabels.add(normalizedLabel);
     }
-    return {
-      ...question,
-      header: truncateUtf16Safe(question.header, 12),
-    };
+    return question;
   });
 }
 

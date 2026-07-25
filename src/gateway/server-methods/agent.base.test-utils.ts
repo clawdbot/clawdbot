@@ -11,6 +11,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -131,12 +132,16 @@ describe("gateway agent handler", () => {
       accountId: "work",
       threadId: "topic-42",
     });
-    expect(persistedEntry?.deliveryContext).toEqual({
-      channel: "whatsapp",
-      to: "user:+15551234567",
-      accountId: "work",
-      threadId: "topic-42",
-    });
+    expect(persistedEntry?.delivery).toEqual(
+      normalizeSessionDeliveryState({
+        context: {
+          channel: "whatsapp",
+          to: "user:+15551234567",
+          accountId: "work",
+          threadId: "topic-42",
+        },
+      }),
+    );
   });
 
   it.each(["webchat", "LAST"])(
@@ -543,6 +548,35 @@ describe("gateway agent handler", () => {
         persistFallback: expect.any(Function),
       }),
     );
+  });
+
+  it("attributes gateway agent prompts to the authenticated connection user", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "persist me",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "idem-attributed-user-turn-recorder",
+      },
+      {
+        reqId: "idem-attributed-user-turn-recorder",
+        client: {
+          ...requireValue(operatorWriteCliClient(), "expected operator client"),
+          authenticatedUserId: "alice@example.com",
+        },
+      },
+    );
+
+    const call = await waitForAgentCommandCall<
+      AgentCommandCall & { userTurnTranscriptRecorder?: { message?: unknown } }
+    >();
+    expect(call.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "persist me",
+      __openclaw: { senderId: "alice@example.com" },
+    });
   });
 
   it("dispatches with the session id reloaded during lifecycle admission", async () => {

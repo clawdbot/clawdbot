@@ -1,8 +1,10 @@
 // Qa Lab plugin module implements QA evidence summary behavior.
 import { z } from "zod";
+import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
+import { qaRuntimePairLaneSchema, type QaRuntimePairLane } from "./scenario-catalog.js";
 import {
   qaScorecardEvidenceModeSchema,
   readQaScorecardProfileOptions,
@@ -19,7 +21,6 @@ const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
 const nullableStringSchema = nonEmptyStringSchema.nullable();
 const qaEvidenceProfileIdSchema = nonEmptyStringSchema;
-const qaEvidenceIdSchema = z.strictObject({ id: nonEmptyStringSchema });
 
 const qaEvidenceProviderSchema = z.strictObject({
   id: nonEmptyStringSchema,
@@ -82,7 +83,8 @@ const qaEvidenceRefSchema = z.strictObject({
   path: nonEmptyStringSchema,
 });
 
-const qaEvidenceCoverageSchema = qaEvidenceIdSchema.extend({
+const qaEvidenceCoverageSchema = z.strictObject({
+  id: qaCoverageIdSchema,
   role: nonEmptyStringSchema,
 });
 
@@ -150,7 +152,7 @@ const qaEvidenceSummaryEntrySchema = z.strictObject({
   coverage: z.array(qaEvidenceCoverageSchema),
   posture: qaEvidencePostureSchema.optional(),
   refs: z.array(qaEvidenceRefSchema).optional(),
-  runtimeParityTier: nonEmptyStringSchema.optional(),
+  runtimePairLane: qaRuntimePairLaneSchema.optional(),
   execution: qaEvidenceExecutionSchema.optional(),
   result: qaEvidenceResultSchema,
 });
@@ -186,7 +188,7 @@ type QaEvidenceScenarioDefinitionInput = {
     primary?: readonly string[];
     secondary?: readonly string[];
   };
-  runtimeParityTier?: string;
+  runtimePairLane?: QaRuntimePairLane;
   docsRefs?: readonly string[];
   codeRefs?: readonly string[];
 };
@@ -509,7 +511,7 @@ export function buildQaSuiteEvidenceSummary(
       ...(scenario?.coverage?.primary ?? []),
       ...(scenario?.coverage?.secondary ?? []),
     ]);
-    const runtimeParityTier = scenario?.runtimeParityTier;
+    const runtimePairLane = scenario?.runtimePairLane;
     const testId = scenario?.id ?? `scenario-${index + 1}`;
     const refs = buildQaEvidenceRefs({
       docsRefs: scenario?.docsRefs,
@@ -530,7 +532,7 @@ export function buildQaSuiteEvidenceSummary(
         ),
       }),
       refs: refs.length > 0 ? refs : undefined,
-      runtimeParityTier,
+      runtimePairLane,
       execution: {
         runner,
         environment,

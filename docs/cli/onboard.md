@@ -46,6 +46,7 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
 openclaw onboard recommendations --json
 openclaw onboard recommendations acknowledge
+openclaw onboard recommendations acknowledge --retry "<failed-id>"
 openclaw onboard recommendations refresh
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
@@ -63,15 +64,30 @@ onboarding run rescans installed apps and creates a new offer.
 Fresh workspaces defer the recommendation choice to the bootstrap conversation.
 After that conversation handles the user's choices,
 `openclaw onboard recommendations acknowledge` marks the stored offer answered.
-The acknowledgement is idempotent.
+The acknowledgement is idempotent. If a chosen install fails, pass each failed
+opaque ID with `--retry <id...>`; successful and declined matches are consumed,
+while failed matches remain pending for a later onboarding run. Unknown IDs
+fail without changing the stored offer. After an interrupted ClawHub skill
+install, an existing target counts as successful only when
+`openclaw skills verify "@owner/slug"` succeeds for the same
+publisher-qualified recommendation ID and its JSON output reports
+`openclaw.resolution.source: "installed"`. Registry verification alone is not
+proof of a local install. Otherwise keep that ID pending with `--retry` and do
+not overwrite the existing skill.
 
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
-- `--flow quickstart`: opens the classic wizard with minimal prompts and
-  auto-generates a gateway token.
+- `--flow quickstart`: opens the classic wizard with minimal prompts, uses
+  token auth by default, and generates a token when no stored or explicit
+  credential applies. Explicit local Gateway flags such as
+  `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
+  override the corresponding stored or default quickstart values; omitted
+  options keep their current values.
 - `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
   for port, bind, and auth.
-- `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`), previews the plan, then applies after confirmation. Import only runs against a fresh OpenClaw setup - reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
+- `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
+- `--remote-url` and `--remote-token`: prefill the classic remote Gateway step and override stored remote values for this run. Changing the URL does not reuse stored credentials unless you also pass a token. The token stays masked in prompts and follows the wizard's existing plaintext or SecretRef storage choice.
+- `--tailscale-reset-on-exit` and `--no-tailscale-reset-on-exit`: explicitly control whether Tailscale Serve or Funnel configuration is reset when the Gateway exits. Omitting both preserves the current setting during non-interactive reruns.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
   assistant. It uses the same live-inference gate as `openclaw setup` and
   accepts only `--workspace`, `--accept-risk`,
@@ -106,7 +122,10 @@ unchanged until OpenClaw starts.
 In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
-workspace through their normal setup flow.
+workspace through their normal setup flow. On a rerun with an existing agent
+roster, onboarding preserves the configured fleet workspace: the classic
+wizard shows both paths and requires explicit confirmation before moving it,
+while non-interactive setup warns and keeps the current value.
 
 After inference passes, onboarding checks for memories from supported local AI
 tools: Claude Code auto-memory, Codex consolidated memories, and Hermes memory
@@ -179,7 +198,7 @@ openclaw onboard --reset --reset-scope full
 
 ## Locale
 
-Interactive onboarding uses the CLI wizard locale for fixed setup copy. Resolve order:
+Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses the first nonblank value in this order:
 
 1. `OPENCLAW_LOCALE`
 2. `LC_ALL`
@@ -191,6 +210,7 @@ Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use u
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
+OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ```
 
 ## Non-interactive setup

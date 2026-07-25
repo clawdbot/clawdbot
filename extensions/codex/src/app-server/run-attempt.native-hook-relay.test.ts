@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
@@ -204,7 +205,11 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.messageChannel = "discord";
+    params.agentAccountId = "operations";
     params.currentChannelId = "channel:target";
+    params.memberRoleIds = ["maintainer-role"];
+    params.senderId = "maintainer-user";
+    params.senderIsOwner = false;
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: {
@@ -251,6 +256,13 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
       channelId: "target",
+      requester: {
+        channel: "discord",
+        accountId: "operations",
+        senderId: "maintainer-user",
+        senderIsOwner: false,
+        roleIds: ["maintainer-role"],
+      },
     });
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -877,7 +889,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     const result = await run;
 
-    expect(result.aborted).toBe(true);
+    expect(readAttemptTerminal(result).aborted).toBe(true);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     await expect(
       invokeNativeHookRelay({

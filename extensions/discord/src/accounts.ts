@@ -8,8 +8,6 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   mapAllowFromEntries,
   normalizeChannelDmPolicy,
-  resolveChannelDmAllowFrom,
-  resolveChannelDmPolicy,
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
@@ -68,11 +66,7 @@ export function resolveDiscordAccountAllowFrom(params: {
   );
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
-
-  const allowFrom = resolveChannelDmAllowFrom({
-    account: accountConfig as Record<string, unknown> | undefined,
-    parent: rootConfig as Record<string, unknown> | undefined,
-  });
+  const allowFrom = accountConfig?.allowFrom ?? rootConfig?.allowFrom;
   return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
 }
 
@@ -85,12 +79,7 @@ export function resolveDiscordAccountDmPolicy(params: {
   );
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
-  const policy = resolveChannelDmPolicy({
-    account: accountConfig as Record<string, unknown> | undefined,
-    parent: rootConfig as Record<string, unknown> | undefined,
-    defaultPolicy: "pairing",
-  });
-  return normalizeChannelDmPolicy(policy);
+  return normalizeChannelDmPolicy(accountConfig?.dmPolicy ?? rootConfig?.dmPolicy ?? "pairing");
 }
 
 export function createDiscordActionGate(params: {

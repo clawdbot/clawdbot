@@ -19,8 +19,11 @@ import {
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   deleteSqliteTranscriptEventsInTransaction,
+  ensureTranscriptGenerationInTransaction,
   ensureTranscriptSessionRoot,
+  readTranscriptGenerationInTransaction,
   readNextTranscriptSeq,
+  rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -49,6 +52,7 @@ export function appendTranscriptEventInTransaction(
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(event) ?? Date.now();
   ensureTranscriptSessionRoot(database, scope, createdAt);
+  ensureTranscriptGenerationInTransaction(database, scope.sessionId);
   const identity = readTranscriptEventIdentity(event);
   if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
     return false;
@@ -310,14 +314,21 @@ export function replaceSqliteTranscriptEventsInTransaction(
   resolved: ResolvedTranscriptScope,
   events: readonly TranscriptEvent[],
 ): void {
+  const previousGeneration = readTranscriptGenerationInTransaction(database, resolved.sessionId);
   const deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
   if (events.length === 0) {
-    if (deleted) {
+    if (deleted || previousGeneration) {
+      rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
       touchTranscriptMutationInTransaction(database, resolved.sessionId);
     }
     return;
   }
   ensureTranscriptSessionRoot(database, resolved, readEventTimestamp(events[0]) ?? Date.now());
+  if (deleted || previousGeneration) {
+    rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+  } else {
+    ensureTranscriptGenerationInTransaction(database, resolved.sessionId);
+  }
   let seq = 0;
   const seenEventIds = new Set<string>();
   const seenMessageIdempotencyKeys = new Set<string>();

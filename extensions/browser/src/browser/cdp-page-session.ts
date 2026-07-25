@@ -34,6 +34,10 @@ function readCommittedFrameUrl(
     return unreachableUrl;
   }
   const url = typeof frame?.url === "string" ? frame.url.trim() : "";
+  // Chrome reports ":" for the initial empty document before navigation commits.
+  if (url === ":") {
+    return undefined;
+  }
   const fragment = typeof frame?.urlFragment === "string" ? frame.urlFragment.trim() : "";
   return url ? `${url}${fragment}` : undefined;
 }

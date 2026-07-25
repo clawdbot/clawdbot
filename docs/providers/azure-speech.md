@@ -36,18 +36,16 @@ output format through the `X-Microsoft-OutputFormat` header.
     ```
 
   </Step>
-  <Step title="Select Azure Speech in messages.tts">
+  <Step title="Select Azure Speech in tts">
     ```json5
     {
-      messages: {
-        tts: {
-          auto: "always",
-          provider: "azure-speech",
-          providers: {
-            "azure-speech": {
-              voice: "en-US-JennyNeural",
-              lang: "en-US",
-            },
+      tts: {
+        auto: "always",
+        provider: "azure-speech",
+        providers: {
+          "azure-speech": {
+            voice: "en-US-JennyNeural",
+            lang: "en-US",
           },
         },
       },
@@ -63,7 +61,7 @@ output format through the `X-Microsoft-OutputFormat` header.
 
 ## Configuration options
 
-All options live under `messages.tts.providers["azure-speech"]`.
+All options live under `tts.providers["azure-speech"]`.
 
 | Option                  | Description                                                                                           |
 | ----------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -75,7 +73,7 @@ All options live under `messages.tts.providers["azure-speech"]`.
 | `lang`                  | SSML language code (default `en-US`).                                                                 |
 | `outputFormat`          | Audio-file output format (default `audio-24khz-48kbitrate-mono-mp3`).                                 |
 | `voiceNoteOutputFormat` | Voice-note output format (default `ogg-24khz-16bit-mono-opus`).                                       |
-| `timeoutMs`             | Request timeout override in milliseconds. Falls back to the global `messages.tts.timeoutMs`.          |
+| `timeoutMs`             | Request timeout override in milliseconds. Falls back to the global `tts.timeoutMs`.                   |
 
 The provider is considered configured once `apiKey` is set plus one of
 `region`, `endpoint`, or `baseUrl`. Env vars are only checked as a fallback
@@ -116,10 +114,10 @@ or explicit config for endpoint routing.
 
 <CardGroup cols={2}>
   <Card title="Text-to-speech" href="/tools/tts" icon="waveform-lines">
-    TTS overview, providers, and `messages.tts` config.
+    TTS overview, providers, and `tts` config.
   </Card>
   <Card title="Configuration" href="/gateway/configuration" icon="gear">
-    Full config reference including `messages.tts` settings.
+    Full config reference including `tts` settings.
   </Card>
   <Card title="Providers" href="/providers" icon="grid">
     All bundled OpenClaw providers.

@@ -1,5 +1,6 @@
 // Qwen plugin entrypoint registers its OpenClaw integration.
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -244,18 +245,21 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       run: async (ctx) => {
-        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-        if (!apiKey) {
+        const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
+        if (!auth.apiKey) {
           return null;
         }
         const baseUrl = resolveConfiguredQwenBaseUrl(ctx.config) ?? QWEN_BASE_URL;
         return {
-          provider: {
-            ...buildQwenProvider({ baseUrl }),
-            apiKey,
-          },
+          provider: await buildOpenAICompatibleLiveModelProviderConfig({
+            providerId: PROVIDER_ID,
+            providerConfig: buildQwenProvider({ baseUrl }),
+            apiKey: auth.apiKey,
+            discoveryApiKey: auth.discoveryApiKey,
+          }),
         };
       },
+      staticRun: async () => ({ provider: buildQwenProvider() }),
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyQwenNativeStreamingUsageCompat(providerConfig),
@@ -280,16 +284,18 @@ export default defineSingleProviderPluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(QWEN_TOKEN_PLAN_PROVIDER_ID).apiKey;
-          if (!apiKey) {
+          const auth = ctx.resolveProviderApiKey(QWEN_TOKEN_PLAN_PROVIDER_ID);
+          if (!auth.apiKey) {
             return null;
           }
           const baseUrl = resolveConfiguredQwenTokenPlanBaseUrl(ctx.config);
           return {
-            provider: {
-              ...buildQwenTokenPlanProvider({ baseUrl }),
-              apiKey,
-            },
+            provider: await buildOpenAICompatibleLiveModelProviderConfig({
+              providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
+              providerConfig: buildQwenTokenPlanProvider({ baseUrl }),
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
           };
         },
       },

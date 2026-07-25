@@ -34,6 +34,9 @@
     }
   },
   "modelCatalog": {
+    "discovery": {
+      "xai": "refreshable"
+    },
     "suppressions": [
       {
         "provider": "xai",
@@ -215,10 +218,6 @@
           "rootPath": "plugins.entries.xai.config",
           "overlayPath": "webSearch",
           "required": ["apiKey"]
-        },
-        {
-          "rootPath": "tools.web.search.grok",
-          "required": ["apiKey"]
         }
       ]
     },
@@ -234,16 +233,9 @@
           "rootPath": "plugins.entries.xai.config",
           "overlayPath": "webSearch",
           "required": ["apiKey"]
-        },
-        {
-          "rootPath": "tools.web.search.grok",
-          "required": ["apiKey"]
         }
       ]
     }
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

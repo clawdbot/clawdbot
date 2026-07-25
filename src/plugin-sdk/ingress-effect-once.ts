@@ -1,4 +1,4 @@
-import { createClaimableDedupe } from "./persistent-dedupe.js";
+import { createClaimableDedupe, runClaimableDedupeClaimLoop } from "./persistent-dedupe.js";
 
 const INGRESS_EFFECT_ONCE_NAMESPACE_PREFIX = "ingress-effect-once";
 
@@ -56,50 +56,45 @@ export function createIngressEffectOnce(params: {
       const key = JSON.stringify([effectParams.effect, effectParams.eventId]);
       const namespace = params.namespacePrefix;
 
-      while (true) {
-        // The persistent-dedupe namespace path hashes this raw queue/account scope.
-        const claim = await dedupe.claim(key, { namespace });
-        if (claim.kind === "duplicate") {
-          return { kind: "replayed" };
-        }
-        if (claim.kind === "inflight") {
-          try {
-            await claim.pending;
-            return { kind: "replayed" };
-          } catch (error) {
-            // Only an effect failure is safe to retry; commit failures may follow a visible effect.
-            if (error instanceof IngressEffectRunFailedError) {
-              continue;
-            }
-            throw error;
-          }
-        }
-
-        let value: T;
-        try {
-          value = await effectParams.run();
-        } catch (error) {
-          dedupe.release(key, { namespace, error: new IngressEffectRunFailedError() });
-          throw error;
-        }
-        try {
-          await dedupe.commit(key, { namespace });
-        } catch (error) {
-          try {
-            // forget clears the failed commit's memory marker before its durable delete attempt.
-            await dedupe.forget(key, {
-              namespace,
-              onDiskError: (cleanupError) => {
-                throw cleanupError;
-              },
-            });
-          } catch {
-            // Keep the original commit error; the configured hook already reported it.
+      // The persistent-dedupe namespace path hashes this raw queue/account scope.
+      const claim = await runClaimableDedupeClaimLoop(
+        () => dedupe.claim(key, { namespace }),
+        // Only an effect failure is safe to retry; commit failures may follow a visible effect.
+        (error) => {
+          if (error instanceof IngressEffectRunFailedError) {
+            return true;
           }
           throw error;
-        }
-        return { kind: "executed", value };
+        },
+      );
+      if (claim.kind === "duplicate") {
+        return { kind: "replayed" };
       }
+
+      let value: T;
+      try {
+        value = await effectParams.run();
+      } catch (error) {
+        dedupe.release(key, { namespace, error: new IngressEffectRunFailedError() });
+        throw error;
+      }
+      try {
+        await dedupe.commit(key, { namespace });
+      } catch (error) {
+        try {
+          // forget clears the failed commit's memory marker before its durable delete attempt.
+          await dedupe.forget(key, {
+            namespace,
+            onDiskError: (cleanupError) => {
+              throw cleanupError;
+            },
+          });
+        } catch {
+          // Keep the original commit error; the configured hook already reported it.
+        }
+        throw error;
+      }
+      return { kind: "executed", value };
     },
   };
 }

@@ -614,12 +614,6 @@ export function isCommandLaneTaskMarkerCurrent(marker: CommandLaneTaskMarker | u
   return state?.generation === marker.generation && state.activeTaskIds.has(marker.taskId);
 }
 
-export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {
-  return Array.from(getQueueState().lanes.values(), createCommandLaneSnapshot).toSorted((a, b) =>
-    a.lane.localeCompare(b.lane),
-  );
-}
-
 export function getTotalQueueSize() {
   let total = 0;
   for (const s of getQueueState().lanes.values()) {

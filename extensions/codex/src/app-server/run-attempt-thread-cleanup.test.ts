@@ -7,9 +7,11 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt } from "./run-attempt.js";
 import {
+  readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
@@ -58,12 +60,16 @@ function multiplexedClientFactory(
 
 let tempDir: string;
 
-function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
-  registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+function createParams(
+  sessionFile: string,
+  workspaceDir: string,
+  sessionKey = "agent:main:session-1",
+): EmbeddedRunAttemptParams {
+  registerCodexTestSessionIdentity(sessionFile, "session-1", sessionKey);
   return {
     prompt: "hello",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey,
     sessionFile,
     workspaceDir,
     runId: "run-1",
@@ -138,6 +144,7 @@ function getMockRuntimeIdentity() {
 
 function mockClientRuntimeMethods() {
   return {
+    getInstanceId: () => "test-client-1",
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
   };
@@ -209,7 +216,7 @@ describe("Codex app-server main thread cleanup", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(request).toHaveBeenCalledWith(
       "thread/unsubscribe",
       { threadId: "thread-1" },
@@ -222,9 +229,62 @@ describe("Codex app-server main thread cleanup", () => {
     ]);
   });
 
-  it("unsubscribes the main Codex thread when turn start fails", async () => {
+  it("keeps an incognito thread subscribed for live in-process reuse", async () => {
+    const sessionFile = path.join(tempDir, "incognito-session.jsonl");
+    const workspaceDir = path.join(tempDir, "incognito-workspace");
+    const sessionKey = "agent:main:dashboard:incognito-live-thread";
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
+      return {
+        ...mockClientRuntimeMethods(),
+        request,
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      } as never;
+    });
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
+      bindingStore: testCodexAppServerBindingStore,
+      clientFactory,
+    });
+    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
+      interval: 1,
+      timeout: 5_000,
+    });
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+
+    const result = await run;
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
+    expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
+    expect(requests[0]?.params).toEqual(expect.objectContaining({ ephemeral: true }));
+  });
+
+  it("unsubscribes an incognito Codex thread when turn start fails", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    const sessionKey = "agent:main:dashboard:incognito-failed-turn";
     const requests: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       requests.push({ method, params });
@@ -248,7 +308,7 @@ describe("Codex app-server main thread cleanup", () => {
     });
 
     await expect(
-      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
         bindingStore: testCodexAppServerBindingStore,
         clientFactory,
       }),
@@ -263,5 +323,6 @@ describe("Codex app-server main thread cleanup", () => {
       { threadId: "thread-1" },
       { timeoutMs: 5_000 },
     );
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 });

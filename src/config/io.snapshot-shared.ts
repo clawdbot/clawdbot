@@ -5,6 +5,7 @@ import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./ty
 
 export function createConfigFileSnapshot(params: {
   path: string;
+  includedPaths?: readonly string[];
   exists: boolean;
   raw: string | null;
   parsed: unknown;
@@ -21,6 +22,7 @@ export function createConfigFileSnapshot(params: {
   const runtimeConfig = asRuntimeConfig(params.runtimeConfig);
   return {
     path: params.path,
+    includedPaths: [...(params.includedPaths ?? [])],
     exists: params.exists,
     raw: params.raw,
     parsed: params.parsed,

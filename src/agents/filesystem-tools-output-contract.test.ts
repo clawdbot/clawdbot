@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
-import { createEditTool, createReadTool } from "./sessions/index.js";
+import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
 import { DEFAULT_MAX_BYTES } from "./sessions/tools/truncate.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 
@@ -78,6 +78,38 @@ describe("filesystem tool output contracts", () => {
     expect(noOp.details).toEqual({ changed: false });
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
       "{ changed: false } | { changed: true; diff: string; patch: string; firstChangedLine?: number }",
+    );
+  });
+
+  it("validates write created, overwrite, unknown-state, and no-op results", async () => {
+    const tool = createWriteTool(tmpDir) as unknown as AnyAgentTool;
+    const created = await tool.execute("write-created", { path: "write.txt", content: "one\n" });
+    const overwritten = await tool.execute("write-overwrite", {
+      path: "write.txt",
+      content: "two\n",
+    });
+    const noOp = await tool.execute("write-no-op", { path: "write.txt", content: "two\n" });
+    await fs.writeFile(path.join(tmpDir, "large.txt"), "x".repeat(1024 * 1024 + 1), "utf8");
+    const unknownOverwrite = await tool.execute("write-unknown-overwrite", {
+      path: "large.txt",
+      content: "replacement\n",
+    });
+    const boundedCreate = await tool.execute("write-bounded-create", {
+      path: "large-created.txt",
+      content: "x".repeat(1024 * 1024 + 1),
+    });
+
+    for (const result of [created, overwritten, unknownOverwrite, boundedCreate, noOp]) {
+      expectContract(tool, result.details);
+    }
+    expectContract(tool, { changed: true });
+    expect(created.details).toMatchObject({ changed: true, created: true });
+    expect(overwritten.details).toMatchObject({ changed: true, created: false });
+    expect(unknownOverwrite.details).toEqual({ changed: true, created: false });
+    expect(boundedCreate.details).toEqual({ changed: true, created: true });
+    expect(noOp.details).toEqual({ changed: false });
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      "{ changed: false } | { changed: true; created: true; diff: string; patch: string; firstChangedLine?: number } | { changed: true; created: false; diff: string; patch: string; firstChangedLine?: number } | { changed: true; created?: boolean }",
     );
   });
 

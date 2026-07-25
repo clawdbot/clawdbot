@@ -152,12 +152,14 @@ function resolveConfiguredFallbackApi(
 
 function resolveDynamicRuntimeModelContext(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   provider: string;
   modelId: string;
 }): { modelApi?: string; runtimeModel?: ProviderRuntimeModel } {
   const runtimeModel = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
   }).model as ProviderRuntimeModel | undefined;
   if (!runtimeModel) {
@@ -235,6 +237,7 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   if (!bundledStaticModel) {
     return resolveDynamicRuntimeModelContext({
       cfg: params.cfg,
+      agentId,
       agentDir: params.agentDir,
       workspaceDir,
       provider,

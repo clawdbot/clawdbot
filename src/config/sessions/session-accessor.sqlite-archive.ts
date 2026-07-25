@@ -6,7 +6,7 @@ import {
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "./archive-compression.js";
-import { formatSessionArchiveTimestamp } from "./artifacts.js";
+import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 
 export type SqliteSessionStateDeletePlan = {
@@ -24,7 +24,7 @@ export type MaterializedSqliteSessionStateDeletePlan = SqliteSessionStateDeleteP
 
 function resolveSqliteTranscriptArchivePath(params: {
   archiveDirectory: string;
-  reason: "deleted" | "reset";
+  reason: SessionArchiveReason;
   sessionId: string;
   nowMs?: number;
 }): string {
@@ -42,7 +42,7 @@ function resolveSqliteTranscriptArchivePath(params: {
 function findMatchingSqliteTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
-  reason: "deleted" | "reset";
+  reason: SessionArchiveReason;
   sessionId: string;
 }): string | null {
   let entries: string[];
@@ -76,10 +76,11 @@ function findMatchingSqliteTranscriptArchive(params: {
   return null;
 }
 
-function writeSqliteTranscriptArchive(params: {
+/** Writes or reuses a transcript archive and returns its durable path. */
+export function writeSqliteTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
-  reason: "deleted" | "reset";
+  reason: SessionArchiveReason;
   sessionId: string;
 }): string {
   fs.mkdirSync(params.archiveDirectory, { recursive: true });
@@ -105,6 +106,13 @@ function writeSqliteTranscriptArchive(params: {
       writeDurableFileExclusive(tempPath, encoded.bytes);
       fs.renameSync(tempPath, archivePath);
       fsyncDirectory(params.archiveDirectory);
+      // Full readback is bounded by the same single-generation content the
+      // delete plan already buffers (Node string limits cap both); a partial
+      // or corrupt archive must fail here, before any rows are reclaimed.
+      if (readSessionArchiveContentSync(archivePath) !== params.content) {
+        fs.rmSync(archivePath, { force: true });
+        throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
+      }
       return archivePath;
     } catch (error) {
       fs.rmSync(tempPath, { force: true });
@@ -149,6 +157,10 @@ export function materializeSqliteSessionStateDeletePlans(
   plans: readonly SqliteSessionStateDeletePlan[],
 ): MaterializedSqliteSessionStateDeletePlan[] {
   return dedupeSqliteSessionStateDeletePlans(plans).map((plan) => {
+    // Empty content means no transcript to preserve (e.g. trajectory-only
+    // sessions). Writing a verified-but-empty archive would fake extraction;
+    // trajectory runtime events are diagnostic telemetry and are reclaimed
+    // without an archive artifact.
     const archivedTranscript =
       plan.archiveTranscript && plan.content.length > 0
         ? {

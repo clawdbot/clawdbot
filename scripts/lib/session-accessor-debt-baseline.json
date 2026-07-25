@@ -6,30 +6,18 @@
     "src/agents/subagent-announce.test-support.ts": 2,
     "src/agents/tools/transcripts-tool.ts": 2,
     "src/auto-reply/reply/commands-session-store.ts": 2,
-    "src/commands/doctor-heartbeat-session-target.ts": 2,
-    "src/commands/doctor-state-integrity.ts": 2,
-    "src/commands/doctor/shared/codex-route-session-repair.ts": 3,
     "src/config/sessions/session-accessor.entry.ts": 2,
-    "src/config/sessions/store-load.ts": 3,
-    "src/config/sessions/store.ts": 10,
     "src/config/sessions/transcript.ts": 2
   },
   "sessionAccessorWrite": {
     "src/agents/subagent-spawn.test-helpers.ts": 1,
-    "src/commands/doctor-heartbeat-main-session-repair.ts": 2,
-    "src/commands/doctor-session-snapshots.ts": 2,
-    "src/commands/doctor-session-state-providers.ts": 2,
-    "src/commands/doctor-state-integrity.ts": 2,
-    "src/commands/doctor/shared/codex-route-session-repair.ts": 2,
-    "src/gateway/test-helpers.mocks.ts": 1,
-    "src/infra/state-migrations.session-store.ts": 2,
     "src/plugins/registry-runtime.ts": 1
   },
   "sessionCompactManualTrim": {},
   "sessionLifecycleCleanup": {
     "src/config/sessions/session-accessor.sqlite-projection.ts": 2,
     "src/config/sessions/store-maintenance-operations.ts": 2,
-    "src/config/sessions/store.ts": 2
+    "src/infra/state-migrations.legacy-session-store.ts": 2
   },
   "transcriptWriter": {
     "src/agents/embedded-agent-runner/compaction-hooks.ts": 2,

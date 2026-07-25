@@ -6,7 +6,10 @@ import {
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../context-engine/host-compat.js";
-import { registerContextEngine, resolveContextEngine } from "../../context-engine/registry.js";
+import {
+  registerContextEngineForOwner,
+  resolveContextEngine,
+} from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type {
   ContextEngine,
@@ -16,7 +19,7 @@ import type {
 import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
@@ -25,6 +28,15 @@ import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
 } from "./context-engine-lifecycle.js";
+
+function registerTestContextEngine(
+  id: string,
+  factory: Parameters<typeof registerContextEngineForOwner>[1],
+) {
+  return registerContextEngineForOwner(id, factory, `test:${id}`, {
+    allowSameOwnerRefresh: true,
+  });
+}
 
 function textMessage(role: "user" | "assistant", text: string, timestamp: number): AgentMessage {
   return {
@@ -80,7 +92,7 @@ describe("harness context engine lifecycle", () => {
       `sandboxed=${sandboxed}`,
       "",
     ]);
-    registerMemoryPromptSection(() => ["## Memory Recall", ""]);
+    registerTestMemoryPromptBuilder(() => ["## Memory Recall", ""]);
     registerMemoryPromptPreparation("memory-wiki", prepare);
     const availableTools = new Set(["wiki_search"]);
     const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
@@ -240,7 +252,7 @@ describe("harness context engine lifecycle", () => {
         return { ok: true, compacted: false };
       }),
     });
-    registerContextEngine(engineId, () => engine);
+    registerTestContextEngine(engineId, () => engine);
     const configuredEngine = await resolveContextEngine({
       plugins: { slots: { contextEngine: engineId } },
     });

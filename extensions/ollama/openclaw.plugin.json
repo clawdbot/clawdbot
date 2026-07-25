@@ -156,6 +156,7 @@
       }
     },
     "discovery": {
+      "ollama": "refreshable",
       "ollama-cloud": "refreshable"
     }
   },

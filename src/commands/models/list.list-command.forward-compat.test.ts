@@ -301,10 +301,10 @@ function installModelsListCommandForwardCompatMocks() {
     resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   }));
 
-  vi.doMock("../../agents/model-catalog.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("../../agents/model-catalog.js")>()),
-    loadModelCatalog: mocks.loadModelCatalog,
-    loadModelCatalogSnapshot: async (...args: unknown[]) => {
+  vi.doMock("../../agents/prepared-model-catalog.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../agents/prepared-model-catalog.js")>()),
+    loadPreparedModelCatalog: mocks.loadModelCatalog,
+    loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
       const entries = await mocks.loadModelCatalog(...args);
       return { entries, routeVariants: entries };
     },
@@ -805,6 +805,13 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ json: true, local: true }, runtime as never);
 
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          agentId: "main",
+          agentDir: "/tmp/openclaw-agent",
+        }),
+      );
       expect(mocks.printModelTable).toHaveBeenCalled();
       expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4"]);
     });

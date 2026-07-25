@@ -196,7 +196,10 @@ describe("AppSidebar transient menus", () => {
   // through the top-layer surface host instead of plain fixed divs.
   it("hosts the session sort menu in the top-layer menu surface", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:task"]),
+    );
 
     const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     if (!trigger) {
@@ -212,7 +215,10 @@ describe("AppSidebar transient menus", () => {
 
   it("ignores a stale sort-menu hide after opening its replacement", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:task"]),
+    );
     const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     if (!trigger) {
       throw new Error("expected sort menu trigger");
@@ -252,7 +258,7 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     const settingsItem = firstMenu?.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="command:settings"]',
+      'wa-dropdown-item[value="command:agent-settings"]',
     );
     expect(firstMenu).not.toBeNull();
     expect(settingsItem).not.toBeNull();
@@ -337,7 +343,22 @@ describe("AppSidebar custom group reordering", () => {
   async function mountWithGroups(groups: string[]) {
     const client = {} as GatewayBrowserClient;
     const gateway = createGateway(client);
-    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:thread",
+      ...groups.map((_, index) => `agent:main:group-${index}`),
+    ]);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected grouped session fixtures");
+    }
+    for (const [index, group] of groups.entries()) {
+      const row = result.sessions.find((entry) => entry.key === `agent:main:group-${index}`);
+      if (!row) {
+        throw new Error(`expected session fixture for ${group}`);
+      }
+      row.category = group;
+    }
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     sidebar.connected = true;
     harness.publish({ groups });
@@ -373,7 +394,9 @@ describe("AppSidebar custom group reordering", () => {
     }
     dispatchDragEvent(alphaSection, "drop", dataTransfer);
 
-    expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
+    await waitForFast(() =>
+      expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]),
+    );
   });
 });
 describe("AppSidebar catalog session rows", () => {
@@ -421,7 +444,7 @@ describe("AppSidebar catalog session rows", () => {
     return { sidebar, request };
   }
 
-  it("renders local and paired-node rows under persistent host headings", async () => {
+  it("renders local rows directly and keeps paired-node rows under their host heading", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -469,9 +492,8 @@ describe("AppSidebar catalog session rows", () => {
       const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
       const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
       const node = section?.querySelector('[data-session-catalog-host="node:devbox"]');
-      expect(local?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
-        "Local Codex",
-      );
+      expect(section?.querySelector(".sidebar-session-group-count")?.textContent?.trim()).toBe("2");
+      expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
       expect(local?.textContent).toContain("Local session");
       expect(local?.textContent).not.toContain("Node session");
       expect(node?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
@@ -598,7 +620,7 @@ describe("AppSidebar catalog session rows", () => {
           {
             threadId: "thread-1",
             name: "Release checklist",
-            openClawSessionKey: "agent:main:adopted-codex",
+            sessionKey: "agent:main:adopted-codex",
           },
         ]),
         ["agent:main:main", "agent:main:adopted-codex"],

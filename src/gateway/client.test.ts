@@ -478,7 +478,6 @@ describe("GatewayClient security checks", () => {
   it("proxies ws:// loopback addresses when active proxy loopbackMode is proxy", async () => {
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const handle = await startProxy({
-      enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "proxy",
     });
@@ -503,7 +502,6 @@ describe("GatewayClient security checks", () => {
   it("blocks ws:// loopback addresses when active proxy loopbackMode is block", async () => {
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const handle = await startProxy({
-      enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "block",
     });

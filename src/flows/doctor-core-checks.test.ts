@@ -1,15 +1,15 @@
 // Doctor core checks tests cover core doctor checks and repair hints.
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   CORE_HEALTH_CHECKS,
   createCoreHealthChecks,
-  resetCoreHealthChecksForTest,
   type CoreHealthCheckDeps,
 } from "./doctor-core-checks.js";
 import { clearHealthChecksForTest } from "./health-check-registry.js";
@@ -26,16 +26,32 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   extraGatewayServiceToRepairEffects: vi.fn((): readonly HealthRepairEffect[] => []),
+  callGateway: vi.fn(),
+  collectClawStateHealthFindings: vi.fn(
+    async (_options?: {
+      cronGateway?: {
+        list: (opts?: { includeDisabled?: boolean }) => Promise<readonly unknown[]>;
+      };
+    }) => [],
+  ),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: mocks.loadModelCatalog,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../commands/doctor-gateway-services.js", () => ({
   detectExtraGatewayServiceIssues: mocks.detectExtraGatewayServiceIssues,
   extraGatewayServiceToHealthFinding: mocks.extraGatewayServiceToHealthFinding,
   extraGatewayServiceToRepairEffects: mocks.extraGatewayServiceToRepairEffects,
+}));
+
+vi.mock("../claws/doctor.js", () => ({
+  collectClawStateHealthFindings: mocks.collectClawStateHealthFindings,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
 }));
 
 const runtime = { log() {}, error() {}, exit() {} };
@@ -104,6 +120,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectGatewayDaemonFindings() {
       return [];
     },
+    async listGatewayCronJobs() {
+      return [];
+    },
     ...overrides,
   };
 }
@@ -124,7 +143,6 @@ describe("CORE_HEALTH_CHECKS", () => {
 
   beforeAll(async () => {
     clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
     const cfg: OpenClawConfig = {
@@ -146,7 +164,6 @@ describe("CORE_HEALTH_CHECKS", () => {
       calls: [...mocks.loadModelCatalog.mock.calls],
     };
     clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
   });
 
   beforeEach(() => {
@@ -156,6 +173,9 @@ describe("CORE_HEALTH_CHECKS", () => {
     mocks.detectExtraGatewayServiceIssues.mockResolvedValue([]);
     mocks.extraGatewayServiceToHealthFinding.mockClear();
     mocks.extraGatewayServiceToRepairEffects.mockClear();
+    mocks.callGateway.mockReset();
+    mocks.collectClawStateHealthFindings.mockReset();
+    mocks.collectClawStateHealthFindings.mockResolvedValue([]);
     tmp = undefined;
   });
 
@@ -192,6 +212,118 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
 
     await expect(check.detect({ mode: "lint", runtime, cfg: {} })).resolves.toEqual([finding]);
+  });
+
+  it("includes Claw state diagnostics in core doctor checks", () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    expect(createCoreHealthChecks(createDeps()).map((check) => check.id)).toContain(
+      "core/doctor/claws-state",
+    );
+  });
+
+  it("passes one live Gateway cron inventory provider to Claw diagnostics", async () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    const listGatewayCronJobs = vi.fn(async () => []);
+    mocks.collectClawStateHealthFindings.mockImplementationOnce(async (options) => {
+      await options?.cronGateway?.list({ includeDisabled: true });
+      return [];
+    });
+    const check = getCheck(
+      createCoreHealthChecks(createDeps({ listGatewayCronJobs })),
+      "core/doctor/claws-state",
+    );
+    const ctx = { mode: "doctor" as const, runtime, cfg: {} };
+
+    await expect(check.detect(ctx)).resolves.toEqual([]);
+    expect(listGatewayCronJobs).toHaveBeenCalledOnce();
+    expect(listGatewayCronJobs).toHaveBeenCalledWith(ctx);
+  });
+
+  it("reads every stable Gateway cron inventory page for Claw diagnostics", async () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    const firstJob = { id: "job-1" };
+    const secondJob = { id: "job-2" };
+    mocks.callGateway
+      .mockResolvedValueOnce({
+        jobs: [firstJob],
+        snapshotRevision: "revision-1",
+        total: 2,
+        offset: 0,
+        limit: 200,
+        hasMore: true,
+        nextOffset: 1,
+      })
+      .mockResolvedValueOnce({
+        jobs: [secondJob],
+        snapshotRevision: "revision-1",
+        total: 2,
+        offset: 1,
+        limit: 200,
+        hasMore: false,
+        nextOffset: null,
+      });
+    let listedJobs: readonly unknown[] = [];
+    mocks.collectClawStateHealthFindings.mockImplementationOnce(async (options) => {
+      listedJobs = (await options?.cronGateway?.list({ includeDisabled: true })) ?? [];
+      return [];
+    });
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/claws-state");
+
+    await expect(check.detect({ mode: "doctor", runtime, cfg: {} })).resolves.toEqual([]);
+    expect(listedJobs).toEqual([firstJob, secondJob]);
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "cron.list",
+        params: { includeDisabled: true, limit: 200, offset: 0 },
+      }),
+    );
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "cron.list",
+        params: { includeDisabled: true, limit: 200, offset: 1 },
+      }),
+    );
+  });
+
+  it("rejects a Gateway cron inventory that changes between pages", async () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    mocks.callGateway
+      .mockResolvedValueOnce({
+        jobs: [{ id: "job-1" }],
+        snapshotRevision: "revision-1",
+        total: 2,
+        offset: 0,
+        limit: 200,
+        hasMore: true,
+        nextOffset: 1,
+      })
+      .mockResolvedValueOnce({
+        jobs: [{ id: "job-2" }],
+        snapshotRevision: "revision-2",
+        total: 2,
+        offset: 1,
+        limit: 200,
+        hasMore: false,
+        nextOffset: null,
+      });
+    mocks.collectClawStateHealthFindings.mockImplementationOnce(async (options) => {
+      await options?.cronGateway?.list({ includeDisabled: true });
+      return [];
+    });
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/claws-state");
+
+    await expect(check.detect({ mode: "doctor", runtime, cfg: {} })).rejects.toThrow(
+      "Gateway cron inventory changed while doctor was reading it.",
+    );
+  });
+
+  it("omits Claw state diagnostics without the experiment", () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
+    expect(createCoreHealthChecks(createDeps()).map((check) => check.id)).not.toContain(
+      "core/doctor/claws-state",
+    );
   });
 
   it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
@@ -638,7 +770,6 @@ describe("CORE_HEALTH_CHECKS", () => {
               command: "/bin/sh",
               args: ["-c", `cat >/dev/null; printf executed > ${JSON.stringify(markerPath)}`],
               jsonOnly: false,
-              allowInsecurePath: true,
             },
           },
         },
@@ -668,54 +799,8 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
 
-    const findings = await check?.detect({
-      mode: "lint",
-      runtime: { log() {}, error() {}, exit() {} },
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "token",
-            token: {
-              source: "exec",
-              provider: "default",
-              id: "value",
-            },
-          },
-        },
-        secrets: {
-          providers: {
-            default: {
-              source: "exec",
-              command: process.execPath,
-              args: [resolverPath, markerPath],
-              jsonOnly: false,
-              allowInsecurePath: true,
-              allowSymlinkCommand: true,
-            },
-          },
-        },
-      },
-      cwd: tmp,
-      allowExecSecretRefs: true,
-    });
-
-    expect(findings).toEqual([]);
-    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
-  });
-
-  it("reports exec SecretRef failures when gateway auth lint explicitly allows exec checks", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
-    const resolverPath = join(tmp, "fail-token.cjs");
-    await fs.writeFile(
-      resolverPath,
-      ["process.stdin.resume();", "process.stdin.on('end', () => process.exit(12));"].join("\n"),
-      "utf8",
-    );
-    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
-
-    const findings = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, async () => {
-      return await check?.detect({
+    const findings = await withSecureTestNodeCommand(async (command) =>
+      check?.detect({
         mode: "lint",
         runtime: { log() {}, error() {}, exit() {} },
         cfg: {
@@ -734,18 +819,66 @@ describe("CORE_HEALTH_CHECKS", () => {
             providers: {
               default: {
                 source: "exec",
-                command: process.execPath,
-                args: [resolverPath],
+                command,
+                args: [resolverPath, markerPath],
                 jsonOnly: false,
-                allowInsecurePath: true,
-                allowSymlinkCommand: true,
+                trustedDirs: [dirname(command), tmp!],
               },
             },
           },
         },
+        cwd: tmp,
         allowExecSecretRefs: true,
-      });
-    });
+      }),
+    );
+
+    expect(findings).toEqual([]);
+    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
+  });
+
+  it("reports exec SecretRef failures when gateway auth lint explicitly allows exec checks", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
+    const resolverPath = join(tmp, "fail-token.cjs");
+    await fs.writeFile(
+      resolverPath,
+      ["process.stdin.resume();", "process.stdin.on('end', () => process.exit(12));"].join("\n"),
+      "utf8",
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+
+    const findings = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, async () =>
+      withSecureTestNodeCommand(async (command) =>
+        check?.detect({
+          mode: "lint",
+          runtime: { log() {}, error() {}, exit() {} },
+          cfg: {
+            gateway: {
+              mode: "local",
+              auth: {
+                mode: "token",
+                token: {
+                  source: "exec",
+                  provider: "default",
+                  id: "value",
+                },
+              },
+            },
+            secrets: {
+              providers: {
+                default: {
+                  source: "exec",
+                  command,
+                  args: [resolverPath],
+                  jsonOnly: false,
+                  trustedDirs: [dirname(command), tmp!],
+                },
+              },
+            },
+          },
+          allowExecSecretRefs: true,
+        }),
+      ),
+    );
 
     expect(findings).toContainEqual(
       expect.objectContaining({

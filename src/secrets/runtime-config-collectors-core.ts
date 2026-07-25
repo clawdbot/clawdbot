@@ -456,42 +456,25 @@ function collectMediaRequestAssignments(params: {
 
   for (const capability of capabilityKeys) {
     const section = isRecord(media[capability]) ? media[capability] : undefined;
-    const active = isCapabilityEnabled(capability);
-    const inactiveReason = `${capability} media understanding is disabled.`;
-    if (section && isRecord(section.request)) {
-      collectProviderRequestAssignments({
-        request: section.request,
-        pathPrefix: `tools.media.${capability}.request`,
-        defaults: params.defaults,
-        context: params.context,
-        active,
-        inactiveReason,
-        owner: {
-          ownerKind: "capability",
-          ownerId: runtimeMediaRequestSecretOwnerId(capability),
-          requiredForGateway: false,
-          disposition: "isolate",
-          contract: section,
-        },
-      });
+    if (!section || !isRecord(section.request)) {
+      continue;
     }
-    collectModelAssignments(
-      section?.models,
-      `tools.media.${capability}.models`,
-      (index) => runtimeMediaModelSecretOwnerId({ source: "capability", capability, index }),
-      (rawModel) => ({
-        active:
-          active &&
-          (() => {
-            const entry = rawModel as MediaUnderstandingModelConfig;
-            const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
-            return configuredCapabilities ? configuredCapabilities.includes(capability) : true;
-          })(),
-        inactiveReason: active
-          ? `${capability} media model is filtered out by its configured capabilities.`
-          : inactiveReason,
-      }),
-    );
+    const active = isCapabilityEnabled(capability);
+    collectProviderRequestAssignments({
+      request: section.request,
+      pathPrefix: `tools.media.${capability}.request`,
+      defaults: params.defaults,
+      context: params.context,
+      active,
+      inactiveReason: `${capability} media understanding is disabled.`,
+      owner: {
+        ownerKind: "capability",
+        ownerId: runtimeMediaRequestSecretOwnerId(capability),
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: section,
+      },
+    });
   }
 }
 
@@ -500,13 +483,13 @@ function collectMessagesTtsAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const messages = params.config.messages as Record<string, unknown> | undefined;
-  if (!isRecord(messages) || !isRecord(messages.tts)) {
+  const tts = params.config.tts as Record<string, unknown> | undefined;
+  if (!isRecord(tts)) {
     return;
   }
   collectTtsApiKeyAssignments({
-    tts: messages.tts,
-    pathPrefix: "messages.tts",
+    tts,
+    pathPrefix: "tts",
     defaults: params.defaults,
     context: params.context,
   });
@@ -518,17 +501,17 @@ function collectAgentTtsAssignments(params: {
   context: ResolverContext;
 }): void {
   const agents = params.config.agents as Record<string, unknown> | undefined;
-  const list = agents?.list;
-  if (!Array.isArray(list)) {
+  const entries = isRecord(agents?.entries) ? agents.entries : undefined;
+  if (!entries) {
     return;
   }
-  for (const [index, entry] of list.entries()) {
+  for (const [entryId, entry] of Object.entries(entries)) {
     if (!isRecord(entry) || !isRecord(entry.tts)) {
       continue;
     }
     collectTtsApiKeyAssignments({
       tts: entry.tts,
-      pathPrefix: `agents.list.${index}.tts`,
+      pathPrefix: `agents.entries.${entryId}.tts`,
       defaults: params.defaults,
       context: params.context,
     });

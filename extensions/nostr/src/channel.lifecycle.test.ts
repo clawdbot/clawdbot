@@ -94,4 +94,22 @@ describe("nostr gateway lifecycle", () => {
     expect(mocks.startNostrBus).toHaveBeenCalledOnce();
     expect(bus.close).toHaveBeenCalledOnce();
   });
+
+  it("describes configured relays without claiming they are already connected", async () => {
+    const bus = createMockBus();
+    mocks.startNostrBus.mockResolvedValueOnce(bus as never);
+    const abort = new AbortController();
+    const account = buildResolvedNostrAccount({ relays: ["wss://relay.example.com"] });
+    const context = createStartAccountContext({ account, abortSignal: abort.signal });
+
+    const task = startNostrGatewayAccount(context);
+    await vi.waitFor(() => expect(mocks.startNostrBus).toHaveBeenCalledOnce());
+
+    expect(context.log?.info).toHaveBeenCalledWith(
+      "[default] Nostr provider started with 1 configured relay(s)",
+    );
+
+    abort.abort();
+    await task;
+  });
 });

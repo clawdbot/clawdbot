@@ -62,8 +62,10 @@ function resolveParallelConfig(searchConfig?: SearchConfigRecord): ParallelConfi
 
 function resolveParallelApiKey(parallel?: ParallelConfig): string | undefined {
   return (
-    readConfiguredSecretString(parallel?.apiKey, "tools.web.search.parallel.apiKey") ??
-    readProviderEnvValue(["PARALLEL_API_KEY"])
+    readConfiguredSecretString(
+      parallel?.apiKey,
+      "plugins.entries.parallel.config.webSearch.apiKey",
+    ) ?? readProviderEnvValue(["PARALLEL_API_KEY"])
   );
 }
 

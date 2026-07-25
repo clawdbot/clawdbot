@@ -217,7 +217,7 @@ describe("pw-session connection scoping", () => {
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
     const ssrfPolicy = {
       dangerouslyAllowPrivateNetwork: true,
-      hostnameAllowlist: ["example.com"],
+      allowedHostnames: ["example.com"],
     };
 
     const page = await getPageForTargetId({
@@ -229,7 +229,7 @@ describe("pw-session connection scoping", () => {
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(1);
     expect(ssrfPolicy).toStrictEqual({
       dangerouslyAllowPrivateNetwork: true,
-      hostnameAllowlist: ["example.com"],
+      allowedHostnames: ["example.com"],
     });
   });
 

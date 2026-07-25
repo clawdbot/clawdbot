@@ -28,6 +28,7 @@ type RegistryTestApi = {
   releaseSubagentRun(runId: string): void;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): void;
   testing: {
+    failQueuedSubagentRun(runId: string, error: string): boolean;
     sweepOnceForTests(): Promise<void>;
     runSweeperTickForTests(): Promise<void>;
     setDepsForTest(overrides?: Partial<RegistryDeps>): void;
@@ -82,6 +83,8 @@ export async function finalizeInterruptedSubagentRun(params: {
 }
 
 export const testing = {
+  failQueuedSubagentRun: (runId: string, error: string) =>
+    getRegistryTestApi().testing.failQueuedSubagentRun(runId, error),
   sweepOnceForTests: () => getRegistryTestApi().testing.sweepOnceForTests(),
   runSweeperTickForTests: () => getRegistryTestApi().testing.runSweeperTickForTests(),
   setDepsForTest: (overrides?: Partial<RegistryDeps>) =>

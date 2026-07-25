@@ -1232,6 +1232,8 @@
               {
                 "group": "Sessions and memory",
                 "pages": [
+                  "concepts/main-session",
+                  "concepts/multi-user",
                   "concepts/session",
                   "concepts/session-search",
                   "concepts/channel-docking",
@@ -1303,8 +1305,10 @@
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/logbook",
+                  "plugins/meeting-plugins",
                   "plugins/google-meet",
                   "plugins/teams-meetings",
+                  "plugins/zoom-meetings",
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
@@ -1363,6 +1367,7 @@
                   "tools/code-execution",
                   "tools/code-mode",
                   "tools/diffs",
+                  "tools/screen",
                   "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
@@ -1423,6 +1428,7 @@
                   "tools/goal",
                   "tools/steer",
                   "tools/subagents",
+                  "tools/swarm",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
@@ -1681,6 +1687,8 @@
                     "group": "Protocols and APIs",
                     "pages": [
                       "gateway/protocol",
+                      "gateway/clients",
+                      "gateway/embedding",
                       "gateway/bridge-protocol",
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
@@ -1751,6 +1759,8 @@
                   "web/index",
                   "web/control-ui",
                   "web/dashboard",
+                  "web/dashboards",
+                  "web/dashboard-architecture",
                   "web/webchat",
                   "web/tui",
                   "web/lobster"
@@ -1792,6 +1802,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/claws",
                       "cli/audit",
                       "cli/hooks",
                       "cli/infer",

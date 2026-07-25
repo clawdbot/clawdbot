@@ -11,7 +11,6 @@ import {
 } from "../secrets/ref-contract.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
-import type { MediaToolsConfig } from "./types.tools.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -108,7 +107,6 @@ const SecretsFileProviderSchema = z
       .positive()
       .max(20 * 1024 * 1024)
       .optional(),
-    allowInsecurePath: z.boolean().optional(),
   })
   .strict();
 
@@ -144,8 +142,6 @@ const SecretsManualExecProviderSchema = z
       )
       .max(64)
       .optional(),
-    allowInsecurePath: z.boolean().optional(),
-    allowSymlinkCommand: z.boolean().optional(),
   })
   .strict();
 
@@ -190,19 +186,6 @@ export const SecretsConfigSchema = z
       })
       .strict()
       .optional(),
-    resolution: z
-      .object({
-        maxProviderConcurrency: z.number().int().positive().max(16).optional(),
-        maxRefsPerProvider: z.number().int().positive().max(4096).optional(),
-        maxBatchBytes: z
-          .number()
-          .int()
-          .positive()
-          .max(5 * 1024 * 1024)
-          .optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .optional();
@@ -243,9 +226,7 @@ const ModelCompatSchema = z
     requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
-    nativeWebSearchTool: z.boolean().optional(),
     toolCallArgumentsEncoding: z.string().optional(),
-    requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()
@@ -516,7 +497,9 @@ export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
 
 const ModelProviderSchema = z
   .object({
-    baseUrl: z.string().min(1).optional(),
+    // Bundled provider overlays are materialized with an empty-string sentinel.
+    // ModelProvidersSchema below still rejects empty baseUrl values for custom providers.
+    baseUrl: z.string().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
@@ -608,7 +591,7 @@ export const MentionPatternsPolicySchema = z
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
-    historyLimit: z.number().int().positive().optional(),
+    historyLimit: z.number().int().min(0).optional(),
     unmentionedInbound: AmbientGroupInboundSchema.optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
   })
@@ -732,17 +715,6 @@ const TtsProviderConfigSchema = z
       z.record(z.string(), z.unknown()),
     ]),
   );
-const TtsPersonaPromptSchema = z
-  .object({
-    profile: z.string().optional(),
-    scene: z.string().optional(),
-    sampleContext: z.string().optional(),
-    style: z.string().optional(),
-    accent: z.string().optional(),
-    pacing: z.string().optional(),
-    constraints: z.array(z.string()).optional(),
-  })
-  .strict();
 const TtsPersonaSchema = z
   .object({
     label: z.string().optional(),
@@ -751,7 +723,6 @@ const TtsPersonaSchema = z
     fallbackPolicy: z
       .union([z.literal("preserve-persona"), z.literal("provider-defaults"), z.literal("fail")])
       .optional(),
-    prompt: TtsPersonaPromptSchema.optional(),
     providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
   })
   .strict();
@@ -778,7 +749,6 @@ export const TtsConfigSchema = z
       .strict()
       .optional(),
     providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
-    prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
   })
@@ -790,82 +760,6 @@ export const HumanDelaySchema = z
     mode: z.union([z.literal("off"), z.literal("natural"), z.literal("custom")]).optional(),
     minMs: z.number().int().nonnegative().optional(),
     maxMs: z.number().int().nonnegative().optional(),
-  })
-  .strict();
-
-const CliBackendWatchdogModeSchema = z
-  .object({
-    noOutputTimeoutMs: z.number().int().min(1000).optional(),
-    noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
-    minMs: z.number().int().min(1000).optional(),
-    maxMs: z.number().int().min(1000).optional(),
-  })
-  .strict()
-  .optional();
-
-const CliBackendOutputLimitsSchema = z
-  .object({
-    maxTurnRawChars: z
-      .number()
-      .int()
-      .min(1024)
-      .max(64 * 1024 * 1024)
-      .optional(),
-    maxTurnLines: z.number().int().min(100).max(100_000).optional(),
-  })
-  .strict()
-  .optional();
-
-export const CliBackendSchema = z
-  .object({
-    command: z.string(),
-    args: z.array(z.string()).optional(),
-    output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    jsonlDialect: z
-      .union([z.literal("claude-stream-json"), z.literal("gemini-stream-json")])
-      .optional(),
-    liveSession: z.literal("claude-stdio").optional(),
-    input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
-    maxPromptArgChars: z.number().int().positive().optional(),
-    env: z.record(z.string(), z.string()).optional(),
-    clearEnv: z.array(z.string()).optional(),
-    modelArg: z.string().optional(),
-    modelAliases: z.record(z.string(), z.string()).optional(),
-    sessionArg: z.string().optional(),
-    sessionArgs: z.array(z.string()).optional(),
-    resumeArgs: z.array(z.string()).optional(),
-    forkArg: z.string().optional(),
-    sessionMode: z
-      .union([z.literal("always"), z.literal("existing"), z.literal("none")])
-      .optional(),
-    sessionIdFields: z.array(z.string()).optional(),
-    systemPromptArg: z.string().optional(),
-    systemPromptFileArg: z.string().optional(),
-    systemPromptFileConfigArg: z.string().optional(),
-    systemPromptFileConfigKey: z.string().optional(),
-    systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
-    systemPromptWhen: z
-      .union([z.literal("first"), z.literal("always"), z.literal("never")])
-      .optional(),
-    imageArg: z.string().optional(),
-    imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
-    imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
-    serialize: z.boolean().optional(),
-    reseedFromRawTranscriptWhenUncompacted: z.boolean().optional(),
-    reliability: z
-      .object({
-        outputLimits: CliBackendOutputLimitsSchema,
-        watchdog: z
-          .object({
-            fresh: CliBackendWatchdogModeSchema,
-            resume: CliBackendWatchdogModeSchema,
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict();
 
@@ -944,16 +838,6 @@ export const requireAllowlistAllowFrom = (params: {
 
 export const MSTeamsReplyStyleSchema = z.enum(["thread", "top-level"]);
 
-export const RetryConfigSchema = z
-  .object({
-    attempts: z.number().int().min(1).optional(),
-    minDelayMs: z.number().int().min(0).optional(),
-    maxDelayMs: z.number().int().min(0).optional(),
-    jitter: z.number().min(0).max(1).optional(),
-  })
-  .strict()
-  .optional();
-
 const QueueModeBySurfaceSchema = z
   .object({
     whatsapp: QueueModeSchema.optional(),
@@ -978,7 +862,6 @@ export const QueueSchema = z
   .object({
     mode: QueueModeSchema.optional(),
     byChannel: QueueModeBySurfaceSchema,
-    debounceMs: z.number().int().nonnegative().optional(),
     debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),
     drop: QueueDropSchema.optional(),
@@ -1002,10 +885,6 @@ export const ExecutableTokenSchema = z
 
 const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
 
-const MediaUnderstandingCapabilitiesSchema = z
-  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
-  .optional();
-
 const MediaUnderstandingAttachmentsSchema = z
   .object({
     mode: z.union([z.literal("first"), z.literal("all")]).optional(),
@@ -1017,13 +896,8 @@ const MediaUnderstandingAttachmentsSchema = z
   .strict()
   .optional();
 
-const DeepgramAudioSchema = z
-  .object({
-    detectLanguage: z.boolean().optional(),
-    punctuate: z.boolean().optional(),
-    smartFormat: z.boolean().optional(),
-  })
-  .strict()
+const MediaUnderstandingCapabilitiesSchema = z
+  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
   .optional();
 
 const ProviderOptionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
@@ -1036,7 +910,6 @@ const MediaUnderstandingRuntimeFields = {
   timeoutSeconds: z.number().int().positive().optional(),
   language: z.string().optional(),
   providerOptions: ProviderOptionsSchema,
-  deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   request: ConfiguredProviderRequestSchema,
@@ -1059,15 +932,28 @@ const MediaUnderstandingModelSchema = z
   .strict()
   .optional();
 
-const ToolsMediaUnderstandingSchema = z
+const ToolsMediaCapabilitySchema = z
   .object({
     enabled: z.boolean().optional(),
+    preferredModel: z.string().trim().min(1).optional(),
     scope: MediaUnderstandingScopeSchema,
     maxBytes: z.number().int().positive().optional(),
     maxChars: z.number().int().positive().optional(),
     ...MediaUnderstandingRuntimeFields,
     attachments: MediaUnderstandingAttachmentsSchema,
-    models: z.array(MediaUnderstandingModelSchema).optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolsMediaAudioSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    preferredModel: z.string().trim().min(1).optional(),
+    scope: MediaUnderstandingScopeSchema,
+    maxBytes: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+    ...MediaUnderstandingRuntimeFields,
+    attachments: MediaUnderstandingAttachmentsSchema,
     echoTranscript: z.boolean().optional(),
     echoFormat: z.string().optional(),
   })
@@ -1078,30 +964,12 @@ export const ToolsMediaSchema = z
   .object({
     models: z.array(MediaUnderstandingModelSchema).optional(),
     concurrency: z.number().int().positive().optional(),
-    asyncCompletion: z
-      .object({
-        directSend: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    image: ToolsMediaUnderstandingSchema.optional(),
-    audio: ToolsMediaUnderstandingSchema.optional(),
-    video: ToolsMediaUnderstandingSchema.optional(),
+    image: ToolsMediaCapabilitySchema.optional(),
+    audio: ToolsMediaAudioSchema.optional(),
+    video: ToolsMediaCapabilitySchema.optional(),
   })
   .strict()
   .optional();
-type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-const toolsMediaAsyncCompletionSchemaContract: [
-  AssertAssignable<
-    ToolsMediaConfigFromSchema["asyncCompletion"],
-    MediaToolsConfig["asyncCompletion"]
-  >,
-  AssertAssignable<
-    MediaToolsConfig["asyncCompletion"],
-    ToolsMediaConfigFromSchema["asyncCompletion"]
-  >,
-] = [] as never;
-void toolsMediaAsyncCompletionSchemaContract;
 const LinkModelSchema = z
   .object({
     type: z.literal("cli").optional(),

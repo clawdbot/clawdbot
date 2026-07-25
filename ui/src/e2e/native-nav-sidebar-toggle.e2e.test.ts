@@ -111,17 +111,16 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
-    const collapse = page.locator(".sidebar-brand__collapse");
-    await expect.poll(() => collapse.isVisible()).toBe(true);
-    await collapse.click();
-
-    const expand = page.locator(".shell-nav-expand");
-    await expect.poll(() => expand.isVisible()).toBe(true);
-    await expand.click();
-    await expect.poll(() => collapse.isVisible()).toBe(true);
+    const toggle = page.locator(".shell-chrome-controls__nav-toggle");
+    await expect.poll(() => toggle.isVisible()).toBe(true);
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await toggle.click();
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
+    await toggle.click();
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
   });
 
-  it("hides both web toggles when the native titlebar toggle is present", async () => {
+  it("hides the web chrome cluster when the native titlebar toggle is present", async () => {
     const page = await openPage({ nativeNav: true });
 
     await expect
@@ -150,10 +149,15 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     });
     expect(initialWidth).toBeGreaterThan(0);
 
-    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
+    // Expanded native-nav hosts keep the cluster's search (no native search
+    // control exists while the rail is open) but hide the duplicate nav toggle.
+    await expect.poll(() => page.locator(".shell-chrome-controls__search").isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
+      .toBe(false);
 
-    // Collapse through the native titlebar path; the floating expand control
-    // must stay hidden (the titlebar button is the only expand affordance).
+    // Collapse through the native titlebar path; the whole web chrome cluster
+    // hides (native titlebar provides search and new-thread while collapsed).
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
     });
@@ -169,7 +173,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
         ),
       )
       .toBe(true);
-    await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(false);
+    await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
     // With the in-page expand control hidden, collapse anchors keyboard focus
     // on the content column instead of stranding it on the body.
     await expect
@@ -191,22 +195,22 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     const page = await openPage({ webChrome: true });
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
-    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
-    await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(false);
+    await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
 
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
     const search = toolbar.getByRole("button", { name: "Open command palette" });
-    const newSession = toolbar.getByRole("button", { name: "New session" });
+    const newThread = toolbar.getByRole("button", { name: "New thread" });
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await expect.poll(() => search.isVisible()).toBe(true);
-    await expect.poll(() => newSession.isVisible()).toBe(true);
+    await expect.poll(() => newThread.count()).toBe(0);
 
     await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
+    await expect.poll(() => newThread.isVisible()).toBe(true);
     await search.click();
     await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");
@@ -230,7 +234,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(false);
 
-    await newSession.click();
+    await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await toolbar.getByRole("button", { name: "Expand sidebar" }).click();
     await expect
@@ -256,7 +260,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect
       .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
       .toBe(0);
-    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
+    await expect.poll(() => toolbar.getByRole("button", { name: "New thread" }).count()).toBe(0);
   });
 
   it("keeps the document root scroll-locked in the Settings takeover", async () => {

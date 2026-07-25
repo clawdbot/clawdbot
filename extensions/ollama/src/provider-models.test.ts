@@ -7,6 +7,7 @@ import {
   buildOllamaModelDefinition,
   capLocalOllamaProviderContext,
   enrichOllamaModelsWithContext,
+  isOllamaCloudModel,
   fetchOllamaModels,
   queryOllamaModelShowInfo,
   resolveOllamaApiBase,
@@ -30,13 +31,33 @@ describe("ollama provider models", () => {
       models: [
         buildOllamaModelDefinition("qwen3.5:4b", 262_144),
         buildOllamaModelDefinition("small", 16_384),
+        buildOllamaModelDefinition("glm-5.2:cloud", 1_000_000),
+        buildOllamaModelDefinition("gpt-oss:120b-cloud", 131_072),
+        buildOllamaModelDefinition("local-cloud", 65_536),
       ],
     });
 
     expect(provider.models).toEqual([
       expect.objectContaining({ contextWindow: 262_144, contextTokens: 32_768 }),
       expect.objectContaining({ contextWindow: 16_384, contextTokens: 16_384 }),
+      expect.objectContaining({ id: "glm-5.2:cloud", contextWindow: 1_000_000 }),
+      expect.objectContaining({ id: "gpt-oss:120b-cloud", contextWindow: 131_072 }),
+      expect.objectContaining({ id: "local-cloud", contextTokens: 32_768 }),
     ]);
+    expect(provider.models?.[2]).not.toHaveProperty("contextTokens");
+    expect(provider.models?.[3]).not.toHaveProperty("contextTokens");
+  });
+
+  it.each([
+    ["glm-5.2:cloud", true],
+    ["gpt-oss:120b-cloud", true],
+    ["local-cloud", false],
+    ["invalid:cloud-cloud", false],
+    ["invalid:local:cloud", false],
+    ["invalid:local-cloud", false],
+    ["invalid:cloud:local", false],
+  ])("classifies Ollama model source %s", (modelId, expected) => {
+    expect(isOllamaCloudModel(modelId)).toBe(expected);
   });
 
   it("sets discovered models with context windows from /api/show", async () => {

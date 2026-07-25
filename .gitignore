@@ -230,7 +230,10 @@ USER.md
 package-lock.json
 !.github/release/clawhub-cli/package-lock.json
 !src/commands/copilot-sdk-install-manifest/package-lock.json
-.claude/
+.claude/*
+# Track the shared Claude Code project config (worktree auto-install hook); keep
+# everything else under .claude/ (worktrees, skills, settings.local.json) ignored.
+!.claude/settings.json
 .agent/
 skills-lock.json
 
@@ -247,6 +250,7 @@ apps/swabble/build/
 
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
+packages/gateway-protocol/protocol.schema.json
 .ant-colony/
 
 # Eclipse
@@ -266,8 +270,9 @@ ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 
-# Generated docs baseline artifacts (locally generated, only hashes tracked)
+# Generated docs baseline artifacts (locally generated, only drift detectors tracked)
 docs/.generated/*.json
+!docs/.generated/config-baseline.counts.json
 docs/.generated/*.jsonl
 
 # Deprecated changelog fragment workflow

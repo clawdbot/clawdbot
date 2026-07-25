@@ -6,7 +6,11 @@ import {
   isCodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { CodexAppServerRpcError, isCodexAppServerConnectionClosedError } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerConnectionClosedError,
+  resolveCodexAppServerClientInstanceId,
+} from "./client.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
@@ -329,6 +333,7 @@ export async function startFreshCodexThread(
   params: CodexStartOrResumeThreadParams,
   context: StartThreadContext,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
+  const clientId = resolveCodexAppServerClientInstanceId(params.client);
   const {
     bindingIdentity,
     startModelSelection,
@@ -431,6 +436,7 @@ export async function startFreshCodexThread(
         if: { kind: "absent" },
         binding: {
           threadId: response.thread.id,
+          ...(clientId ? { clientId } : {}),
           cwd: params.cwd,
           authProfileId: params.params.authProfileId,
           model: response.model ?? startParams.model ?? params.params.modelId,
@@ -482,6 +488,7 @@ export async function startFreshCodexThread(
   });
   return {
     threadId: response.thread.id,
+    ...(clientId ? { clientId } : {}),
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
     model: response.model ?? startParams.model ?? params.params.modelId,

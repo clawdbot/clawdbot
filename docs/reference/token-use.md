@@ -18,7 +18,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   Codex turns get the compact skills block as turn-scoped collaboration
   developer instructions; other harnesses get it in the normal prompt surface.
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
-  override at `agents.list[].skillsLimits.maxSkillsPromptChars`.
+  override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
 - Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
   `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus
@@ -40,8 +40,9 @@ OpenClaw assembles its own system prompt on every run. It includes:
     daily memory for that first turn, controlled by
     `agents.defaults.startupContext`. Bare chat `/new` and `/reset` are
     acknowledged without invoking the model.
-  - Post-compaction `AGENTS.md` excerpts are separate and require explicit
-    `agents.defaults.compaction.postCompactionSections` opt-in.
+  - Post-compaction `AGENTS.md` excerpts require explicit
+    `agents.defaults.compaction.postCompactionSections` opt-in; plugins can add
+    other context through `before_prompt_build`.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -65,24 +66,30 @@ Everything the model receives counts toward the context limit:
 
 Runtime-heavy surfaces have their own explicit caps under
 `agents.defaults.contextLimits` (per-agent overrides under
-`agents.list[].contextLimits`):
+`agents.entries.*.contextLimits`):
 
 | Key                      | Purpose                                                                  |
 | ------------------------ | ------------------------------------------------------------------------ |
 | `memoryGetMaxChars`      | Max characters `memory_get` returns before truncation.                   |
-| `memoryGetDefaultLines`  | Default `memory_get` line window when a request omits `lines`.           |
-| `toolResultMaxChars`     | Advanced ceiling for a single live tool result (up to `1000000` chars).  |
 | `postCompactionMaxChars` | Max characters retained from `AGENTS.md` during post-compaction refresh. |
 
 These are bounded runtime excerpts and injected runtime-owned blocks,
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
-`toolResultMaxChars` is unset by default, so OpenClaw derives the live
-tool-result cap from the effective model context window: `16000` chars below
+OpenClaw derives the live tool-result cap from the effective model context
+window: `16000` chars below
 100K tokens, `32000` chars at 100K+ tokens, `64000` chars at 200K+ tokens.
-The runtime context-share guard still caps a single tool result at 30% of the
-context window even when a larger explicit ceiling is configured.
+The runtime context-share guard also caps a single tool result at 30% of the
+context window.
+
+Large provider windows are not enabled automatically when they materially
+change cost or latency. For example, direct OpenAI GPT-5.5 and GPT-5.6 models
+publish a `1050000` token total window, but OpenClaw defaults their active
+runtime budget to `272000` tokens. The opt-in `922000` input budget reserves the
+full `128000` output allowance, and OpenAI applies higher long-context pricing
+to the entire request once input exceeds `272000` tokens. See
+[OpenAI context window defaults](/providers/openai#context-window-defaults-and-long-context-opt-in).
 
 For images, OpenClaw downscales transcript/tool image payloads before
 provider calls. Tune with `agents.defaults.imageMaxDimensionPx` (default:
@@ -199,7 +206,7 @@ TTL is `1h`, setting the heartbeat interval just under that (e.g., `55m`) can
 avoid re-caching the full prompt, reducing cache write costs.
 
 In multi-agent setups, you can keep one shared model config and tune cache
-behavior per agent with `agents.list[].params.cacheRetention`.
+behavior per agent with `agents.entries.*.params.cacheRetention`.
 
 For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
 
@@ -244,7 +251,7 @@ agents:
         cacheRetention: "none" # avoid cache writes for bursty notifications
 ```
 
-`agents.list[].params` merges on top of the selected model's `params`, so you
+`agents.entries.*.params` merges on top of the selected model's `params`, so you
 can override only `cacheRetention` and inherit other model defaults
 unchanged.
 

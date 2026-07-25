@@ -53,4 +53,22 @@ describe("preserveOptimisticTailMessages", () => {
       ),
     ).toEqual([persistedUser, historyAssistant]);
   });
+
+  it("keeps an idempotency-marked queued turn while history is stale", () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const materializedQueuedUser = {
+      role: "user",
+      content: [{ type: "text", text: "steered follow-up" }],
+      timestamp: 10,
+      __openclaw: { idempotencyKey: "steer-run:user" },
+    };
+
+    expect(
+      preserveOptimisticTailMessages([persistedUser], [persistedUser, materializedQueuedUser]),
+    ).toEqual([persistedUser, materializedQueuedUser]);
+  });
 });

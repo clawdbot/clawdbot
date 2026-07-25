@@ -63,6 +63,7 @@ import {
   type PluginHookBeforeToolCallResult,
   type PluginHookToolInputKind,
   type PluginHookToolKind,
+  type PluginHookToolRequesterContext,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
@@ -71,6 +72,11 @@ import {
 } from "../skills/loading/source.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
+import { resolveClientVoiceToolConfirmationPolicy } from "../talk/client-voice-confirmation.js";
+import {
+  isClientVoiceSessionConfirmable,
+  resolveClientVoiceRunBinding,
+} from "../talk/client-voice-session.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
   adjustedParamsByToolCallId,
@@ -84,6 +90,7 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { buildToolMutationState } from "./tool-mutation.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -149,6 +156,8 @@ export type HookContext = {
   approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /** Host-derived message requester for sender-aware tool hooks. */
+  requester?: PluginHookToolRequesterContext;
   /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -219,7 +228,7 @@ export type DeferredPluginToolApproval = {
 };
 
 type BeforeToolCallWrapperOptions = {
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
   emitDiagnostics: boolean;
 };
 type BeforeToolCallPreparingTool = AnyAgentTool & {
@@ -1215,7 +1224,7 @@ export function cancelDeferredPluginToolApproval(
 
 async function resolveBeforeToolCallApprovalOutcome(params: {
   result: PluginHookBeforeToolCallResult | undefined;
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
   toolName: string;
   toolCallId?: string;
   ctx?: HookContext;
@@ -1252,6 +1261,16 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
       params: params.baseParams,
     };
   }
+  if (params.approvalMode === "deny") {
+    notifyPluginApprovalResolution(approval, PluginApprovalResolutions.DENY);
+    return {
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-approval",
+      reason: "approval_required",
+      params: params.baseParams,
+    };
+  }
   return await requestPluginToolApproval({
     approval,
     toolName: params.toolName,
@@ -1266,7 +1285,7 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
 async function resolveSkillWorkshopApprovalForFinalParams(params: {
   toolName: string;
   params: unknown;
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
@@ -1437,7 +1456,7 @@ export async function runBeforeToolCallHook(args: {
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
@@ -1523,6 +1542,24 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
       ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
     });
+    const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
+    const voiceConfirmation = resolveClientVoiceToolConfirmationPolicy({
+      agentId: voiceRun?.agentId,
+      voiceSessionId: voiceRun?.voiceSessionId,
+      runId: args.ctx?.runId,
+      toolName,
+      toolParams: normalizedParams,
+      ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
+    });
+    if (!voiceConfirmation.allowed) {
+      return {
+        blocked: true,
+        kind: "veto",
+        deniedReason: "plugin-before-tool-call",
+        reason: voiceConfirmation.reason,
+        params,
+      };
+    }
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return { blocked: false, params };
     }
@@ -1552,6 +1589,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
+      ...(args.ctx?.requester ? { requester: args.ctx.requester } : {}),
     });
     const toolContext = buildToolContext(toolIdentity);
     const trustedPolicyResult = shouldRunTrustedPolicies
@@ -1750,7 +1788,7 @@ export async function runBeforeToolCallHook(args: {
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report"; emitDiagnostics?: boolean } = {},
+  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const execute = tool.execute;
   if (!execute) {
@@ -1783,6 +1821,7 @@ export function wrapToolWithBeforeToolCallHook(
         ...diagnosticIdentity,
         ...(toolCallId && { toolCallId }),
         paramsSummary: summarizeToolParams(toolParams),
+        mutatingAction: buildToolMutationState(normalizedToolName, toolParams).mutatingAction,
       });
       const recordPreExecutionError = (
         error: unknown,
@@ -2049,7 +2088,7 @@ export function wrapToolWithBeforeToolCallHook(
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report"; emitDiagnostics?: boolean } = {},
+  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];

@@ -37,18 +37,6 @@ vi.mock("../infra/outbound/message.js", () => ({
 
 vi.mock("../utils/message-channel.js", () => {
   const INTERNAL_MESSAGE_CHANNEL = "webchat";
-  const NATIVE_APPROVAL_CHANNELS = new Set([
-    "webchat",
-    "discord",
-    "googlechat",
-    "imessage",
-    "matrix",
-    "qqbot",
-    "signal",
-    "slack",
-    "telegram",
-    "whatsapp",
-  ]);
   const normalizeMessageChannel = (raw?: string | null) => {
     const normalized = raw?.trim().toLowerCase();
     if (!normalized) {
@@ -63,7 +51,7 @@ vi.mock("../utils/message-channel.js", () => {
   return {
     INTERNAL_MESSAGE_CHANNEL,
     isNativeApprovalChannel: (value?: string | null) =>
-      typeof value === "string" && NATIVE_APPROVAL_CHANNELS.has(value),
+      value === INTERNAL_MESSAGE_CHANNEL || value === "discord",
     isDeliverableMessageChannel: (value: string) => {
       const channel = normalizeMessageChannel(value);
       return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL && channel !== "tui");

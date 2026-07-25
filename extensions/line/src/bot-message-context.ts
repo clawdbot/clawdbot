@@ -6,7 +6,9 @@ import {
   formatInboundEnvelope,
   formatLocationText,
   resolveInboundSessionEnvelopeContext,
+  toInboundMediaFacts,
   toLocationContext,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -225,18 +227,20 @@ function extractMessageText(message: MessageEvent["message"]): string {
   return "";
 }
 
-function extractMediaPlaceholder(message: MessageEvent["message"]): string {
+function extractNativeMediaKind(
+  message: MessageEvent["message"],
+): ChannelInboundMediaInput["kind"] | undefined {
   switch (message.type) {
     case "image":
-      return "<media:image>";
+      return "image";
     case "video":
-      return "<media:video>";
+      return "video";
     case "audio":
-      return "<media:audio>";
+      return "audio";
     case "file":
-      return "<media:document>";
+      return "document";
     default:
-      return "";
+      return undefined;
   }
 }
 
@@ -288,12 +292,7 @@ async function finalizeLineInboundContext(params: {
   timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
-  media: {
-    firstPath: string | undefined;
-    firstContentType?: string;
-    paths?: string[];
-    types?: string[];
-  };
+  media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
@@ -322,6 +321,7 @@ async function finalizeLineInboundContext(params: {
   });
 
   const agentBody = params.agentBody ?? params.rawBody;
+  const media = toInboundMediaFacts(params.media);
   const body = formatInboundEnvelope({
     channel: "LINE",
     from: conversationLabel,
@@ -355,12 +355,7 @@ async function finalizeLineInboundContext(params: {
     Surface: "line",
     MessageSid: params.messageSid,
     Timestamp: params.timestamp,
-    MediaPath: params.media.firstPath,
-    MediaType: params.media.firstContentType,
-    MediaUrl: params.media.firstPath,
-    MediaPaths: params.media.paths,
-    MediaUrls: params.media.paths,
-    MediaTypes: params.media.types,
+    media,
     ...params.locationContext,
     CommandAuthorized: params.commandAuthorized,
     OriginatingChannel: "line" as const,
@@ -457,21 +452,22 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const timestamp = event.timestamp;
 
   const textContent = extractMessageText(message);
-  const placeholder = extractMediaPlaceholder(message);
-
-  let rawBody = textContent || placeholder;
-  if (!rawBody && allMedia.length > 0) {
-    rawBody = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
-  }
+  const nativeMediaKind = extractNativeMediaKind(message);
+  const mediaFacts: ChannelInboundMediaInput[] =
+    allMedia.length > 0
+      ? allMedia.map((media) => ({ ...media, kind: nativeMediaKind }))
+      : nativeMediaKind
+        ? [{ kind: nativeMediaKind }]
+        : [];
+  const rawBody = textContent;
   const agentBody = mediaUnavailable
     ? formatInboundMediaUnavailableText({
         body: rawBody,
-        mediaPlaceholder: placeholder,
         notice: "[line attachment unavailable]",
       })
     : rawBody;
 
-  if (!agentBody && allMedia.length === 0) {
+  if (!agentBody && mediaFacts.length === 0) {
     return null;
   }
 
@@ -497,15 +493,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     timestamp,
     messageSid: messageId,
     commandAuthorized,
-    media: {
-      firstPath: allMedia[0]?.path,
-      firstContentType: allMedia[0]?.contentType,
-      paths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-      types:
-        allMedia.length > 0
-          ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
-          : undefined,
-    },
+    media: mediaFacts,
     locationContext,
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
     inboundHistory,
@@ -564,12 +552,7 @@ export async function buildLinePostbackContext(params: {
     timestamp,
     messageSid,
     commandAuthorized,
-    media: {
-      firstPath: "",
-      firstContentType: undefined,
-      paths: undefined,
-      types: undefined,
-    },
+    media: [],
     verboseLog: { kind: "postback" },
   });
 

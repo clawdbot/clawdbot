@@ -101,8 +101,6 @@ describe("resolveAgentConfig", () => {
         defaults: {
           contextLimits: {
             memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 18_000,
           },
         },
         list: [
@@ -121,8 +119,6 @@ describe("resolveAgentConfig", () => {
 
     expect(resolveAgentConfig(cfg, "main")?.contextLimits).toEqual({
       memoryGetMaxChars: 24_000,
-      memoryGetDefaultLines: 180,
-      toolResultMaxChars: 18_000,
     });
   });
 
@@ -147,36 +143,6 @@ describe("resolveAgentConfig", () => {
 
     expect(resolveAgentConfig(cfg, "main")?.experimental).toEqual({
       localModelLean: false,
-    });
-  });
-
-  it("merges runRetries from defaults with per-agent overrides", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          runRetries: {
-            base: 24,
-            perProfile: 8,
-            min: 32,
-            max: 160,
-          },
-        },
-        list: [
-          {
-            id: "main",
-            runRetries: {
-              max: 50,
-            },
-          },
-        ],
-      },
-    };
-
-    expect(resolveAgentConfig(cfg, "main")?.runRetries).toEqual({
-      base: 24,
-      perProfile: 8,
-      min: 32,
-      max: 50,
     });
   });
 

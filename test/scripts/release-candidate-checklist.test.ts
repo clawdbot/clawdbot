@@ -14,6 +14,7 @@ import {
   isDirectReleaseCandidateExecution,
   parseArgs,
   parseRunIdFromDispatchOutput,
+  preflightCorePackageTarballs,
   reconcileReleaseCandidateState,
   releaseBranchForTag,
   resolveArtifactName,
@@ -25,6 +26,7 @@ import {
   validateFullManifest,
   validateNpmPreflightRunSource,
   validatePreflightManifest,
+  validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
@@ -198,13 +200,44 @@ describe("release candidate checklist", () => {
     expect(source).toContain(
       '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
     );
+    expect(source).toContain("[TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha");
     expect(source).toContain("cwd: targetRoot");
     expect(source).toContain('"worktree", "remove", "--force", toolingRoot');
     expect(source).toContain(
-      "const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
+      "const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
     );
     expect(source).toContain('targetHeadSha: gitRevParse("HEAD", targetRoot)');
     expect(source).toContain("toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT)");
+  });
+
+  it("keeps the exact pinned trusted tooling valid when main advances", () => {
+    const isAncestor = vi.fn(() => true);
+
+    expect(
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor,
+      }),
+    ).toBe("a".repeat(40));
+    expect(isAncestor).toHaveBeenCalledWith("a".repeat(40), "b".repeat(40));
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "b".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor: () => true,
+      }),
+    ).toThrow("does not match pinned tooling");
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "c".repeat(40),
+        isAncestor: () => false,
+      }),
+    ).toThrow("pinned release candidate tooling");
   });
 
   it("validates the exact tag changelog before dispatching the release matrix", () => {
@@ -555,6 +588,37 @@ describe("release candidate checklist", () => {
         params,
       ),
     ).toThrow("invalid dependency tarball metadata");
+  });
+
+  it("prefers the complete core package tarball set with legacy manifest fallback", () => {
+    const legacyTarball = {
+      packageName: "@openclaw/ai",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+      tarballSha256: "ai-sha",
+    };
+    const gatewayProtocolTarball = {
+      packageName: "@openclaw/gateway-protocol",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-protocol-2026.7.1-beta.3.tgz",
+      tarballSha256: "protocol-sha",
+    };
+
+    expect(
+      preflightCorePackageTarballs({
+        corePackageTarballs: [legacyTarball, gatewayProtocolTarball],
+        dependencyTarballs: [legacyTarball],
+      }),
+    ).toEqual([legacyTarball, gatewayProtocolTarball]);
+    expect(preflightCorePackageTarballs({ dependencyTarballs: [legacyTarball] })).toEqual([
+      legacyTarball,
+    ]);
+    expect(() =>
+      preflightCorePackageTarballs({
+        corePackageTarballs: null,
+        dependencyTarballs: [legacyTarball],
+      }),
+    ).toThrow("missing dependency tarball metadata");
   });
 
   it("trusts the npm workflow SHA while binding the candidate through its manifest", () => {

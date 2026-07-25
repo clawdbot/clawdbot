@@ -40,6 +40,23 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T | "timeout"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function mockLocalEmbeddingRuntime(
   vector: ArrayLike<number> = new Float32Array([2.35, 3.45, 0.63, 4.3]),
 ) {
@@ -668,23 +685,19 @@ process.on("message", (message) => {
       })
       .toBe(true);
 
-    const queuedEmbedResult = Promise.race([
+    const queuedEmbedResult = settleWithin(
       provider.embedQuery("queued").then(
         () => "resolved" as const,
         (err: unknown) => err,
       ),
-      new Promise<"timeout">((resolve) => {
-        setTimeout(() => resolve("timeout"), 1_000);
-      }),
-    ]);
+      1_000,
+    );
 
     const closePromise = provider.close?.() ?? Promise.resolve();
-    const closeResult = await Promise.race([
+    const closeResult = await settleWithin(
       closePromise.then(() => "closed" as const),
-      new Promise<"timeout">((resolve) => {
-        setTimeout(() => resolve("timeout"), 1_000);
-      }),
-    ]);
+      1_000,
+    );
 
     expect(closeResult).toBe("closed");
     await expect(firstEmbedError).resolves.toMatchObject({

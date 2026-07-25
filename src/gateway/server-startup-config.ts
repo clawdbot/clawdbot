@@ -11,9 +11,6 @@ import {
   classifySecretResolutionErrorDegradations,
   isRetryableSecretDegradationReason,
   listSecretResolutionErrorOwners,
-  redactSecretDegradationReason,
-  SECRET_DEGRADATION_RETRY_HINT,
-  type SecretDegradation,
 } from "../secrets/runtime-degraded-state.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../secrets/runtime-fast-path.js";
 import { registerProviderAuthRuntimeSnapshotActivationOwner } from "../secrets/runtime-provider-auth-activation.js";
@@ -44,6 +41,10 @@ import {
   type GatewayStartupConfigMeasure,
   type GatewayStartupLog,
 } from "./server-startup-config-helpers.js";
+import {
+  logPreparedSecretDegradations,
+  logThrownSecretDegradations,
+} from "./server-startup-secret-diagnostics.js";
 export {
   loadGatewayStartupConfigSnapshot,
   type GatewayStartupConfigSnapshotLoadResult,
@@ -116,22 +117,6 @@ export function publishRuntimeSecretsStateTransition(
   options?: { sourceOnly?: boolean; expectedRevision?: number },
 ): void {
   runtimeSecretsStatePublishers.get(activateRuntimeSecrets)?.(snapshot, options);
-}
-
-function logSecretDegradation(log: GatewayStartupLog, degradation: SecretDegradation): void {
-  const reason = redactSecretDegradationReason(degradation.reason);
-  log.warn(
-    `[SECRETS_DEGRADED] ${degradation.state} ${degradation.kind}:${degradation.id}: ` +
-      `${reason}. Retry: ${degradation.retryHint}.`,
-    {
-      event: "secrets.degraded",
-      ownerKind: degradation.kind,
-      ownerId: degradation.id,
-      reason,
-      state: degradation.state,
-      retryHint: degradation.retryHint,
-    },
-  );
 }
 
 /** Create the serialized secrets activation function used by startup and reload paths. */
@@ -212,15 +197,7 @@ export function createRuntimeSecretsActivator(params: {
     scope: SecretsStateScope = "full",
     activationScope: SecretsStateScope = "full",
   ) => {
-    for (const owner of prepared.degradedOwners ?? []) {
-      logSecretDegradation(params.logSecrets, {
-        kind: owner.ownerKind,
-        id: owner.ownerId,
-        reason: owner.reason,
-        state: owner.degradationState ?? "cold",
-        retryHint: SECRET_DEGRADATION_RETRY_HINT,
-      });
-    }
+    logPreparedSecretDegradations(params.logSecrets, prepared.degradedOwners ?? []);
     if (reason === "startup") {
       return;
     }
@@ -332,9 +309,7 @@ export function createRuntimeSecretsActivator(params: {
       retryableDegradations.length > 0 &&
       (activationParams.reason === "startup" || mayPublishReloadDegradation)
     ) {
-      for (const degradation of retryableDegradations) {
-        logSecretDegradation(params.logSecrets, degradation);
-      }
+      logThrownSecretDegradations(params.logSecrets, err, retryableDegradations);
       if (activationParams.reason !== "startup") {
         if (!secretsDegraded) {
           params.emitStateEvent(

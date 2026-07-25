@@ -182,7 +182,7 @@
       }
     },
     "discovery": {
-      "groq": "static"
+      "groq": "refreshable"
     }
   },
   "contracts": {

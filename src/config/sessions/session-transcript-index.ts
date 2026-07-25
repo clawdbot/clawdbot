@@ -32,7 +32,7 @@ import {
 
 type TranscriptIndexDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  | "sessions"
+  | "session_windows"
   | "session_transcript_active_events"
   | "session_transcript_fts"
   | "session_transcript_index_state"
@@ -426,10 +426,10 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
   const rows = executeSqliteQuerySync(
     db,
     kysely
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .innerJoin("transcript_events as latest", (join) =>
         join
-          .onRef("latest.session_id", "=", "sessions.session_id")
+          .onRef("latest.session_id", "=", "session_windows.session_id")
           .on((eb) =>
             eb(
               "latest.seq",
@@ -437,14 +437,18 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
               eb
                 .selectFrom("transcript_events as candidate")
                 .select("candidate.seq")
-                .whereRef("candidate.session_id", "=", "sessions.session_id")
+                .whereRef("candidate.session_id", "=", "session_windows.session_id")
                 .orderBy("candidate.seq", "desc")
                 .limit(1),
             ),
           ),
       )
-      .leftJoin("session_transcript_index_state as st", "st.session_id", "sessions.session_id")
-      .select("sessions.session_id")
+      .leftJoin(
+        "session_transcript_index_state as st",
+        "st.session_id",
+        "session_windows.session_id",
+      )
+      .select("session_windows.session_id")
       .where((eb) =>
         eb.or([
           eb(eb.fn.coalesce("st.needs_rebuild", eb.val(1)), "!=", 0),
@@ -453,7 +457,7 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
       )
       // The transcript PK makes the correlated latest-row lookup one index seek per session.
       // Grouping transcript_events here made every healthy search rescan the entire history.
-      .orderBy("sessions.session_id"),
+      .orderBy("session_windows.session_id"),
   ).rows;
   return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
 }

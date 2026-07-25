@@ -76,7 +76,7 @@ and `openclaw memory status --deep`.
 
 ## Secrets
 
-- When the running Gateway isolated a known SecretRef owner during cold startup, status includes `degradedSecretOwners` in JSON and a **Degraded secrets** overview row in human output. Each entry names the owner, unavailable state, config paths, and redacted reason.
+- When the running Gateway has any isolated SecretRef owner from startup, reload, or a config write, status includes `degradedSecretOwners` in JSON and a **Degraded secrets** overview row in human output. Each entry names the owner, degradation state (`cold` or `stale`), config paths, and redacted reason. Cold owners are unavailable; stale owners continue with last-known-good values.
 - Read-only status surfaces (`status`, `status --json`, `status --all`)
   resolve supported SecretRefs for their targeted config paths when
   possible.
@@ -96,7 +96,7 @@ and `openclaw memory status --deep`.
 
 `status --json --all` reports memory details from the active memory plugin
 runtime selected by `plugins.slots.memory`. Custom memory plugins can leave
-built-in `agents.defaults.memorySearch.enabled` disabled and still report
+built-in `memory.search.enabled` disabled and still report
 their own files, chunks, vector, and FTS state.
 
 ## Related

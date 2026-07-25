@@ -117,6 +117,7 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
 function makeInboundRuntime(
   dispatchReplyWithBufferedBlockDispatcher: (params: unknown) => Promise<unknown>,
   onResolvedContext?: (ctx: Record<string, unknown>) => void,
+  onResolvedTurn?: (turn: Record<string, unknown>) => void,
 ): GatewayPluginRuntime["channel"]["inbound"] {
   return {
     run: vi.fn(async (rawParams: unknown) => {
@@ -138,12 +139,14 @@ function makeInboundRuntime(
       )) as {
         cfg: unknown;
         ctxPayload: Record<string, unknown>;
+        record?: Record<string, unknown>;
         dispatcherOptions?: Record<string, unknown>;
         delivery: { deliver: unknown; onError?: unknown };
         replyOptions?: unknown;
         replyResolver?: unknown;
       };
       onResolvedContext?.(turn.ctxPayload);
+      onResolvedTurn?.(turn as unknown as Record<string, unknown>);
       return {
         dispatchResult: await dispatchReplyWithBufferedBlockDispatcher({
           ctx: turn.ctxPayload,
@@ -163,6 +166,7 @@ function makeInboundRuntime(
 
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
+  onTurn?: (turn: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
   skipFreshSettledDelivery?: boolean;
   onDispatch?: (dispatcherOptions: {
@@ -247,7 +251,11 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      inbound: makeInboundRuntime(dispatchReplyWithBufferedBlockDispatcher, params.onFinalize),
+      inbound: makeInboundRuntime(
+        dispatchReplyWithBufferedBlockDispatcher,
+        params.onFinalize,
+        params.onTurn,
+      ),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
@@ -996,7 +1004,7 @@ describe("dispatchOutbound", () => {
     }
   });
 
-  it("marks voice-only inbound as audio without adding voice paths to MediaPaths", async () => {
+  it("marks voice-only inbound as type-only audio facts", async () => {
     let finalized: Record<string, unknown> | undefined;
     const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });
 
@@ -1008,11 +1016,35 @@ describe("dispatchOutbound", () => {
       { runtime, cfg: {}, account },
     );
 
-    expect(finalized?.MediaType).toBe("audio/wav");
-    expect(finalized?.MediaTypes).toEqual(["audio/wav"]);
+    expect(finalized?.media).toEqual([expect.objectContaining({ contentType: "audio/wav" })]);
     expect(finalized?.QQVoiceAttachmentPaths).toEqual(["/tmp/qqbot/voice.wav"]);
-    expect(finalized).not.toHaveProperty("MediaPath");
-    expect(finalized).not.toHaveProperty("MediaPaths");
+    expect(finalized?.MediaPath).toBeUndefined();
+    expect(finalized?.MediaPaths).toBeUndefined();
+  });
+
+  it("keeps disjoint local and remote images as separate ordered facts", async () => {
+    let finalized: Record<string, unknown> | undefined;
+    const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });
+
+    await dispatchOutbound(
+      makeInbound({
+        localMediaPaths: ["/tmp/qqbot/local.png"],
+        localMediaTypes: ["image/png"],
+        remoteMediaUrls: ["https://example.test/remote.png"],
+      }),
+      { runtime, cfg: {}, account },
+    );
+
+    expect(finalized?.media).toEqual([
+      expect.objectContaining({
+        path: "/tmp/qqbot/local.png",
+        contentType: "image/png",
+        kind: "image",
+      }),
+      // Remote URLs carry no MIME; without an explicit image kind the fact
+      // would classify as a generic file and skip image understanding.
+      expect.objectContaining({ url: "https://example.test/remote.png", kind: "image" }),
+    ]);
   });
 
   it("synthesizes plain audioAsVoice text as a QQ voice reply", async () => {
@@ -1549,6 +1581,81 @@ describe("dispatchOutbound", () => {
         "| 17 | 100ms | Lin | daily cap |",
       ].join("\n"),
     ]);
+  });
+
+  it("persists announce routes only for group and guild turns", async () => {
+    const cases = [
+      {
+        type: "group" as const,
+        isGroupChat: true,
+        eventTarget: { groupOpenid: "group-1001" },
+        peerId: "group-1001",
+        qualifiedTarget: "qqbot:group:group-1001",
+      },
+      {
+        type: "guild" as const,
+        isGroupChat: true,
+        eventTarget: { channelId: "channel-2001", guildId: "guild-2001" },
+        peerId: "channel-2001",
+        qualifiedTarget: "qqbot:channel:channel-2001",
+      },
+      {
+        type: "c2c" as const,
+        isGroupChat: false,
+        eventTarget: {},
+        peerId: "user-openid",
+        qualifiedTarget: "qqbot:c2c:user-openid",
+      },
+      {
+        type: "dm" as const,
+        isGroupChat: false,
+        eventTarget: { guildId: "dm-guild-1" },
+        peerId: "user-openid",
+        qualifiedTarget: "qqbot:dm:dm-guild-1",
+      },
+    ];
+
+    for (const testCase of cases) {
+      let record: Record<string, unknown> | undefined;
+      const runtime = makeRuntime({
+        onTurn: (turn) => {
+          record = turn.record as Record<string, unknown> | undefined;
+        },
+        onDeliver: async (deliver) => {
+          await deliver({ text: "hello" }, { kind: "block" });
+        },
+      });
+      const sessionKey = `agent:main:qqbot:${testCase.type}:${testCase.peerId}`;
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: testCase.type,
+            senderId: "user-openid",
+            messageId: `msg-${testCase.type}`,
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+            ...testCase.eventTarget,
+          } as InboundContext["event"],
+          isGroupChat: testCase.isGroupChat,
+          peerId: testCase.peerId,
+          qualifiedTarget: testCase.qualifiedTarget,
+          route: { sessionKey, accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+
+      expect(record).toBeDefined();
+      expect(record?.updateLastRoute).toEqual(
+        testCase.isGroupChat
+          ? {
+              sessionKey,
+              channel: "qqbot",
+              to: testCase.qualifiedTarget,
+              accountId: "qq-main",
+            }
+          : undefined,
+      );
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

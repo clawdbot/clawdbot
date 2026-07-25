@@ -117,6 +117,23 @@ Use `source=npm -f package_spec=openclaw@beta` for published beta proof. Keep
 `workflow_ref` as trusted current harness code unless the release process says
 otherwise.
 
+For extended-stable, branch-owned Full Release Validation is publication
+evidence; Package Acceptance is a post-publish selector smoke:
+
+```bash
+gh workflow run package-acceptance.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=npm \
+  -f package_spec=openclaw@extended-stable \
+  -f suite_profile=package \
+  -f telegram_mode=mock-openai
+```
+
+Record the resolved version. Still verify every package and selector in the
+tag's `all-publishable` inventory; one smoke is not registry readback.
+
 ## Plugin npm Artifact Preflight
 
 Use the trusted `main` workflow to prepare and read back a selected plugin npm

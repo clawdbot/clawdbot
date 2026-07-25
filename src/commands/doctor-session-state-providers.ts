@@ -15,8 +15,8 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
@@ -528,7 +528,7 @@ export async function runPluginSessionStateDoctorRepairs(params: {
         let repaired = 0;
         const repairedAt = Date.now();
         const repairsByKey = new Map(repairs.map((repair) => [repair.key, repair]));
-        await updateSessionStore(params.absoluteStorePath, (currentStore) => {
+        await updateLegacySessionStore(params.absoluteStorePath, (currentStore) => {
           const currentMutableStore = currentStore as unknown as Record<
             string,
             Record<string, unknown>

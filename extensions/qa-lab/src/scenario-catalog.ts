@@ -3,6 +3,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { isRepoRootRelativeRef } from "./cli-paths.js";
+import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 
@@ -121,13 +122,6 @@ const qaScenarioExecutionSchema = z.union([
   qaTestFileScenarioExecutionSchema,
 ]);
 
-const qaCoverageIdSchema = z
-  .string()
-  .trim()
-  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
-    message: "coverage ids must use lowercase dotted tokens",
-  });
-
 const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
 
 const qaScenarioCoverageSchema = z
@@ -175,8 +169,8 @@ const qaScenarioGatewayRuntimeSchema = z.object({
   preserveDebugArtifacts: z.boolean().optional(),
 });
 
-export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;
-const qaRuntimeParityTierSchema = z.enum(QA_RUNTIME_PARITY_TIERS);
+export const QA_RUNTIME_PAIR_LANES = ["core", "extended", "soak"] as const;
+export const qaRuntimePairLaneSchema = z.enum(QA_RUNTIME_PAIR_LANES);
 const qaRuntimeParityUsageSchema = z.discriminatedUnion("expectation", [
   z.object({
     expectation: z.literal("assistant-message-required"),
@@ -295,7 +289,7 @@ const qaSeedScenarioBodySchema = z.object({
   id: z.string().trim().min(1),
   surface: z.string().trim().min(1),
   category: z.string().trim().min(1).optional(),
-  runtimeParityTier: qaRuntimeParityTierSchema.optional(),
+  runtimePairLane: qaRuntimePairLaneSchema.optional(),
   runtimeParityUsage: qaRuntimeParityUsageSchema.optional(),
   coverage: qaScenarioCoverageSchema.optional(),
   surfaces: z.array(z.string().trim().min(1)).min(1).optional(),
@@ -324,11 +318,11 @@ const qaScenarioFileSchema = z
     flow: z.union([qaFlowSchema, qaScenarioModuleFlow.moduleSchema]).optional(),
   })
   .superRefine((file, ctx) => {
-    if (file.scenario.runtimeParityUsage && !file.scenario.runtimeParityTier) {
+    if (file.scenario.runtimeParityUsage && !file.scenario.runtimePairLane) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["scenario", "runtimeParityUsage"],
-        message: "runtimeParityUsage requires runtimeParityTier",
+        message: "runtimeParityUsage requires runtimePairLane",
       });
     }
   });
@@ -350,7 +344,7 @@ const qaScenarioPackFileSchema = z.object({
 
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
-export type QaRuntimeParityTier = z.infer<typeof qaRuntimeParityTierSchema>;
+export type QaRuntimePairLane = z.infer<typeof qaRuntimePairLaneSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
 export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;

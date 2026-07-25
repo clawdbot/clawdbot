@@ -6,11 +6,21 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import {
+  isWellFormedApprovalId,
+  type ApprovalDecision,
+  type ApprovalGetResult,
+  type ApprovalKind,
+  type ApprovalResolveResult,
+  type ApprovalSnapshot,
+} from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
+import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
@@ -86,7 +96,24 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
   file?: string;
   stdin?: boolean;
   agent?: string;
+  reason?: string;
 };
+
+type PendingApprovalCliEntry = {
+  id: string;
+  kind: ApprovalKind;
+  agentId: string | null;
+  sessionKey: string | null;
+  createdAtMs: number;
+  expiresAtMs: number;
+  summary: string;
+};
+
+const APPROVAL_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
+const PENDING_APPROVAL_SUMMARY_MAX_LENGTH = 96;
+const APPROVAL_ID_TOKEN_PREFIX = "id64_";
+const APPROVAL_TERMINAL_UNSAFE_CHAR =
+  /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
 
 async function readStdin(
   stream: NodeJS.ReadableStream = process.stdin,
@@ -97,6 +124,19 @@ async function readStdin(
     onOverflow: ({ maxBytes: limit }) => new Error(`Exec approvals stdin exceeds ${limit} bytes.`),
   });
   return bytes.toString("utf8");
+}
+
+async function readApprovalsFile(filePath: string): Promise<string> {
+  // Explicit CLI file inputs have historically followed symlinks and readable
+  // special files. Pin that opened target while bounding the bytes consumed.
+  const handle = await fs.open(filePath, "r");
+  try {
+    return (await readFileDescriptorBounded(handle.fd, EXEC_APPROVALS_STDIN_MAX_BYTES)).toString(
+      "utf8",
+    );
+  } finally {
+    await handle.close();
+  }
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
@@ -340,6 +380,342 @@ function formatCliError(err: unknown): string {
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
   const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
   return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
+}
+
+function isApprovalDecision(value: string): value is ApprovalDecision {
+  return (APPROVAL_DECISIONS as readonly string[]).includes(value);
+}
+
+function shortenPendingApprovalSummary(value: string): string {
+  if (value.length <= PENDING_APPROVAL_SUMMARY_MAX_LENGTH) {
+    return value;
+  }
+  return `${truncateUtf16Safe(value, PENDING_APPROVAL_SUMMARY_MAX_LENGTH - 3)}...`;
+}
+
+function escapeApprovalTextForTerminal(value: string): string {
+  let escaped = "";
+  for (const char of value) {
+    if (char === "\\") {
+      escaped += "\\\\";
+      continue;
+    }
+    if (APPROVAL_TERMINAL_UNSAFE_CHAR.test(char)) {
+      escaped += `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`;
+      continue;
+    }
+    escaped += char;
+  }
+  return escaped;
+}
+
+// Gateway-minted ids are UUID-shaped, but explicit ids from an agent host are
+// stored verbatim, so hostile ids (ANSI escapes, controls) are possible. Show
+// the raw id when it is terminal-safe; wrap only unsafe ids in a copyable
+// token that `resolve` decodes.
+// Leading hyphen excluded: a raw `-x`/`--flag` id could not be pasted into
+// `approvals resolve <id>` without Commander eating it as an option.
+const APPROVAL_ID_TERMINAL_SAFE_RE = /^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127}$/;
+
+// Tokens encode UTF-16 code units, not UTF-8: ids are opaque JS strings and
+// UTF-8 replaces lone surrogates with U+FFFD, which would let two distinct
+// ids collide into one token on this remote-execution surface.
+function formatApprovalIdForTerminal(value: string): string {
+  if (APPROVAL_ID_TERMINAL_SAFE_RE.test(value)) {
+    return value;
+  }
+  return `${APPROVAL_ID_TOKEN_PREFIX}${Buffer.from(value, "utf16le").toString("base64url")}`;
+}
+
+function decodeDisplayedApprovalId(value: string): string | null {
+  if (!value.startsWith(APPROVAL_ID_TOKEN_PREFIX)) {
+    return null;
+  }
+  const encoded = value.slice(APPROVAL_ID_TOKEN_PREFIX.length);
+  if (!encoded || !/^[a-zA-Z0-9_-]+$/.test(encoded)) {
+    return null;
+  }
+  const decoded = Buffer.from(encoded, "base64url").toString("utf16le");
+  return Buffer.from(decoded, "utf16le").toString("base64url") === encoded ? decoded : null;
+}
+
+function readPendingApprovalEntry(
+  value: unknown,
+  kind: ApprovalKind,
+): PendingApprovalCliEntry | null {
+  if (!isRecord(value) || !isRecord(value.request)) {
+    return null;
+  }
+  // Approval ids are opaque and stored verbatim by the gateway — never trim
+  // them, or two ids differing only in whitespace collapse into one display
+  // form and resolving could target the wrong request. Whitespace-bearing ids
+  // fail the terminal-safe charset and render as exact-round-trip id64 tokens.
+  // Ill-formed (lone-surrogate) ids are skipped outright: the unified
+  // approval.get/resolve schema rejects them, so listing one would advertise
+  // a token that can never be resolved.
+  const id = typeof value.id === "string" && isWellFormedApprovalId(value.id) ? value.id : null;
+  const createdAtMs = value.createdAtMs;
+  const expiresAtMs = value.expiresAtMs;
+  if (
+    !id ||
+    typeof createdAtMs !== "number" ||
+    !Number.isFinite(createdAtMs) ||
+    typeof expiresAtMs !== "number" ||
+    !Number.isFinite(expiresAtMs)
+  ) {
+    return null;
+  }
+  const request = value.request;
+  const agentId = normalizeOptionalString(request.agentId) ?? null;
+  const sessionKey = normalizeOptionalString(request.sessionKey) ?? null;
+  const command = typeof request.command === "string" && request.command ? request.command : null;
+  const title = typeof request.title === "string" && request.title ? request.title : null;
+  const description =
+    typeof request.description === "string" && request.description ? request.description : null;
+  const prose = title && description ? `${title}: ${description}` : (title ?? description);
+  // System-agent approvals stay on their reviewer-safe presentation (title,
+  // description); the raw operation is host-local by contract and must not
+  // leak into terminals, scripts, or logs.
+  const summarySource =
+    kind === "exec"
+      ? command
+      : kind === "plugin" && command
+        ? `${prose ? `${prose} — ` : ""}Command: ${command}`
+        : prose;
+  return {
+    id,
+    kind,
+    agentId,
+    sessionKey,
+    createdAtMs,
+    expiresAtMs,
+    summary: summarySource ?? "(summary unavailable)",
+  };
+}
+
+function readPendingApprovalList(value: unknown, kind: ApprovalKind): PendingApprovalCliEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid ${kind} approval list response.`);
+  }
+  return value.flatMap((entry) => {
+    const parsed = readPendingApprovalEntry(entry, kind);
+    return parsed ? [parsed] : [];
+  });
+}
+
+async function loadPendingApprovals(
+  opts: ExecApprovalsCliOpts,
+): Promise<PendingApprovalCliEntry[]> {
+  // The owner-specific list methods retain requester filtering unless the caller is an admin.
+  // Request admin explicitly so this operator command cannot silently omit live approvals.
+  const listCall = (method: string) =>
+    callGatewayFromCli(method, opts, {}, { scopes: [ADMIN_SCOPE] });
+  const [exec, plugin, systemAgent] = await Promise.all([
+    listCall("exec.approval.list"),
+    listCall("plugin.approval.list"),
+    listCall("openclaw.approval.list"),
+  ]);
+  return [
+    ...readPendingApprovalList(exec, "exec"),
+    ...readPendingApprovalList(plugin, "plugin"),
+    ...readPendingApprovalList(systemAgent, "system-agent"),
+  ].toSorted((a, b) => b.createdAtMs - a.createdAtMs);
+}
+
+function formatPendingAgentSession(entry: PendingApprovalCliEntry): string {
+  const parts = [entry.agentId, entry.sessionKey].filter((value): value is string =>
+    Boolean(value),
+  );
+  return parts.length > 0 ? escapeApprovalTextForTerminal(parts.join(" / ")) : "-";
+}
+
+function renderPendingApprovals(entries: PendingApprovalCliEntry[]): void {
+  if (entries.length === 0) {
+    defaultRuntime.log(theme.muted("No pending approvals."));
+    return;
+  }
+  const now = Date.now();
+  defaultRuntime.log(`${theme.heading("Pending approvals")} ${theme.muted(`(${entries.length})`)}`);
+  defaultRuntime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "ID", header: "ID", minWidth: 16, flex: true },
+        { key: "Kind", header: "Kind", minWidth: 12 },
+        { key: "AgentSession", header: "Agent / Session", minWidth: 16, flex: true },
+        { key: "Requested", header: "Requested", minWidth: 12 },
+        { key: "Expires", header: "Expires In", minWidth: 10 },
+        { key: "Summary", header: "Command / Summary", minWidth: 20, flex: true },
+      ],
+      rows: entries.map((entry) => {
+        const summary = escapeApprovalTextForTerminal(entry.summary);
+        return {
+          ID: formatApprovalIdForTerminal(entry.id),
+          Kind: entry.kind,
+          AgentSession: formatPendingAgentSession(entry),
+          Requested: formatTimeAgo(Math.max(0, now - entry.createdAtMs)),
+          Expires: formatTimeAgo(Math.max(0, entry.expiresAtMs - now), { suffix: false }),
+          Summary: shortenPendingApprovalSummary(summary),
+        };
+      }),
+    }).trimEnd(),
+  );
+  defaultRuntime.log(theme.heading("Full request text"));
+  for (const entry of entries) {
+    defaultRuntime.log(
+      `${formatApprovalIdForTerminal(entry.id)}: ${escapeApprovalTextForTerminal(entry.summary)}`,
+    );
+  }
+}
+
+function approvalRecordedDecision(approval: ApprovalSnapshot): ApprovalDecision | null {
+  return "decision" in approval && isApprovalDecision(approval.decision) ? approval.decision : null;
+}
+
+function formatResolver(approval: ApprovalResolveResult["approval"]): string {
+  const resolver = approval.resolver;
+  if (!resolver) {
+    return "unknown resolver";
+  }
+  return resolver.id
+    ? `${resolver.kind}:${escapeApprovalTextForTerminal(resolver.id)}`
+    : resolver.kind;
+}
+
+function describeTerminalApprovalFailure(approval: ApprovalResolveResult["approval"]): string {
+  const id = formatApprovalIdForTerminal(approval.id);
+  if (approval.status === "expired") {
+    return `Approval ${id} expired.`;
+  }
+  if (approval.status === "cancelled") {
+    return `Approval ${id} was cancelled (${approval.reason}).`;
+  }
+  return `Approval ${id} did not settle to a recorded decision.`;
+}
+
+async function resolvePendingApproval(
+  idInput: string,
+  decisionInput: string,
+  opts: ExecApprovalsCliOpts,
+): Promise<void> {
+  // Never trim the id: `pending --json` emits ids verbatim, and a
+  // whitespace-bearing id fed back through a script must target exactly that
+  // approval, not its trimmed sibling.
+  if (idInput.length === 0) {
+    exitWithError("Approval id required.");
+  }
+  const rawId = idInput;
+  const decision = requireTrimmedNonEmpty(decisionInput, "Decision required.");
+  if (!isApprovalDecision(decision)) {
+    exitWithError(`Decision must be one of: ${APPROVAL_DECISIONS.join(", ")}.`);
+  }
+  const reason = opts.reason === undefined ? null : normalizeOptionalString(opts.reason);
+  if (opts.reason !== undefined && !reason) {
+    exitWithError("Reason must not be empty.");
+  }
+
+  // No explicit device identity: operator.admin authorizes resolution on its
+  // own (canReviewOperatorApproval), and forcing a local identity onto a
+  // loopback token/password session can trigger pairing for an otherwise
+  // authorized credential.
+  const approvalCallOptions = {
+    scopes: [ADMIN_SCOPE, APPROVALS_SCOPE] as OperatorScope[],
+  };
+
+  const lookupOne = async (id: string, tolerateNotFound = false) => {
+    try {
+      return (await callGatewayFromCli(
+        "approval.get",
+        opts,
+        { id },
+        approvalCallOptions,
+      )) as ApprovalGetResult;
+    } catch (error) {
+      if (
+        tolerateNotFound &&
+        formatErrorMessage(error).toLowerCase().includes("approval not found")
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  };
+
+  const decodedId = decodeDisplayedApprovalId(rawId);
+  let id = rawId;
+  let lookup: ApprovalGetResult;
+  if (decodedId && decodedId !== rawId) {
+    const [rawLookup, decodedLookup] = await Promise.all([
+      lookupOne(rawId, true),
+      lookupOne(decodedId, true),
+    ]);
+    if (rawLookup && decodedLookup) {
+      exitWithError(
+        "Approval id is ambiguous: it matches both a raw id and a displayed id token. This CLI cannot resolve it safely.",
+      );
+    }
+    if (rawLookup) {
+      lookup = rawLookup;
+    } else if (decodedLookup) {
+      id = decodedId;
+      lookup = decodedLookup;
+    } else {
+      exitWithError("Approval not found.");
+    }
+  } else {
+    lookup = expectDefined(await lookupOne(rawId), "approval lookup result");
+  }
+  const displayId = formatApprovalIdForTerminal(id);
+  const current = lookup.approval;
+  if (current.status === "pending") {
+    const allowedDecisions = current.presentation.allowedDecisions as readonly ApprovalDecision[];
+    if (!allowedDecisions.includes(decision)) {
+      exitWithError(
+        `Decision ${decision} is not allowed for ${current.presentation.kind} approvals; allowed decisions: ${allowedDecisions.join(", ")}.`,
+      );
+    }
+  }
+
+  const result = (await callGatewayFromCli(
+    "approval.resolve",
+    opts,
+    {
+      id,
+      kind: current.presentation.kind,
+      decision,
+    },
+    approvalCallOptions,
+  )) as ApprovalResolveResult;
+  const recordedDecision = approvalRecordedDecision(result.approval);
+  if (!recordedDecision) {
+    exitWithError(describeTerminalApprovalFailure(result.approval));
+  }
+  if (recordedDecision !== decision) {
+    exitWithError(
+      `Approval ${displayId} was already resolved with ${recordedDecision} by ${formatResolver(result.approval)}.`,
+    );
+  }
+
+  if (opts.json) {
+    defaultRuntime.writeJson(
+      {
+        ...result,
+        alreadyResolved: !result.applied,
+        ...(reason ? { cliReason: reason } : {}),
+      },
+      0,
+    );
+    return;
+  }
+  const settled = result.applied
+    ? `resolved ${recordedDecision}`
+    : `already resolved (same decision: ${recordedDecision})`;
+  const reasonSuffix = reason
+    ? `; CLI reason: ${shortenPendingApprovalSummary(escapeApprovalTextForTerminal(reason))}`
+    : "";
+  defaultRuntime.log(
+    `Approval ${displayId} ${settled} by ${formatResolver(result.approval)}${reasonSuffix}.`,
+  );
 }
 
 async function loadConfigForApprovalsTarget(params: {
@@ -734,12 +1110,44 @@ export function registerExecApprovalsCli(program: Command) {
   const approvals = program
     .command("approvals")
     .alias("exec-approvals")
-    .description("Manage exec approvals (gateway or node host)")
+    .description("Manage approval policy and pending requests")
     .addHelpText(
       "after",
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
     );
+
+  const pendingCmd = approvals
+    .command("pending")
+    .description("List pending exec, plugin, and system-agent approvals")
+    .action(async (opts: ExecApprovalsCliOpts) => {
+      try {
+        const entries = await loadPendingApprovals(opts);
+        if (opts.json) {
+          defaultRuntime.writeJson({ approvals: entries }, 0);
+          return;
+        }
+        renderPendingApprovals(entries);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(pendingCmd);
+
+  const resolveCmd = approvals
+    .command("resolve <id> <decision>")
+    .description("Resolve a pending approval")
+    .option("--reason <text>", "Add a local note to the CLI confirmation")
+    .action(async (id: string, decision: string, opts: ExecApprovalsCliOpts) => {
+      try {
+        await resolvePendingApproval(id, decision, opts);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(resolveCmd);
 
   const getCmd = approvals
     .command("get")
@@ -799,7 +1207,7 @@ export function registerExecApprovalsCli(program: Command) {
         }
         const { source, nodeId, targetLabel, baseHash, kind } =
           await loadWritableSnapshotTarget(opts);
-        const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
+        const raw = opts.stdin ? await readStdin() : await readApprovalsFile(String(opts.file));
         let input: unknown;
         try {
           input = JSON5.parse(raw);

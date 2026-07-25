@@ -15,6 +15,8 @@ import {
   type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
+  type WorkerSessionTurnClaim,
+  type WorkerWorkspaceResultConflict,
 } from "./placement-record.js";
 import {
   ensureLocal,
@@ -38,6 +40,14 @@ import {
   createPlacementWorkspaceResultOps,
   hasWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
+import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
+
+function exactConflictPath(value: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("Worker placement conflict path is required");
+  }
+  return value;
+}
 
 export type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-record.js";
 
@@ -78,6 +88,34 @@ export function createWorkerSessionPlacementStore(
     write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { path }),
   };
   const { read, write } = runtime;
+  const workspaceResultConflicts = new Map<string, WorkerWorkspaceResultConflict>();
+  const withWorkspaceResultConflict = (
+    record: WorkerSessionPlacementRecord | undefined,
+  ): WorkerSessionPlacementRecord | undefined => {
+    if (!record) {
+      return undefined;
+    }
+    const conflict = workspaceResultConflicts.get(record.sessionId);
+    return conflict ? { ...record, workspaceResultConflict: conflict } : record;
+  };
+
+  const requireClaimOwner = (claim: WorkerSessionTurnClaim): void => {
+    const current = find(read(), required(claim.sessionId, "session id"));
+    const persisted = current?.turnClaim;
+    if (
+      claim.owner.kind !== "worker" ||
+      (current?.state !== "active" && current?.state !== "draining") ||
+      current.environmentId !== claim.owner.environmentId ||
+      current.activeOwnerEpoch !== claim.owner.ownerEpoch ||
+      persisted?.owner !== "worker" ||
+      persisted.claimId !== claim.claimId ||
+      persisted.runId !== claim.runId ||
+      persisted.generation !== claim.placementGeneration ||
+      persisted.ownerEpoch !== claim.owner.ownerEpoch
+    ) {
+      throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
+    }
+  };
 
   return {
     ...createPlacementTurnClaimOps(runtime),
@@ -85,7 +123,7 @@ export function createWorkerSessionPlacementStore(
     ...createPlacementWorkspaceResultOps(runtime),
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
-      return find(read(), required(sessionId, "session id"));
+      return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
     },
 
     getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {
@@ -104,10 +142,33 @@ export function createWorkerSessionPlacementStore(
             .where("session_id", "in", chunk),
         ).rows) {
           const record = fromRow(row);
-          records.set(record.sessionId, record);
+          records.set(record.sessionId, withWorkspaceResultConflict(record)!);
         }
       }
       return records;
+    },
+
+    recordWorkspaceResultConflict(
+      claim: WorkerSessionTurnClaim,
+      conflict: WorkerWorkspaceResultConflict | undefined,
+    ): void {
+      requireClaimOwner(claim);
+      if (!conflict) {
+        workspaceResultConflicts.delete(claim.sessionId);
+        return;
+      }
+      const paths = conflict.paths.map(exactConflictPath);
+      const stagedResultRef = required(conflict.stagedResultRef, "staged result ref");
+      if (
+        paths.length === 0 ||
+        !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(stagedResultRef)
+      ) {
+        throw new Error("Cloud workspace result conflict projection is invalid");
+      }
+      workspaceResultConflicts.set(
+        claim.sessionId,
+        projectWorkspaceResultConflict(paths, stagedResultRef, conflict.totalCount),
+      );
     },
 
     startDispatch(input: WorkerSessionPlacementIdentity): WorkerSessionPlacementRecord {
@@ -453,7 +514,7 @@ export function createWorkerSessionPlacementStore(
           .where("state", "not in", ["local", "reclaimed"])
           .orderBy("updated_at_ms")
           .orderBy("session_id"),
-      ).rows.map(fromRow);
+      ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
     },
 
     list(): WorkerSessionPlacementRecord[] {
@@ -461,7 +522,7 @@ export function createWorkerSessionPlacementStore(
       return executeSqliteQuerySync(
         db,
         query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
-      ).rows.map(fromRow);
+      ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
     },
   };
 }

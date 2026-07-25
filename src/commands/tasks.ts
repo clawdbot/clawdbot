@@ -144,7 +144,7 @@ function resolveExplicitCronSessionSegment(sessionKey: string | undefined): stri
 
 function readRunningCronJobIds(): { ids: Set<string>; count: number } {
   try {
-    const cronStorePath = resolveCronJobsStorePath(getRuntimeConfig().cron?.store);
+    const cronStorePath = resolveCronJobsStorePath();
     const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );

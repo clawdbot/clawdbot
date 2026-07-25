@@ -1,7 +1,7 @@
 /** Resolves and emits cron failure-alert notifications. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
@@ -104,21 +104,18 @@ function emitFailureAlert(
   params: {
     job: CronJob;
     error?: string;
+    errorReason?: FailoverReason;
     consecutiveErrors: number;
     channel: CronMessageChannel;
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
     status: "error" | "skipped";
-    provider?: string;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = truncateUtf16Safe(params.error?.trim() || "unknown reason", 200);
-  const errorReason =
-    params.status === "error" && typeof params.error === "string"
-      ? (resolveFailoverReasonFromError(params.error, params.provider) ?? undefined)
-      : undefined;
+  const errorReason = params.status === "error" ? params.errorReason : undefined;
   // Keep alert bodies compact because they may route through chat channels
   // with notification previews and provider-specific message limits.
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
@@ -166,7 +163,7 @@ export function maybeEmitFailureAlert(
     alertConfig: ResolvedFailureAlert | null;
     status: "error" | "skipped";
     error?: string;
-    provider?: string;
+    errorReason?: FailoverReason;
     consecutiveCount: number;
     delivery?: "emit" | "record-only";
     occurredAtMs?: number;
@@ -192,13 +189,13 @@ export function maybeEmitFailureAlert(
     emitFailureAlert(state, {
       job: params.job,
       error: params.error,
+      errorReason: params.errorReason,
       consecutiveErrors: params.consecutiveCount,
       channel: params.alertConfig.channel,
       to: params.alertConfig.to,
       mode: params.alertConfig.mode,
       accountId: params.alertConfig.accountId,
       status: params.status,
-      provider: params.provider,
     });
   }
   params.job.state.lastFailureAlertAtMs = now;

@@ -1,8 +1,4 @@
-/**
- * image_generate built-in tool.
- *
- * Loads references, resolves providers/options, saves generated images, and supports detached background runs.
- */
+/** Runs image generation, persistence, and detached completion. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
@@ -53,6 +49,7 @@ import {
   buildMediaGenerationRequestKey,
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import {
   ToolInputError,
@@ -87,6 +84,7 @@ import {
   applyImageGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  createCapabilityProviderRuntimeDeps,
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
@@ -256,7 +254,7 @@ function resolveImageGenerationModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
+    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.image,
     providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
 }
@@ -268,7 +266,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.imageGenerationModel));
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.image));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
@@ -756,6 +754,7 @@ async function executeImageGenerationJob(params: {
   loadedReferenceImages: LoadedReferenceImage[];
   taskHandle?: ImageGenerationTaskHandle | null;
   autoProviderFallback?: boolean;
+  providers?: ImageGenerationProvider[];
 }) {
   if (params.taskHandle) {
     recordImageGenerationTaskProgress({
@@ -763,25 +762,28 @@ async function executeImageGenerationJob(params: {
       progressSummary: "Generating image",
     });
   }
-  const result = await generateImage({
-    cfg: params.effectiveCfg,
-    prompt: params.prompt,
-    agentDir: params.agentDir,
-    modelOverride: params.model,
-    autoProviderFallback: params.autoProviderFallback,
-    size: params.size,
-    aspectRatio: params.aspectRatio,
-    resolution: params.resolution,
-    inferredResolution: params.inferredResolution,
-    quality: params.quality,
-    outputFormat: params.outputFormat,
-    background: params.background,
-    count: params.count,
-    inputImages: params.inputImages,
-    timeoutMs: params.timeoutMs,
-    providerOptions: params.providerOptions,
-    ssrfPolicy: params.ssrfPolicy,
-  });
+  const result = await generateImage(
+    {
+      cfg: params.effectiveCfg,
+      prompt: params.prompt,
+      agentDir: params.agentDir,
+      modelOverride: params.model,
+      autoProviderFallback: params.autoProviderFallback,
+      size: params.size,
+      aspectRatio: params.aspectRatio,
+      resolution: params.resolution,
+      inferredResolution: params.inferredResolution,
+      quality: params.quality,
+      outputFormat: params.outputFormat,
+      background: params.background,
+      count: params.count,
+      inputImages: params.inputImages,
+      timeoutMs: params.timeoutMs,
+      providerOptions: params.providerOptions,
+      ssrfPolicy: params.ssrfPolicy,
+    },
+    createCapabilityProviderRuntimeDeps(params.providers),
+  );
   if (params.taskHandle) {
     recordImageGenerationTaskProgress({
       handle: params.taskHandle,
@@ -902,20 +904,26 @@ export function createImageGenerateTool(options?: {
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: ImageGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
 }): AnyAgentTool | null {
   const cfg = options?.config ?? getRuntimeConfig();
+  const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
+    ?.imageGenerationProviders
+    ? [...options.preparedModelRuntime.mediaCapabilityProviders.imageGenerationProviders]
+    : undefined;
   if (
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.imageGenerationModel,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.image,
       providerKey: "imageGenerationProviders",
+      providers: preparedProviders,
     })
   ) {
     return null;
@@ -954,7 +962,7 @@ export function createImageGenerateTool(options?: {
 
       const model = readStringParam(params, "model");
       const configuredImageGenerationModelConfig = coerceToolModelConfig(
-        cfg.agents?.defaults?.imageGenerationModel,
+        cfg.agents?.defaults?.mediaModels?.image,
       );
       const imageGenerationModelConfig =
         resolveImageGenerationModelConfigForTool({
@@ -990,9 +998,8 @@ export function createImageGenerateTool(options?: {
       const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
       const background = normalizeBackground(readStringParam(params, "background"));
       const providerOptions = normalizeProviderOptions(params);
-      const imageGenerationProviders = listRuntimeImageGenerationProviders({
-        config: effectiveCfg,
-      });
+      const imageGenerationProviders =
+        preparedProviders ?? listRuntimeImageGenerationProviders({ config: effectiveCfg });
       const selectedProvider = resolveSelectedImageGenerationProvider({
         providers: imageGenerationProviders,
         imageGenerationModelConfig,
@@ -1009,7 +1016,7 @@ export function createImageGenerateTool(options?: {
       });
       const imageGenerationCandidates = resolveCapabilityModelCandidates({
         cfg: effectiveCfg,
-        modelConfig: effectiveCfg.agents?.defaults?.imageGenerationModel,
+        modelConfig: effectiveCfg.agents?.defaults?.mediaModels?.image,
         modelOverride: model,
         parseModelRef: parseImageGenerationModelRef,
         agentDir: options?.agentDir,
@@ -1146,6 +1153,7 @@ export function createImageGenerateTool(options?: {
               loadedReferenceImages,
               taskHandle,
               autoProviderFallback: explicitModelConfig ? false : undefined,
+              providers: imageGenerationProviders,
             }),
         });
 
@@ -1204,6 +1212,7 @@ export function createImageGenerateTool(options?: {
           loadedReferenceImages,
           taskHandle,
           autoProviderFallback: explicitModelConfig ? false : undefined,
+          providers: imageGenerationProviders,
         });
         completeImageGenerationTaskRun({
           handle: taskHandle,

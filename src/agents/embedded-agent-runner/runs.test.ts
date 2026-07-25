@@ -10,6 +10,7 @@ import {
   isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
@@ -437,6 +438,7 @@ describe("embedded-agent runner run registry", () => {
     updateActiveEmbeddedRunSessionFile(
       "session-file-diagnostics",
       "/tmp/openclaw-run-registry-rotated.jsonl",
+      getAgentEventLifecycleGeneration(),
     );
 
     expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(

@@ -5,10 +5,14 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  assertAgentDeletionPathFence,
+  prepareAgentDeletionPathFence,
+} from "./agent-deletion-journal.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
@@ -30,6 +34,10 @@ export function registerOpenClawAgentDatabase(params: {
   path: string;
   env?: NodeJS.ProcessEnv;
 }): void {
+  const deletionFence = prepareAgentDeletionPathFence(
+    { agentId: params.agentId, path: params.path },
+    { env: params.env },
+  );
   let sizeBytes: number | null = null;
   try {
     sizeBytes = statSync(params.path).size;
@@ -39,6 +47,7 @@ export function registerOpenClawAgentDatabase(params: {
   const lastSeenAt = Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
+      assertAgentDeletionPathFence(database.db, deletionFence);
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
         database.db,
@@ -140,8 +149,9 @@ export function listOpenClawRegisteredAgentDatabases(
     );
   }
 
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  const database = openNodeSqliteDatabase(pathname, {
+    readOnly: true,
+  });
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     if (readSqliteUserVersion(database) > OPENCLAW_STATE_SCHEMA_VERSION) {

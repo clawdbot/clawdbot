@@ -21,8 +21,8 @@ Plaintext credentials remain agent-readable if they sit in files the agent can i
 ## Runtime model
 
 - Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
-- Cold Gateway startup isolates unavailable SecretRefs to a known non-Gateway owner when that owner supports isolation. Today this covers model providers, the built-in TTS capability, web search and fetch providers, and webhook routes. The Gateway starts, records that owner as configured-unavailable, and emits a redacted `SECRETS_OWNER_UNAVAILABLE` warning. Gateway ingress auth, structurally invalid refs or resolved values, and refs whose runtime owner is not yet mapped still fail startup.
-- Reload validates each mapped owner independently, then publishes one atomic snapshot. Healthy owners refresh; an unchanged failed owner keeps its last-known-good value and becomes stale, while a changed or new failed owner becomes cold.
+- Cold Gateway startup isolates a retryable SecretRef failure to a known non-Gateway owner when that owner supports isolation. Mapped owner classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. The Gateway starts, records the owner as configured-unavailable, and emits a redacted degradation warning. Gateway ingress auth, structurally invalid refs or resolved values, fail-closed owners, and refs whose runtime owner is not mapped still fail startup.
+- Reload validates each mapped owner independently, then publishes one atomic snapshot. Healthy owners refresh. An eligible failed owner keeps its last-known-good value and becomes stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a changed or new failed owner becomes cold. A strict failure rejects the reload and preserves the active snapshot.
 - Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
 - Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
 
@@ -66,7 +66,7 @@ SecretRefs do not make arbitrary readable files safe. Backups, copied configs, o
 
 SecretRefs are validated only on effectively active surfaces:
 
-- **Enabled surfaces**: unresolved refs block startup/reload.
+- **Enabled surfaces**: retryable failures for mapped, isolatable owners enter cold or stale degradation. Strict, fail-closed, Gateway-required, or unmapped failures block startup/reload.
 - **Inactive surfaces**: unresolved refs do not block startup/reload; they emit a non-fatal `SECRETS_REF_IGNORED_INACTIVE_SURFACE` diagnostic.
 
 <Accordion title="Examples of inactive surfaces">
@@ -189,11 +189,6 @@ Define providers under `secrets.providers`:
       env: "default",
       file: "filemain",
       exec: "vault",
-    },
-    resolution: {
-      maxProviderConcurrency: 4,
-      maxRefsPerProvider: 512,
-      maxBatchBytes: 262144,
     },
   },
 }
@@ -580,7 +575,7 @@ Warning and audit signals:
 - `SECRETS_REF_OVERRIDES_PLAINTEXT` (runtime warning)
 - `REF_SHADOWED` (audit finding when `auth-profiles.json` credentials take precedence over `openclaw.json` refs)
 
-Google Chat compatibility: `serviceAccountRef` takes precedence over plaintext `serviceAccount`; the plaintext value is ignored once the sibling ref is set.
+Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this canonical field when it is unset.
 
 ## Activation triggers
 
@@ -595,9 +590,9 @@ Secret activation runs on:
 Activation contract:
 
 - Success swaps the snapshot atomically.
-- Startup failure aborts gateway startup.
-- During cold startup, a resolution failure for a mapped non-Gateway owner may publish the snapshot with that exact owner configured-unavailable. Requests for the owner fail with `SECRET_SURFACE_UNAVAILABLE`; model-provider owners do not fall back to environment or auth-profile credentials after an explicit ref fails.
-- Reload and restart-check isolate mapped non-Gateway owners. Unchanged refs with unchanged provider definitions retain their exact last-known-good values as stale; changed or newly configured unresolved refs publish cold for only that owner.
+- A strict startup failure aborts Gateway startup.
+- During cold startup, a retryable resolution failure for a mapped, isolatable non-Gateway owner may publish the snapshot with that exact owner configured-unavailable. Requests for the owner fail with `SECRET_SURFACE_UNAVAILABLE`; model-provider owners do not fall back to environment or auth-profile credentials after an explicit ref fails.
+- Reload and restart-check isolate eligible mapped owners. Unchanged ref identities with unchanged provider definitions and an unchanged complete non-secret owner contract retain their exact last-known-good values as stale; changed or newly configured unresolved refs publish cold for only that owner. A strict reload failure preserves the previously active snapshot.
 - `config.set`, `config.apply`, and `config.patch` accept syntactically valid unresolved refs for isolatable owners and return a redacted `degradedSecretOwners` report. Gateway ingress auth, structurally invalid config or resolved values, policy violations, and unknown owners still reject before disk mutation.
 - Healthy sibling owners resolve and publish normally even when another owner is cold or stale.
 - Providing an explicit per-call channel token to an outbound helper/tool call does not trigger SecretRef activation; activation points remain startup, reload, and explicit `secrets.reload`.
@@ -614,8 +609,8 @@ Behavior:
 - Degraded: healthy owners refresh, stale owners keep last-known-good, and cold owners remain unavailable.
 - Recovered: emitted once after the next successful activation.
 - Repeated failures while already degraded log warnings but do not re-emit the event.
-- Startup fail-fast never emits a degraded event, because runtime never became active.
-- Startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. The warning includes the owner kind and id, a redacted reason, `cold` or `stale` state, and the `openclaw secrets reload` retry hint. It never includes resolved values or SecretRef ids.
+- A strict startup failure never emits a degraded event, because runtime never became active. A successful startup with cold owners logs the owner degradation but does not emit a reloader event.
+- Ref-scoped startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. Provider-scoped outages emit one `SECRETS_PROVIDER_DEGRADED` warning with the provider and complete affected-owner list instead of repeating the provider failure per owner. Warnings include a redacted reason, `cold` or `stale` owner state, and the `openclaw secrets reload` retry hint. They never include resolved values or SecretRef ids.
 - `openclaw doctor` lists cold and stale owners with their affected config paths, redacted reason, and retry guidance.
 
 ## Command-path resolution

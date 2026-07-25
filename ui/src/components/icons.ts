@@ -12,11 +12,27 @@ export const icons = {
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
     </svg>
   `,
+  layoutGrid: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="7" height="7" x="3" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="14" rx="1" />
+      <rect width="7" height="7" x="3" y="14" rx="1" />
+    </svg>
+  `,
   barChart: html`
     <svg viewBox="0 0 24 24">
       <line x1="12" x2="12" y1="20" y2="10" />
       <line x1="18" x2="18" y1="20" y2="4" />
       <line x1="6" x2="6" y1="20" y2="16" />
+    </svg>
+  `,
+  layoutDashboard: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="7" height="9" x="3" y="3" rx="1" />
+      <rect width="7" height="5" x="14" y="3" rx="1" />
+      <rect width="7" height="9" x="14" y="12" rx="1" />
+      <rect width="7" height="5" x="3" y="16" rx="1" />
     </svg>
   `,
   coins: html`
@@ -205,6 +221,14 @@ export const icons = {
       <circle cx="12" cy="12" r="2" />
     </svg>
   `,
+  switchCamera: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M11 19H6.5a4.5 4.5 0 0 1 0-9H8" />
+      <path d="m8 16 3 3-3 3" />
+      <path d="M13 5h4.5a4.5 4.5 0 0 1 0 9H16" />
+      <path d="m16 8-3-3 3-3" />
+    </svg>
+  `,
   archive: html`
     <svg viewBox="0 0 24 24">
       <rect width="20" height="5" x="2" y="3" rx="1" />
@@ -225,6 +249,41 @@ export const icons = {
       <path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
       <path d="M12 9v4" />
       <path d="M12 17h.01" />
+    </svg>
+  `,
+  hand: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M18 11V6a2 2 0 0 0-4 0v5" />
+      <path d="M14 10V4a2 2 0 0 0-4 0v6" />
+      <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
+      <path d="M6 14v-2a2 2 0 0 0-4 0v4c0 4.4 3.6 8 8 8h2c4.4 0 8-3.6 8-8v-5a2 2 0 0 0-4 0v2" />
+    </svg>
+  `,
+  key: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="7.5" cy="15.5" r="5.5" />
+      <path d="m21 2-9.6 9.6" />
+      <path d="m15.5 7.5 3 3L22 7l-3-3" />
+    </svg>
+  `,
+  flag: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M5 22V4" />
+      <path d="M5 4c5-4 9 4 14 0v11c-5 4-9-4-14 0" />
+    </svg>
+  `,
+  lock: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="18" height="11" x="3" y="11" rx="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  `,
+  hourglass: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M5 22h14" />
+      <path d="M5 2h14" />
+      <path d="M17 22v-4.2a4 4 0 0 0-1.2-2.8L12 11l-3.8 4A4 4 0 0 0 7 17.8V22" />
+      <path d="M7 2v4.2A4 4 0 0 0 8.2 9l3.8 4 3.8-4A4 4 0 0 0 17 6.2V2" />
     </svg>
   `,
   layoutComfortable: html`
@@ -252,6 +311,7 @@ export const icons = {
   `,
   arrowDown: html` <svg viewBox="0 0 24 24"><path d="M12 5v14m7-7-7 7-7-7" /></svg> `,
   arrowUp: html` <svg viewBox="0 0 24 24"><path d="M12 19V5m-7 7 7-7 7 7" /></svg> `,
+  chevronUp: html` <svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6" /></svg> `,
   arrowLeft: html`
     <svg viewBox="0 0 24 24">
       <path d="m12 19-7-7 7-7" />

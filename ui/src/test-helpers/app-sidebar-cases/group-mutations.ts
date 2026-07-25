@@ -19,7 +19,14 @@ describe("AppSidebar group mutation collapsed state", () => {
   }) {
     localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(["category:Alpha"]));
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
-    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:alpha"]);
+    const alpha = harness.sessions.state.result?.sessions.find(
+      (row) => row.key === "agent:main:alpha",
+    );
+    if (!alpha) {
+      throw new Error("expected Alpha session fixture");
+    }
+    alpha.category = "Alpha";
     if (options.groupsRename) {
       harness.groupsRename.mockImplementation(options.groupsRename);
     }
@@ -95,8 +102,8 @@ describe("AppSidebar group mutation collapsed state", () => {
     menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
     await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
 
-    gatewayHarness.publish({ connected: false });
-    gatewayHarness.publish({ connected: true });
+    gatewayHarness.publish({ phase: "stopped" });
+    gatewayHarness.publish({ phase: "connected" });
     resolveRename("stale");
     await Promise.resolve();
     await Promise.resolve();

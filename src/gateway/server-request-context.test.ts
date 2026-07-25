@@ -7,6 +7,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 
@@ -15,6 +16,7 @@ type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
+  const config = {} as never;
   const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
@@ -29,7 +31,8 @@ function makeContextParams(
   return {
     deps: {} as never,
     runtimeState,
-    getRuntimeConfig: vi.fn(() => ({}) as never),
+    getRuntimeConfig: vi.fn(() => config),
+    sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
       ok: false as const,
       block: { kind: "disabled" as const },
@@ -39,7 +42,12 @@ function makeContextParams(
     pluginApprovalManager: undefined,
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
-    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+      agentDir: "/tmp/model-catalog-agent",
+      config,
+      entries: [],
+      routeVariants: [],
+    })),
     getHealthCache: vi.fn(() => null),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     logHealth: { error: vi.fn() },
@@ -53,21 +61,14 @@ function makeContextParams(
     nodeSubscribe: vi.fn(),
     nodeUnsubscribe: vi.fn(),
     nodeUnsubscribeAll: vi.fn(),
-    hasConnectedTalkNode: vi.fn(() => false),
+    hasConnectedTalkNode: vi.fn(async () => false),
     clients: new Set(),
     enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
-    nodeRegistry: {} as never,
+    nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
-    chatAbortedRuns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    clearChatRunState: vi.fn(),
+    chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     subscribeSessionEvents: vi.fn(),
@@ -297,9 +298,14 @@ describe("createGatewayRequestContext", () => {
     };
     const clients = new Set([target, unrelated]) as never;
     const invalidateDeviceTransports = vi.fn();
+    const invalidateConnectionForPairingChange = vi.fn();
 
     const context = createGatewayRequestContext(
-      makeContextParams({ clients, invalidateDeviceTransports }),
+      makeContextParams({
+        clients,
+        invalidateDeviceTransports,
+        nodeRegistry: { invalidateConnectionForPairingChange } as never,
+      }),
     );
     context.invalidateClientsForDevice?.("device-1", { reason: "device-token-rotated" });
 
@@ -308,6 +314,10 @@ describe("createGatewayRequestContext", () => {
       "device-token-rotated",
     );
     expect(target.socket.close).not.toHaveBeenCalled();
+    expect(invalidateConnectionForPairingChange).toHaveBeenCalledWith(
+      "conn-target",
+      "device-token-rotated",
+    );
 
     expect((unrelated as { invalidated?: boolean }).invalidated).toBeUndefined();
     expect(unrelated.socket.close).not.toHaveBeenCalled();

@@ -8,10 +8,19 @@ import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
 
-vi.mock("../plugins/providers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: vi.fn(async () => []),
+}));
+
+vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
+  // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
+  loadPreparedModelCatalog: vi.fn(async () => []),
 }));
 
 const overview: SystemAgentOverview = {
@@ -149,7 +158,7 @@ describe("runSystemAgentTui", () => {
     if (!options.backend || typeof options.backend !== "object") {
       throw new Error("expected openclaw TUI backend");
     }
-  });
+  }, 240_000);
 
   it("reports the verified model without its auth profile and the effective thinking level", async () => {
     const config = {
@@ -229,6 +238,36 @@ describe("runSystemAgentTui", () => {
 
           await expect(backend.listSessions()).resolves.toMatchObject({
             sessions: [{ model: "gpt-5.6-sol", thinkingLevel: "medium" }],
+          });
+          return { exitReason: "exit" };
+        },
+      },
+      createRuntime(),
+    );
+  });
+
+  it("reports that /model cannot replace the active verified inference route", async () => {
+    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+
+    await runSystemAgentTui(
+      {
+        ...verified,
+        runTui: async (opts) => {
+          const backend = opts.backend as unknown as {
+            patchSession: (opts: { key: string; model: string }) => Promise<unknown>;
+            listSessions: () => Promise<{
+              sessions: Array<{ model?: string; modelProvider?: string }>;
+            }>;
+          };
+
+          await expect(
+            backend.patchSession({
+              key: "agent:openclaw:main",
+              model: "anthropic/claude-opus-4-8",
+            }),
+          ).rejects.toThrow("cannot change the model inside its active verified session");
+          await expect(backend.listSessions()).resolves.toMatchObject({
+            sessions: [{ model: "gpt-5.5", modelProvider: "openai" }],
           });
           return { exitReason: "exit" };
         },

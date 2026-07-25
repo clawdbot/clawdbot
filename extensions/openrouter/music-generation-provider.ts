@@ -295,7 +295,9 @@ async function readOpenRouterAudioStream(
       for (const line of lines) {
         if (processOpenRouterSseLine(line.trim(), result)) {
           flushOpenRouterMusicAudio(result);
-          await reader.cancel();
+          // Once [DONE] is observed, the generated result is authoritative.
+          // Cancellation is cleanup and must not replace it with a transport error.
+          await reader.cancel().catch(() => {});
           return {
             audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
             transcript: result.transcriptChunks.join(""),

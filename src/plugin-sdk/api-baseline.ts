@@ -611,8 +611,7 @@ function buildModuleSurface(params: {
   const metadata = Object.hasOwn(pluginSdkDocMetadata, entrypoint)
     ? pluginSdkDocMetadata[entrypoint as PluginSdkDocEntrypoint]
     : undefined;
-  const importSpecifier =
-    entrypoint === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entrypoint}`;
+  const importSpecifier = `openclaw/plugin-sdk/${entrypoint}`;
   const moduleSourcePath = path.join(repoRoot, "src", "plugin-sdk", `${entrypoint}.ts`);
   const sourceFile = program.getSourceFile(moduleSourcePath);
   assert(sourceFile, `Missing source file for ${importSpecifier}`);

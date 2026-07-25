@@ -1,7 +1,13 @@
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
+import type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
 import {
+  buildOpenAICompatibleLiveModels,
+  readLiveModelCatalogRecord,
+} from "./provider-catalog-live-normalize.internal.js";
+import {
+  buildSingleProviderApiKeyCatalog,
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
@@ -74,6 +80,28 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
     ttlMs?: number;
     cacheKeyParts?: readonly unknown[];
   };
+
+export type OpenAICompatibleModelDiscoveryOptions = {
+  /** Fixed endpoint used only while the effective inference base remains canonical. */
+  endpointUrl?: {
+    url: string;
+    requireBaseUrl: string;
+  };
+  /** Relative path appended to the effective provider base URL. Defaults to `models`. */
+  endpointPath?: string;
+  /** Provider-specific response row selector when the response is not `{ data: [] }`. */
+  readRows?: FetchLiveProviderModelRowsParams["readRows"];
+  /** Provider-specific authorization headers for non-Bearer model-list APIs. */
+  buildRequestHeaders?: FetchLiveProviderModelRowsParams["buildRequestHeaders"];
+};
+
+export type BuildOpenAICompatibleProviderCatalogParams = {
+  ctx: ProviderCatalogContext;
+  providerId: string;
+  buildProvider: () => ModelProviderConfig | Promise<ModelProviderConfig>;
+  allowExplicitBaseUrl?: boolean;
+  modelDiscovery?: OpenAICompatibleModelDiscoveryOptions;
+};
 
 function readDefaultLiveModelCatalogRows(body: unknown): readonly unknown[] {
   if (Array.isArray(body)) {
@@ -164,12 +192,6 @@ function readLiveModelCatalogString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function readLiveModelCatalogRecord(body: unknown): Record<string, unknown> | undefined {
-  return body && typeof body === "object" && !Array.isArray(body)
-    ? (body as Record<string, unknown>)
-    : undefined;
-}
-
 function readLiveModelCatalogNextUrl(body: unknown): string | undefined {
   const record = readLiveModelCatalogRecord(body);
   if (!record) {
@@ -181,7 +203,7 @@ function readLiveModelCatalogNextUrl(body: unknown): string | undefined {
 
 function readLiveModelCatalogCursor(
   body: unknown,
-): { name: "after" | "pageToken"; value: string } | undefined {
+): { name: "after" | "after_id" | "pageToken" | "page_token"; value: string } | undefined {
   const record = readLiveModelCatalogRecord(body);
   if (!record || record.has_more === false) {
     return undefined;
@@ -190,8 +212,17 @@ function readLiveModelCatalogCursor(
   if (nextCursor) {
     return { name: "after", value: nextCursor };
   }
+  const lastId =
+    readLiveModelCatalogString(record.last_id) ?? readLiveModelCatalogString(record.lastId);
+  if (lastId) {
+    return { name: "after_id", value: lastId };
+  }
   const nextPageToken = readLiveModelCatalogString(record.nextPageToken);
-  return nextPageToken ? { name: "pageToken", value: nextPageToken } : undefined;
+  if (nextPageToken) {
+    return { name: "pageToken", value: nextPageToken };
+  }
+  const nextPageTokenSnakeCase = readLiveModelCatalogString(record.next_page_token);
+  return nextPageTokenSnakeCase ? { name: "page_token", value: nextPageTokenSnakeCase } : undefined;
 }
 
 type LiveModelCatalogNextPageResolution =
@@ -208,8 +239,17 @@ function bodyAdvertisesMoreLiveModelCatalogPages(body: unknown): boolean {
     record.has_more === true ||
     readLiveModelCatalogNextUrl(body) ||
     readLiveModelCatalogString(record.next_cursor) ||
-    readLiveModelCatalogString(record.nextPageToken),
+    readLiveModelCatalogString(record.nextPageToken) ||
+    readLiveModelCatalogString(record.next_page_token),
   );
+}
+
+function tryParseUrl(url: string, base?: string): URL | undefined {
+  try {
+    return new URL(url, base);
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveLiveModelCatalogNextPage(
@@ -218,16 +258,33 @@ function resolveLiveModelCatalogNextPage(
 ): LiveModelCatalogNextPageResolution {
   const rawNextUrl = readLiveModelCatalogNextUrl(body);
   if (rawNextUrl) {
-    const nextUrl = new URL(rawNextUrl, currentUrl);
-    if (nextUrl.origin === new URL(currentUrl).origin) {
+    const currentParsed = tryParseUrl(currentUrl);
+    const nextUrl = tryParseUrl(rawNextUrl, currentUrl);
+    if (nextUrl && currentParsed && nextUrl.origin === currentParsed.origin) {
       return { status: "next", url: nextUrl.toString() };
     }
+    // The provider advertised a next URL but it is malformed or cross-origin.
+    // Attempt cursor-based pagination as a fallback before giving up.
+    const cursor = readLiveModelCatalogCursor(body);
+    if (cursor) {
+      const cursorUrl = tryParseUrl(currentUrl);
+      if (cursorUrl) {
+        cursorUrl.searchParams.set(cursor.name, cursor.value);
+        return { status: "next", url: cursorUrl.toString() };
+      }
+    }
+    // No usable fallback: the provider explicitly advertised a next page we
+    // cannot follow. Return incomplete so the caller surfaces a controlled
+    // error instead of silently returning a truncated catalog.
+    return { status: "incomplete" };
   }
   const cursor = readLiveModelCatalogCursor(body);
   if (cursor) {
-    const nextUrl = new URL(currentUrl);
-    nextUrl.searchParams.set(cursor.name, cursor.value);
-    return { status: "next", url: nextUrl.toString() };
+    const nextUrl = tryParseUrl(currentUrl);
+    if (nextUrl) {
+      nextUrl.searchParams.set(cursor.name, cursor.value);
+      return { status: "next", url: nextUrl.toString() };
+    }
   }
   return bodyAdvertisesMoreLiveModelCatalogPages(body)
     ? { status: "incomplete" }
@@ -302,7 +359,14 @@ export async function fetchLiveProviderModelRows(
       safeReplayHeaders,
     });
     rows.push(...result.rows);
-    if (safeReplayHeaders || new URL(result.finalUrl).origin !== new URL(requestedPageUrl).origin) {
+    const finalParsed = tryParseUrl(result.finalUrl);
+    const requestedParsed = tryParseUrl(requestedPageUrl);
+    if (
+      safeReplayHeaders ||
+      !finalParsed ||
+      !requestedParsed ||
+      finalParsed.origin !== requestedParsed.origin
+    ) {
       safeReplayHeaders = new Headers(
         retainSafeHeadersForCrossOriginRedirect(result.requestHeaders),
       );
@@ -397,4 +461,91 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
     // when discovery is unavailable or the provider returns an unexpected body.
   }
   return buildProviderConfig(params, params.models);
+}
+
+function resolveLiveModelDiscoveryEndpoint(baseUrl: string, endpointPath: string): string {
+  const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  const normalizedPath = endpointPath.trim().replace(/^\/+/, "");
+  return `${normalizedBaseUrl}/${normalizedPath}`;
+}
+
+function resolveFixedLiveModelDiscoveryEndpoint(
+  baseUrl: string,
+  endpoint: NonNullable<OpenAICompatibleModelDiscoveryOptions["endpointUrl"]>,
+): string | undefined {
+  const effectiveBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  const requiredBaseUrl = endpoint.requireBaseUrl.trim().replace(/\/+$/, "");
+  return effectiveBaseUrl === requiredBaseUrl ? endpoint.url : undefined;
+}
+
+export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
+  providerId: string;
+  providerConfig: ModelProviderConfig;
+  apiKey?: string;
+  discoveryApiKey?: string;
+  modelDiscovery?: OpenAICompatibleModelDiscoveryOptions;
+  fetchGuard?: LiveModelCatalogFetchGuard;
+  signal?: AbortSignal;
+}): Promise<ModelProviderConfig> {
+  const fallback = {
+    ...params.providerConfig,
+    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
+  };
+  const endpoint = params.modelDiscovery?.endpointUrl
+    ? resolveFixedLiveModelDiscoveryEndpoint(fallback.baseUrl, params.modelDiscovery.endpointUrl)
+    : resolveLiveModelDiscoveryEndpoint(
+        fallback.baseUrl,
+        params.modelDiscovery?.endpointPath ?? "models",
+      );
+  if (!endpoint) {
+    return fallback;
+  }
+  try {
+    const rows = await getCachedLiveProviderModelRows({
+      providerId: params.providerId,
+      endpoint,
+      apiKey: params.apiKey,
+      discoveryApiKey: params.discoveryApiKey,
+      fetchGuard: params.fetchGuard,
+      signal: params.signal,
+      ttlMs: 60_000,
+      auditContext: `${params.providerId}-model-discovery`,
+      readRows: params.modelDiscovery?.readRows,
+      buildRequestHeaders: params.modelDiscovery?.buildRequestHeaders,
+      shouldCacheRows: (modelRows) =>
+        buildOpenAICompatibleLiveModels(modelRows, fallback).length > 0,
+    });
+    const models = buildOpenAICompatibleLiveModels(rows, fallback);
+    if (models.length > 0) {
+      return { ...fallback, models };
+    }
+  } catch {
+    // Provider catalogs are advisory. Preserve the provider-owned seed when
+    // credentials, networking, or a vendor response prevents live discovery.
+  }
+  return fallback;
+}
+
+export async function buildOpenAICompatibleProviderCatalog(
+  params: BuildOpenAICompatibleProviderCatalogParams,
+): Promise<ProviderCatalogResult> {
+  const result = await buildSingleProviderApiKeyCatalog({
+    ctx: params.ctx,
+    providerId: params.providerId,
+    buildProvider: params.buildProvider,
+    allowExplicitBaseUrl: params.allowExplicitBaseUrl,
+  });
+  if (!result || !("provider" in result)) {
+    return result;
+  }
+  const auth = params.ctx.resolveProviderApiKey(params.providerId);
+  return {
+    provider: await buildOpenAICompatibleLiveModelProviderConfig({
+      providerId: params.providerId,
+      providerConfig: result.provider,
+      apiKey: auth.apiKey,
+      discoveryApiKey: auth.discoveryApiKey,
+      modelDiscovery: params.modelDiscovery,
+    }),
+  };
 }

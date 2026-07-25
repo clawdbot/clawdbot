@@ -260,6 +260,52 @@ docker_build_resource_exhausted_failure "$LOG_PATH"
     }
   });
 
+  it("detects compiler processes killed by the OOM killer", () => {
+    const workDir = tempDirs.make("openclaw-docker-build-killed-compiler-");
+    const logPath = join(workDir, "docker-build.log");
+    writeFileSync(logPath, "c++: fatal error: Killed signal terminated program cc1plus\n");
+    const rootDir = process.cwd();
+    const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+LOG_PATH=${shellQuote(logPath)}
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+docker_build_resource_exhausted_failure "$LOG_PATH"
+`;
+
+    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+  });
+
+  it("retries Corepack connect timeouts without misreading Dockerfile comments as OOM", () => {
+    const workDir = tempDirs.make("openclaw-docker-build-connect-timeout-");
+
+    try {
+      const logPath = join(workDir, "docker-build.log");
+      writeFileSync(
+        logPath,
+        [
+          '# Docker builds on small VMs may otherwise fail with "Killed" (exit 137).',
+          "ConnectTimeoutError: Connect Timeout Error (attempted addresses: 192.0.2.1:443)",
+        ].join("\n"),
+      );
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+LOG_PATH=${shellQuote(logPath)}
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+docker_build_transient_failure "$LOG_PATH"
+if docker_build_resource_exhausted_failure "$LOG_PATH"; then
+  exit 3
+fi
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps shell-script Docker builds behind the helper", () => {
     for (const path of CENTRALIZED_BUILD_SCRIPTS) {
       const script = readFileSync(path, "utf8");
@@ -3695,12 +3741,11 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     );
   });
 
-  it("keeps private bundled plugins discoverable in the functional Docker E2E image", () => {
+  it("keeps private bundled plugins discoverable without persisting a curated registry", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
 
-    expect(dockerfile).toContain(
-      "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 node /app/scripts/postinstall-bundled-plugins.mjs",
-    );
+    expect(dockerfile).toContain("runBundledPluginPostinstall");
+    expect(dockerfile).not.toContain("node /app/scripts/postinstall-bundled-plugins.mjs");
   });
 
   it("keeps onboarding Docker E2E resource-guarded", () => {
@@ -3807,6 +3852,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain("sample_openwebui_stats_once()");
     expect(runner).toContain("start_openwebui_stats_sampler()");
     expect(runner).toContain("start_openwebui_stats_sampler\n");
+    expect(runner).toContain('node "$entry" doctor --fix --yes --force');
+    expect(runner).toContain(`openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan`);
     expect(runner).toContain('for container_name in "$GW_NAME" "$OW_NAME"; do');
     expect(runner).toContain('"$GW_NAME" \\');
     expect(runner).toContain('"$OW_NAME" \\');
@@ -4796,6 +4843,9 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     );
     expect(runner).toContain('docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"');
     expect(runner).not.toMatch(/(^|\n)docker run --rm/u);
+    expect(runner).toContain(
+      "lets authorized gateway-style plugin commands escape plugin-owned bindings",
+    );
     expect(runner).toContain(
       "keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin",
     );

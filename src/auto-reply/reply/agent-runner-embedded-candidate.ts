@@ -210,6 +210,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         sandboxSessionKey: turn.runtimePolicySessionKey,
         prompt: turn.commandBody,
         transcriptPrompt: turn.transcriptCommandBody,
+        media: turn.followupRun.media,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,

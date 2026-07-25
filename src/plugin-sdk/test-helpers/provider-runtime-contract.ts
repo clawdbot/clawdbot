@@ -759,7 +759,6 @@ export function describeVeniceProviderRuntimeContract(load: ProviderRuntimeContr
       });
       const compat = requireRecord(model?.compat, "compat");
       expect(compat.toolSchemaProfile).toBe("xai");
-      expect(compat.nativeWebSearchTool).toBe(true);
       expect(compat.toolCallArgumentsEncoding).toBe("html-entities");
     });
   });
@@ -798,6 +797,26 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
         api: "openai-completions",
         reasoning: true,
       });
+    });
+
+    it("owns Z.AI token-limit overflow classification", () => {
+      const provider = requireProviderContractProvider("zai");
+
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1210: tokens in request more than max tokens allowed",
+        }),
+      ).toBe(true);
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1261: Prompt exceeds max length",
+        }),
+      ).toBe(true);
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1210: invalid request parameters",
+        }),
+      ).toBe(false);
     });
 
     it("owns usage auth resolution", async () => {

@@ -345,6 +345,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
         firstModelCallStarted: true,
       });
     },
+    suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
   return {
     cacheObservabilityEnabled,

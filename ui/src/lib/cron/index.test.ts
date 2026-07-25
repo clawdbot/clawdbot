@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../api/types.ts";
@@ -863,6 +864,56 @@ describe("cron controller", () => {
     expect(patch).not.toHaveProperty("payload");
   });
 
+  it("loads and preserves script payloads as read-only metadata edits", async () => {
+    const scriptJob = {
+      id: "job-script",
+      name: "Script",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every" as const, everyMs: 600_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: {
+        kind: "script" as const,
+        script: "const result = await agent('check status')",
+        toolBudget: 4,
+      },
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return { jobs: [scriptJob], total: 1, hasMore: false, nextOffset: null };
+      }
+      if (method === "cron.update") {
+        return { id: scriptJob.id };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+    });
+
+    await loadCronJobsPage(state);
+    expect(state.cronJobs).toEqual([scriptJob]);
+
+    startCronEdit(state, scriptJob);
+    expect(state.cronForm.payloadKind).toBe("script");
+    expect(state.cronForm.payloadLocked).toBe(true);
+    expect(state.cronForm.payloadText).toBe(scriptJob.payload.script);
+
+    state.cronForm.name = "Script renamed";
+    await addCronJob(state);
+
+    const patch = requestPatch(findRequestCall(request.mock.calls, "cron.update"));
+    expect(patch.name).toBe("Script renamed");
+    expect(patch).not.toHaveProperty("payload");
+  });
+
   it("preserves on-exit schedules when editing Control UI metadata", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
@@ -902,6 +953,47 @@ describe("cron controller", () => {
     const updateCall = findRequestCall(request.mock.calls, "cron.update");
     const patch = requestPatch(updateCall);
     expect(patch.name).toBe("On exit renamed");
+    expect(patch).not.toHaveProperty("schedule");
+    expect(state.cronFieldErrors).toEqual({});
+  });
+
+  it("preserves stream schedules when editing Control UI metadata", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.update") {
+        return { id: "job-stream" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-stream" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-stream",
+      name: "Stream",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "stream" as const, command: ["node", "events.mjs"] },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "report" },
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.name = "Stream renamed";
+    await addCronJob(state);
+
+    const patch = requestPatch(findRequestCall(request.mock.calls, "cron.update"));
+    expect(patch.name).toBe("Stream renamed");
     expect(patch).not.toHaveProperty("schedule");
     expect(state.cronFieldErrors).toEqual({});
   });

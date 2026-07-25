@@ -44,7 +44,7 @@ command handling is enabled for the surface.
       do **not** persist session settings.
     - Directives only apply for **authorized senders**. If `commands.allowFrom`
       is set, it is the only allowlist used; otherwise authorization comes from
-      channel allowlists/pairing plus `commands.useAccessGroups`. Unauthorized
+      channel allowlists, pairing, and always-on access-group enforcement. Unauthorized
       senders see directives treated as plain text.
   </Accordion>
 </AccordionGroup>
@@ -148,10 +148,6 @@ command handling is enabled for the surface.
   Per-provider allowlist for command authorization. When configured, it is the
   **only** authorization source for commands and directives. Use `"*"` for a
   global default; provider-specific keys override it.
-</ParamField>
-
-<ParamField path="commands.useAccessGroups" type="boolean" default="true">
-  Enforces allowlists/policies for commands when `commands.allowFrom` is not set.
 </ParamField>
 
 ## Command list
@@ -371,8 +367,9 @@ use the Control UI Tools panel or config surfaces.
 ```
 
 On Discord, `/model` and `/models` open an interactive picker with provider and
-model dropdowns. The picker respects `agents.defaults.models`, including
-`provider/*` entries.
+model dropdowns. The picker respects `agents.defaults.modelPolicy.allow`,
+including `provider/*` entries. Without an explicit allowlist, model entries and
+aliases do not restrict selection.
 
 ## `/config`: on-disk config writes
 
@@ -382,10 +379,10 @@ model dropdowns. The picker respects `agents.defaults.models`, including
 
 ```text
 /config show
-/config show messages.responsePrefix
-/config get messages.responsePrefix
-/config set messages.responsePrefix="[openclaw]"
-/config unset messages.responsePrefix
+/config show channels.whatsapp.responsePrefix
+/config get channels.whatsapp.responsePrefix
+/config set channels.whatsapp.responsePrefix="[openclaw]"
+/config unset channels.whatsapp.responsePrefix
 ```
 
 Config is validated before write. Invalid changes are rejected. `/config`
@@ -420,9 +417,9 @@ chat.
 
 ```text
 /debug show
-/debug set messages.responsePrefix="[openclaw]"
+/debug set channels.whatsapp.responsePrefix="[openclaw]"
 /debug set channels.whatsapp.allowFrom=["+1555","+4477"]
-/debug unset messages.responsePrefix
+/debug unset channels.whatsapp.responsePrefix
 /debug reset
 ```
 

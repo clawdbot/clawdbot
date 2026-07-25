@@ -85,9 +85,10 @@ import {
 } from "./monitor-ingress.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import {
+  buildMattermostInboundMediaPayload,
   createMattermostMonitorResources,
   formatMattermostInboundMediaText,
-  type MattermostMediaInfo,
+  formatMattermostPendingMediaText,
 } from "./monitor-resources.js";
 import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 import {
@@ -108,7 +109,6 @@ import type {
   RuntimeEnv,
 } from "./runtime-api.js";
 import {
-  buildAgentMediaPayload,
   buildModelsProviderData,
   createChannelHistoryWindow,
   createChannelPairingController,
@@ -141,8 +141,6 @@ type MonitorMattermostOpts = {
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
   webSocketFactory?: MattermostWebSocketFactory;
 };
-
-type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 type MattermostReaction = {
   user_id?: string;
@@ -195,25 +193,6 @@ function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermo
     settleBoundaries: noopAsync,
     resolveFinalText: (text) => ({ kind: "full", text }),
   };
-}
-
-function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
-  if (mediaList.length === 0) {
-    return "";
-  }
-  if (mediaList.length === 1) {
-    const media = mediaList[0];
-    if (!media) {
-      return "";
-    }
-    const kind = media.kind === "unknown" ? "document" : media.kind;
-    return `<media:${kind}>`;
-  }
-  const allImages = mediaList.every((media) => media.kind === "image");
-  const label = allImages ? "image" : "file";
-  const suffix = mediaList.length === 1 ? label : `${label}s`;
-  const tag = allImages ? "<media:image>" : "<media:document>";
-  return `${tag} (${mediaList.length} ${suffix})`;
 }
 
 function buildMattermostWsUrl(baseUrl: string): string {
@@ -605,7 +584,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
     mediaMaxBytes,
     saveRemoteMedia: (params) => core.channel.media.saveRemoteMedia(params),
-    mediaKindFromMime: (contentType) => core.media.mediaKindFromMime(contentType) as MediaKind,
+    mediaKindFromMime: (contentType) => core.media.mediaKindFromMime(contentType),
   });
 
   const runModelPickerCommand = async (params: {
@@ -1144,6 +1123,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
     const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
     const historyKey = resolveMattermostPendingHistoryKey({ kind, sessionKey });
+    const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
+    const nativeMedia = fileIds.map(() => ({}));
 
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
     const wasMentioned =
@@ -1154,11 +1135,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           )
         : false) ||
         core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
-    const pendingBody =
-      rawText ||
-      (post.file_ids?.length
-        ? `[Mattermost ${post.file_ids.length === 1 ? "file" : "files"}]`
-        : "");
+    const pendingBody = formatMattermostPendingMediaText({
+      body: rawText,
+      media: nativeMedia,
+    });
     const pendingSender = senderName;
     const recordPendingHistory = () => {
       const trimmed = pendingBody.trim();
@@ -1242,19 +1222,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       recordPendingHistory();
       return;
     }
-    const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
     const mediaList = await resolveMattermostMedia(fileIds);
-    const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
     const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
-    const downloadedText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
     const baseText = formatMattermostInboundMediaText({
-      body: downloadedText,
-      mediaPlaceholder,
-      expectedCount: fileIds.length,
-      mediaCount: mediaList.length,
+      body: bodySource,
+      nativeMedia,
+      materializedMedia: mediaList,
     });
     const bodyText = normalizeMention(baseText, botUsername);
-    if (shouldDropEmptyMattermostBody({ bodyText, rawText: rawPostText, botUsername })) {
+    if (
+      mediaList.length === 0 &&
+      shouldDropEmptyMattermostBody({ bodyText, rawText: rawPostText, botUsername })
+    ) {
       logVerboseMessage(
         `mattermost: drop message (empty body after normalization channel=${channelId} sender=${senderId} wasMentioned=${wasMentioned})`,
       );
@@ -1310,7 +1289,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
 
     const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
-    const mediaPayload = buildAgentMediaPayload(mediaList);
+    const mediaPayload = buildMattermostInboundMediaPayload(mediaList);
     const commandBody = rawText.trim();
     const inboundHistory =
       historyKey && historyLimit > 0

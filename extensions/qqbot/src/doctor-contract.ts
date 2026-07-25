@@ -5,7 +5,11 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  hasLegacyAccountStreamingAliases,
+  normalizeChannelConfigEntries,
+} from "openclaw/plugin-sdk/runtime-doctor";
 
 const RESTRICTED_GROUP_TOOLS: GroupToolPolicyConfig = {
   deny: ["exec", "read", "write"],
@@ -28,14 +32,6 @@ function hasLegacyStreamingValue(value: unknown): boolean {
     typeof entry.streaming === "boolean" ||
     asObjectRecord(entry.streaming)?.c2cStreamApi !== undefined
   );
-}
-
-function hasLegacyAccountStreamingValues(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacyStreamingValue(account));
 }
 
 function migrateStreamingValue(params: {
@@ -77,16 +73,6 @@ function hasLegacyGroupToolPolicy(value: unknown): boolean {
     return false;
   }
   return Object.values(groups).some((group) => asObjectRecord(group)?.toolPolicy !== undefined);
-}
-
-function hasLegacyAccountGroupToolPolicy(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) =>
-    hasLegacyGroupToolPolicy(asObjectRecord(account)?.groups),
-  );
 }
 
 function migrateToolPolicy(value: unknown): GroupToolPolicyConfig | undefined {
@@ -151,7 +137,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "qqbot", "accounts"],
     message:
       'channels.qqbot.accounts.<id>.streaming (boolean) and streaming.c2cStreamApi are legacy; use channels.qqbot.accounts.<id>.streaming.{mode,nativeTransport}. Run "openclaw doctor --fix".',
-    match: hasLegacyAccountStreamingValues,
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyStreamingValue),
   },
   {
     path: ["channels", "qqbot", "groups"],
@@ -163,97 +149,41 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "qqbot", "accounts"],
     message:
       'channels.qqbot.accounts.<id>.groups.<groupId>.toolPolicy is legacy and was ignored by QQBot group tool enforcement; use channels.qqbot.accounts.<id>.groups.<groupId>.tools instead. Run "openclaw doctor --fix".',
-    match: hasLegacyAccountGroupToolPolicy,
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, (account) =>
+        hasLegacyGroupToolPolicy(asObjectRecord(account)?.groups),
+      ),
   },
 ];
+
+function normalizeQqbotEntry(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const streaming = migrateStreamingValue(params);
+  const groups = asObjectRecord(streaming.entry.groups);
+  if (!groups) {
+    return streaming;
+  }
+  const migrated = migrateGroups({
+    groups,
+    pathPrefix: `${params.pathPrefix}.groups`,
+    changes: params.changes,
+  });
+  return migrated.changed
+    ? { entry: { ...streaming.entry, groups: migrated.groups }, changed: true }
+    : streaming;
+}
 
 export function normalizeCompatibilityConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.qqbot);
-  if (!rawEntry) {
-    return { config: cfg, changes: [] };
-  }
-
-  const changes: string[] = [];
-  let updated = rawEntry;
-  let changed = false;
-
-  const rootStreaming = migrateStreamingValue({
-    entry: updated,
-    pathPrefix: "channels.qqbot",
-    changes,
+  return normalizeChannelConfigEntries({
+    cfg,
+    channelId: "qqbot",
+    normalizeEntry: normalizeQqbotEntry,
   });
-  updated = rootStreaming.entry;
-  changed = changed || rootStreaming.changed;
-
-  const groups = asObjectRecord(updated.groups);
-  if (groups) {
-    const migrated = migrateGroups({
-      groups,
-      pathPrefix: "channels.qqbot.groups",
-      changes,
-    });
-    if (migrated.changed) {
-      updated = { ...updated, groups: migrated.groups };
-      changed = true;
-    }
-  }
-
-  const accounts = asObjectRecord(updated.accounts);
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts = { ...accounts };
-    for (const [accountId, rawAccount] of Object.entries(accounts)) {
-      const account = asObjectRecord(rawAccount);
-      if (!account) {
-        continue;
-      }
-      const accountStreaming = migrateStreamingValue({
-        entry: account,
-        pathPrefix: `channels.qqbot.accounts.${accountId}`,
-        changes,
-      });
-      let nextAccount = accountStreaming.entry;
-      let accountChanged = accountStreaming.changed;
-
-      const accountGroups = asObjectRecord(nextAccount.groups);
-      if (accountGroups) {
-        const migrated = migrateGroups({
-          groups: accountGroups,
-          pathPrefix: `channels.qqbot.accounts.${accountId}.groups`,
-          changes,
-        });
-        if (migrated.changed) {
-          nextAccount = { ...nextAccount, groups: migrated.groups };
-          accountChanged = true;
-        }
-      }
-
-      if (accountChanged) {
-        nextAccounts[accountId] = nextAccount;
-        accountsChanged = true;
-      }
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return { config: cfg, changes: [] };
-  }
-  return {
-    config: {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        qqbot: updated as unknown as NonNullable<OpenClawConfig["channels"]>["qqbot"],
-      } as OpenClawConfig["channels"],
-    },
-    changes,
-  };
 }

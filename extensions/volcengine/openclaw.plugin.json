@@ -142,8 +142,8 @@
       }
     },
     "discovery": {
-      "volcengine": "static",
-      "volcengine-plan": "static"
+      "volcengine": "refreshable",
+      "volcengine-plan": "refreshable"
     }
   },
   "providerAuthChoices": [

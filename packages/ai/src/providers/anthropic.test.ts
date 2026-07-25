@@ -78,6 +78,21 @@ function makeSonnet5PrefillContext(): Context {
   };
 }
 
+function tinyJpegBase64(): string {
+  return Buffer.from([
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+  ]).toString("base64");
+}
+
+function configureTestAnthropicImageNormalizer(): void {
+  configureAiTransportHost({
+    normalizeAnthropicInlineContentBlocks: async (content) =>
+      content.map((block) =>
+        block.type === "image" ? { ...block, mimeType: "image/jpeg" } : block,
+      ),
+  });
+}
+
 describe("Anthropic provider", () => {
   beforeEach(() => {
     anthropicMockState.configs = [];
@@ -1239,6 +1254,139 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("normalizes unsupported user image blocks before Anthropic payloads", async () => {
+    configureTestAnthropicImageNormalizer();
+    let capturedPayload: unknown;
+    const imageData = tinyJpegBase64();
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", mimeType: "image/heic", data: imageData },
+            ],
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    const [userMessage] = (capturedPayload as { messages: [Record<string, unknown>] }).messages;
+    const imageBlock = (userMessage.content as Array<Record<string, unknown>>)[1];
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: imageData },
+    });
+  });
+
+  it("keeps non-vision image downgrade behavior without invoking normalization", async () => {
+    configureAiTransportHost({
+      normalizeAnthropicInlineContentBlocks: async () => {
+        throw new Error("non-vision images should be downgraded before normalization");
+      },
+    });
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", mimeType: "image/heic", data: "not-base64" },
+            ],
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    const [userMessage] = (capturedPayload as { messages: [Record<string, unknown>] }).messages;
+    expect(userMessage.content).toMatchObject([
+      { type: "text", text: "look" },
+      { type: "text", text: "(image omitted: model does not support images)" },
+    ]);
+  });
+
+  it("normalizes unsupported tool result image blocks before Anthropic payloads", async () => {
+    configureTestAnthropicImageNormalizer();
+    let capturedPayload: unknown;
+    const imageData = tinyJpegBase64();
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            toolName: "screenshot",
+            content: [{ type: "image", data: imageData, mimeType: "image/tiff" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "test-api-key",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    const [, userMessage] = (
+      capturedPayload as { messages: [Record<string, unknown>, Record<string, unknown>] }
+    ).messages;
+    const [toolResult] = userMessage.content as [Record<string, unknown>];
+    const imageBlock = (toolResult.content as Array<Record<string, unknown>>)[1];
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: imageData },
+    });
+  });
+
   it("does not emit Anthropic image blocks or placeholders for payload-less tool media", async () => {
     let capturedPayload: unknown;
     const stream = streamAnthropic(
@@ -1356,6 +1504,8 @@ describe("Anthropic provider", () => {
     ["claude-fable-5", "Claude Fable 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic-vertex", "vertex-token"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic", "sk-ant-provider"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic-vertex", "vertex-token"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic", "sk-ant-provider"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic-vertex", "vertex-token"],
   ])("surfaces structured %s streaming refusals for %s", async (id, name, provider, apiKey) => {
@@ -1886,6 +2036,52 @@ describe("Anthropic provider", () => {
     },
   );
 
+  it("uses the Claude Opus 5 adaptive-thinking request contract", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "prod-opus",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-opus-5" },
+        reasoning: false,
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        maxTokens: 128_000,
+      }),
+      {
+        messages: [
+          { role: "user", content: "hello", timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text: "prefill" }], timestamp: 0 },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "sk-ant-provider",
+        temperature: 0.2,
+        onPayload: (payload) => {
+          capturedPayload = {
+            ...(payload as Record<string, unknown>),
+            service_tier: "auto",
+            top_p: 0.9,
+            top_k: 40,
+          };
+          return capturedPayload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      messages: [{ role: "user" }],
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
+    });
+    expect(capturedPayload).not.toHaveProperty("temperature");
+    expect(capturedPayload).not.toHaveProperty("top_p");
+    expect(capturedPayload).not.toHaveProperty("top_k");
+    expect(capturedPayload).not.toHaveProperty("service_tier");
+  });
+
   it("uses always-on adaptive thinking for Claude Fable 5", async () => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(
@@ -2173,7 +2369,7 @@ describe("Anthropic provider", () => {
     },
   );
 
-  it.each(["claude-opus-4-8", "claude-mythos-preview"])(
+  it.each(["claude-opus-5", "claude-opus-4-8", "claude-mythos-preview"])(
     "restores default sampling for %s after payload hooks",
     async (modelId) => {
       let capturedPayload: unknown;
@@ -2269,6 +2465,7 @@ describe("Anthropic provider", () => {
   });
 
   it.each([
+    { canonicalModelId: "claude-opus-5", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-8", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-6", expectedTemperature: 0.2 },
   ] as const)(
