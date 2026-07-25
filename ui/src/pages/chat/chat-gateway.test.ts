@@ -109,6 +109,19 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, undefined)).toBe(null);
   });
 
+  it("drops sessionless run-idless terminal events instead of materializing them", () => {
+    // Companion/internal runs can surface unkeyed terminal events; with no
+    // active run, undefined === undefined must not pass the run-id fallback.
+    const state = createState({ sessionKey: "main" });
+    const before = state.chatMessages.length;
+    handleChatGatewayEvent(state, {
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "leaked companion answer" }] },
+    } as ChatEventPayload);
+    expect(state.chatMessages.length).toBe(before);
+    expect(JSON.stringify(state.chatMessages)).not.toContain("leaked companion answer");
+  });
+
   it("adopts startup status only for the queued local run before its ACK", () => {
     const state = createState({
       chatQueue: [

@@ -391,7 +391,11 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
   if (
     isTerminalChatState(payload?.state) &&
     payload !== undefined &&
-    (chatEventSessionMatches(state, payload) || payload.runId === activeRunIdBeforeEvent) &&
+    // Unkeyed events must also carry a real run id: with no active run,
+    // `undefined === undefined` would let sessionless internal-run terminals
+    // (e.g. companion answers) materialize into the open main thread.
+    (chatEventSessionMatches(state, payload) ||
+      (typeof payload.runId === "string" && payload.runId === activeRunIdBeforeEvent)) &&
     !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)
   ) {
     // The active stream belongs to the user boundary that preceded any steer
