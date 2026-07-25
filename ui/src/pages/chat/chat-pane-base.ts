@@ -226,6 +226,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         () => this.context?.runtimeConfig,
         (runtimeConfig, notify) =>
           runtimeConfig.subscribe(() => {
+            this.refreshSwarmRoster();
             this.refreshBuiltinBoardSnapshot();
             notify();
           }),
@@ -245,6 +246,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
 
   protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
+  protected abstract refreshSwarmRoster(): void;
   protected abstract refreshBuiltinBoardSnapshot(): void;
   protected abstract resolveBoardProvider(): BoardProvider;
   protected abstract handleBoardCommand(event: BoardCommandEvent): void;

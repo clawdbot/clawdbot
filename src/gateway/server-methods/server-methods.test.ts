@@ -28,6 +28,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
@@ -2177,30 +2178,9 @@ describe("projectRecentChatDisplayMessages", () => {
 
   it.each([
     {
-      name: "legacy-only",
-      message: { MediaPath: "/tmp/openclaw/legacy.png", MediaType: "image/png" },
-      expectedPath: "/tmp/openclaw/legacy.png",
-    },
-    {
       name: "facts-only",
       message: { __openclaw: { media: [{ path: "/tmp/openclaw/fact.png" }] } },
       expectedPath: "/tmp/openclaw/fact.png",
-    },
-    {
-      name: "both-equal",
-      message: {
-        MediaPath: "/tmp/openclaw/equal.png",
-        __openclaw: { media: [{ path: "/tmp/openclaw/equal.png" }] },
-      },
-      expectedPath: "/tmp/openclaw/equal.png",
-    },
-    {
-      name: "both-conflict",
-      message: {
-        MediaPath: "/tmp/openclaw/legacy-conflict.png",
-        __openclaw: { media: [{ path: "/tmp/openclaw/canonical.png" }] },
-      },
-      expectedPath: "/tmp/openclaw/canonical.png",
     },
     {
       name: "sparse",
@@ -2218,7 +2198,7 @@ describe("projectRecentChatDisplayMessages", () => {
       message: { __openclaw: { media: [{ path: "/tmp/openclaw/media-only.png" }] } },
       expectedPath: "/tmp/openclaw/media-only.png",
     },
-  ])("keeps $name media-only users through facts-first display projection", (testCase) => {
+  ])("keeps $name media-only users through canonical display projection", (testCase) => {
     const result = projectRecentChatDisplayMessages([
       { role: "user", content: "", timestamp: 1, ...testCase.message },
       { role: "user", content: "", timestamp: 2 },
@@ -5362,9 +5342,10 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   it("merges live dead-lettered delivery queue counts into cached health responses", async () => {
-    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-cached-dq-"));
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-health-cached-dq-",
+    });
     try {
       const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
         await import("../../infra/delivery-queue-sqlite.js");
@@ -5422,12 +5403,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
       expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(tmpStateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 

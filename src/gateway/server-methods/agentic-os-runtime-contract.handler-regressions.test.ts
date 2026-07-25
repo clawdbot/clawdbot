@@ -200,6 +200,19 @@ describe("Agentic OS runtime handler regressions", () => {
     expect(canonicalHistory.requests).toEqual([]);
   });
 
+  it("rejects malformed sessions_history includeTools values before canonical history reads", async () => {
+    for (const includeTools of ["true", 1, null, {}, []]) {
+      const response = await invoke("sessions_history", null, {
+        sessionKey: "agent:ai-engineer:subagent:child",
+        includeTools,
+      });
+
+      expect(response[0]).toBe(false);
+      expect(response[2]?.message).toContain("invalid boolean: includeTools");
+    }
+    expect(canonicalHistory.requests).toEqual([]);
+  });
+
   it("forwards numeric sessions_history limits to canonical history reads", async () => {
     const response = await invoke("sessions_history", null, {
       sessionKey: "agent:ai-engineer:subagent:child",

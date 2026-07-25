@@ -10,7 +10,7 @@ const NOVITA_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 
 export const NOVITA_BASE_URL = NOVITA_MANIFEST_PROVIDER.baseUrl;
 export const NOVITA_MODEL_CATALOG: ModelDefinitionConfig[] = NOVITA_MANIFEST_PROVIDER.models;
-export const NOVITA_DEFAULT_MODEL_REF = "novita/deepseek/deepseek-v3-0324";
+export const NOVITA_DEFAULT_MODEL_REF = "novita/deepseek/deepseek-v4-pro";
 
 export function buildNovitaModelDefinition(model: ModelDefinitionConfig): ModelDefinitionConfig {
   return {

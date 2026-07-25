@@ -642,6 +642,33 @@ describe("Agentic OS runtime contract v1", () => {
     }
   });
 
+  it("rejects malformed sessions_spawn lightContext values before spawning", async () => {
+    for (const lightContext of ["true", 1, null, {}, []]) {
+      const gatewayLeaseId = await acquireLease();
+      expectInvalid(
+        await invoke("sessions_spawn", {
+          task: "malformed light context",
+          runtime: "subagent",
+          lightContext,
+          agentId: "ai-engineer",
+          gateway_lease_id: gatewayLeaseId,
+          client_request_id: `spawn-light-${typeof lightContext}-${Array.isArray(lightContext)}`,
+          idempotency_key: `spawn-light-idem-${typeof lightContext}-${Array.isArray(lightContext)}`,
+          metadata: {
+            ...sessionMetadata,
+            client_request_id: `spawn-light-${typeof lightContext}-${Array.isArray(lightContext)}`,
+            idempotency_key: `spawn-light-idem-${typeof lightContext}-${Array.isArray(
+              lightContext,
+            )}`,
+            task_digest: sha256Hex("malformed light context"),
+          },
+        }),
+        "invalid boolean: lightContext",
+      );
+    }
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
   it("rejects sessions_spawn session mode before advertising unsupported thread semantics", async () => {
     const gatewayLeaseId = await acquireLease();
     expectInvalid(

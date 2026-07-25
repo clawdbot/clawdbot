@@ -616,6 +616,7 @@
 
 .chat-tasks-rail__title {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -632,8 +633,29 @@
 }
 
 .chat-tasks-rail__title strong {
+  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tasks-rail__back {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+}
+
+.chat-tasks-rail__back svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
 }
 
 .chat-tasks-rail__actions {
@@ -735,11 +757,6 @@
 .chat-tasks-rail__task:hover,
 .chat-tasks-rail__task:focus-within {
   border-color: color-mix(in srgb, var(--border-strong) 45%, transparent);
-}
-
-.chat-tasks-rail__task--expanded {
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
-  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
 }
 
 .chat-tasks-rail__task-head {
@@ -903,20 +920,88 @@
   overflow-wrap: anywhere;
 }
 
-.chat-tasks-rail__task-inspector {
+.chat-tasks-rail__detail {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px 12px 18px;
+}
+
+.chat-tasks-rail__detail-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-tasks-rail__detail-status-line {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.chat-tasks-rail__detail-status-line .chat-tasks-rail__task-meta {
+  flex: 1 1 auto;
+}
+
+.chat-tasks-rail__detail-stop {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  color: var(--danger, #ef4444);
+}
+
+.chat-tasks-rail__detail-stop svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+}
+
+.chat-tasks-rail__detail-activity {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 5px;
-  padding-top: 9px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
-  cursor: default;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--warn, #f59e0b) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warn, #f59e0b) 6%, transparent);
+}
+
+.chat-tasks-rail__detail-activity span {
+  color: var(--warn, #f59e0b);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+}
+
+.chat-tasks-rail__detail-activity strong {
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chat-tasks-rail__detail-blocks {
+  display: grid;
+  gap: 12px;
 }
 
 .chat-tasks-rail__task-inspector-block {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
+  min-width: 0;
 }
 
 .chat-tasks-rail__task-inspector-label {
@@ -927,29 +1012,33 @@
   text-transform: uppercase;
 }
 
-.chat-tasks-rail__task-inspector pre {
-  max-height: 180px;
+.chat-tasks-rail__task-inspector-block pre {
+  max-height: 240px;
   margin: 0;
   overflow: auto;
-  padding: 8px;
+  padding: 9px;
   border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   color: var(--text);
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
-  line-height: 1.45;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .chat-tasks-rail__task-inspector-state {
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-radius: var(--radius-md);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   line-height: 1.4;
 }
 
 .chat-tasks-rail__task-inspector-state--error {
+  border-color: color-mix(in srgb, var(--danger, #ef4444) 30%, var(--border));
   color: var(--danger, #ef4444);
 }
 

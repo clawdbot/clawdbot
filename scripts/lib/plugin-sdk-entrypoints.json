@@ -129,6 +129,7 @@
   "test-media-generation",
   "test-media-understanding",
   "test-node-mocks",
+  "test-state",
   "temp-path",
   "time-runtime",
   "logging-core",

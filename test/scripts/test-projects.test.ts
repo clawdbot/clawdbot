@@ -298,6 +298,7 @@ describe("scripts/test-projects changed-target routing", () => {
         targets: [
           "extensions/codex/src/manifest.test.ts",
           "extensions/openai/openai-provider.test.ts",
+          "test/scripts/codex-client-version-contract.test.ts",
         ],
       });
     },

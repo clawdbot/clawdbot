@@ -47,10 +47,5 @@ function sanitizeUntrustedJsonValue(value: unknown): unknown {
 }
 
 export function formatUntrustedJsonBlock(label: string, payload: unknown): string {
-  return [
-    label,
-    "```json",
-    JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
-    "```",
-  ].join("\n");
+  return [label, "```json", JSON.stringify(sanitizeUntrustedJsonValue(payload)), "```"].join("\n");
 }

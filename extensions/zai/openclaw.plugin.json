@@ -48,14 +48,42 @@
             }
           },
           {
+            "id": "glm-5-turbo",
+            "name": "GLM-5-Turbo",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 200000,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 1.2,
+              "output": 4,
+              "cacheRead": 0.24,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "glm-5v-turbo",
+            "name": "GLM-5V-Turbo",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 1.2,
+              "output": 4,
+              "cacheRead": 0.24,
+              "cacheWrite": 0
+            }
+          },
+          {
             "id": "glm-5.1",
             "name": "GLM-5.1",
             "status": "deprecated",
             "replacedBy": "glm-5.2",
             "reasoning": true,
             "input": ["text"],
-            "contextWindow": 202800,
-            "maxTokens": 131100,
+            "contextWindow": 200000,
+            "maxTokens": 131072,
             "cost": {
               "input": 1.4,
               "output": 4.4,

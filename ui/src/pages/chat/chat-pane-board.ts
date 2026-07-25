@@ -22,7 +22,6 @@ import {
   type BoardSessionView,
   type BoardTab,
   type BoardViewSnapshot,
-  type GatewaySessionRow,
   type SessionObserverDigest,
   type WorkboardCardChipProps,
 } from "./chat-pane-deps.ts";
@@ -140,15 +139,15 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
   }
 
-  protected refreshBuiltinBoardSnapshot(): void {
+  protected refreshSwarmRoster(): void {
     const state = this.state;
     if (!state) {
       return;
     }
     const parentKey = this.resolveBoardSessionKey();
     const sourceEpoch = state.connectionEpoch;
-    void import("../../lib/board/builtin-dashboard.ts").then(
-      ({ isSwarmEnabledInConfig, SwarmRosterHydrator, withBuiltinDashboardWidgets }) => {
+    void import("../../lib/sessions/swarm-roster.ts").then(
+      ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
         if (
           !this.state ||
           this.state.connectionEpoch !== sourceEpoch ||
@@ -156,28 +155,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         ) {
           return;
         }
-        const swarmEnabled =
+        const enabled =
           this.state.connected &&
           isSwarmEnabledInConfig(
             this.context.runtimeConfig?.state.configSnapshot?.config,
             resolveAgentIdFromSessionKey(parentKey),
           );
-        const applyRows = (rows: readonly GatewaySessionRow[], includeSwarm: boolean) => {
-          const base = this.resolveBoardProvider().snapshot$.value;
-          const sessionKey = this.resolveBoardSessionKey(base.sessionKey);
-          this.builtinBoardSnapshotBase = base;
-          this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
-            base,
-            rows,
-            this.observerDigestHistory.get(sessionKey),
-            includeSwarm,
-          );
-          this.requestUpdate();
-        };
-        if (!swarmEnabled) {
+        if (!enabled) {
           this.swarmHydrator?.dispose();
           this.swarmHydrator = null;
-          applyRows(this.state.sessionsResult?.sessions ?? [], false);
+          this.requestUpdate();
           return;
         }
         this.swarmHydrator ??= new SwarmRosterHydrator();
@@ -189,10 +176,36 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             this.state?.connectionEpoch === sourceEpoch
               ? (this.state.sessionsResult?.sessions ?? [])
               : [],
-          onRows: (rows) => applyRows(rows, true),
+          onRows: () => this.requestUpdate(),
         });
       },
     );
+  }
+
+  protected refreshBuiltinBoardSnapshot(): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const parentKey = this.resolveBoardSessionKey();
+    const sourceEpoch = state.connectionEpoch;
+    void import("../../lib/board/builtin-dashboard.ts").then(({ withBuiltinDashboardWidgets }) => {
+      if (
+        !this.state ||
+        this.state.connectionEpoch !== sourceEpoch ||
+        parentKey !== this.resolveBoardSessionKey()
+      ) {
+        return;
+      }
+      const base = this.resolveBoardProvider().snapshot$.value;
+      const sessionKey = this.resolveBoardSessionKey(base.sessionKey);
+      this.builtinBoardSnapshotBase = base;
+      this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
+        base,
+        this.observerDigestHistory.get(sessionKey),
+      );
+      this.requestUpdate();
+    });
   }
 
   protected recordObserverDigest(digest: SessionObserverDigest): void {
@@ -217,12 +230,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const savedTab = snapshot.tabs.some((tab) => tab.tabId === saved?.activeTabId)
       ? saved?.activeTabId
       : undefined;
-    const activeTabId =
-      savedTab ??
-      snapshot.widgets.find((candidate) => candidate.builtin === "swarm")?.tabId ??
-      snapshot.tabs[0]?.tabId ??
-      snapshot.widgets[0]?.tabId ??
-      "";
+    const activeTabId = savedTab ?? snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
     const tab = snapshot.tabs.find((candidate) => candidate.tabId === activeTabId);
     const activeTabReadOnly = snapshot.widgets.some(
       (candidate) => candidate.tabId === activeTabId && candidate.readOnly === true,

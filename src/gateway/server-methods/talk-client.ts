@@ -14,11 +14,7 @@ import {
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import {
-  buildAgentMainSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -26,6 +22,7 @@ import {
 } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
@@ -75,10 +72,10 @@ function pruneLegacyVoiceBindings(now = Date.now()): void {
 }
 
 function resolveTalkClientAgentId(
-  config: Parameters<typeof resolveDefaultAgentId>[0],
+  config: Parameters<typeof resolveTalkSessionAgentId>[0],
   key: string,
 ) {
-  return resolveAgentIdFromSessionKey(key, resolveDefaultAgentId(config));
+  return resolveTalkSessionAgentId(config, key);
 }
 
 /**

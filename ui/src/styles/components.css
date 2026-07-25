@@ -45,7 +45,9 @@ openclaw-session-owner-chip {
   font-size: 10px;
 }
 
-.sidebar-session-avatar {
+/* Leading slot shared by every sidebar row: the row's own artwork plus a run
+   ring and corner badge, so run state always reads at the row's left edge. */
+.session-glyph {
   position: relative;
   display: inline-flex;
   width: 16px;
@@ -53,17 +55,37 @@ openclaw-session-owner-chip {
   flex: 0 0 16px;
 }
 
-.sidebar-session-avatar__running-ring {
+.session-glyph__content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  transition: transform var(--duration-fast) ease;
+}
+
+/* The ring is a circle, so square artwork (page icons, thumbnails, arbitrary
+   SVGs) must shrink to keep its corners inside it. Circular avatars already
+   fit. A 16px square scaled below 0.75 clears the ring's 17px inner circle. */
+.session-glyph--running .session-glyph__content {
+  transform: scale(0.72);
+}
+
+.session-glyph--circular.session-glyph--running .session-glyph__content {
+  transform: none;
+}
+
+.session-glyph__ring {
   position: absolute;
   inset: -2px;
   box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-top-color: var(--accent);
+  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
+  border-top-color: var(--run);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
 
-.sidebar-session-avatar__badge {
+.session-glyph__badge {
   position: absolute;
   z-index: 1;
   top: -2px;
@@ -75,7 +97,7 @@ openclaw-session-owner-chip {
   box-shadow: 0 0 0 1.5px var(--bg);
 }
 
-.sidebar-session-avatar__badge--unread {
+.session-glyph__badge--unread {
   color: var(--accent);
 }
 
@@ -5692,13 +5714,13 @@ td.data-table-key-col {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-top-color: var(--accent);
+  border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
+  border-top-color: var(--run);
   border-radius: var(--radius-full);
 }
 
 .session-run-spinner,
-.sidebar-session-avatar__running-ring {
+.session-glyph__ring {
   animation: session-run-spin 0.8s linear infinite;
 }
 
@@ -5710,9 +5732,9 @@ td.data-table-key-col {
 
 @media (prefers-reduced-motion: reduce) {
   .session-run-spinner,
-  .sidebar-session-avatar__running-ring {
+  .session-glyph__ring {
     animation: none;
-    border-color: var(--accent);
+    border-color: var(--run);
   }
 }
 

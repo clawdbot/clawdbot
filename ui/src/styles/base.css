@@ -99,6 +99,11 @@
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
+  /* Run state needs its own token: --accent is red in every shipped theme and
+     sits on top of --danger, so a spinning ring reads as a failed session.
+     Graphical indicator, judged against WCAG 1.4.11 (3:1), not the label audit
+     above: #14b8a6 is 7.7:1 on --bg. */
+  --run: #14b8a6;
 
   /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
@@ -264,6 +269,9 @@
   --danger-subtle: rgba(185, 28, 28, 0.08);
   --info: #1d4ed8;
   --info-subtle: rgba(29, 78, 216, 0.08);
+  /* See the dark-theme note: run state stays off --accent. #0d9488 is 3.6:1 on
+     --bg, above the 3:1 WCAG 1.4.11 bar for a non-text indicator. */
+  --run: #0d9488;
 
   --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);

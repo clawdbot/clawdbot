@@ -10,7 +10,7 @@ const GMI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 
 export const GMI_BASE_URL = GMI_MANIFEST_PROVIDER.baseUrl;
 export const GMI_MODEL_CATALOG: ModelDefinitionConfig[] = GMI_MANIFEST_PROVIDER.models;
-export const GMI_DEFAULT_MODEL_REF = "gmi/google/gemini-3.1-flash-lite";
+export const GMI_DEFAULT_MODEL_REF = "gmi/openai/gpt-5.6-sol";
 
 export function buildGmiModelDefinition(model: ModelDefinitionConfig): ModelDefinitionConfig {
   return {

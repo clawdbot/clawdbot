@@ -38,6 +38,7 @@ import {
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
+  supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -431,7 +432,7 @@ function resolveAnthropicForwardCompatModel(
 }
 
 function isAnthropicGa1MModel(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId });
+  return supportsClaude1MContext({ id: modelId });
 }
 
 function isAnthropicFable5Model(modelId: string): boolean {

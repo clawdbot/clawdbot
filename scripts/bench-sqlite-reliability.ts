@@ -49,6 +49,9 @@ function printProofLines(report: ReliabilityReport): void {
     `SQLITE_RELIABILITY_REPOSITORY_INTERRUPTION=${report.maintenanceProof.repositoryInterruption.beforePending.repositoryVerified && report.maintenanceProof.repositoryInterruption.beforePending.retryCreated && report.maintenanceProof.repositoryInterruption.pending.crashSnapshotVerifiedAfterCrash && report.maintenanceProof.repositoryInterruption.pending.crashSnapshotVisibleAfterCrash && report.maintenanceProof.repositoryInterruption.pending.incompleteEntries === 0 && report.maintenanceProof.repositoryInterruption.pending.retryCreated && report.maintenanceProof.repositoryInterruption.afterCommit.crashSnapshotVerifiedAfterCrash && report.maintenanceProof.repositoryInterruption.afterCommit.retryCreated ? "verified" : "missing"}`,
   );
   console.log(
+    `SQLITE_RELIABILITY_INDEX_REPAIR_INTERRUPTION=${report.indexRepairInterruptionProof.rollbackJournal.recoveryVerified && report.indexRepairInterruptionProof.wal.recoveryVerified ? "verified" : "missing"}`,
+  );
+  console.log(
     `SQLITE_RELIABILITY_WAL_SENTINEL=${report.transactionProof.committedWalSentinel ? "verified" : "missing"}`,
   );
   console.log(`SQLITE_RELIABILITY_HELD_BATCH=${report.transactionProof.heldBatch}`);

@@ -6,7 +6,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { compactDoctorSessionSqliteTarget } from "../../src/commands/doctor-session-sqlite-compact.js";
 import { runDoctorStateSqliteCompact } from "../../src/commands/doctor-state-sqlite-compact.js";
-import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { createLocalSqliteSnapshotProvider } from "../../src/snapshot/local-repository.js";
 import type { SnapshotDatabaseIdentity } from "../../src/snapshot/snapshot-provider.js";
 import {
@@ -28,6 +28,7 @@ import {
   type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
+import { runIndexRepairInterruptionProof } from "./sqlite-reliability-index-repair.js";
 import { runPublicationInterruptionProof } from "./sqlite-reliability-publication.js";
 import { runRepositoryInterruptionProof } from "./sqlite-reliability-repository.js";
 import { runRestoreInterruptionProof } from "./sqlite-reliability-restore.js";
@@ -103,8 +104,7 @@ function resolveTargetDatabase(options: CliOptions, env: NodeJS.ProcessEnv): Tar
 }
 
 function setupStressTable(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
+  const database = openNodeSqliteDatabase(databasePath);
   try {
     database.exec("PRAGMA journal_mode = WAL;");
     database.exec("PRAGMA busy_timeout = 30000;");
@@ -212,8 +212,9 @@ function verifyRestoredDatabase(params: {
   rowsPerBatch: number;
   uncommittedBatch: number | null;
 }): ReliabilityStateProof {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(params.path, { readOnly: params.readOnly ?? true });
+  const database = openNodeSqliteDatabase(params.path, {
+    readOnly: params.readOnly ?? true,
+  });
   try {
     database.exec("PRAGMA trusted_schema = OFF;");
     assertPragmaOk(database, "quick_check");
@@ -257,8 +258,7 @@ function verifyRestoredDatabase(params: {
 }
 
 function createCompactionBloat(databasePath: string): number {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
+  const database = openNodeSqliteDatabase(databasePath);
   const payload = "b".repeat(COMPACTION_BLOAT_PAYLOAD_BYTES);
   try {
     database.exec("PRAGMA journal_mode = WAL;");
@@ -296,8 +296,7 @@ function readCompactionPayload(databasePath: string): {
   idSum: number;
   rows: number;
 } {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
+  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
   try {
     const row = database
       .prepare(
@@ -319,8 +318,7 @@ function readCompactionPayload(databasePath: string): {
 }
 
 function deleteCompactionBloat(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
+  const database = openNodeSqliteDatabase(databasePath);
   try {
     database.exec(`
       DELETE FROM openclaw_reliability_compaction_bloat;
@@ -332,8 +330,7 @@ function deleteCompactionBloat(databasePath: string): void {
 }
 
 function readAutoVacuum(databasePath: string): number {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
+  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
   try {
     const row = database.prepare("PRAGMA auto_vacuum;").get() as
       | Record<string, unknown>
@@ -348,8 +345,7 @@ function readAutoVacuum(databasePath: string): number {
 }
 
 function prepareVacuumRollbackSentinel(databasePath: string): number {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
+  const database = openNodeSqliteDatabase(databasePath);
   try {
     database.exec(`
       PRAGMA busy_timeout = 30000;
@@ -740,6 +736,9 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
           uncommittedBatch: null,
         }),
     });
+    const indexRepairInterruptionProof = await runIndexRepairInterruptionProof(
+      path.join(runScratch, "index-repair-interruptions"),
+    );
     const maintenanceProof = await runMaintenanceRoundTrip({
       env,
       repositoryProvider,
@@ -763,6 +762,7 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
         stateBeforeKill,
         writerRestarted: true,
       },
+      indexRepairInterruptionProof,
       iterations: profile.iterations,
       maintenanceProof,
       node: process.version,

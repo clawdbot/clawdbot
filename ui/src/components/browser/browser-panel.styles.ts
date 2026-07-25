@@ -3,19 +3,6 @@
 import { css } from "lit";
 
 export const browserPanelStyles = css`
-  :host {
-    position: fixed;
-    z-index: 60;
-    color: var(--text, #d7dae0);
-    font-family: var(--font-sans, system-ui, sans-serif);
-  }
-  .bp {
-    position: fixed;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg, #0e1015);
-    overflow: hidden;
-  }
   /* Docked panels get a single hairline separator on the inner edge so they
      read as layout, not as a floating card. The browser dock yields to the
      terminal dock's reserved edges so the two panels tile instead of
@@ -24,61 +11,11 @@ export const browserPanelStyles = css`
     left: var(--shell-nav-width, 0);
     right: var(--oc-terminal-reserve-right, 0px);
     bottom: var(--oc-terminal-reserve-bottom, 0px);
-    border-top: 1px solid var(--border, #262b34);
   }
   .bp--right {
     top: var(--shell-topbar-height, 0);
     right: var(--oc-terminal-reserve-right, 0px);
     bottom: var(--oc-terminal-reserve-bottom, 0px);
-    border-left: 1px solid var(--border, #262b34);
-  }
-  .bp-resizer {
-    position: absolute;
-    z-index: 2;
-    background: transparent;
-  }
-  .bp-resizer:hover {
-    background: var(--accent, #ff5c5c);
-    opacity: 0.5;
-  }
-  .bp-resizer--bottom {
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 5px;
-    cursor: ns-resize;
-  }
-  .bp-resizer--right {
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 5px;
-    cursor: ew-resize;
-  }
-  .bp-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 0 6px 0 4px;
-    border-bottom: 1px solid var(--border, #262b34);
-    min-height: 36px;
-  }
-  .bp-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: none;
-    background: transparent;
-    color: var(--muted, #8a919e);
-    border-radius: 6px;
-    padding: 0;
-  }
-  .bp-icon:hover {
-    background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
-    color: var(--text, #d7dae0);
   }
   .bp-icon.is-active {
     color: var(--accent, #ff5c5c);
@@ -88,10 +25,6 @@ export const browserPanelStyles = css`
     opacity: 0.4;
   }
   .bp-actions {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding-left: 6px;
     flex: none;
   }
   .bp-toolbar {

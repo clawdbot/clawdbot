@@ -38,6 +38,7 @@ import {
 } from "../../../lib/chat/side-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -751,12 +752,7 @@ function removeReplyContextMenu(paneId?: string) {
 
 function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
   const source = `${senderLabel ?? ""}\n${text}`;
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `reply:${(hash >>> 0).toString(16)}`;
+  return `reply:${fnv1aUtf16(source).toString(16)}`;
 }
 
 function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {

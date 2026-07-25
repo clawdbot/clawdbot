@@ -443,6 +443,9 @@ export async function spawnAgenticOsSession(
     params.cleanup === "delete" || params.cleanup === "keep" ? params.cleanup : undefined;
   const context =
     params.context === "fork" || params.context === "isolated" ? params.context : undefined;
+  if (Object.hasOwn(params, "lightContext") && typeof params.lightContext !== "boolean") {
+    return rejectConflict("invalid boolean: lightContext");
+  }
   const lightContext = params.lightContext === true;
   const fingerprint = stableJson({
     client_request_id: clientRequestId,

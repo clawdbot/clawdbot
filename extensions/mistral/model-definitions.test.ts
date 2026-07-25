@@ -1,6 +1,7 @@
 // Mistral tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildMistralModelDefinition, MISTRAL_DEFAULT_MODEL_ID } from "./model-definitions.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildMistralProvider } from "./provider-catalog.js";
 
 function buildCatalogModels() {
@@ -51,14 +52,25 @@ describe("mistral model definitions", () => {
     const models = buildCatalogModels();
     const codestral = catalogModelById(models, "codestral-latest");
     expect(codestral.input).toEqual(["text"]);
-    expect(codestral.contextWindow).toBe(256000);
+    expect(codestral.contextWindow).toBe(128000);
     expect(codestral.maxTokens).toBe(4096);
 
-    const magistralSmall = catalogModelById(models, "magistral-small");
-    expect(magistralSmall.reasoning).toBe(true);
-    expect(magistralSmall.input).toEqual(["text"]);
-    expect(magistralSmall.contextWindow).toBe(128000);
-    expect(magistralSmall.maxTokens).toBe(40000);
+    const devstral = catalogModelById(models, "devstral-medium-latest");
+    expect(devstral.contextWindow).toBe(262144);
+    expect(devstral.maxTokens).toBe(32768);
+
+    const medium31 = catalogModelById(models, "mistral-medium-2508");
+    expect(medium31.contextWindow).toBe(128000);
+
+    const manifestRows = manifest.modelCatalog.providers.mistral.models as Array<
+      Record<string, unknown>
+    >;
+    for (const id of ["devstral-medium-latest", "mistral-medium-2508"]) {
+      expect(manifestRows.find((model) => model.id === id)).toMatchObject({
+        status: "deprecated",
+        replacedBy: "mistral-medium-3-5",
+      });
+    }
 
     const medium = catalogModelById(models, "mistral-medium-3-5");
     expect(medium.reasoning).toBe(true);
@@ -85,9 +97,7 @@ describe("mistral model definitions", () => {
     expect(small4.maxTokens).toBe(16384);
     expect(small4.cost).toEqual(smallLatest.cost);
 
-    const pixtralLarge = catalogModelById(models, "pixtral-large-latest");
-    expect(pixtralLarge.input).toEqual(["text", "image"]);
-    expect(pixtralLarge.contextWindow).toBe(128000);
-    expect(pixtralLarge.maxTokens).toBe(32768);
+    expect(models.map((model) => model.id)).not.toContain("magistral-small");
+    expect(models.map((model) => model.id)).not.toContain("pixtral-large-latest");
   });
 });

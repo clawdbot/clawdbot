@@ -91,6 +91,17 @@ function readOptionalPositiveInteger(
   return value;
 }
 
+function readOptionalBoolean(params: Record<string, unknown>, key: string): boolean | undefined {
+  if (!Object.hasOwn(params, key)) {
+    return undefined;
+  }
+  const value = params[key];
+  if (typeof value !== "boolean") {
+    throw new ContractInputError(`invalid boolean: ${key}`);
+  }
+  return value;
+}
+
 async function callCanonicalHandler(
   handler: GatewayRequestHandler,
   opts: GatewayRequestHandlerOptions,
@@ -241,6 +252,7 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
       const tracked = historyAgenticOsSession(input, authenticatedPrincipalId(opts.client));
       const sessionKey = tracked.session_key;
       const limit = readOptionalPositiveInteger(input, "limit");
+      const includeTools = readOptionalBoolean(input, "includeTools");
       let canonical: Record<string, unknown>;
       try {
         canonical = await callCanonicalHandler(chatHistoryHandlers["chat.history"]!, opts, {
@@ -251,7 +263,7 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
         throw new ContractInputError("canonical chat.history read failed");
       }
       const rawMessages = Array.isArray(canonical.messages) ? canonical.messages : [];
-      const messages = input.includeTools === true ? rawMessages : stripToolMessages(rawMessages);
+      const messages = includeTools === true ? rawMessages : stripToolMessages(rawMessages);
       return { ...tracked, messages };
     });
   },

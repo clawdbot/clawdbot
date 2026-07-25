@@ -1,19 +1,18 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
-import { areUiSessionKeysEquivalent } from "../../sessions/session-key.ts";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
 
 const SWARM_DOT_STATUS_RANK = { running: 0, queued: 1, failed: 2, done: 3 } as const;
+const MAX_RENDERED_DOTS_PER_PHASE = 256;
 
 type SwarmDot = {
   key: string;
   label: string;
   status: SwarmDotStatus;
 };
-
-const MAX_RENDERED_DOTS_PER_PHASE = 256;
 
 type SwarmPhase = {
   title?: string;
@@ -69,7 +68,6 @@ function groupTail(groupId: string): string {
 
 function swarmPhaseRank(row: GatewaySessionRow): number {
   const rank = (row as GatewaySessionRow & SwarmPhaseCarrier).swarmPhaseRank;
-  // Unranked (unphased or pre-rank) buckets sort after announced phases.
   return typeof rank === "number" && Number.isFinite(rank) ? rank : Number.MAX_SAFE_INTEGER;
 }
 
@@ -94,7 +92,6 @@ function isSwarmChildForSession(row: GatewaySessionRow, sessionKey: string): boo
   return Boolean(owner && areUiSessionKeysEquivalent(owner, sessionKey));
 }
 
-/** Groups the live session roster into the active collector swarms for one dashboard. */
 function collectActiveSwarmGroups(
   sessions: readonly GatewaySessionRow[],
   sessionKey: string,
@@ -108,12 +105,12 @@ function collectActiveSwarmGroups(
     if (!groupId || !isSwarmChildForSession(row, sessionKey)) {
       continue;
     }
-    const dots = byGroup.get(groupId) ?? [];
     const status = swarmDotStatus(row);
     if (!status) {
       continue;
     }
-    dots.push({
+    const entries = byGroup.get(groupId) ?? [];
+    entries.push({
       phase: swarmPhase(row),
       phaseRank: swarmPhaseRank(row),
       log: swarmLog(row),
@@ -123,7 +120,7 @@ function collectActiveSwarmGroups(
         status,
       },
     });
-    byGroup.set(groupId, dots);
+    byGroup.set(groupId, entries);
   }
 
   return [...byGroup.entries()]
@@ -169,45 +166,49 @@ function collectActiveSwarmGroups(
     .toSorted((left, right) => left.groupId.localeCompare(right.groupId));
 }
 
-export function renderSwarmWidget({
+export function renderChatSwarmProgress({
   sessions,
   sessionKey,
 }: {
   sessions: readonly GatewaySessionRow[];
   sessionKey: string;
-}): TemplateResult {
+}): TemplateResult | typeof nothing {
   const groups = collectActiveSwarmGroups(sessions, sessionKey);
   if (groups.length === 0) {
-    return html`<p class="swarm-widget__empty" data-test-id="swarm-empty">
-      ${t("labsPage.swarm.empty")}
-    </p>`;
+    return nothing;
   }
   return html`
-    <div class="swarm-widget" data-test-id="swarm-widget">
+    <aside
+      class="chat-swarm"
+      data-test-id="chat-swarm"
+      role="status"
+      aria-live="off"
+      aria-label=${t("labsPage.swarm.title")}
+    >
       ${groups.map(
         (group) => html`
-          <section class="swarm-widget__group" data-swarm-group=${group.groupId}>
-            <header class="swarm-widget__group-header">
+          <div class="chat-swarm__group" data-swarm-group=${group.groupId}>
+            <div class="chat-swarm__header">
               <strong title=${group.groupId}>${group.label}</strong>
               <span
                 >${group.running} ${swarmStatusLabel("running")} · ${group.done}
                 ${swarmStatusLabel("done")} · ${group.failed} ${swarmStatusLabel("failed")}</span
               >
-            </header>
+            </div>
             ${group.narrator
-              ? html`<div class="swarm-widget__narrator">${group.narrator}</div>`
+              ? html`<div class="chat-swarm__narrator">${group.narrator}</div>`
               : nothing}
             ${group.phases.map(
               (phase) => html`
-                <div class="swarm-widget__phase-row">
-                  <div class="swarm-widget__phase">
+                <div class="chat-swarm__phase-row">
+                  <div class="chat-swarm__phase">
                     ${phase.title ?? t("labsPage.swarm.defaultPhase")}
                   </div>
-                  <div class="swarm-widget__dots" role="list">
+                  <div class="chat-swarm__dots" role="list">
                     ${phase.dots.map(
                       (dot) => html`
                         <span
-                          class=${`swarm-widget__dot swarm-widget__dot--${dot.status}`}
+                          class=${`chat-swarm__dot chat-swarm__dot--${dot.status}`}
                           role="listitem"
                           title=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
                           aria-label=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
@@ -215,17 +216,15 @@ export function renderSwarmWidget({
                       `,
                     )}
                     ${phase.hidden > 0
-                      ? html`<span class="swarm-widget__more" role="listitem"
-                          >+${phase.hidden}</span
-                        >`
+                      ? html`<span class="chat-swarm__more" role="listitem">+${phase.hidden}</span>`
                       : nothing}
                   </div>
                 </div>
               `,
             )}
-          </section>
+          </div>
         `,
       )}
-    </div>
+    </aside>
   `;
 }

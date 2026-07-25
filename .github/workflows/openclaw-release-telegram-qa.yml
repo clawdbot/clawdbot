@@ -2259,16 +2259,15 @@ jobs:
             exit "$status"
           )
 
-          if ! run_qa_attempt preflight --scenario channel-canary; then
-            echo "Telegram channel canary failed; skipping the remaining scenarios." >&2
-            exit 1
-          fi
-          terminate_sut_uid
-
           remaining_scenarios=()
+          has_channel_canary=false
           while IFS=$'\t' read -r scenario_id default_label _; do
-            if [[ "$default_label" == "default" && "$scenario_id" != "channel-canary" ]]; then
-              remaining_scenarios+=(--scenario "$scenario_id")
+            if [[ "$default_label" == "default" ]]; then
+              if [[ "$scenario_id" == "channel-canary" ]]; then
+                has_channel_canary=true
+              else
+                remaining_scenarios+=(--scenario "$scenario_id")
+              fi
             fi
           done < <(
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
@@ -2277,7 +2276,20 @@ jobs:
                 --provider-mode mock-openai \
                 --list-scenarios
           )
-          ((${#remaining_scenarios[@]} > 0))
+          if [[ "$has_channel_canary" == "true" ]]; then
+            if ! run_qa_attempt preflight --scenario channel-canary; then
+              echo "Telegram channel canary failed; skipping the remaining scenarios." >&2
+              exit 1
+            fi
+            terminate_sut_uid
+          fi
+          if ((${#remaining_scenarios[@]} == 0)); then
+            if [[ "$has_channel_canary" == "true" ]]; then
+              exit 0
+            fi
+            echo "Candidate Telegram QA catalog has no default scenarios." >&2
+            exit 1
+          fi
 
           for attempt in 1 2; do
             if run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"; then

@@ -29,7 +29,7 @@ export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
       ...CHUTES_MODEL_CATALOG.map((model) => `chutes/${model.id}`),
       {
         modelRef: "chutes-vision",
-        alias: "chutes/moonshotai/Kimi-K2.5-TEE",
+        alias: "chutes/moonshotai/Kimi-K2.6-TEE",
       },
       { modelRef: "chutes-pro", alias: "chutes/deepseek-ai/DeepSeek-V3.2-TEE" },
     ],
@@ -49,11 +49,11 @@ export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
         ...next.agents?.defaults,
         model: {
           primary: CHUTES_DEFAULT_MODEL_REF,
-          fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.5-TEE"],
+          fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.6-TEE"],
         },
         imageModel: {
-          primary: "chutes/moonshotai/Kimi-K2.5-TEE",
-          fallbacks: ["chutes/Qwen/Qwen3.5-397B-A17B-TEE"],
+          primary: "chutes/moonshotai/Kimi-K2.6-TEE",
+          fallbacks: ["chutes/Qwen/Qwen3.6-27B-TEE"],
         },
       },
     },

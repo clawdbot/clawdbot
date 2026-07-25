@@ -2935,6 +2935,27 @@ describe("agents.files.list", () => {
     expect(names).toContain("BOOTSTRAP.md");
   });
 
+  it("does not expose retired HEARTBEAT.md workspace files", async () => {
+    const names = await listAgentFileNames();
+    expect(names).not.toContain("HEARTBEAT.md");
+  });
+
+  it("rejects writes to retired HEARTBEAT.md workspace files", async () => {
+    const { respond, promise } = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "HEARTBEAT.md",
+      content: "legacy checklist",
+    });
+    await promise;
+
+    expectRecordFields(expectRespondErrorContaining(respond, "unsupported file"), {
+      code: "INVALID_REQUEST",
+      message: 'unsupported file "HEARTBEAT.md"',
+    });
+    expect(mocks.fsMkdir).not.toHaveBeenCalled();
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
+  });
+
   it("hides BOOTSTRAP.md when workspace setup is complete", async () => {
     mockWorkspaceStateRead({ setupCompletedAt: "2026-02-15T14:00:00.000Z" });
 

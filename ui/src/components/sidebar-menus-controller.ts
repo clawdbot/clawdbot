@@ -56,7 +56,7 @@ type SidebarMenusRenderer = {
   renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
 };
 
-interface SidebarMenusControllerHost
+export interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
   readonly activeWorkboardBoardId: string;
@@ -72,6 +72,7 @@ interface SidebarMenusControllerHost
   ) => void;
   readonly onPairMobile?: () => void;
   readonly onRetryConnect?: () => void;
+  readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
   readonly pinnedAgentIds: readonly string[];
   readonly selectedSessionKeys: ReadonlySet<string>;
