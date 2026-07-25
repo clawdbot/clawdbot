@@ -19,7 +19,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
@@ -814,24 +814,19 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
 }): Promise<void> {
   try {
     const cfg = getRuntimeConfig();
-    // Guard: skip the write when this session key now maps to a different session.
-    // A replacement session could have claimed the key before a stale force-clear
-    // recovery completes; writing "killed" would corrupt the replacement.
-    const current = loadSessionEntry({
-      sessionKey: params.sessionKey,
-      storePath: resolveStorePath(cfg.session?.store, {
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-      }),
-    });
-    if (current && current.sessionId !== params.sessionId) {
-      return;
-    }
-
     const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     await updateSessionEntry(
       { sessionKey: params.sessionKey, storePath },
       (entry) => {
+        // Guard: skip the write when this session key now maps to a different session.
+        // This check runs inside the store's serialized write lock, so a replacement
+        // session cannot interleave between the read and the conditional patch.
+        // A stale force-clear recovery that arrives after a new session has claimed
+        // the same key must not mark the replacement as killed.
+        if (entry.sessionId !== params.sessionId) {
+          return null;
+        }
         const endedAt = Date.now();
         const startedAt = entry.startedAt;
         const runtimeMs =
