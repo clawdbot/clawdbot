@@ -26,13 +26,14 @@ async function createOpenAICompatibleEmbeddingProvider(options: EmbeddingProvide
     throw new Error("expected OpenAI-compatible embedding provider");
   }
   const cacheKeyData = result.runtime?.cacheKeyData as
-    | { baseUrl?: string; headers?: Record<string, string> }
+    | { baseUrl?: string; headers?: Record<string, string>; localServiceTarget?: unknown }
     | undefined;
   return {
     provider: result.provider,
     client: {
       baseUrl: cacheKeyData?.baseUrl,
       headers: cacheKeyData?.headers ?? {},
+      localServiceTarget: cacheKeyData?.localServiceTarget,
     },
   };
 }
@@ -394,6 +395,7 @@ describe("openai-compatible generic embedding provider", () => {
               api: "openai-completions",
               baseUrl: "http://spark.local:11434/v1",
               localService: { command: process.execPath },
+              request: { allowPrivateNetwork: true },
               models: [],
             },
           },
@@ -407,7 +409,8 @@ describe("openai-compatible generic embedding provider", () => {
     };
     options.acquireLocalService = acquireLocalService;
 
-    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    const { client, provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    expect(client.localServiceTarget).toBeUndefined();
     await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
     expect(acquireLocalService).not.toHaveBeenCalled();
   });
