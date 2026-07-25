@@ -19,11 +19,9 @@ plugins.
 
 ## Test utilities
 
-Most of these subpaths are repo-local source entrypoints for OpenClaw's own
-bundled plugin tests. They are not published `package.json` exports for
-third-party plugins, and they may import Vitest or other repo-only test
-dependencies. `plugin-sdk/test-state` is the narrow published exception for
-tests that need the host's canonical isolated state lifecycle.
+These subpaths are repo-local source entrypoints for OpenClaw's own bundled
+plugin tests. They are not published `package.json` exports for third-party
+plugins, and they may import Vitest or other repo-only test dependencies.
 
 ```typescript
 import {

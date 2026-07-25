@@ -105,9 +105,6 @@ export const pluginSdkDocMetadata = {
   "media-local-roots": {
     category: "utilities",
   },
-  "test-state": {
-    category: "utilities",
-  },
 } as const satisfies Record<string, PluginSdkDocMetadata>;
 
 export type PluginSdkDocEntrypoint = keyof typeof pluginSdkDocMetadata;
