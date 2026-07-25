@@ -9,7 +9,6 @@ import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/messa
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import type { buildChatItems } from "./chat-thread-build.ts";
 import {
   resolveMessageToolUseId,
   resolveToolBlockId,
@@ -442,14 +441,14 @@ function assistantGroupHasReplyText(group: MessageGroup): boolean {
   });
 }
 
-export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
+function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
   return group.messages.some(({ message }) => {
     const provenance = asRecord(asRecord(message)?.provenance);
     return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
   });
 }
 
-export function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
+function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
   return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
 }
 
@@ -487,7 +486,7 @@ export function annotateToolTurnOutcome(
   return items;
 }
 
-type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+type RenderChatItem = ChatItem | MessageGroup;
 type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;

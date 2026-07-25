@@ -100,7 +100,7 @@ export function turnHasMatchingAssistant(
   return false;
 }
 
-export type ChatMessagePreview = {
+type ChatMessagePreview = {
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
   text: string | null;
   timestamp: number | null;
