@@ -14,6 +14,7 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveThinkingDefault } from "./model-selection.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
@@ -196,10 +197,6 @@ vi.mock("../channels/plugins/registry.js", () => ({
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: hoisted.resolveStorePathMock,
-}));
-
-vi.mock("../config/sessions/store.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
@@ -2690,16 +2687,18 @@ describe("spawnAcpDirect", () => {
     hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<
         string,
-        { sessionId: string; updatedAt: number; deliveryContext?: unknown }
+        { sessionId: string; updatedAt: number; delivery?: SessionEntry["delivery"] }
       > = {
         "agent:main:subagent:parent": {
           sessionId: "parent-sess-1",
           updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "discord",
-            to: "channel:parent-channel",
-            accountId: "default",
-          },
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "discord",
+              to: "channel:parent-channel",
+              accountId: "default",
+            },
+          }),
         },
       };
       return new Proxy(store, {
@@ -2768,7 +2767,7 @@ describe("spawnAcpDirect", () => {
         {
           sessionId: string;
           updatedAt: number;
-          deliveryContext?: unknown;
+          delivery?: SessionEntry["delivery"];
           spawnedBy?: string;
           spawnDepth?: number;
           subagentRole?: string;
@@ -2778,11 +2777,13 @@ describe("spawnAcpDirect", () => {
         "agent:main:acp:child": {
           sessionId: "parent-sess-1",
           updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "discord",
-            to: "channel:parent-channel",
-            accountId: "default",
-          },
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "discord",
+              to: "channel:parent-channel",
+              accountId: "default",
+            },
+          }),
           spawnedBy: "agent:main:subagent:parent",
           spawnDepth: 1,
           subagentRole: "orchestrator",

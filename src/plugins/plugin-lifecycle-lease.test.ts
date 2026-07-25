@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 
 afterEach(() => {
@@ -86,6 +87,47 @@ describe("plugin lifecycle lease", () => {
     });
   });
 
+  it("uses an explicit shared database path instead of each caller's default state", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-explicit-path" }, async (state) => {
+      const databasePath = state.path("shared-plugin-lifecycle.sqlite");
+      const firstEntered = deferred();
+      const releaseFirst = deferred();
+      const events: string[] = [];
+      const first = withPluginLifecycleLease(
+        {
+          env: { ...state.env, OPENCLAW_STATE_DIR: state.path("state-a") },
+          path: databasePath,
+          leaseMs: 1_000,
+          waitMs: 3_000,
+        },
+        async () => {
+          events.push("first-enter");
+          firstEntered.resolve();
+          await releaseFirst.promise;
+        },
+      );
+      await firstEntered.promise;
+      const second = withPluginLifecycleLease(
+        {
+          env: { ...state.env, OPENCLAW_STATE_DIR: state.path("state-b") },
+          path: databasePath,
+          leaseMs: 1_000,
+          waitMs: 3_000,
+        },
+        async () => {
+          events.push("second-enter");
+        },
+      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      expect(events).toEqual(["first-enter"]);
+      releaseFirst.resolve();
+      await Promise.all([first, second]);
+      expect(events).toEqual(["first-enter", "second-enter"]);
+    });
+  });
+
   it("serializes lifecycle work across processes", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-processes" }, async (state) => {
       const firstMarker = state.path("first-entered");
@@ -143,7 +185,9 @@ describe("plugin lifecycle lease", () => {
       await waitForPath(firstMarker);
       const second = runLeaseChild(childScript, ["second", ...childArgs]);
       await waitForPath(secondReady);
-      await waitForPath(secondResult);
+      // Wait for the child to close so its result write is fully flushed before
+      // reading; file existence alone can race with the write after open().
+      await second;
 
       let assertionError: unknown;
       try {
@@ -162,6 +206,66 @@ describe("plugin lifecycle lease", () => {
           ? assertionError
           : new Error("cross-process lease assertion failed", { cause: assertionError });
       }
+    });
+  });
+
+  it("reloads install records after waiting for another process", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-record-cache" }, async (state) => {
+      const leaseModuleUrl = pathToFileURL(
+        path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
+      ).href;
+      const recordsModuleUrl = pathToFileURL(
+        path.resolve("src/plugins/installed-plugin-index-records.ts"),
+      ).href;
+      const goMarker = state.path("go");
+      const readyAlpha = state.path("ready-alpha");
+      const readyBeta = state.path("ready-beta");
+      const childScript = await state.writeText(
+        "record-cache-child.mts",
+        `
+          import fs from "node:fs/promises";
+          import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
+          import {
+            loadInstalledPluginIndexInstallRecords,
+            writePersistedInstalledPluginIndexInstallRecords,
+          } from ${JSON.stringify(recordsModuleUrl)};
+          const [pluginId, stateDir, readyMarker, goMarker] = process.argv.slice(2);
+          process.env.OPENCLAW_STATE_DIR = stateDir;
+          const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+          await loadInstalledPluginIndexInstallRecords();
+          await fs.writeFile(readyMarker, "ready");
+          while (true) {
+            try {
+              await fs.access(goMarker);
+              break;
+            } catch {
+              await new Promise((resolve) => setTimeout(resolve, 25));
+            }
+          }
+          await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
+            const records = await loadInstalledPluginIndexInstallRecords();
+            await writePersistedInstalledPluginIndexInstallRecords({
+              ...records,
+              [pluginId]: {
+                source: "path",
+                spec: pluginId,
+                sourcePath: "/tmp/" + pluginId,
+                installPath: "/tmp/" + pluginId,
+              },
+            });
+          });
+        `,
+      );
+
+      const alpha = runLeaseChild(childScript, ["alpha", state.stateDir, readyAlpha, goMarker]);
+      const beta = runLeaseChild(childScript, ["beta", state.stateDir, readyBeta, goMarker]);
+      await Promise.all([waitForPath(readyAlpha), waitForPath(readyBeta)]);
+      await fs.writeFile(goMarker, "go");
+      await Promise.all([alpha, beta]);
+
+      closeOpenClawStateDatabaseForTest();
+      const persisted = await readPersistedInstalledPluginIndex({ env: state.env });
+      expect(Object.keys(persisted?.installRecords ?? {}).toSorted()).toEqual(["alpha", "beta"]);
     });
   });
 

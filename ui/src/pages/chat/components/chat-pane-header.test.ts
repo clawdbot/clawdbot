@@ -109,6 +109,18 @@ describe("chat pane header", () => {
     expect(props.onBeginRename).toHaveBeenCalledOnce();
   });
 
+  it("places pane presence between the workspace chip and face control", () => {
+    const { container } = mount({
+      presence: html`<span data-slot="presence"></span>`,
+      faceControl: html`<span data-slot="face"></span>`,
+    });
+    const workspace = container.querySelector(".chat-pane__workspace-menu");
+    expect(workspace?.nextElementSibling?.getAttribute("data-slot")).toBe("presence");
+    expect(workspace?.nextElementSibling?.nextElementSibling?.getAttribute("data-slot")).toBe(
+      "face",
+    );
+  });
+
   it("renders the permanent owner chip only when attribution chrome is enabled", () => {
     const shown = mount({
       showOwnerChip: true,
@@ -180,6 +192,13 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__cloud")).not.toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="reveal"]')).toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
+  });
+
+  it("shows an incognito indicator for in-memory threads", () => {
+    const { container } = mount({ session: row({ incognito: true }) });
+    expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
+      "Incognito thread",
+    );
   });
 
   it("hides one branch and lists multiple branches with the active tip marked", () => {

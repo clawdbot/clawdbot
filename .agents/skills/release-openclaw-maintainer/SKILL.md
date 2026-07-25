@@ -1057,7 +1057,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     `latest` only when you intentionally want direct stable publish), keep it
     the same as the preflight run, and pass the successful npm
     `preflight_run_id` plus the successful `full_release_validation_run_id` and
-    its exact `full_release_validation_run_attempt`.
+    its exact `full_release_validation_run_attempt`. Preserve the immutable evidence pair as
+    `full_release_validation_run_id=<saved-run-id>` and
+    `full_release_validation_run_attempt=<saved-attempt>`.
     For stable publish, also pass the exact non-prerelease
     `openclaw/openclaw-windows-node` tag as `windows_node_tag` and its
     candidate-approved installer digest map as `windows_node_installer_digests`.

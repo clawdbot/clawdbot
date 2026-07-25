@@ -45,9 +45,8 @@ function snapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
+    phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
-    reconnecting: !connected,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",

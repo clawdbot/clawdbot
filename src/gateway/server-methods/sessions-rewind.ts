@@ -129,11 +129,11 @@ async function listBranches(options: GatewayRequestHandlerOptions): Promise<void
     agentId: requestedAgent.agentId,
   });
   if (!current.entry?.sessionId) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${sessionKey}`),
-    );
+    // A session key that has not materialized yet (fresh chat, no first
+    // message) legitimately has no branches. Only the mutating siblings
+    // (rewind/switch/fork) treat a missing session as an error; erroring here
+    // put a spurious failure in gateway logs on every new-chat load.
+    respond(true, { branches: [] }, undefined);
     return;
   }
   if (readSessionUpstreamLink(current.canonicalKey, current.target.agentId)) {

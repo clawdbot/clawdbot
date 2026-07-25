@@ -35,8 +35,7 @@ function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
   const subscribe = () => () => undefined;
   const snapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",

@@ -21,9 +21,8 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
     hello: {
       type: "hello-ok",
       protocol: 1,

@@ -114,6 +114,7 @@ beforeEach(() => {
           ],
         }),
         nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "execution-args",
         sideQuestionToolMode: "disabled",
         resolveExecutionArgs: (context) => context.baseArgs,
       },
@@ -337,7 +338,7 @@ describe("runSystemAgentTurn", () => {
     expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
     expect(call.cliToolAvailability).toEqual({
       native: [],
-      mcp: ["mcp__openclaw__openclaw"],
+      openClaw: ["openclaw"],
     });
     expect(call.toolsAllow).toBeUndefined();
     expect(requireValue(call.systemAgentTool, "missing CLI OpenClaw tool").proposalRef).toBe(
@@ -811,6 +812,7 @@ describe("runSystemAgentTurn", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(runCliAgent).not.toHaveBeenCalled();
     const call = requireValue(runEmbeddedAgent.mock.calls[0]?.[0], "missing embedded runner call");
+    expect(call).not.toHaveProperty("streamParams");
     expect(call).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",

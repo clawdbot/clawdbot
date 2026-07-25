@@ -1,8 +1,8 @@
 // Session store writer tests cover serialized session writes and cleanup.
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test-utils/deferred.js";
+import { clearSessionStoreCacheForTest } from "./store-writer-state.js";
 import { runExclusiveSessionStoreWrite } from "./store-writer.js";
-import { clearSessionStoreCacheForTest } from "./store.js";
 
 describe("session store writer", () => {
   afterEach(() => {

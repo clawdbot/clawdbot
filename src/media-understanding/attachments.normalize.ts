@@ -3,9 +3,9 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
 import { getFileExtension, isAudioFileName, kindFromMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { MsgContext } from "../auto-reply/templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
-import { hasStagedMediaProjection, resolveMediaFacts } from "../media/media-facts.js";
+import { resolveMediaFacts } from "../media/media-facts.js";
 import type { MediaAttachment } from "./types.js";
 
 /** Normalizes a local attachment path while rejecting remote file URLs and Windows UNC paths. */
@@ -29,10 +29,9 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
   return value;
 }
 
-/** Flattens legacy single-value and array media fields into indexed attachment records. */
+/** Converts ordered media facts into indexed attachment records. */
 export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
-  const mediaSource = hasStagedMediaProjection(ctx) ? { ...ctx, media: undefined } : ctx;
-  return resolveMediaFacts(mediaSource)
+  return resolveMediaFacts(ctx)
     .map((fact, index) => ({
       path: normalizeOptionalString(fact.path),
       url: normalizeOptionalString(fact.url),

@@ -75,6 +75,10 @@ import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
 } from "./state-migrations.mcp-oauth.js";
+import {
+  detectLegacyMeetingTranscripts,
+  migrateLegacyMeetingTranscripts,
+} from "./state-migrations.meeting-transcripts.js";
 import { mergeNotices } from "./state-migrations.messages.js";
 import {
   detectLegacyNodeHostConfig,
@@ -461,6 +465,11 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const meetingTranscripts = detectLegacyMeetingTranscripts({
+    stateDir,
+    env,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const restartSentinel = detectLegacyRestartSentinel({ stateDir });
   const workspace = detectLegacyWorkspaceState({
     cfg: params.cfg,
@@ -657,6 +666,9 @@ export async function detectLegacyStateMigrations(params: {
   if (mcpOauth.hasLegacy) {
     preview.push("- MCP OAuth credentials: legacy JSON → shared SQLite state");
   }
+  if (meetingTranscripts.hasLegacy) {
+    preview.push("- Meeting transcripts: legacy JSON/JSONL files → shared SQLite state");
+  }
   if (restartSentinel.hasLegacy) {
     preview.push("- Restart sentinel: legacy JSON → shared SQLite state");
   }
@@ -767,6 +779,7 @@ export async function detectLegacyStateMigrations(params: {
     deviceAuth,
     deviceIdentity,
     mcpOauth,
+    meetingTranscripts,
     restartSentinel,
     workspace,
     webPush,
@@ -1046,6 +1059,12 @@ export async function runLegacyStateMigrations(params: {
     env,
     stateDir: detected.stateDir,
   });
+  const meetingTranscripts = await migrateLegacyMeetingTranscripts({
+    detected: detected.meetingTranscripts,
+    env,
+    stateDir: detected.stateDir,
+    now,
+  });
   const restartSentinel = await migrateLegacyRestartSentinel({
     detected: detected.restartSentinel,
     env,
@@ -1113,6 +1132,7 @@ export async function runLegacyStateMigrations(params: {
     deviceAuth,
     deviceIdentity,
     mcpOauth,
+    meetingTranscripts,
     restartSentinel,
     workspace,
     webPush,
@@ -1142,6 +1162,7 @@ export async function runLegacyStateMigrations(params: {
       ...deviceAuth.changes,
       ...deviceIdentity.changes,
       ...mcpOauth.changes,
+      ...meetingTranscripts.changes,
       ...restartSentinel.changes,
       ...workspace.changes,
       ...webPush.changes,
@@ -1178,6 +1199,7 @@ export async function runLegacyStateMigrations(params: {
       ...deviceAuth.warnings,
       ...deviceIdentity.warnings,
       ...mcpOauth.warnings,
+      ...meetingTranscripts.warnings,
       ...restartSentinel.warnings,
       ...workspace.warnings,
       ...webPush.warnings,
@@ -1325,6 +1347,12 @@ export async function autoMigrateLegacyState(params: {
     stateDir: detected.stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const meetingTranscripts = await migrateLegacyMeetingTranscripts({
+    detected: detected.meetingTranscripts,
+    env,
+    stateDir: detected.stateDir,
+    now: params.now,
+  });
   const hasCustomAgentDir = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (hasCustomAgentDir) {
     const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
@@ -1434,6 +1462,7 @@ export async function autoMigrateLegacyState(params: {
       updateCheck,
       deviceAuth,
       deviceIdentity,
+      meetingTranscripts,
       restartSentinel,
       pluginPlans,
     ];
@@ -1458,6 +1487,7 @@ export async function autoMigrateLegacyState(params: {
         currentConversationBindings.changes.length > 0 ||
         deviceAuth.changes.length > 0 ||
         deviceIdentity.changes.length > 0 ||
+        meetingTranscripts.changes.length > 0 ||
         restartSentinel.changes.length > 0 ||
         channelPairing.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
@@ -1497,6 +1527,7 @@ export async function autoMigrateLegacyState(params: {
       ...acpSessionMetadata.changes,
       ...deviceAuth.changes,
       ...deviceIdentity.changes,
+      ...meetingTranscripts.changes,
     ];
     const warnings = [
       ...stateDirResult.warnings,
@@ -1507,6 +1538,7 @@ export async function autoMigrateLegacyState(params: {
       ...acpSessionMetadata.warnings,
       ...deviceAuth.warnings,
       ...deviceIdentity.warnings,
+      ...meetingTranscripts.warnings,
     ];
     const notices = [
       ...(stateDirResult.notices ?? []),
@@ -1523,7 +1555,8 @@ export async function autoMigrateLegacyState(params: {
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
         deviceAuth.changes.length > 0 ||
-        deviceIdentity.changes.length > 0,
+        deviceIdentity.changes.length > 0 ||
+        meetingTranscripts.changes.length > 0,
       skipped: false,
       changes,
       warnings,
@@ -1616,6 +1649,7 @@ export async function autoMigrateLegacyState(params: {
     ...currentConversationBindings.changes,
     ...deviceAuth.changes,
     ...deviceIdentity.changes,
+    ...meetingTranscripts.changes,
     ...restartSentinel.changes,
     ...channelPairing.changes,
     ...preSessionChannelPlans.changes,
@@ -1644,6 +1678,7 @@ export async function autoMigrateLegacyState(params: {
     ...currentConversationBindings.warnings,
     ...deviceAuth.warnings,
     ...deviceIdentity.warnings,
+    ...meetingTranscripts.warnings,
     ...restartSentinel.warnings,
     ...channelPairing.warnings,
     ...preSessionChannelPlans.warnings,
@@ -1660,6 +1695,7 @@ export async function autoMigrateLegacyState(params: {
     updateCheck,
     deviceAuth,
     deviceIdentity,
+    meetingTranscripts,
     restartSentinel,
     pluginPlans,
   ];

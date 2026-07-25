@@ -235,13 +235,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   padding: 0;
 }
 
-/* Drawer brand row keeps only the new-thread action: search lives in the
-   topbar and the drawer dismisses via backdrop, so their buttons stay hidden. */
-.shell--mobile-nav .sidebar-brand .sidebar-search,
-.shell--mobile-nav .sidebar-brand .sidebar-brand__collapse {
-  display: none;
-}
-
 .shell--mobile-nav .sidebar {
   width: 100%;
   min-width: 0;

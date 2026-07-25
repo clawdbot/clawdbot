@@ -115,7 +115,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.dismissedScope = gatewayUrl;
       this.dismissed = loadDismissals(gatewayUrl);
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       this.loadGeneration += 1;
       this.loadedClient = null;
       this.cronJobs = [];
@@ -142,7 +142,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.loadGeneration === generation &&
       this.loadedClient === client &&
       gateway.snapshot.client === client &&
-      gateway.snapshot.connected;
+      gateway.snapshot.phase === "connected";
     const cron = createInitialCronState({ client, connected: true });
     await Promise.allSettled([
       loadCronJobsPage(cron).then(() => {
@@ -206,7 +206,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    if (!this.context?.gateway.snapshot.connected) {
+    if (this.context?.gateway.snapshot.phase !== "connected") {
       return nothing;
     }
     const items = buildSidebarAttentionItems({

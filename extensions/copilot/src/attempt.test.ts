@@ -9,7 +9,8 @@ import {
   attachModelProviderRequestTransport,
   queueAgentHarnessMessage,
   type AgentHarnessAttemptParams,
-  type AgentHarnessAttemptResult,
+  type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
+  type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -22,10 +23,27 @@ import { runCopilotAttempt } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
 
+type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
+
+function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResult["terminal"]) {
+  return {
+    aborted: terminal.kind === "aborted" && terminal.source !== "yield_cleanup",
+    promptError:
+      terminal.kind === "failed"
+        ? terminal.error
+        : terminal.kind === "ok"
+          ? null
+          : (terminal.failure?.error ?? null),
+    timedOut: terminal.kind === "timeout" && terminal.source !== "observation",
+    timedOutDuringCompaction: terminal.kind === "timeout" && terminal.phase === "compaction",
+  };
+}
+
 const gatewayQuestionMock = vi.hoisted(() => ({
   waiters: new Map<string, (value: unknown) => void>(),
   cancelError: undefined as Error | undefined,
   warn: vi.fn(),
+  setActiveEmbeddedRun: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
@@ -63,6 +81,12 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
         return result;
       }
       return await actual.callGatewayTool(...args);
+    },
+    setActiveEmbeddedRun: (
+      ...args: Parameters<typeof actual.setActiveEmbeddedRun>
+    ): ReturnType<typeof actual.setActiveEmbeddedRun> => {
+      gatewayQuestionMock.setActiveEmbeddedRun(...args);
+      return actual.setActiveEmbeddedRun(...args);
     },
   };
 });
@@ -180,7 +204,9 @@ function waitForEventLoopTurn(): Promise<void> {
 }
 
 function getPromptErrorCode(result: AgentHarnessAttemptResult): string | undefined {
-  return (result.promptError as { code?: string } | undefined)?.code;
+  return (
+    projectAgentRunAttemptTerminal(result.terminal).promptError as { code?: string } | undefined
+  )?.code;
 }
 
 function getSdkSessionId(result: AgentHarnessAttemptResult): string | undefined {
@@ -308,7 +334,7 @@ function makeParams(
         useLoggedInUser?: boolean;
       };
       initialReplayState: { sdkSessionId?: string };
-      messages: Array<{ content: string; role: "user"; timestamp: number }>;
+      messages: AgentMessage[];
       model: { api: string; id: string; provider: string };
       onAssistantDelta: (payload: { delta: string; text: string }) => void | Promise<void>;
       profileVersion: string;
@@ -363,9 +389,7 @@ describe("runCopilotAttempt", () => {
 
     expect(sdk.createSession).toHaveBeenCalledTimes(1);
     expect(sdk.sessions[0]?.sendAndWait).toHaveBeenCalledTimes(1);
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeUndefined();
+    expect(result.terminal).toEqual({ kind: "ok" });
     expect(result.lastAssistant?.role).toBe("assistant");
     expect(result.assistantTexts).toEqual(["done"]);
     expect(result.messagesSnapshot.length).toBe(2);
@@ -642,7 +666,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
 
-    expect(result.timedOut).toBe(false);
+    expect(projectAgentRunAttemptTerminal(result.terminal).timedOut).toBe(false);
     await vi.waitFor(() => {
       expect(beforeCompaction).toHaveBeenCalledTimes(1);
     });
@@ -671,8 +695,7 @@ describe("runCopilotAttempt", () => {
     const attempt = runCopilotAttempt(makeParams(), { pool });
     const result = await attempt;
 
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeUndefined();
+    expect(result.terminal).toEqual({ kind: "ok" });
     expect(sdk.sessions[0]?.disconnect).not.toHaveBeenCalled();
     expect(sdk.client.deleteSession).not.toHaveBeenCalled();
 
@@ -706,7 +729,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await attempt;
 
-    expect(result.aborted).toBe(false);
+    expect(projectAgentRunAttemptTerminal(result.terminal).aborted).toBe(false);
     expect(activeSession?.abort).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(activeSession?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
@@ -741,7 +764,7 @@ describe("runCopilotAttempt", () => {
       pool: makeFakePool(sdk),
     });
 
-    expect(result.timedOutDuringCompaction).toBe(true);
+    expect(projectAgentRunAttemptTerminal(result.terminal).timedOutDuringCompaction).toBe(true);
     controller.abort();
     await vi.waitFor(() => {
       expect(activeSession?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
@@ -833,7 +856,7 @@ describe("runCopilotAttempt", () => {
     );
     await waitForEventLoopTurn();
 
-    expect(result.aborted).toBe(true);
+    expect(projectAgentRunAttemptTerminal(result.terminal).aborted).toBe(true);
     expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
     expect(llmOutput).not.toHaveBeenCalled();
   });
@@ -863,7 +886,7 @@ describe("runCopilotAttempt", () => {
     expect(agentEnd).toHaveBeenCalledTimes(1);
     expect(settled).toBe(false);
     releaseAgentEnd();
-    await expect(run).resolves.toMatchObject({ promptError: undefined });
+    await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
     expect(settled).toBe(true);
   });
 
@@ -907,6 +930,13 @@ describe("runCopilotAttempt", () => {
         makeParams({
           imageOrder: ["offloaded"],
           images: [],
+          media: [
+            {
+              url: `media://inbound/${mediaId}`,
+              contentType: "image/png",
+              kind: "image",
+            },
+          ],
           model: {
             api: "openai-responses",
             id: "gpt-4o",
@@ -1205,7 +1235,7 @@ describe("runCopilotAttempt", () => {
 
     expect(resumeCalls).toBe(1);
     expect(sdk.createSession).toHaveBeenCalledTimes(1);
-    expect(result.promptError).toBeUndefined();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
     // Recovery invalidates replay even though no side effects occurred.
     expect(result.replayMetadata).toEqual({
       hadPotentialSideEffects: false,
@@ -1230,7 +1260,9 @@ describe("runCopilotAttempt", () => {
 
     expect(sdk.resumeSession).toHaveBeenCalledTimes(1);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
-    expect((result.promptError as Error | undefined)?.message).toContain("ECONNRESET");
+    expect(
+      (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)?.message,
+    ).toContain("ECONNRESET");
   });
 
   it("replay-shim: prior hadPotentialSideEffects propagates into result replayMetadata", async () => {
@@ -1332,19 +1364,16 @@ describe("runCopilotAttempt", () => {
     const result = await runPromise;
 
     expect(session.abort).toHaveBeenCalledTimes(1);
-    expect(result.aborted).toBe(true);
-    expect(result.externalAbort).toBe(true);
+    expect(result.terminal).toMatchObject({ kind: "aborted", source: "external" });
   });
 
   it("active-run abort path marks the attempt as externally aborted", async () => {
+    gatewayQuestionMock.setActiveEmbeddedRun.mockClear();
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
     const sessionCreated = createDeferred<FakeSession>();
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockReturnValue(sendDeferred.promise);
-        session.abort.mockImplementationOnce(async () => {
-          sendDeferred.resolve(undefined);
-        });
         sessionCreated.resolve(session);
       },
     });
@@ -1357,14 +1386,22 @@ describe("runCopilotAttempt", () => {
     });
     const session = await sessionCreated.promise;
     await vi.waitFor(() => expect(session.sendAndWait).toHaveBeenCalledTimes(1));
+    const activeRunHandle = expectDefined(
+      gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.findLast(
+        ([sessionId]) => sessionId === "session-1",
+      )?.[1] as { isAborted?: () => boolean } | undefined,
+      "active Copilot run handle",
+    );
+    expect(activeRunHandle.isAborted?.()).toBe(false);
 
     gatewayQuestionMock.cancelError = new Error("gateway unavailable");
     expect(abortAgentHarnessRun("session-1")).toBe(true);
+    expect(activeRunHandle.isAborted?.()).toBe(true);
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    sendDeferred.resolve(undefined);
     const result = await runPromise;
 
-    expect(session.abort).toHaveBeenCalledTimes(1);
-    expect(result.aborted).toBe(true);
-    expect(result.externalAbort).toBe(true);
+    expect(result.terminal).toMatchObject({ kind: "aborted", source: "external" });
     await vi.waitFor(() =>
       expect(gatewayQuestionMock.warn).toHaveBeenCalledWith(
         "failed to cancel copilot gateway question during shutdown",
@@ -1387,8 +1424,7 @@ describe("runCopilotAttempt", () => {
       pool,
     });
 
-    expect(result.aborted).toBe(true);
-    expect(result.externalAbort).toBe(true);
+    expect(result.terminal).toMatchObject({ kind: "aborted", source: "external" });
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
     expect(pool["acquire"]).toHaveBeenCalledTimes(0);
     expect(agentEnd).toHaveBeenCalledWith(
@@ -1408,8 +1444,7 @@ describe("runCopilotAttempt", () => {
     controller.abort();
 
     expect(sdk.sessions[0]?.abort).toHaveBeenCalledTimes(0);
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(result.terminal).toEqual({ kind: "ok" });
   });
 
   it("tool bridge wiring: injected tools populate session config", async () => {
@@ -1570,9 +1605,9 @@ describe("runCopilotAttempt", () => {
     const result = await runCopilotAttempt(makeParams(), { createToolBridge, pool });
 
     expect(getPromptErrorCode(result)).toBe("tool_bridge_failure");
-    expect((result.promptError as Error | undefined)?.message).toBe(
-      "[copilot-attempt] tool-bridge construction failed: bridge failed",
-    );
+    expect(
+      (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)?.message,
+    ).toBe("[copilot-attempt] tool-bridge construction failed: bridge failed");
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
     expect(pool["acquire"]).toHaveBeenCalledTimes(0);
     expect(pool["release"]).toHaveBeenCalledTimes(0);
@@ -2029,8 +2064,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.timedOut).toBe(true);
-    expect(result.aborted).toBe(false);
+    expect(result.terminal).toMatchObject({ kind: "timeout" });
     expect(getSdkSessionId(result)).toBe("sess-1");
     expect(sdk.sessions[0]?.abort).toHaveBeenCalledTimes(0);
     expect(agentEnd).toHaveBeenCalledWith(
@@ -2062,8 +2096,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
 
-    expect(result.timedOut).toBe(true);
-    expect(result.timedOutDuringCompaction).toBe(true);
+    expect(result.terminal).toMatchObject({ kind: "timeout", phase: "compaction" });
     expect(sdk.sessions[0]?.disconnect).not.toHaveBeenCalled();
 
     sdk.sessions[0]?.emit("session.compaction_complete", { messagesRemoved: 3, success: true });
@@ -2107,8 +2140,7 @@ describe("runCopilotAttempt", () => {
       pool: makeFakePool(sdk),
     });
 
-    expect(result.timedOut).toBe(true);
-    expect(result.timedOutDuringCompaction).toBe(false);
+    expect(result.terminal).toMatchObject({ kind: "timeout", phase: "prompt" });
     expect(onDeferredCompaction).toHaveBeenCalledWith(
       expect.objectContaining({ sdkSessionId: "sess-1" }),
     );
@@ -2143,8 +2175,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
 
-    expect(result.timedOut).toBe(true);
-    expect(result.timedOutDuringCompaction).toBe(false);
+    expect(result.terminal).toMatchObject({ kind: "timeout", phase: "prompt" });
   });
 
   it("bounds deferred cleanup when SDK compaction never completes", async () => {
@@ -2161,7 +2192,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.timedOutDuringCompaction).toBe(true);
+    expect(result.terminal).toMatchObject({ kind: "timeout", phase: "compaction" });
     expect(sdk.sessions[0]?.disconnect).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(180_000);
@@ -2187,7 +2218,7 @@ describe("runCopilotAttempt", () => {
       pool: makeFakePool(sdk),
     });
 
-    expect(result.timedOutDuringCompaction).toBe(true);
+    expect(result.terminal).toMatchObject({ kind: "timeout", phase: "compaction" });
     expect(sdk.sessions[0]?.disconnect).not.toHaveBeenCalled();
 
     controller.abort();
@@ -2222,8 +2253,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await attempt;
 
-    expect(result.timedOut).toBe(true);
-    expect(result.timedOutDuringCompaction).toBe(true);
+    expect(result.terminal).toMatchObject({ kind: "timeout", phase: "compaction" });
   });
 
   it("G1: SDK timeout rejection (Error 'Timeout after Nms waiting for session.idle') sets timedOut, leaves promptError undefined, and does NOT abort the session", async () => {
@@ -2246,10 +2276,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBeUndefined();
-    expect(result.aborted).toBe(false);
-    expect(result.externalAbort).toBe(false);
+    expect(result.terminal).toMatchObject({ kind: "timeout", source: "runtime" });
     // Do NOT abort on timeout: orchestrator may resume the in-flight
     // SDK session on the next attempt. Matches the existing
     // resolve(undefined) test above.
@@ -2303,7 +2330,7 @@ describe("runCopilotAttempt", () => {
     release.resolve();
     const result = await runPromise;
 
-    expect(result.timedOut).toBe(true);
+    expect(result.terminal).toMatchObject({ kind: "timeout" });
     expect(onAssistantDelta).toHaveBeenCalledTimes(1);
     expect(result.assistantTexts?.join("")).toContain("partial-");
     session.emit("session.idle", {});
@@ -2339,7 +2366,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.promptError).toBe(error);
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(error);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
     expect(pool["release"]).toHaveBeenCalledTimes(0);
   });
@@ -2371,7 +2398,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.promptError).toBe(primaryError);
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(primaryError);
     expect(warnSpy).toHaveBeenCalledWith(
       "[copilot-attempt] pool.release failed after primary error",
       expect.objectContaining({ message: "release failed" }),
@@ -2418,7 +2445,7 @@ describe("runCopilotAttempt", () => {
     const result = await runCopilotAttempt(makeParams(), { pool });
     const session = requireSession(sdk);
 
-    expect(result.promptError).toBe(error);
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(error);
     expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
     expect(session.disconnect).toHaveBeenCalledTimes(1);
     expect(pool["release"]).toHaveBeenCalledTimes(1);
@@ -2435,7 +2462,7 @@ describe("runCopilotAttempt", () => {
     const poolWithPrimaryError = makeFakePool(sdkWithPrimaryError);
 
     const first = await runCopilotAttempt(makeParams(), { pool: poolWithPrimaryError });
-    expect(first.promptError).toBe(primaryError);
+    expect(projectAgentRunAttemptTerminal(first.terminal).promptError).toBe(primaryError);
 
     const sdkWithoutPrimaryError = makeFakeSdk({
       onCreateSession: (session) => {
@@ -2446,7 +2473,9 @@ describe("runCopilotAttempt", () => {
     const poolWithoutPrimaryError = makeFakePool(sdkWithoutPrimaryError);
 
     const second = await runCopilotAttempt(makeParams(), { pool: poolWithoutPrimaryError });
-    expect((second.promptError as Error | undefined)?.message).toBe("disconnect failed");
+    expect(
+      (projectAgentRunAttemptTerminal(second.terminal).promptError as Error | undefined)?.message,
+    ).toBe("disconnect failed");
   });
 
   it("pool keying: useLoggedInUser", async () => {
@@ -2652,7 +2681,9 @@ describe("runCopilotAttempt", () => {
     );
 
     expect(getPromptErrorCode(result)).toBe("model_not_supported");
-    expect((result.promptError as Error | undefined)?.message).toContain("request proxy");
+    expect(
+      (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)?.message,
+    ).toContain("request proxy");
     expect(sdk.createSession).not.toHaveBeenCalled();
   });
 
@@ -2832,6 +2863,43 @@ describe("runCopilotAttempt", () => {
       const roles = args.messages.map((m) => m.role);
       expect(roles).toContain("user");
       expect(roles).toContain("assistant");
+    });
+
+    it("keeps current memory-maintenance visibility hidden across later replays", async () => {
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("NO_REPLY"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const priorAssistant = {
+        role: "assistant",
+        content: [{ type: "text", text: "ordinary prior reply" }],
+        timestamp: Date.now() - 1,
+      } as AgentMessage;
+      const currentUser = {
+        role: "user",
+        content: "Pre-compaction memory flush",
+        timestamp: Date.now(),
+      } as AgentMessage;
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          messages: [priorAssistant, currentUser],
+          prompt: "Pre-compaction memory flush",
+          trigger: "memory",
+        }),
+        { pool },
+      );
+
+      const [replayedPrior, persistedPrompt, persistedAssistant] =
+        result.messagesSnapshot as Array<{
+          display?: boolean;
+          role: string;
+        }>;
+      expect(replayedPrior).not.toHaveProperty("display", false);
+      expect(persistedPrompt).toMatchObject({ display: false, role: "user" });
+      expect(persistedAssistant).toMatchObject({ display: false, role: "assistant" });
     });
 
     it("does not invoke dual-write mirror when runtime identity is absent", async () => {
@@ -3451,9 +3519,9 @@ describe("runCopilotAttempt", () => {
       });
 
       expect(getPromptErrorCode(result)).toBe("sandbox_resolution_failure");
-      expect((result.promptError as Error | undefined)?.message).toContain(
-        "sandbox provisioning boom",
-      );
+      expect(
+        (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)?.message,
+      ).toContain("sandbox provisioning boom");
       expect(createToolBridge).not.toHaveBeenCalled();
       expect(sdk.createSession).not.toHaveBeenCalled();
       expect(agentEnd).toHaveBeenCalledWith(
@@ -3485,7 +3553,10 @@ describe("runCopilotAttempt", () => {
         });
 
         expect(getPromptErrorCode(result)).toBe("sandbox_resolution_failure");
-        expect((result.promptError as Error | undefined)?.message).toContain("ENOTDIR");
+        expect(
+          (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)
+            ?.message,
+        ).toContain("ENOTDIR");
         expect(createToolBridge).not.toHaveBeenCalled();
         expect(sdk.createSession).not.toHaveBeenCalled();
       } finally {
@@ -3564,7 +3635,7 @@ describe("runCopilotAttempt", () => {
         },
       );
 
-      expect(result.promptError).toBeUndefined();
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
       expect(result.assistantTexts).toEqual(["final answer"]);
       expect(result.currentAttemptCompletedAssistant).toMatchObject({
         content: [{ type: "text", text: "final answer" }],

@@ -135,8 +135,8 @@ describe("legacy config migration end to end", () => {
         reload: { mode: "hybrid" },
         nodes: { allowSkills: false, commands: { allow: ["camera.snap"], deny: ["system.run"] } },
       },
-      ui: { prefs: { chatMessageMaxWidth: "82%" } },
       cron: { failureAlert: { channel: "telegram", to: "123" } },
+      messages: { inbound: { byChannel: { whatsapp: 0 } } },
       channels: {
         defaults: { heartbeatVisibility: { showOk: true } },
         slack: { postAs: "user" },

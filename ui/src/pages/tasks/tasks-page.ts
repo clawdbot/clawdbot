@@ -143,7 +143,7 @@ class TasksPage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, sourceChanged: boolean) {
     const identityChanged = sourceChanged || this.client !== snapshot.client;
-    const connectionChanged = this.connected !== snapshot.connected;
+    const connectionChanged = this.connected !== (snapshot.phase === "connected");
     if (identityChanged || connectionChanged) {
       this.invalidateGatewayWork();
     }
@@ -152,8 +152,8 @@ class TasksPage extends OpenClawLightDomElement {
       this.tasks = [];
       this.error = null;
     }
-    this.connected = snapshot.connected;
-    if (snapshot.connected) {
+    this.connected = snapshot.phase === "connected";
+    if (snapshot.phase === "connected") {
       void this.context.agents.ensureList();
     }
   }

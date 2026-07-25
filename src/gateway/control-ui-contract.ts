@@ -148,7 +148,6 @@ export type ControlUiBootstrapConfig = {
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
-  chatMessageMaxWidth?: string;
   seamColor?: string;
   /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
   timeFormat?: "auto" | "12" | "24";

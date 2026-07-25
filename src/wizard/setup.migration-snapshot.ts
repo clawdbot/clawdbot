@@ -24,7 +24,7 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
   "MEMORY.md",
   "skills",
 ] as const;
-const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
+const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents", "state"] as const;
 
 function canonicalizeJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -113,6 +113,12 @@ export async function inspectSetupMigrationFreshness(params: {
     if (await exists(path.join(params.workspaceDir, entry))) {
       reasons.push(`workspace ${entry} exists`);
     }
+  }
+  if (
+    reasons.every((reason) => !reason.startsWith("workspace ")) &&
+    (await hasDirectoryEntries(params.workspaceDir))
+  ) {
+    reasons.push("workspace directory is not empty");
   }
   for (const entry of MEANINGFUL_STATE_ENTRIES) {
     if (await hasDirectoryEntries(path.join(params.stateDir, entry))) {
@@ -240,9 +246,7 @@ export async function buildSetupMigrationTargetSnapshot(params: {
   const hash = crypto.createHash("sha256");
   const targetConfig = buildSetupMigrationSnapshotConfig(params.config);
   hash.update(`config:${JSON.stringify(canonicalizeJsonValue(targetConfig))}\0`);
-  for (const entry of MEANINGFUL_WORKSPACE_ENTRIES) {
-    await hashTargetPath(hash, path.join(params.workspaceDir, entry), `workspace/${entry}`);
-  }
+  await hashTargetPath(hash, params.workspaceDir, "workspace");
   for (const entry of MEANINGFUL_STATE_ENTRIES) {
     await hashTargetPath(hash, path.join(params.stateDir, entry), `state/${entry}`);
   }

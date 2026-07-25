@@ -29,6 +29,10 @@ import {
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
 import {
+  resolveScheduledToolPolicyContext,
+  type ScheduledToolPolicyContext,
+} from "../agents/scheduled-tool-policy.js";
+import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
   type ToolSearchToolContext,
@@ -81,6 +85,7 @@ type PrepareTriggerRuntime = (params: {
   jobId: string;
   agentId?: string;
   toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   signal?: AbortSignal;
 }) => Promise<PreparedTriggerRuntime>;
 
@@ -106,6 +111,7 @@ async function prepareTriggerRuntime(params: {
   jobId: string;
   agentId?: string;
   toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   signal?: AbortSignal;
 }): Promise<PreparedTriggerRuntime> {
   params.signal?.throwIfAborted();
@@ -173,6 +179,10 @@ async function prepareTriggerRuntime(params: {
         includeCoreTools: toolPlan.includeCoreTools,
         runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
         inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
+        scheduledToolPolicy: resolveScheduledToolPolicyContext({
+          toolsAllow: params.toolsAllow,
+          scheduledToolPolicy: params.scheduledToolPolicy,
+        }),
         toolConstructionPlan: toolPlan.codingToolConstructionPlan,
       })
     : [];
@@ -341,6 +351,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     requestedAgentId?: string;
     agentId: string;
     toolsAllow?: string[];
+    scheduledToolPolicy?: ScheduledToolPolicyContext;
     toolsAllowKey: string;
     signal: AbortSignal;
   }): Promise<PreparedTriggerRuntime> => {
@@ -375,6 +386,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       jobId: request.jobId,
       agentId: request.requestedAgentId,
       toolsAllow: request.toolsAllow,
+      scheduledToolPolicy: request.scheduledToolPolicy,
       signal: request.signal,
     });
     const entry: TriggerRuntimeCacheEntry = {
@@ -400,6 +412,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     agentId?: string;
     script: string;
     toolsAllow?: string[];
+    scheduledToolPolicy?: ScheduledToolPolicyContext;
     abortSignal?: AbortSignal;
     wallClockMs: number;
     maxToolCalls: number;
@@ -417,13 +430,17 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     try {
       const runtimeConfig = resolveCronActiveRuntimeConfig(deps.config);
       const agentId = resolveTriggerAgentId(runtimeConfig, params.agentId);
-      const toolsAllowKey = JSON.stringify(params.toolsAllow ?? null);
+      const toolsAllowKey = JSON.stringify([
+        params.toolsAllow ?? null,
+        params.scheduledToolPolicy ?? null,
+      ]);
       const runtime = await resolveCachedRuntime({
         runtimeConfig,
         jobId: params.jobId,
         requestedAgentId: params.agentId,
         agentId,
         toolsAllow: params.toolsAllow,
+        scheduledToolPolicy: params.scheduledToolPolicy,
         toolsAllowKey,
         signal: evaluationScope.signal,
       });
@@ -590,6 +607,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       state: unknown;
       streamBatch?: string;
       toolsAllow?: string[];
+      scheduledToolPolicy?: ScheduledToolPolicyContext;
       abortSignal?: AbortSignal;
     }): Promise<CronTriggerEvaluationResult> => {
       if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
@@ -616,6 +634,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       state: unknown;
       streamBatch?: string;
       toolsAllow?: string[];
+      scheduledToolPolicy?: ScheduledToolPolicyContext;
       timeoutSeconds?: number;
       toolBudget?: number;
       abortSignal?: AbortSignal;

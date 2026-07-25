@@ -13,6 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import { resolveCodexAppServerClientInstanceId } from "./app-server/client.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import { assertCodexThreadForkParams } from "./app-server/protocol-validators.js";
@@ -132,12 +133,14 @@ type CodexSessionCatalogRequestSnapshot = {
 };
 
 function createCodexSessionCatalogControlFromRequests(params: {
+  clientId?: string;
   connectionFingerprint?: string;
   createRequestSnapshot: () => CodexSessionCatalogRequestSnapshot;
   now: () => number;
   withPinnedConnection: CodexSessionCatalogControl["withPinnedConnection"];
 }): CodexSessionCatalogControl {
   return {
+    ...(params.clientId ? { clientId: params.clientId } : {}),
     ...(params.connectionFingerprint
       ? { connectionFingerprint: params.connectionFingerprint }
       : {}),
@@ -341,6 +344,7 @@ export function createCodexSessionCatalogControl(params: {
       };
       const pinnedControl: CodexSessionCatalogControl =
         createCodexSessionCatalogControlFromRequests({
+          clientId: resolveCodexAppServerClientInstanceId(client),
           connectionFingerprint: buildCodexAppServerConnectionFingerprint(
             runtime,
             resolveDefaultAgentDir(runtimeConfig ?? {}),

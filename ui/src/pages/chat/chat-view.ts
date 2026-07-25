@@ -2,7 +2,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
-import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionSharingRole,
+  SessionSuggestion,
+  SessionSuggestionResolution,
+  TaskSuggestion,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   SessionObserverDigest,
   SessionsObserverAskResult,
@@ -45,11 +50,13 @@ import {
   renderChatImageLightbox,
 } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
+import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
+import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
+import "./components/chat-sidebar.ts";
 import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import "./components/chat-sidebar.ts";
 import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
 import type {
   DetailFullMessageResult,
@@ -140,6 +147,9 @@ export type ChatProps = {
   offline?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
+  suggestionComposer?: boolean;
+  typingLabel?: string | null;
+  onTypingChange?: (typing: boolean) => void;
   canSend: boolean;
   disabledReason: string | null;
   disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
@@ -255,6 +265,15 @@ export type ChatProps = {
   canDismissTaskSuggestions?: boolean;
   onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
+  sessionSuggestions?: readonly SessionSuggestion[];
+  sessionSuggestionRole?: SessionSharingRole;
+  sessionSuggestionBusyIds?: ReadonlySet<string>;
+  sessionSuggestionsArchived?: boolean;
+  canResolveSessionSuggestions?: boolean;
+  onResolveSessionSuggestion?: (
+    suggestion: SessionSuggestion,
+    resolution: SessionSuggestionResolution,
+  ) => void;
   pullRequests?: ControlUiSessionPullRequest[];
   pullRequestsBranch?: ControlUiSessionBranch;
   pullRequestsRateLimited?: boolean;
@@ -262,28 +281,6 @@ export type ChatProps = {
   onExpandPullRequests?: () => void;
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
-
-export function renderChatResizableDivider(props: {
-  className?: string;
-  label: string;
-  maxRatio?: number;
-  minRatio?: number;
-  onElement?: (element: Element | undefined) => void;
-  onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
-  orientation: "horizontal" | "vertical";
-  splitRatio: number;
-}) {
-  return html`<resizable-divider
-    ${ref(props.onElement ?? (() => {}))}
-    class=${props.className ?? nothing}
-    .splitRatio=${props.splitRatio}
-    .minRatio=${props.minRatio ?? 0.4}
-    .maxRatio=${props.maxRatio ?? 0.7}
-    .label=${props.label}
-    .orientation=${props.orientation}
-    @resize=${props.onResize}
-  ></resizable-divider>`;
-}
 
 function isImageLightboxEvent(event: Event): boolean {
   return event
@@ -385,7 +382,7 @@ export function renderChat(props: ChatProps) {
       onForkMessage: props.onForkMessage,
       // Archived/non-composable sessions must not offer selection actions:
       // withholding the callback keeps the popup from rendering at all.
-      onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
+      onSideQuestion: props.canSend && !props.suggestionComposer ? props.onSideQuestion : undefined,
       onOpenSession: props.onSessionSelect,
       backgroundTasks: props.backgroundTasks,
       onFocusComposer: () =>
@@ -439,6 +436,9 @@ export function renderChat(props: ChatProps) {
     realtimeTalkCameraError: props.realtimeTalkCameraError,
     gatewayClient: props.gatewayClient,
     composerHoldToRecord: props.composerHoldToRecord,
+    suggestionComposer: props.suggestionComposer,
+    typingLabel: props.typingLabel,
+    onTypingChange: props.onTypingChange,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -446,8 +446,8 @@ export function renderChat(props: ChatProps) {
     onHistoryKeydown: props.onHistoryKeydown,
     onSlashIntent: props.onSlashIntent,
     onSend: props.onSend,
-    onCompact: props.onCompact,
-    onToggleRealtimeTalk: props.onToggleRealtimeTalk,
+    onCompact: props.suggestionComposer ? undefined : props.onCompact,
+    onToggleRealtimeTalk: props.suggestionComposer ? undefined : props.onToggleRealtimeTalk,
     onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
@@ -604,6 +604,15 @@ export function renderChat(props: ChatProps) {
                 expanded: props.pullRequestsExpanded === true,
                 onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+              })}
+              ${renderChatSessionSuggestions({
+                suggestions: props.sessionSuggestions ?? [],
+                role: props.sessionSuggestionRole,
+                busyIds: props.sessionSuggestionBusyIds ?? new Set(),
+                archived: props.sessionSuggestionsArchived === true,
+                canResolve: props.canResolveSessionSuggestions === true,
+                onResolve: (suggestion, resolution) =>
+                  props.onResolveSessionSuggestion?.(suggestion, resolution),
               })}
               ${props.observerHudReady
                 ? html`

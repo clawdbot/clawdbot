@@ -395,6 +395,39 @@ function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
   return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
 }
 
+function stampReplyAttribution(
+  items: Array<ChatItem | MessageGroup>,
+): Array<ChatItem | MessageGroup> {
+  const userSenderKeys = new Set<string>();
+  for (const item of items) {
+    if (item.kind !== "group" || item.role !== "user" || !item.sender) {
+      continue;
+    }
+    const senderKey = senderIdentityKey(item.sender);
+    if (senderKey) {
+      userSenderKeys.add(senderKey);
+    }
+  }
+  if (userSenderKeys.size < 2) {
+    return items;
+  }
+
+  let latestUserSender: MessageGroup["sender"];
+  for (const item of items) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    if (item.role === "user") {
+      // A sender-less user group clears attribution: no chip is safer than
+      // mislabeling the reply as addressed to the previous participant.
+      latestUserSender = item.sender;
+    } else if (item.role === "assistant" && latestUserSender) {
+      item.replyToSender = latestUserSender;
+    }
+  }
+  return items;
+}
+
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -412,17 +445,15 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
     const senderLabel =
-      role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
-        ? (normalized.senderLabel ?? null)
-        : null;
-    const sender = role.toLowerCase() === "user" ? normalized.sender : undefined;
+      role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
+    const sender = role === "user" ? normalized.sender : undefined;
     const timestamp = normalized.timestamp || Date.now();
-    const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
+    const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
     const splitsAssistantCommentary =
-      role.toLowerCase() === "assistant" &&
-      currentGroup?.role.toLowerCase() === "assistant" &&
+      role === "assistant" &&
+      currentGroup?.role === "assistant" &&
       isKeyedAssistantStreamFallbackMessage(currentGroup.messages[0]?.message) !==
         isKeyedAssistantStreamFallbackMessage(item.message);
 
@@ -460,7 +491,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   if (currentGroup) {
     result.push(currentGroup);
   }
-  return result;
+  return stampReplyAttribution(result);
 }
 
 function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): ChatItem | null {
@@ -1165,6 +1196,7 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "message":
       return rawMessageTimestamp(item.message);
     case "divider":
+    case "notice":
       return item.timestamp;
     case "stream":
       return item.startedAt;
@@ -1281,6 +1313,15 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
     if (marker && marker.kind === "compaction") {
       items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
+      continue;
+    }
+
+    const role = normalizeRoleForGrouping(normalized.role);
+    if (role === "system") {
+      const text = extractTextCached(msg);
+      if (text?.trim()) {
+        items.push({ kind: "notice", key: itemKey, text, timestamp: normalized.timestamp });
+      }
       continue;
     }
 
@@ -1610,6 +1651,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
     senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
+    senderIdentityKey(previous.replyToSender) === senderIdentityKey(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
     previous.turnSucceeded === next.turnSucceeded &&
     previous.messages.length === next.messages.length &&
@@ -1637,6 +1679,12 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.kind === "message" &&
         previous.message === next.message &&
         previous.duplicateCount === next.duplicateCount
+      );
+    case "notice":
+      return (
+        previous.kind === "notice" &&
+        previous.text === next.text &&
+        previous.timestamp === next.timestamp
       );
     case "divider":
       return (

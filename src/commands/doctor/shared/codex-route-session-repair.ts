@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
-import { loadSessionStore, updateSessionStore } from "../../../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  loadLegacySessionStore,
+  updateLegacySessionStore,
+} from "../../../infra/state-migrations.legacy-session-store.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
 import {
   isOpenAICodexAuthProfileRef,
@@ -294,7 +297,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   if (!params.shouldRepair) {
     const stale = targets.flatMap((target) => {
       const sessionKeys = scanCodexSessionStoreRoutes(
-        loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+        loadLegacySessionStore(target.storePath),
         params.blockedModelIdentities,
       );
       return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
@@ -320,13 +323,13 @@ export async function maybeRepairCodexSessionRoutes(params: {
   let repairedSessions = 0;
   for (const target of targets) {
     const staleSessionKeys = scanCodexSessionStoreRoutes(
-      loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+      loadLegacySessionStore(target.storePath),
       params.blockedModelIdentities,
     );
     if (staleSessionKeys.length === 0) {
       continue;
     }
-    const result = await updateSessionStore(
+    const result = await updateLegacySessionStore(
       target.storePath,
       (store) =>
         repairCodexSessionStoreRoutes({

@@ -20,10 +20,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { formatForLog } from "../ws-log.js";
 import {
   assertExpectedExistingSession,
@@ -227,6 +229,13 @@ export async function persistAgentSessionPhase(params: {
                 ...(freshEntry.thinkingLevel ? { thinking: freshEntry.thinkingLevel } : {}),
                 ...(marker.toolsAllow !== undefined ? { toolsAllow: [...marker.toolsAllow] } : {}),
                 ...(marker.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
+                ...(normalizeCronScheduledToolPolicy(marker.scheduledToolPolicy)
+                  ? {
+                      scheduledToolPolicy: normalizeCronScheduledToolPolicy(
+                        marker.scheduledToolPolicy,
+                      ),
+                    }
+                  : {}),
                 ...(marker.cliSessionBindingFacts
                   ? { cliSessionBindingFacts: { ...marker.cliSessionBindingFacts } }
                   : {}),
@@ -314,7 +323,7 @@ export async function persistAgentSessionPhase(params: {
                 cfg: params.cfg,
                 entry: merged,
                 sessionKey: params.canonicalSessionKey,
-                channel: merged.channel,
+                channel: sessionDeliveryChannel(merged),
                 chatType: merged.chatType,
               }) === "deny"
             ) {
@@ -475,7 +484,7 @@ export async function persistAgentSessionPhase(params: {
       cfg: params.cfg,
       entry: sessionEntry,
       sessionKey: params.canonicalSessionKey,
-      channel: sessionEntry?.channel,
+      channel: sessionDeliveryChannel(sessionEntry),
       chatType: sessionEntry?.chatType,
     }) === "deny"
   ) {

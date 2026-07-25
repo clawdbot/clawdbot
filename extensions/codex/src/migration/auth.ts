@@ -5,6 +5,7 @@ import {
   markMigrationItemConflict,
   markMigrationItemError,
   markMigrationItemSkipped,
+  resolveMigrationConfigRuntime,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -258,7 +259,8 @@ function hasCurrentAuthProfileConfigConflict(
 ): boolean {
   let config = ctx.config;
   try {
-    config = (ctx.runtime?.config?.current?.() as OpenClawConfig | undefined) ?? config;
+    config =
+      (resolveMigrationConfigRuntime(ctx)?.current?.() as OpenClawConfig | undefined) ?? config;
   } catch {
     // Fall back to the planning snapshot; direct config writes recheck inside mutate.
   }
@@ -415,7 +417,7 @@ async function applyCodexAuthProfileConfig(
   profile: CodexAuthProfileConfig,
   applyConfig: (config: OpenClawConfig) => OpenClawConfig,
 ): Promise<CodexAuthConfigApplyResult> {
-  const configApi = ctx.runtime?.config;
+  const configApi = resolveMigrationConfigRuntime(ctx);
   if (!configApi?.current || !configApi.mutateConfigFile) {
     return "unavailable";
   }
@@ -559,6 +561,7 @@ export async function applyCodexAuthItem(params: {
   let wrote = false;
   const store = await updateAuthProfileStoreWithLock({
     agentDir: targets.agentDir,
+    stateDir: ctx.stateDir,
     updater: (freshStore) => {
       const existing = freshStore.profiles[profileId];
       if (!ctx.overwrite && existing) {

@@ -18,7 +18,7 @@ describe("agents route", () => {
       ],
     };
     const ensureList = vi.fn(async () => agentsList);
-    const gateway = { snapshot: { client: null, connected: false } };
+    const gateway = { snapshot: { client: null, phase: "stopped" } };
     const context = {
       gateway,
       agents: {

@@ -5,6 +5,10 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import {
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+} from "../../utils/delivery-context.shared.js";
 import type { MsgContext } from "../templating.js";
 import { handleDockCommand } from "./commands-dock.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
@@ -37,9 +41,9 @@ function buildDockParams(commandBody: string, ctxOverrides?: Partial<MsgContext>
   const sessionEntry = {
     sessionId: "session-dock",
     updatedAt: 1,
-    lastChannel: "telegram",
-    lastTo: "42",
-    lastAccountId: "primary",
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "telegram", to: "42", accountId: "primary" },
+    }),
   };
   const params = buildCommandTestParams(
     commandBody,
@@ -87,9 +91,11 @@ describe("handleDockCommand", () => {
       reply: { text: "Docked replies to discord." },
     });
     const updatedEntry = params.sessionStore?.[params.sessionKey];
-    expect(updatedEntry?.lastChannel).toBe("discord");
-    expect(updatedEntry?.lastTo).toBe("UserCase123");
-    expect(updatedEntry?.lastAccountId).toBe("default");
+    expect(projectSessionDeliveryFields(updatedEntry?.delivery)).toMatchObject({
+      lastChannel: "discord",
+      lastTo: "UserCase123",
+      lastAccountId: "default",
+    });
   });
 
   it("accepts generated underscore aliases such as Telegram native /dock_discord", async () => {
@@ -98,8 +104,10 @@ describe("handleDockCommand", () => {
     const result = await handleDockCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(params.sessionEntry?.lastChannel).toBe("discord");
-    expect(params.sessionEntry?.lastTo).toBe("UserCase123");
+    expect(projectSessionDeliveryFields(params.sessionEntry?.delivery)).toMatchObject({
+      lastChannel: "discord",
+      lastTo: "UserCase123",
+    });
   });
 
   it("does not claim unrelated slash commands", async () => {
@@ -119,7 +127,9 @@ describe("handleDockCommand", () => {
         text: "Cannot dock to discord: add this sender and a discord:... peer to session.identityLinks.",
       },
     });
-    expect(params.sessionEntry?.lastChannel).toBe("telegram");
+    expect(projectSessionDeliveryFields(params.sessionEntry?.delivery).lastChannel).toBe(
+      "telegram",
+    );
   });
 
   it("rejects group-session docking before it can reroute replies to a linked DM", async () => {
@@ -137,8 +147,10 @@ describe("handleDockCommand", () => {
       shouldContinue: false,
       reply: { text: "Cannot dock to discord: docking is only available from direct chats." },
     });
-    expect(params.sessionEntry?.lastChannel).toBe("telegram");
-    expect(params.sessionEntry?.lastTo).toBe("42");
+    expect(projectSessionDeliveryFields(params.sessionEntry?.delivery)).toMatchObject({
+      lastChannel: "telegram",
+      lastTo: "42",
+    });
   });
 
   it("fails closed when no session entry can be persisted", async () => {

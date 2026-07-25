@@ -1189,6 +1189,61 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("skips memory flush for incognito sessions", async () => {
+    const sessionEntry: SessionEntry = {
+      incognito: true,
+      sessionId: "incognito-session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "webchat" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+  });
+
+  it("skips memory flush for an incognito key after process-local state is gone", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-deleted-memory";
+    const sessionEntry: SessionEntry = {
+      sessionId: "rematerialized-session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "webchat" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("skips memory flush for compatible CLI session runtime pins", async () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [

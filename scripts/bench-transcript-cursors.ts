@@ -47,13 +47,20 @@ function seedTranscript(
     const now = Date.now();
     database.db
       .prepare(
-        `INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at)
-         VALUES (?, ?, 'conversation', ?, ?)`,
+        `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+         VALUES (?, ?, '{}', ?)`,
+      )
+      .run(sessionKey, sessionId, now);
+    database.db
+      .prepare(
+        `INSERT INTO session_windows (
+           session_id, session_key, session_scope, created_at, updated_at
+         ) VALUES (?, ?, 'conversation', ?, ?)`,
       )
       .run(sessionId, sessionKey, now, now);
     database.db
       .prepare(
-        `INSERT INTO session_transcript_generations (session_id, generation, updated_at)
+        `INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
          VALUES (?, 'benchmark-generation', ?)`,
       )
       .run(sessionId, now);

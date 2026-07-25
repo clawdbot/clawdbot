@@ -37,11 +37,11 @@ type AppLifecycleState = {
 type ShellInitializationState = {
   routeState: { routeId?: string };
   ensureAgentsList: (
-    snapshot: { client: GatewayBrowserClient | null; connected: boolean },
+    snapshot: ApplicationGatewaySnapshot,
     agents: ApplicationContext["agents"],
   ) => void;
   ensureRuntimeConfig: (
-    snapshot: { client: GatewayBrowserClient | null; connected: boolean },
+    snapshot: ApplicationGatewaySnapshot,
     runtimeConfig: ApplicationContext["runtimeConfig"],
   ) => void;
 };
@@ -244,8 +244,7 @@ describe("OpenClaw app lifecycle", () => {
     const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
     const snapshot = {
       client: null,
-      connected: false,
-      reconnecting: false,
+      phase: "stopped",
       lastError: null,
       lastErrorCode: null,
     } as ApplicationGatewaySnapshot;
@@ -317,7 +316,7 @@ describe("OpenClaw shell source initialization", () => {
     ) as unknown as ShellInitializationState;
     shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
-    const snapshot = { client, connected: true };
+    const snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
     const firstAgents = {
       state: { agentsList: null },
       ensureList: vi.fn(() => Promise.resolve(null)),
@@ -615,7 +614,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       context: {
         gateway: {
           snapshot: {
-            connected: true,
+            phase: "connected",
             hello: {
               auth: { role: "operator", scopes: ["operator.admin"] },
               features: { methods: ["terminal.open", "browser.request"] },
@@ -839,6 +838,28 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       key: "<",
       code: "Comma",
       metaKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+
+    shell.handleDocumentKeydown(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith("config", undefined);
+  });
+
+  it("opens Settings with Ctrl-Shift-Comma", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new KeyboardEvent("keydown", {
+      key: "<",
+      code: "Comma",
+      ctrlKey: true,
       shiftKey: true,
       cancelable: true,
     });

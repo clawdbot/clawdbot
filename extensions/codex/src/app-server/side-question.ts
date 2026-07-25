@@ -55,7 +55,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
-import { CodexNativeToolLifecycleProjector } from "./event-projector.js";
+import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
@@ -1042,6 +1042,7 @@ async function createCodexSideToolBridge(input: {
       hookContext: {
         agentId: input.sessionAgentId,
         config: input.params.cfg,
+        contextWindowTokens: runtimeModel.contextWindow,
         sessionId: input.params.sessionId,
         sessionKey: input.params.sessionKey,
         runId: input.runId,

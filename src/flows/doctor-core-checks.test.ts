@@ -10,7 +10,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   CORE_HEALTH_CHECKS,
   createCoreHealthChecks,
-  resetCoreHealthChecksForTest,
   type CoreHealthCheckDeps,
 } from "./doctor-core-checks.js";
 import { clearHealthChecksForTest } from "./health-check-registry.js";
@@ -144,7 +143,6 @@ describe("CORE_HEALTH_CHECKS", () => {
 
   beforeAll(async () => {
     clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
     const cfg: OpenClawConfig = {
@@ -166,7 +164,6 @@ describe("CORE_HEALTH_CHECKS", () => {
       calls: [...mocks.loadModelCatalog.mock.calls],
     };
     clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
   });
 
   beforeEach(() => {

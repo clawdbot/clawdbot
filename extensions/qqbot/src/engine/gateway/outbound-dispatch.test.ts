@@ -1004,7 +1004,7 @@ describe("dispatchOutbound", () => {
     }
   });
 
-  it("marks voice-only inbound as audio without adding voice paths to MediaPaths", async () => {
+  it("marks voice-only inbound as type-only audio facts", async () => {
     let finalized: Record<string, unknown> | undefined;
     const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });
 
@@ -1016,11 +1016,35 @@ describe("dispatchOutbound", () => {
       { runtime, cfg: {}, account },
     );
 
-    expect(finalized?.MediaType).toBe("audio/wav");
-    expect(finalized?.MediaTypes).toEqual(["audio/wav"]);
+    expect(finalized?.media).toEqual([expect.objectContaining({ contentType: "audio/wav" })]);
     expect(finalized?.QQVoiceAttachmentPaths).toEqual(["/tmp/qqbot/voice.wav"]);
-    expect(finalized).not.toHaveProperty("MediaPath");
-    expect(finalized).not.toHaveProperty("MediaPaths");
+    expect(finalized?.MediaPath).toBeUndefined();
+    expect(finalized?.MediaPaths).toBeUndefined();
+  });
+
+  it("keeps disjoint local and remote images as separate ordered facts", async () => {
+    let finalized: Record<string, unknown> | undefined;
+    const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });
+
+    await dispatchOutbound(
+      makeInbound({
+        localMediaPaths: ["/tmp/qqbot/local.png"],
+        localMediaTypes: ["image/png"],
+        remoteMediaUrls: ["https://example.test/remote.png"],
+      }),
+      { runtime, cfg: {}, account },
+    );
+
+    expect(finalized?.media).toEqual([
+      expect.objectContaining({
+        path: "/tmp/qqbot/local.png",
+        contentType: "image/png",
+        kind: "image",
+      }),
+      // Remote URLs carry no MIME; without an explicit image kind the fact
+      // would classify as a generic file and skip image understanding.
+      expect.objectContaining({ url: "https://example.test/remote.png", kind: "image" }),
+    ]);
   });
 
   it("synthesizes plain audioAsVoice text as a QQ voice reply", async () => {

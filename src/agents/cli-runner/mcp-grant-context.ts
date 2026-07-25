@@ -9,7 +9,7 @@ export function normalizeOptionalMcpContextValue(value: string | undefined): str
   return value?.trim() || undefined;
 }
 
-export function buildCliMcpExecSession(
+function buildCliMcpExecSession(
   sessionEntry: RunCliAgentParams["sessionEntry"],
 ): McpLoopbackRequestContext["execSession"] {
   const execSession = {
@@ -21,7 +21,7 @@ export function buildCliMcpExecSession(
   return Object.values(execSession).some(Boolean) ? execSession : undefined;
 }
 
-export function buildCliMcpExecOverrides(
+function buildCliMcpExecOverrides(
   execOverrides: RunCliAgentParams["execOverrides"],
 ): McpLoopbackRequestContext["execOverrides"] {
   if (!execOverrides) {
@@ -36,7 +36,7 @@ export function buildCliMcpExecOverrides(
   return Object.keys(scopedOverrides).length > 0 ? scopedOverrides : undefined;
 }
 
-export function buildCliMcpBashElevated(
+function buildCliMcpBashElevated(
   bashElevated: RunCliAgentParams["bashElevated"],
 ): McpLoopbackRequestContext["bashElevated"] {
   if (!bashElevated) {
@@ -55,7 +55,7 @@ export function buildCliMcpBashElevated(
   };
 }
 
-export function buildCliMcpChannelContext(
+function buildCliMcpChannelContext(
   channelContext: RunCliAgentParams["channelContext"],
   senderId?: string | null,
 ): McpLoopbackRequestContext["channelContext"] {
@@ -72,13 +72,13 @@ export function buildCliMcpChannelContext(
   };
 }
 
-export function resolveCliMcpMessageProvider(
+function resolveCliMcpMessageProvider(
   run: Pick<RunCliAgentParams, "messageProvider" | "messageChannel">,
 ): string | undefined {
   return normalizeMessageChannel(run.messageProvider ?? run.messageChannel) ?? undefined;
 }
 
-export function resolveCliMcpSessionKey(
+function resolveCliMcpSessionKey(
   run: Pick<RunCliAgentParams, "sessionKey">,
   config: OpenClawConfig,
   agentId: string,
@@ -120,9 +120,14 @@ export function buildCliMcpGrantContext(params: {
     agentId: params.agentId,
     sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
     runId: normalizeOptionalMcpContextValue(params.run.runId),
+    workspaceDir: params.run.workspaceDir,
+    ...(normalizeOptionalMcpContextValue(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
     // Restricted runs get their allowlist stamped into the grant; the
     // loopback server enforces it on tools/list and tools/call.
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
+    ...(params.run.scheduledToolPolicy
+      ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
+      : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     messageProvider: resolveCliMcpMessageProvider(params.run),

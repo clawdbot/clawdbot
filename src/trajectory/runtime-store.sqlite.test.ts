@@ -92,7 +92,7 @@ describe("SQLite trajectory runtime store", () => {
     ]);
 
     const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
-    database.db.prepare("DELETE FROM sessions WHERE session_id = ?").run("session-1");
+    database.db.prepare("DELETE FROM session_windows WHERE session_id = ?").run("session-1");
 
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),

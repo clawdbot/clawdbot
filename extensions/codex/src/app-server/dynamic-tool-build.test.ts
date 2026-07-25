@@ -449,7 +449,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(webSearchAllowed).toBe(false);
   });
 
-  it("forwards trusted completion lineage to tool and web-search policy construction", async () => {
+  it("forwards trusted completion and scheduled authority to policy construction", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -460,6 +460,12 @@ describe("Codex app-server dynamic tool build", () => {
       sourceTool: "subagent_announce",
     };
     params.trustedInternalHandoff = true;
+    params.scheduledToolPolicy = {
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "default",
+    };
     let receivedOptions: unknown;
     setOpenClawCodingToolsFactoryForTests((options) => {
       receivedOptions = options;
@@ -471,11 +477,13 @@ describe("Codex app-server dynamic tool build", () => {
     expect(receivedOptions).toMatchObject({
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: true,
+      scheduledToolPolicy: params.scheduledToolPolicy,
     });
     expect(hoisted.resolveWebSearchToolPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
         inputProvenance: params.inputProvenance,
         trustedInternalHandoff: true,
+        scheduledToolPolicy: params.scheduledToolPolicy,
       }),
     );
   });

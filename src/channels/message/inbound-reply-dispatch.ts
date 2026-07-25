@@ -32,6 +32,9 @@ import {
 import type { ChannelTurnResult, DurableInboundReplyDeliveryOptions } from "../turn/kernel.js";
 import type {
   AssembledChannelTurn,
+  ChannelCoreManagedTurnDeliveryAdapter,
+  ChannelProviderOwnedMessageSendingDeliveryAdapter,
+  ChannelTurnDeliveryAdapter,
   ChannelTurnPlan,
   PreparedChannelTurn,
   RunChannelTurnParams,
@@ -60,7 +63,13 @@ export type ChannelInboundEventRunnerParams<
 > = RunChannelTurnParams<TRaw, TDispatchResult>;
 export type PreparedInboundReply<TDispatchResult> = PreparedChannelTurn<TDispatchResult>;
 export type AssembledInboundReply = AssembledChannelTurn;
-export type ChannelInboundTurnPlan = ChannelTurnPlan;
+export type ChannelInboundTurnPlan<
+  TOwnership extends "core" | "provider_message_sending" = "core",
+> = ChannelTurnPlan<
+  TOwnership extends "provider_message_sending"
+    ? ChannelProviderOwnedMessageSendingDeliveryAdapter
+    : ChannelCoreManagedTurnDeliveryAdapter
+>;
 export type InboundReplyDispatchResult<TDispatchResult> = ChannelTurnResult<TDispatchResult>;
 
 /** Run an already prepared inbound reply through shared session-record + dispatch ordering. */
@@ -70,32 +79,42 @@ export async function runPreparedInboundReply<TDispatchResult>(
   return await runPreparedInboundReplyCore(params);
 }
 
-/** @deprecated Use `runPreparedInboundReply`. */
-export async function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>> {
-  return await runPreparedInboundReply(params);
-}
-
+export function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: RunChannelTurnParams<
+    TRaw,
+    TDispatchResult,
+    ChannelProviderOwnedMessageSendingDeliveryAdapter
+  >,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+export function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
 export async function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
-  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
+  params: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
 ) {
-  return await runChannelInboundEventCore(params);
-}
-
-/** @deprecated Use `runChannelInboundEvent`. */
-export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
-  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
-) {
-  return await runChannelInboundEvent(params);
+  const run = runChannelInboundEventCore as (
+    value: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
+  ) => Promise<ChannelTurnResult<TDispatchResult>>;
+  return await run(params);
 }
 
 export async function dispatchChannelInboundReply(params: AssembledInboundReply) {
   return await dispatchChannelInboundReplyCore(params);
 }
 
-export async function dispatchChannelInboundTurn(params: ChannelInboundTurnPlan) {
-  return await dispatchChannelInboundTurnCore(params);
+export function dispatchChannelInboundTurn(
+  params: ChannelInboundTurnPlan<"provider_message_sending">,
+): Promise<ChannelTurnResult>;
+export function dispatchChannelInboundTurn(
+  params: ChannelInboundTurnPlan,
+): Promise<ChannelTurnResult>;
+export async function dispatchChannelInboundTurn(
+  params: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
+) {
+  const dispatch = dispatchChannelInboundTurnCore as (
+    value: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
+  ) => Promise<ChannelTurnResult>;
+  return await dispatch(params);
 }
 
 export {

@@ -20,7 +20,11 @@ import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import {
+  formatDocumentTitle,
+  isSettingsNavigationRoute,
+  titleForRoute,
+} from "../app-navigation.ts";
 import { workboardBoardIdFromPath } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
@@ -49,11 +53,20 @@ import {
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
+import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
+import {
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+  resolveUiKnownSelectedGlobalAgentId,
+} from "../lib/sessions/session-key.ts";
 import "../lib/toast.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -125,6 +138,9 @@ type AppSidebarElement = HTMLElement & {
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
+const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
+  ? "⌘K"
+  : "Ctrl K";
 
 type StoredOutboxScopeHost = {
   settings: { gatewayUrl?: string | null };
@@ -236,7 +252,7 @@ function renderApprovalDocument(runtime: ApplicationRuntime) {
 }
 
 function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapshot"]): boolean {
-  if (!snapshot.connected) {
+  if (snapshot.phase !== "connected") {
     return false;
   }
   return (
@@ -341,7 +357,7 @@ class OpenClawApp extends OpenClawLightDomElement {
     if (sourceChanged || clientChanged) {
       this.syncLoginConnection(gateway);
     }
-    if (snapshot.connected) {
+    if (snapshot.phase === "connected") {
       this.loginGatePinned = false;
     }
   }
@@ -368,6 +384,7 @@ class OpenClawApp extends OpenClawLightDomElement {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const gatewaySnapshot = context.gateway.snapshot;
+    const gatewayConnected = gatewaySnapshot.phase === "connected";
     const gatewayUrlConfirmation = this.pendingGatewayUrl
       ? html`
           <openclaw-gateway-url-confirmation
@@ -395,7 +412,7 @@ class OpenClawApp extends OpenClawLightDomElement {
       // Embedded clients query this host immediately; keep it stable while the chunk loads.
       return html`
         <openclaw-terminal-panel
-          .client=${gatewaySnapshot.connected ? gatewaySnapshot.client : null}
+          .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${terminalAvailable}
           .themeMode=${resolveTerminalThemeMode()}
           fullscreen
@@ -403,7 +420,7 @@ class OpenClawApp extends OpenClawLightDomElement {
         ${!isOptionalElementDefined(TERMINAL_PANEL_ELEMENT) && terminalAvailable
           ? renderConnectingSplash(context.basePath)
           : nothing}
-        ${!terminalAvailable && (gatewaySnapshot.connected || gatewaySnapshot.lastError)
+        ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
           : nothing}
       `;
@@ -416,8 +433,8 @@ class OpenClawApp extends OpenClawLightDomElement {
     // the moment the attempt fails (lastError set on every close).
     const initialConnectPending =
       this.initialAuthPresent &&
-      !gatewaySnapshot.connected &&
-      !gatewaySnapshot.reconnecting &&
+      !gatewayConnected &&
+      gatewaySnapshot.phase !== "reconnecting" &&
       !this.loginGatePinned &&
       gatewaySnapshot.lastError === null &&
       gatewaySnapshot.client !== null;
@@ -429,14 +446,14 @@ class OpenClawApp extends OpenClawLightDomElement {
       `;
     }
     const showLoginGate =
-      !gatewaySnapshot.connected && (this.loginGatePinned || !gatewaySnapshot.reconnecting);
+      !gatewayConnected && (this.loginGatePinned || gatewaySnapshot.phase !== "reconnecting");
     if (showLoginGate) {
       return html`
         <openclaw-tooltip-provider>
           <openclaw-login-gate
             .props=${{
               basePath: context.basePath,
-              connected: gatewaySnapshot.connected,
+              connected: gatewayConnected,
               lastError: gatewaySnapshot.lastError,
               lastErrorCode: gatewaySnapshot.lastErrorCode,
               hasToken: Boolean(this.loginToken.trim()),
@@ -553,6 +570,37 @@ class OpenClawShell extends OpenClawLightDomElement {
     return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
   }
 
+  private storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost {
+    const gatewaySnapshot = context.gateway.snapshot;
+    return {
+      settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
+      assistantAgentId: gatewaySnapshot.assistantAgentId,
+      agentsList: context.agents.state.agentsList,
+      hello: gatewaySnapshot.hello,
+    };
+  }
+
+  private chatTitleContext(
+    context: ApplicationContext<RouteId>,
+    outboxScopeHost: StoredOutboxScopeHost,
+  ): string {
+    const sessionKey = this.activeSessionKey;
+    const row = context.sessions.state.result?.sessions.find(
+      (session) => session.key === sessionKey,
+    );
+    // An agent's main chat is its identity, so use its roster label when available.
+    const parsed = parseAgentSessionKey(sessionKey);
+    const mainAgentId = isUiGlobalSessionKey(sessionKey)
+      ? resolveUiKnownSelectedGlobalAgentId(outboxScopeHost)
+      : parsed?.rest === resolveUiConfiguredMainKey(outboxScopeHost)
+        ? normalizeAgentId(parsed.agentId)
+        : undefined;
+    const agent = context.agents.state.agentsList?.agents.find(
+      (candidate) => normalizeAgentId(candidate.id) === mainAgentId,
+    );
+    return agent ? normalizeAgentLabel(agent) : resolveSessionDisplayName(sessionKey, row);
+  }
+
   constructor() {
     super();
     this.subscriptions
@@ -611,6 +659,10 @@ class OpenClawShell extends OpenClawLightDomElement {
       .watch(
         () => this.context?.overlays,
         (overlays, notify) => overlays.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -689,7 +741,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       }
       const prefs = changedServerUiPrefs(previous, next);
       const snapshot = this.context?.gateway.snapshot;
-      if (prefs && snapshot?.connected && snapshot.client) {
+      if (prefs && snapshot?.phase === "connected" && snapshot.client) {
         pushServerUiPrefs(snapshot.client, prefs);
       }
     });
@@ -938,7 +990,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     });
     if (nextNavCollapsed) {
       void this.updateComplete.then(() => {
-        this.restoreFocusTo(this.querySelector<HTMLElement>(".shell-nav-expand"));
+        this.restoreFocusTo(this.querySelector<HTMLElement>(".shell-chrome-controls__nav-toggle"));
       });
     }
   }
@@ -987,6 +1039,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     context.navigation.update({ navWidth });
   }
 
+  private openNewSession(agentId: string, target?: NewSessionTarget) {
+    this.navigate("new-session", { search: newSessionSearch(agentId, target) });
+  }
+
   // Shipped Mac app builds without web chrome still drive these handlers.
   private readonly handleNativeToggleSidebar = () => {
     this.toggleNavigationSurface();
@@ -1018,9 +1074,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     const agentId = context.agentSelection.state.selectedId ?? "";
-    this.navigate("new-session", {
-      search: agentId ? `?agent=${encodeURIComponent(agentId)}` : "",
-    });
+    this.openNewSession(agentId);
   };
 
   private readonly handleNativeHistoryState = (event: Event) => {
@@ -1107,12 +1161,13 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.exitSettings();
       return;
     }
-    const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
-    if (commandKey && event.shiftKey && event.code === "Comma") {
+    const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
+    if (settingsModifier && event.shiftKey && event.code === "Comma") {
       event.preventDefault();
       this.navigate("config");
       return;
     }
+    const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
     if (!commandKey || event.shiftKey || event.key.toLowerCase() !== "b") {
       return;
     }
@@ -1267,7 +1322,35 @@ class OpenClawShell extends OpenClawLightDomElement {
     );
   }
 
+  /** Keep the tab/window title on the active destination. Runs after every
+   * render so route changes and locale switches both refresh it; before the
+   * first committed route the static boot title from index.html stays. */
+  private syncDocumentTitle() {
+    const routeId = this.routeState.routeId;
+    const context = this.context;
+    if (!routeId || !context) {
+      return;
+    }
+    const outboxScopeHost = this.storedOutboxScopeHost(context);
+    let primaryContext = titleForRoute(routeId);
+    if (routeId === "chat" && this.activeSessionKey) {
+      primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
+    } else if (routeId === "custodian") {
+      primaryContext = t("nav.askOpenClaw");
+    }
+    const title = formatDocumentTitle({
+      context: primaryContext,
+      attentionCount: context.overlays.snapshot.approvalQueue.length,
+      offline: context.gateway.snapshot.phase !== "connected",
+      queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total ?? 0,
+    });
+    if (document.title !== title) {
+      document.title = title;
+    }
+  }
+
   override updated() {
+    this.syncDocumentTitle();
     const context = this.context;
     if (!context) {
       return;
@@ -1306,7 +1389,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.syncSidebarWorkboard();
     // Chunks are usually served by the gateway, so a failed idle load of the
     // outbox module recovers on reconnect, not only on a browser online event.
-    if (snapshot.connected) {
+    if (snapshot.phase === "connected") {
       void this.outboxStoreImport.load().catch(() => undefined);
     }
   }
@@ -1329,7 +1412,7 @@ class OpenClawShell extends OpenClawLightDomElement {
         this.syncSidebarWorkboard();
         return;
       }
-      runtime.sync(snapshot.client, snapshot.connected);
+      runtime.sync(snapshot.client, snapshot.phase === "connected");
       return;
     }
     if (this.sidebarWorkboardRuntimeLoad) {
@@ -1365,7 +1448,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           gateway &&
           isWorkboardEnabledInConfigSnapshot(current.runtimeConfig.state.configSnapshot)
         ) {
-          loadedRuntime.sync(gateway.client, gateway.connected);
+          loadedRuntime.sync(gateway.client, gateway.phase === "connected");
         }
       })
       .catch(() => {
@@ -1393,15 +1476,12 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private ensureRuntimeConfig(
-    snapshot: {
-      client: GatewayBrowserClient | null;
-      connected: boolean;
-    },
+    snapshot: ApplicationContext["gateway"]["snapshot"],
     runtimeConfig = this.context?.runtimeConfig,
   ) {
     // The sidebar hides config-gated routes (Workboard), so the snapshot must
     // load eagerly instead of waiting for a page that happens to fetch it.
-    if (!snapshot.connected || !snapshot.client || !runtimeConfig) {
+    if (snapshot.phase !== "connected" || !snapshot.client || !runtimeConfig) {
       this.runtimeConfigClient = null;
       return;
     }
@@ -1431,10 +1511,10 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private ensureAgentsList(
-    snapshot: { client: GatewayBrowserClient | null; connected: boolean },
+    snapshot: ApplicationContext["gateway"]["snapshot"],
     agents = this.context?.agents,
   ) {
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       this.agentsListClient = null;
       return;
     }
@@ -1522,12 +1602,8 @@ class OpenClawShell extends OpenClawLightDomElement {
       return nothing;
     }
     const gatewaySnapshot = context.gateway.snapshot;
-    const outboxScopeHost = {
-      settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
-      assistantAgentId: gatewaySnapshot.assistantAgentId,
-      agentsList: context.agents.state.agentsList,
-      hello: gatewaySnapshot.hello,
-    };
+    const gatewayConnected = gatewaySnapshot.phase === "connected";
+    const outboxScopeHost = this.storedOutboxScopeHost(context);
     const outboxStoreRuntime = this.outboxStoreRuntime;
     const storedOutboxes = outboxStoreRuntime
       ? outboxStoreRuntime.summarizeStoredChatOutboxes(outboxScopeHost)
@@ -1585,6 +1661,12 @@ class OpenClawShell extends OpenClawLightDomElement {
       mobileNavLayout,
     });
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    // Mirror the sidebar brand action: an open new-session draft wins over the
+    // persisted selection so the collapsed cluster "+" targets the same agent.
+    const selectedAgentId = normalizeAgentId(
+      this.draftSessionAgentId() ||
+        (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
+    );
     // One storage read per render; theme.refresh() re-renders on pref changes.
     const uiSettings = loadSettings();
     // The new-session draft shares the chat layout: full-height pane that owns
@@ -1648,19 +1730,52 @@ class OpenClawShell extends OpenClawLightDomElement {
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
         ></openclaw-app-topbar>
-        ${navCollapsed && !onboarding
+        ${!onboarding && !settingsTakeover && !mobileNavLayout
           ? html`
-              <openclaw-tooltip .content=${`${t("nav.expand")} (⌘B)`}>
-                <button
-                  type="button"
-                  class="shell-nav-expand"
-                  aria-label=${t("nav.expand")}
-                  aria-expanded="false"
-                  @click=${() => this.toggleNavigationSurface()}
+              <div class="shell-chrome-controls">
+                <openclaw-tooltip
+                  .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (⌘B)`}
                 >
-                  ${icons.panelLeftOpen}
-                </button>
-              </openclaw-tooltip>
+                  <button
+                    type="button"
+                    class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
+                    aria-label=${t(navCollapsed ? "nav.expand" : "nav.collapse")}
+                    aria-expanded=${navCollapsed ? "false" : "true"}
+                    @click=${() => this.toggleNavigationSurface()}
+                  >
+                    ${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+                  </button>
+                </openclaw-tooltip>
+                ${navCollapsed
+                  ? html`<openclaw-tooltip
+                      .content=${gatewaySnapshot.phase === "connected"
+                        ? t("chat.runControls.newSession")
+                        : t("chat.runControls.newSessionDisconnected")}
+                    >
+                      <button
+                        type="button"
+                        class="shell-chrome-controls__button shell-chrome-controls__new-thread"
+                        aria-label=${t("chat.runControls.newSession")}
+                        ?disabled=${gatewaySnapshot.phase !== "connected"}
+                        @click=${() => this.openNewSession(selectedAgentId)}
+                      >
+                        ${icons.plus}
+                      </button>
+                    </openclaw-tooltip>`
+                  : nothing}
+                <openclaw-tooltip
+                  .content=${`${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`}
+                >
+                  <button
+                    type="button"
+                    class="shell-chrome-controls__button shell-chrome-controls__search"
+                    aria-label=${t("chat.openCommandPalette")}
+                    @click=${this.openPalette}
+                  >
+                    ${icons.search}
+                  </button>
+                </openclaw-tooltip>
+              </div>
             `
           : nothing}
         <div class="shell-nav">
@@ -1701,14 +1816,12 @@ class OpenClawShell extends OpenClawLightDomElement {
                   context.basePath,
                 ) ?? ""}
                 .sessionKey=${this.activeSessionKey}
-                .connected=${gatewaySnapshot.connected}
+                .connected=${gatewayConnected}
                 .offline=${gatewaySnapshot.offlineStable}
                 .outboxCountForSession=${outboxCountForSession}
-                .queuedOutboxCount=${storedOutboxes?.total ?? 0}
-                .lastError=${gatewaySnapshot.lastError}
                 .terminalAvailable=${terminalAvailable}
                 .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
-                .canPairDevice=${gatewaySnapshot.connected &&
+                .canPairDevice=${gatewayConnected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarEntries=${navigationSnapshot.sidebarEntries}
                 .workboardBoards=${this.sidebarWorkboardSnapshot.boards}
@@ -1726,14 +1839,10 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
                 .updateRunning=${overlaySnapshot.updateRunning}
                 .onUpdate=${() => void context.overlays.runUpdate()}
-                .onOpenPalette=${this.openPalette}
                 .onOpenApprovals=${this.openApprovals}
-                .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onRetryConnect=${() => context.gateway.connect()}
-                .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
-                  const search = newSessionSearch(agentId, target);
-                  this.navigate("new-session", { search });
-                }}
+                .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) =>
+                  this.openNewSession(agentId, target)}
                 .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onUpdateSidebarEntries=${(entries: string[]) =>
                   context.navigation.update({ sidebarEntries: entries })}
@@ -1816,12 +1925,12 @@ class OpenClawShell extends OpenClawLightDomElement {
           ></openclaw-router-outlet>
         </main>
         <openclaw-terminal-panel
-          .client=${gatewaySnapshot.connected ? gatewaySnapshot.client : null}
+          .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${terminalAvailable}
           .themeMode=${resolveTerminalThemeMode()}
         ></openclaw-terminal-panel>
         <openclaw-browser-panel
-          .client=${gatewaySnapshot.connected ? gatewaySnapshot.client : null}
+          .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${browserPanelAvailable}
           .basePath=${context.basePath}
           .authToken=${resolveControlUiAuthToken({

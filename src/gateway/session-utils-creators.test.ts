@@ -16,6 +16,8 @@ import { listSessionsFromStore } from "./session-utils.js";
 it("returns the complete deterministic creator facet independently of pagination", () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:ada": {
+      archivedAt: 3,
+      archivedBy: { type: "human", id: "profile-bob" },
       createdActor: { type: "human", id: "profile-ada" },
       sessionId: "session-ada",
       updatedAt: 2,
@@ -31,7 +33,7 @@ it("returns the complete deterministic creator facet independently of pagination
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-creators",
     store,
-    opts: { limit: 1 },
+    opts: { archived: "all", limit: 1 },
   });
 
   expect(result.count).toBe(1);
@@ -45,13 +47,18 @@ it("returns the complete deterministic creator facet independently of pagination
     id: "profile-ada",
     label: "Ada",
   });
+  expect(result.sessions[0]?.archivedBy).toEqual({
+    type: "human",
+    id: "profile-bob",
+    label: "Bob",
+  });
   expect(getUserProfileListItem).toHaveBeenCalledTimes(2);
 
   const filtered = listSessionsFromStore({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-creators",
     store,
-    opts: { creatorId: "profile-bob", limit: 1 },
+    opts: { archived: "all", creatorId: "profile-bob", limit: 1 },
   });
   expect(filtered.sessions.map((row) => row.key)).toEqual(["agent:main:bob"]);
   expect(filtered.creators).toEqual(result.creators);

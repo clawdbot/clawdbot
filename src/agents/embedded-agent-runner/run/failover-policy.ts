@@ -101,6 +101,7 @@ function shouldRotatePrompt(params: PromptDecisionParams): boolean {
   return (
     params.failoverFailure &&
     params.failoverReason !== "timeout" &&
+    params.failoverReason !== "tls_certificate" &&
     !isTerminalFormatFailure(params)
   );
 }
@@ -241,6 +242,17 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       action: "surface_error",
       reason: params.failoverReason,
     };
+  }
+  if (params.failoverFailure && params.failoverReason === "tls_certificate") {
+    return params.fallbackConfigured
+      ? {
+          action: "fallback_model",
+          reason: "tls_certificate",
+        }
+      : {
+          action: "surface_error",
+          reason: "tls_certificate",
+        };
   }
   const assistantShouldRotate = shouldRotateAssistant(params);
   if (!params.profileRotated && assistantShouldRotate) {

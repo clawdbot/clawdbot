@@ -325,9 +325,6 @@ export function resolveMemoryDreamingPluginConfig(
   return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }
 
-/** @deprecated Use resolveMemoryDreamingPluginConfig. */
-export const resolveMemoryCorePluginConfig = resolveMemoryDreamingPluginConfig;
-
 export function resolveMemoryDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;

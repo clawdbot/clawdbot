@@ -296,7 +296,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const agents = createAgentCapability(gateway);
   const agentIdentity = createAgentIdentityCapability(gateway);
-  const agentSelection = createAgentSelectionCapability(gateway);
+  const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);
   const config = createApplicationConfigCapability({
     basePath,
@@ -340,7 +340,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       : null;
   let lastPostConnectClient: GatewayBrowserClient | null = null;
   const stopPostConnect = gateway.subscribe((snapshot) => {
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       lastPostConnectClient = null;
       return;
     }

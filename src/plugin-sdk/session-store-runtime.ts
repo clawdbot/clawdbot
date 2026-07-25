@@ -31,7 +31,7 @@ import {
 } from "../config/sessions/sqlite-marker.js";
 import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
-import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type {
   AmbientTranscriptWatermark,
   InternalSessionEntry,
@@ -50,6 +50,15 @@ import {
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+
+export {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../utils/delivery-context.shared.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
@@ -582,7 +591,7 @@ export {
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 export { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.

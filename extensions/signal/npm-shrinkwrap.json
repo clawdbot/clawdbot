@@ -8,14 +8,14 @@
       "name": "@openclaw/signal",
       "version": "2026.7.2",
       "dependencies": {
-        "ws": "8.21.0",
+        "ws": "8.21.1",
         "zod": "4.4.3"
       }
     },
     "node_modules/ws": {
-      "version": "8.21.0",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
-      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
+      "version": "8.21.1",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.1.tgz",
+      "integrity": "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"

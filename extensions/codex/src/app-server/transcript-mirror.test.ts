@@ -626,6 +626,83 @@ describe("projectBoundedCodexThreadHistory", () => {
 });
 
 describe("mirrorCodexAppServerTranscript", () => {
+  it("hides current memory-maintenance messages without hiding replayed turns", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (event) => {
+            const { display: _display, ...message } = (
+              event as { message: Record<string, unknown> }
+            ).message;
+            return { message: castAgentMessage(message) };
+          },
+        },
+      ]),
+    );
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-memory-");
+    const messages = [
+      attachCodexMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "ordinary prior reply" }],
+          timestamp: Date.now(),
+        }),
+        "turn-prior:assistant",
+      ),
+      attachCodexMirrorIdentity(
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "Pre-compaction memory flush" }],
+          timestamp: Date.now() + 1,
+        }),
+        "turn-memory:prompt",
+      ),
+      attachCodexMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
+          timestamp: Date.now() + 2,
+        }),
+        "turn-memory:tool-call:call-1",
+      ),
+      attachCodexMirrorIdentity(
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "write",
+          content: [{ type: "toolResult", toolCallId: "call-1", content: "saved" }],
+          timestamp: Date.now() + 3,
+        }),
+        "turn-memory:tool-result:call-1",
+      ),
+      attachCodexMirrorIdentity(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "NO_REPLY" }],
+          timestamp: Date.now() + 4,
+        }),
+        "turn-memory:assistant",
+      ),
+    ];
+    for (const message of messages.slice(1)) {
+      Object.assign(message, { display: false });
+    }
+
+    await mirrorCodexAppServerTranscript({
+      ...target,
+      messages,
+      idempotencyScope: "codex-app-server:memory",
+    });
+
+    const persistedMessages = (await readMirrorEvents(target))
+      .map((event) =>
+        event && typeof event === "object" ? (event as { message?: unknown }).message : undefined,
+      )
+      .filter((message): message is Record<string, unknown> =>
+        Boolean(message && typeof message === "object"),
+      );
+    expect(persistedMessages).toHaveLength(messages.length);
+    expect(persistedMessages[0]).not.toHaveProperty("display", false);
+    expect(persistedMessages.slice(1).every((message) => message.display === false)).toBe(true);
+  });
+
   it("mirrors user, assistant, and tool result messages by SQLite identity", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-basic-");
     const userMessage = makeAgentUserMessage({
@@ -1125,6 +1202,9 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
 
     expect(mirrorOutcome.assistantTranscriptOwned).toBe(true);
+    expect(mirrorOutcome.assistantTranscriptIdempotencyKey).toBe(
+      "codex-app-server:thread-1:turn-1:assistant",
+    );
     expect(mirrorOutcome.mirroredMessages).toMatchObject([
       { role: "assistant", content: [{ type: "text", text: "[redacted by hook]" }] },
     ]);

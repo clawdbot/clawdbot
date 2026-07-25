@@ -278,6 +278,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "cron.get", scope: "operator.read", since: "<=2026.7" },
   { name: "cron.list", scope: "operator.read", since: "<=2026.7" },
   { name: "cron.status", scope: "operator.read", since: "<=2026.7" },
+  { name: "cron.scratch.get", scope: "operator.admin", since: "2026.7" },
+  { name: "cron.scratch.set", scope: "operator.admin", since: "2026.7" },
   { name: "cron.add", scope: "operator.admin", since: "<=2026.7" },
   { name: "cron.update", scope: "operator.admin", since: "<=2026.7" },
   { name: "cron.remove", scope: "operator.admin", since: "<=2026.7" },
@@ -455,6 +457,15 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // the answer is ephemeral and never mutates the run or its transcript.
   { name: "sessions.observer.ask", scope: "operator.read", since: "2026.7" },
   { name: "sessions.observer.visibility", scope: "operator.read", since: "2026.7" },
+  // Additive phase-2 collaboration methods append so older advertised indices stay stable.
+  { name: "session.visibility.set", scope: "operator.write", since: "2026.7" },
+  { name: "session.members.list", scope: "operator.read", since: "2026.7" },
+  { name: "session.members.add", scope: "operator.write", since: "2026.7" },
+  { name: "session.members.remove", scope: "operator.write", since: "2026.7" },
+  { name: "session.suggestions.add", scope: "operator.write", since: "2026.7" },
+  { name: "session.suggestions.list", scope: "operator.read", since: "2026.7" },
+  { name: "session.suggestions.resolve", scope: "operator.write", since: "2026.7" },
+  { name: "session.typing", scope: "operator.write", since: "2026.7" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

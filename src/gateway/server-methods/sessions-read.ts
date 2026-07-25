@@ -14,7 +14,9 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   isConfiguredSessionStoreAgentId,
   isPerAgentSessionStoreConfig,
+  listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
+  resolveStorePath,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   type SessionEntry,
@@ -26,8 +28,20 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import {
+  canAccessIncognitoSession,
+  filterDraftSessionsForClient,
+  isGatewayAdmin,
+  resolveSessionSharingRole,
+  resolveSessionSharingTarget,
+  resolveSessionVisibility,
+} from "../session-sharing.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -49,6 +63,7 @@ import {
 } from "../session-utils.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -61,7 +76,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionReadHandlers: GatewayRequestHandlers = {
-  "sessions.search": async ({ params, respond, context }) => {
+  "sessions.search": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
       return;
     }
@@ -71,6 +86,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
+    const restrictIncognito =
+      Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
+    const canSearchSessionKey = (sessionKey: string) =>
+      !isIncognitoSessionKey(sessionKey) ||
+      canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey });
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const sessionKeys = params.sessionKeys?.map((sessionKey) =>
       requestedAgentId
@@ -106,7 +126,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const scopedSessionKeys = configured
+    const scopedSessionKeysRaw = configured
       ? sessionKeys
       : sessionKeys?.filter((sessionKey) => {
           const sessionAgentId =
@@ -115,6 +135,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               : resolveSessionStoreAgentId(cfg, sessionKey);
           return sessionAgentId === agentId;
         });
+    const scopedSessionKeys = scopedSessionKeysRaw?.filter(canSearchSessionKey);
     if (!configured && scopedSessionKeys?.length === 0) {
       respond(true, { results: [] }, undefined);
       return;
@@ -127,14 +148,27 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const configuredVisibleSessionKeys =
+        restrictIncognito && configured && scopedSessionKeys === undefined
+          ? listSessionEntriesReadOnly({
+              agentId,
+              storePath: resolveStorePath(cfg.session?.store, { agentId }),
+            })
+              .map((entry) => entry.sessionKey)
+              .filter(canSearchSessionKey)
+          : undefined;
       const searchTargets = configured ? [undefined] : existingTargets;
       const targetResults = searchTargets.flatMap((target) => {
         const targetSessionKeys =
           scopedSessionKeys ??
-          (target && !isPerAgentSessionStoreConfig(cfg.session?.store)
+          configuredVisibleSessionKeys ??
+          (target && (restrictIncognito || !isPerAgentSessionStoreConfig(cfg.session?.store))
             ? listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
                 .map((entry) => entry.sessionKey)
                 .filter((sessionKey) => {
+                  if (!canSearchSessionKey(sessionKey)) {
+                    return false;
+                  }
                   const parsed = parseAgentSessionKey(sessionKey);
                   return !parsed || normalizeAgentId(parsed.agentId) === agentId;
                 })
@@ -183,7 +217,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
-  "sessions.list": async ({ params, respond, context }) => {
+  "sessions.list": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
@@ -193,7 +227,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const payload = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list",
       async () => {
-        const { storePath, store } = measureDiagnosticsTimelineSpanSync(
+        const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.store_load",
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
@@ -208,9 +242,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        const visibleStore = filterDraftSessionsForClient({ client, store });
         const listStore = configuredAgentsOnly
-          ? filterSessionStoreToConfiguredAgents(cfg, store)
-          : store;
+          ? filterSessionStoreToConfiguredAgents(cfg, visibleStore)
+          : visibleStore;
+        const visibleStorePath = Object.entries(listStore).some(
+          ([sessionKey, entry]) => entry.incognito === true || isIncognitoSessionKey(sessionKey),
+        )
+          ? storePath
+          : (durableStorePath ?? storePath);
         const modelCatalog = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.model_catalog",
           () => loadOptionalServerMethodModelCatalog(context, "sessions.list"),
@@ -224,7 +264,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           () =>
             listSessionsFromStoreAsync({
               cfg,
-              storePath,
+              storePath: visibleStorePath,
               store: listStore,
               modelCatalog,
               opts: p,
@@ -237,13 +277,66 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        const sharingTargets = result.sessions.map((session) =>
+          resolveSessionSharingTarget({
+            cfg,
+            sessionKey: session.key,
+            ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
+          }),
+        );
+        const membershipKeys = new Set<string>();
+        const identityId = gatewayClientSessionCreator(client)?.id;
+        if (identityId && !isGatewayAdmin(client)) {
+          const groups = new Map<
+            string,
+            {
+              agentId: string;
+              sessionKeys: string[];
+              storePath: string;
+            }
+          >();
+          for (const target of sharingTargets) {
+            if (!target) {
+              continue;
+            }
+            const groupKey = `${target.agentId}\0${target.storePath}`;
+            const group = groups.get(groupKey) ?? {
+              agentId: target.agentId,
+              sessionKeys: [],
+              storePath: target.storePath,
+            };
+            group.sessionKeys.push(target.storeKey);
+            groups.set(groupKey, group);
+          }
+          for (const group of groups.values()) {
+            const firstSessionKey = group.sessionKeys[0];
+            if (!firstSessionKey) {
+              continue;
+            }
+            for (const sessionKey of listSessionMembershipKeys(
+              {
+                agentId: group.agentId,
+                sessionKey: firstSessionKey,
+                storePath: group.storePath,
+              },
+              group.sessionKeys,
+              identityId,
+            )) {
+              membershipKeys.add(`${group.agentId}\0${group.storePath}\0${sessionKey}`);
+            }
+          }
+        }
         const placementsBySessionId = context.workerSessionPlacementService?.getMany(
           result.sessions.flatMap((session) => (session.sessionId ? [session.sessionId] : [])),
         );
         const sessions = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.active_run_flags",
           () => {
-            return result.sessions.map((session) => {
+            return result.sessions.map((session, index) => {
+              const sharingTarget = sharingTargets[index];
+              const visibility = sharingTarget
+                ? resolveSessionVisibility(sharingTarget.entry)
+                : "shared";
               const placementRecord = session.sessionId
                 ? placementsBySessionId?.get(session.sessionId)
                 : undefined;
@@ -256,6 +349,18 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 defaultAgentId: resolveDefaultAgentId(cfg),
               });
               return Object.assign({}, session, {
+                visibility,
+                ...(sharingTarget
+                  ? {
+                      sharingRole: resolveSessionSharingRole({
+                        client,
+                        target: sharingTarget,
+                        isMember: membershipKeys.has(
+                          `${sharingTarget.agentId}\0${sharingTarget.storePath}\0${sharingTarget.storeKey}`,
+                        ),
+                      }),
+                    }
+                  : {}),
                 hasActiveRun: activeRunState.active,
                 ...(placementRecord
                   ? { placement: projectWorkerSessionPlacement(placementRecord) }
@@ -274,9 +379,24 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        // The pre-await draft filter used a stale store snapshot; re-drop rows
+        // whose freshly resolved sharing state is a draft this caller cannot see
+        // (a session flipped to draft mid-list, or an older shared alias hiding
+        // a now-draft canonical entry). Drafts are owner+admin only — members
+        // lose access, matching filterDraftSessionsForClient — so keep a draft
+        // row only for the owner role. Admins and identity-less solo callers
+        // keep everything.
+        const canSeeDrafts = !identityId || isGatewayAdmin(client);
+        const visibleSessions = canSeeDrafts
+          ? sessions
+          : sessions.filter(
+              (session) =>
+                !session.incognito &&
+                (session.visibility !== "draft" || session.sharingRole === "owner"),
+            );
         return {
           ...result,
-          sessions,
+          sessions: visibleSessions,
         };
       },
       {

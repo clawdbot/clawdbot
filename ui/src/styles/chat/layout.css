@@ -1064,6 +1064,10 @@ openclaw-chat-page {
   justify-content: flex-end;
 }
 
+.chat-group.user.chat-group--peer .chat-message-images {
+  justify-content: flex-start;
+}
+
 .chat-assistant-attachments {
   display: flex;
   flex-direction: column;
@@ -1327,6 +1331,87 @@ openclaw-chat-page {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0 14px 10px;
+}
+
+.session-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 16px 8px;
+}
+
+.session-suggestion {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-strong) 74%, transparent);
+}
+
+.session-suggestion__author,
+.session-suggestion__state {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.session-suggestion__author {
+  color: var(--text-strong);
+  background: var(--panel-hover);
+}
+
+.session-suggestion__state {
+  color: var(--muted);
+}
+
+.session-suggestion__text {
+  max-height: 12rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.session-suggestion__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.session-suggestion__action {
+  width: 28px;
+  height: 28px;
+}
+
+.session-suggestion__action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.agent-chat__typing-indicator {
+  padding: 0 4px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+@media (max-width: 640px) {
+  .session-suggestion {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .session-suggestion__actions,
+  .session-suggestion__state {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
 }
 
 .task-suggestion {

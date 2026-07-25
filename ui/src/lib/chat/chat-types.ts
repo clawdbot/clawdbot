@@ -51,6 +51,7 @@ export type ChatQueueItem = {
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
+  | { kind: "notice"; key: string; text: string; timestamp: number }
   | {
       kind: "divider";
       key: string;
@@ -94,6 +95,7 @@ export type MessageGroup = {
   role: string;
   senderLabel?: string | null;
   sender?: SenderIdentity;
+  replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;

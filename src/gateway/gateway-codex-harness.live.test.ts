@@ -25,6 +25,7 @@ import {
 } from "./gateway-cli-backend.live-helpers.js";
 import { requireSuccessfulNativeCommandCompactionEvidence } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
+  buildCodexHarnessAppServerArgs,
   buildCodexHarnessLargeOutputCommand,
   CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
@@ -85,15 +86,38 @@ const CODEX_HARNESS_RESUME_STRESS_RESTARTS = resolveBoundedPositiveIntEnv(
   3,
   10,
 );
-const CODEX_HARNESS_COMPACTION_STRESS = isTruthyEnvValue(
-  process.env.OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS,
-);
+type CodexCompactionStressMode =
+  | { kind: "off" }
+  | { kind: "reduced" }
+  | { kind: "full"; modelCatalogPath: string };
+
+function resolveCodexCompactionStressMode(): CodexCompactionStressMode {
+  if (isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT)) {
+    const modelCatalogPath = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG?.trim();
+    if (!modelCatalogPath) {
+      throw new Error(
+        "OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT requires OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG",
+      );
+    }
+    return { kind: "full", modelCatalogPath };
+  }
+  return isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS)
+    ? { kind: "reduced" }
+    : { kind: "off" };
+}
+
+const CODEX_HARNESS_COMPACTION_MODE = resolveCodexCompactionStressMode();
+const CODEX_HARNESS_FULL_CONTEXT = CODEX_HARNESS_COMPACTION_MODE.kind === "full";
+const CODEX_HARNESS_COMPACTION_STRESS = CODEX_HARNESS_COMPACTION_MODE.kind !== "off";
 const CODEX_HARNESS_COMPACTION_STRESS_TURNS = resolveBoundedPositiveIntEnv(
   "OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS",
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS,
-  4,
+  CODEX_HARNESS_FULL_CONTEXT ? 8 : 4,
   8,
 );
+if (CODEX_HARNESS_FULL_CONTEXT && CODEX_HARNESS_COMPACTION_STRESS_TURNS !== 8) {
+  throw new Error("full-context Codex stress requires exactly 8 compaction stress turns");
+}
 const CODEX_HARNESS_LARGE_OUTPUT_BYTES = resolveBoundedPositiveIntEnv(
   "OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES",
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES,
@@ -129,6 +153,9 @@ const CODEX_HARNESS_AGENT_TIMEOUT_SECONDS = Math.max(
 );
 const CODEX_HARNESS_AUTH_MODE =
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "api-key" : "codex-auth";
+if (CODEX_HARNESS_FULL_CONTEXT && CODEX_HARNESS_AUTH_MODE !== "api-key") {
+  throw new Error("OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT requires API-key auth");
+}
 const CODEX_HARNESS_THINKING = resolveCodexHarnessThinkingLevel(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_THINKING,
 );
@@ -345,6 +372,40 @@ function parseModelKey(modelKey: string): { provider: string; modelId: string } 
   return { provider: provider.trim(), modelId: modelId.trim() };
 }
 
+function buildCodexHarnessDenseContext(params: { marker: string; chars: number }): string {
+  const lines: string[] = [];
+  let length = 0;
+  for (let index = 0; length < params.chars; index += 1) {
+    const line =
+      `${params.marker}|Context stress record ${index}: the copper lighthouse tracks violet weather ` +
+      `while patient engineers preserve durable state across each compacted conversation.\n`;
+    lines.push(line);
+    length += line.length;
+  }
+  return lines.join("").slice(0, params.chars);
+}
+
+function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): string[] | undefined {
+  const overrides =
+    mode.kind === "full"
+      ? [
+          `model_catalog_json=${JSON.stringify(mode.modelCatalogPath)}`,
+          "model_context_window=922000",
+          "model_auto_compact_token_limit=700000",
+          "model_auto_compact_token_limit_scope=total",
+          "tool_output_token_limit=200000",
+        ]
+      : mode.kind === "reduced"
+        ? [
+            "model_auto_compact_token_limit_scope=body_after_prefix",
+            // One truncated 300 KB tool result is only a few thousand tokens.
+            "model_auto_compact_token_limit=4000",
+            "tool_output_token_limit=10000",
+          ]
+        : undefined;
+  return overrides ? buildCodexHarnessAppServerArgs(overrides) : undefined;
+}
+
 async function assertCodexHarnessSessionSelection(params: {
   client: GatewayClient;
   modelKey: string;
@@ -426,7 +487,7 @@ async function assertCodexHarnessTranscriptModelIdentity(params: {
 async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
-  compactionStress?: boolean;
+  compactionMode: CodexCompactionStressMode;
   loopDetectionPreToolUseRelay?: boolean;
   configPath: string;
   modelKey: string;
@@ -435,6 +496,7 @@ async function writeLiveGatewayConfig(params: {
   workspace: string;
 }): Promise<void> {
   const parsedModel = parseModelKey(params.modelKey);
+  const appServerArgs = buildCodexCompactionAppServerArgs(params.compactionMode);
   const cfg: OpenClawConfig = {
     gateway: {
       mode: "local",
@@ -449,23 +511,7 @@ async function writeLiveGatewayConfig(params: {
           config: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
-              ...(params.compactionStress
-                ? {
-                    args: [
-                      "-c",
-                      "model_auto_compact_token_limit_scope=body_after_prefix",
-                      "-c",
-                      // One truncated 300 KB tool result is only a few thousand
-                      // tokens after Codex applies its transcript output cap.
-                      "model_auto_compact_token_limit=4000",
-                      "-c",
-                      "tool_output_token_limit=10000",
-                      "app-server",
-                      "--listen",
-                      "stdio://",
-                    ],
-                  }
-                : {}),
+              ...(appServerArgs ? { args: appServerArgs } : {}),
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
               ...(params.loopDetectionPreToolUseRelay === false
                 ? { loopDetectionPreToolUseRelay: false }
@@ -492,16 +538,15 @@ async function writeLiveGatewayConfig(params: {
         models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         sandbox: { mode: "off" },
       },
-      list: [
-        {
-          id: "dev",
+      entries: {
+        dev: {
           default: true,
           workspace: params.workspace,
           thinkingDefault: CODEX_HARNESS_THINKING,
           model: { primary: params.modelKey },
           models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         },
-      ],
+      },
     },
     ...(CODEX_HARNESS_AUTH_MODE === "api-key" && parsedModel.provider === "openai"
       ? {
@@ -849,11 +894,87 @@ async function readCodexHarnessCompactionCount(params: {
   return count;
 }
 
+async function verifyCodexFullContextStress(params: {
+  client: GatewayClient;
+  events: EventFrame[];
+  sessionKey: string;
+}): Promise<{ persistedCount: number }> {
+  const baselineCount = await readCodexHarnessCompactionCount({
+    client: params.client,
+    events: params.events,
+    minimum: 0,
+    sessionKey: params.sessionKey,
+  });
+  let persistedCount = baselineCount;
+  let maximumObservedModelContextWindow = 0;
+  let maximumObservedPromptTokens = 0;
+  for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
+    const acknowledgement = `CODEX-FULL-CONTEXT-${turn}-OK`;
+    const marker = `OPENCLAW-CODEX-FULL-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
+    const { text, events } = await requestAgentTextWithEvents({
+      client: params.client,
+      eventPrefix: "codex_app_server.",
+      sessionKey: params.sessionKey,
+      message: [
+        buildCodexHarnessDenseContext({ marker, chars: CODEX_HARNESS_LARGE_OUTPUT_BYTES }),
+        `Reply exactly ${acknowledgement} and nothing else.`,
+      ].join("\n\n"),
+    });
+    expect(text).toContain(acknowledgement);
+    recordCodexAttemptIdentity({ events, sessionKey: params.sessionKey });
+    for (const event of events) {
+      if (event.stream !== "codex_app_server.usage") {
+        continue;
+      }
+      const modelContextWindow = event.data?.modelContextWindow;
+      const promptTokens = event.data?.promptTokens;
+      if (typeof modelContextWindow === "number") {
+        maximumObservedModelContextWindow = Math.max(
+          maximumObservedModelContextWindow,
+          modelContextWindow,
+        );
+      }
+      if (typeof promptTokens === "number") {
+        maximumObservedPromptTokens = Math.max(maximumObservedPromptTokens, promptTokens);
+      }
+    }
+    if (turn % 4 === 0) {
+      await requestCodexCommandText({
+        client: params.client,
+        command: "/compact",
+        events: params.events,
+        expectedText: "Compaction",
+        sessionKey: params.sessionKey,
+      });
+      persistedCount = await readCodexHarnessCompactionCount({
+        client: params.client,
+        events: params.events,
+        minimum: persistedCount + 1,
+        sessionKey: params.sessionKey,
+      });
+    }
+  }
+  expect(maximumObservedModelContextWindow).toBe(875_900);
+  expect(maximumObservedPromptTokens).toBeGreaterThan(272_000);
+  expect(persistedCount - baselineCount).toBeGreaterThanOrEqual(2);
+  const continued = await requestAgentText({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    expectedReply: "CODEX-FULL-CONTEXT-CONTINUE-OK",
+    message: "Reply exactly CODEX-FULL-CONTEXT-CONTINUE-OK and nothing else.",
+  });
+  expect(continued.trim()).toBe("CODEX-FULL-CONTEXT-CONTINUE-OK");
+  return { persistedCount };
+}
+
 async function verifyCodexCompactionStress(params: {
   client: GatewayClient;
   events: EventFrame[];
   sessionKey: string;
-}): Promise<{ hiddenMarker: string; persistedCount: number }> {
+}): Promise<{ hiddenMarker?: string; persistedCount: number }> {
+  if (CODEX_HARNESS_FULL_CONTEXT) {
+    return await verifyCodexFullContextStress(params);
+  }
   const hiddenMarker = `CODEX-DURABLE-${randomBytes(6).toString("hex").toUpperCase()}`;
   await requestAgentText({
     client: params.client,
@@ -887,17 +1008,18 @@ async function verifyCodexCompactionStress(params: {
       commandMarker,
       outputBytes: CODEX_HARNESS_LARGE_OUTPUT_BYTES,
     });
+    const message = [
+      "Large-output compaction probe.",
+      "Use the native exec_command tool exactly once.",
+      `Run this exact command: ${largeOutputCommand}`,
+      "Set max_output_tokens to 10000.",
+      `After the tool completes, reply exactly ${acknowledgement} and nothing else.`,
+    ].join("\n");
     const { text, events, compactionCount } = await requestAgentTextWithEvents({
       client: params.client,
       eventPrefixes: ["codex_app_server.", "compaction", "tool"],
       sessionKey: params.sessionKey,
-      message: [
-        "Large-output compaction probe.",
-        "Use the native exec_command tool exactly once.",
-        `Run this exact command: ${largeOutputCommand}`,
-        "Set max_output_tokens to 10000.",
-        `After the tool completes, reply exactly ${acknowledgement} and nothing else.`,
-      ].join("\n"),
+      message,
     });
     expect(text).toContain(acknowledgement);
     recordCodexAttemptIdentity({ events, sessionKey: params.sessionKey });
@@ -913,12 +1035,11 @@ async function verifyCodexCompactionStress(params: {
       sessionKey: params.sessionKey,
       limit: 100,
     });
-    const historyMessages = history.messages ?? [];
     requireSuccessfulNativeCommandCompactionEvidence({
       commandMarker,
       events,
       expectedCommand: largeOutputCommand,
-      messages: historyMessages,
+      messages: history.messages ?? [],
       minimumOutputChars: Math.floor(CODEX_HARNESS_LARGE_OUTPUT_BYTES * 0.95),
     });
   }
@@ -1586,7 +1707,7 @@ describeLive("gateway live (Codex harness)", () => {
         workspace,
         codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
         codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
-        compactionStress: CODEX_HARNESS_COMPACTION_STRESS,
+        compactionMode: CODEX_HARNESS_COMPACTION_MODE,
         ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
       });
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
@@ -1989,7 +2110,7 @@ describeLive("gateway live (Codex harness)", () => {
               sessionKey: resumeStressState.sessionKey,
             });
           }
-          if (CODEX_HARNESS_COMPACTION_STRESS) {
+          if (CODEX_HARNESS_COMPACTION_STRESS && !CODEX_HARNESS_FULL_CONTEXT) {
             const continued = await verifyCodexCompactionStress({
               client,
               events: gatewayEvents,

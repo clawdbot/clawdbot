@@ -76,20 +76,6 @@ export type LobsterPetLook = {
   glint: string | null;
 };
 
-export type LobsterLogoVisitPhase = "in" | "leaving" | "out";
-
-export type LobsterLogoVisitDetail = {
-  phase: LobsterLogoVisitPhase;
-  // A null look on a non-"out" phase means "hide the logo, render no
-  // stand-in": a ledge visit scared the brand mark away.
-  look: LobsterPetLook | null;
-  name: string | null;
-};
-
-// Fired on the pet host whenever the logo stand-in phase changes; the
-// sidebar owns the brand slot, so the swap renders there, not here.
-export const LOBSTER_LOGO_VISIT_EVENT = "openclaw-lobster-logo-visit";
-
 function fnv1a(value: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < value.length; i++) {

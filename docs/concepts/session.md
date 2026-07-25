@@ -68,6 +68,16 @@ troubleshooting.
 
 Verify your setup with `openclaw security audit`.
 
+## Incognito sessions
+
+Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread disappears when the Gateway restarts, does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
+
+The `incognito-` segment is reserved for dashboard, subagent, and hidden internal session keys; `openclaw doctor --fix` renames any colliding legacy durable keys.
+
+Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send, diagnostic logging remains unchanged, and OpenClaw still records content-free audit metadata such as HMAC references.
+
+On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
+
 ## Remember across conversations
 
 Separate transcripts control each conversation's local history. For a personal

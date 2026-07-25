@@ -1252,7 +1252,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
+        "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -1274,6 +1274,10 @@
               "type": "string"
             },
             "reason": {
+              "type": "string"
+            },
+            "scratch": {
+              "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
               "type": "string"
             },
             "summary": {

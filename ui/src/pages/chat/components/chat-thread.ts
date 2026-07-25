@@ -20,11 +20,9 @@ import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { COPY_LABEL } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
 import "../../../components/tooltip.ts";
-import {
-  handleMarkdownCodeBlockCopy,
-  markdownFileLinkFromEvent,
-} from "../../../components/markdown.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -69,7 +67,7 @@ import type { PlanStatus } from "../tool-stream.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
-import { renderChatDivider } from "./chat-divider.ts";
+import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import {
   dismissConfirmedActionPopovers,
   getAssistantAttachmentAvailabilityRenderVersion,
@@ -231,13 +229,30 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
   };
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
+  private pruneDetachedRowsQueued = false;
   private measureRowRefFor(key: string): (element?: Element) => void {
     let callback = this.measureRowRefs.get(key);
     if (!callback) {
-      callback = (element?: Element) =>
-        this.virtualizerController
-          .getVirtualizer()
-          .measureElement(element instanceof HTMLElement ? element : null);
+      callback = (element?: Element) => {
+        if (element instanceof HTMLElement) {
+          this.virtualizerController.getVirtualizer().measureElement(element);
+          return;
+        }
+        // Re-stamps (e.g. the chat<->dashboard face switch) re-invoke each
+        // stable row ref as an (undefined, element) pair while the new subtree
+        // is still detached. measureElement(null) prunes every disconnected
+        // row, so calling it synchronously unobserves just-registered sibling
+        // rows and freezes their heights at the old pane width (overlapping
+        // bubbles). Defer until the commit lands so only removed rows prune.
+        if (this.pruneDetachedRowsQueued) {
+          return;
+        }
+        this.pruneDetachedRowsQueued = true;
+        queueMicrotask(() => {
+          this.pruneDetachedRowsQueued = false;
+          this.virtualizerController.getVirtualizer().measureElement(null);
+        });
+      };
       this.measureRowRefs.set(key, callback);
     }
     return callback;
@@ -1292,6 +1307,9 @@ function renderChatThreadContents(
   const renderItem = guardChatRenderItems(state, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item, props.onOpenSessionCheckpoints);
+    }
+    if (item.kind === "notice") {
+      return renderChatNotice(item);
     }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {

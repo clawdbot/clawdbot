@@ -37,6 +37,20 @@ function expectTooltipText(badge: Element | null | undefined, text: string) {
 }
 
 describe("session row placement badges", () => {
+  it("renders the incognito indicator", () => {
+    render(
+      renderSessionRowBadges({
+        hasAutomation: false,
+        incognito: true,
+      }),
+      container,
+    );
+
+    const badge = container.querySelector(".session-row-badge--incognito");
+    expect(badge?.getAttribute("aria-label")).toBe("Incognito thread");
+    expectTooltipText(badge, "Incognito thread");
+  });
+
   it("renders the durable outbox count and stays quiet when empty", () => {
     render(
       renderSessionRowBadges({

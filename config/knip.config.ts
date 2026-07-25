@@ -66,6 +66,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
+  "scripts/ios-release-cut.ts!",
+  "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mjs!",
   "scripts/lib/docker-plugin-selection.mjs!",
   "scripts/lib/openclaw-test-state.mjs!",
@@ -131,7 +133,6 @@ const rootEntries = [
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
-  "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
   // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
@@ -455,8 +456,6 @@ export default {
         "src/types.ts!",
         "src/harness/messages.ts!",
         "src/harness/env/kill-tree.ts!",
-        "src/harness/compaction.ts!",
-        "src/harness/branch-summarization.ts!",
         "src/harness/prompt-template-arguments.ts!",
         "src/harness/utils/truncate.ts!",
       ],
@@ -475,7 +474,7 @@ export default {
       project: ["**/*.ts!", ...testSupport],
     },
     "packages/speech-core": {
-      entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
+      entry: ["runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
       project: ["**/*.ts!", ...testSupport],
       ignoreDependencies: ["openclaw"],
     },

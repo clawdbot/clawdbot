@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.room-allowlist-access-policy
+      - whatsapp.direct-message-dmpolicy
   objective: Verify dmPolicy disabled rejects direct messages.
   gatewayConfigPatch:
     channels:

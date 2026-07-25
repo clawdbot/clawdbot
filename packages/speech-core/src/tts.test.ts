@@ -127,6 +127,7 @@ const {
   setTtsMaxLength,
   synthesizeSpeech,
   textToSpeech,
+  textToSpeechStream,
   textToSpeechTelephony,
 } = await import("../runtime-api.js");
 
@@ -835,6 +836,119 @@ describe("speech-core native voice-note routing", () => {
     ]);
   });
 
+  it("skips non-streaming providers before using a streaming fallback", async () => {
+    const release = vi.fn(async () => {});
+    const streamSynthesize = vi.fn(async () => ({
+      audioStream: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      fileExtension: ".pcm",
+      outputFormat: "pcm",
+      voiceCompatible: false,
+      release,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("buffered", { autoSelectOrder: 1 }),
+      createMockSpeechProvider("streaming", {
+        autoSelectOrder: 2,
+        streamSynthesize,
+      }),
+    ]);
+
+    const result = await textToSpeechStream({
+      text: "Use streaming fallback.",
+      cfg: {
+        tts: {
+          enabled: true,
+          provider: "buffered",
+          prefsPath: "/tmp/openclaw-speech-core-streaming-fallback-test.json",
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe("streaming");
+    expect(result.fallbackFrom).toBe("buffered");
+    expect(result.attemptedProviders).toEqual(["buffered", "streaming"]);
+    expect(result.outputFormat).toBe("pcm");
+    expect(result.fileExtension).toBe(".pcm");
+    expect(result.target).toBe("audio-file");
+    expect(result.release).toBe(release);
+    const skippedAttempt = requireAttempt(result.attempts, 0);
+    expect(skippedAttempt).toMatchObject({
+      provider: "buffered",
+      outcome: "skipped",
+      reasonCode: "unsupported_for_streaming",
+      personaBinding: "none",
+      error: "buffered does not support streaming TTS",
+    });
+    expect(skippedAttempt).not.toHaveProperty("latencyMs");
+    expect(requireAttempt(result.attempts, 1)).toMatchObject({
+      provider: "streaming",
+      outcome: "success",
+      reasonCode: "success",
+    });
+    expect(streamSynthesize).toHaveBeenCalledOnce();
+  });
+
+  it("classifies streaming timeouts before falling back with raw text", async () => {
+    const timeoutStreamSynthesize = vi.fn(async () => {
+      const error = new Error("stalled");
+      error.name = "AbortError";
+      throw error;
+    });
+    const fallbackStreamSynthesize = vi.fn(async () => ({
+      audioStream: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }),
+      fileExtension: ".pcm",
+      outputFormat: "pcm",
+      voiceCompatible: false,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("primary", {
+        autoSelectOrder: 1,
+        streamSynthesize: timeoutStreamSynthesize,
+      }),
+      createMockSpeechProvider("fallback", {
+        autoSelectOrder: 2,
+        streamSynthesize: fallbackStreamSynthesize,
+      }),
+    ]);
+    const text = "## Keep [streaming Markdown](https://example.com) raw!!!!!";
+
+    const result = await textToSpeechStream({
+      text,
+      cfg: {
+        tts: {
+          enabled: true,
+          provider: "primary",
+          prefsPath: "/tmp/openclaw-speech-core-streaming-timeout-test.json",
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe("fallback");
+    expect(result.fallbackFrom).toBe("primary");
+    expect(requireAttempt(result.attempts, 0)).toMatchObject({
+      provider: "primary",
+      outcome: "failed",
+      reasonCode: "timeout",
+      error: "primary: request timed out",
+    });
+    expect(requireAttempt(result.attempts, 1)).toMatchObject({
+      provider: "fallback",
+      outcome: "success",
+      reasonCode: "success",
+    });
+    expect(fallbackStreamSynthesize).toHaveBeenCalledWith(expect.objectContaining({ text }));
+  });
+
   it("ignores voiceModel refs that are not speech models", async () => {
     installSpeechProviders([
       createMockSpeechProvider("openai", {
@@ -1419,8 +1533,9 @@ describe("speech-core native voice-note routing", () => {
       }),
     ]);
 
+    const text = "## Keep [telephony Markdown](https://example.com) raw!!!!!";
     const result = await textToSpeechTelephony({
-      text: "Use a directed telephony voice.",
+      text,
       cfg: {
         tts: {
           enabled: true,
@@ -1455,6 +1570,8 @@ describe("speech-core native voice-note routing", () => {
       speakerVoice: "directed-voice",
       speed: 1.5,
     });
+    expect(telephonyRequest.text).toBe(text);
+    expect(telephonyRequest).not.toHaveProperty("target");
   });
 
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {

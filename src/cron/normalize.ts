@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
@@ -13,6 +14,7 @@ import { parseDeliveryInput } from "./delivery-field-schemas.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { normalizeCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import { inferCronJobName } from "./service/normalize.js";
 import {
   assertSafeCronSessionTargetId,
@@ -370,13 +372,26 @@ export function normalizeCronJobInput(
   if (isRecord(base.owner)) {
     const agentId = normalizeOptionalString(base.owner.agentId);
     const sessionKey = normalizeOptionalString(base.owner.sessionKey);
-    if (agentId || sessionKey) {
+    const accountId = normalizeOptionalAccountId(
+      typeof base.owner.accountId === "string" ? base.owner.accountId : undefined,
+    );
+    if (agentId || sessionKey || accountId) {
       next.owner = {
         ...(agentId ? { agentId: sanitizeAgentId(agentId) } : {}),
         ...(sessionKey ? { sessionKey } : {}),
+        ...(accountId ? { accountId } : {}),
       };
     } else {
       delete next.owner;
+    }
+  }
+
+  if ("scheduledToolPolicy" in base) {
+    const scheduledToolPolicy = normalizeCronScheduledToolPolicy(base.scheduledToolPolicy);
+    if (scheduledToolPolicy) {
+      next.scheduledToolPolicy = scheduledToolPolicy;
+    } else {
+      delete next.scheduledToolPolicy;
     }
   }
 

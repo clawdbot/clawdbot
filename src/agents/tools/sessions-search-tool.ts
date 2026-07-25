@@ -7,6 +7,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import {
   agentSessionKeysMatchByRequestKey,
+  isIncognitoSessionKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -411,24 +412,29 @@ export function createSessionsSearchTool(opts?: {
       const requesterAgentId =
         opts?.agentId ?? resolveSessionAgentId({ sessionKey: effectiveRequesterKey, config: cfg });
 
-      const searchSessions = sessionKey
-        ? [
-            {
-              key: sessionKey,
-              access: "direct" as const,
-              ...(opts?.agentId && !parseAgentSessionKey(sessionKey)
-                ? { agentId: opts.agentId }
-                : {}),
-            },
-          ]
-        : await listVisibleSearchSessions({
-            unscopedAgentId: requesterAgentId,
-            effectiveRequesterAgentId: opts?.agentId,
-            effectiveRequesterKey,
-            gatewayCall,
-            rowGuard,
-            restrictToSpawned,
-          });
+      const searchSessions = (
+        sessionKey
+          ? [
+              {
+                key: sessionKey,
+                access: "direct" as const,
+                ...(opts?.agentId && !parseAgentSessionKey(sessionKey)
+                  ? { agentId: opts.agentId }
+                  : {}),
+              },
+            ]
+          : await listVisibleSearchSessions({
+              unscopedAgentId: requesterAgentId,
+              effectiveRequesterAgentId: opts?.agentId,
+              effectiveRequesterKey,
+              gatewayCall,
+              rowGuard,
+              restrictToSpawned,
+            })
+      )
+        // Search excerpts are re-persisted in the caller transcript; incognito
+        // sessions therefore stay absent even when the caller could otherwise see them.
+        .filter((candidate) => !isIncognitoSessionKey(candidate.key));
       const visibleHits: SanitizedSearchHit[] = [];
       let indexing = false;
       let backendTruncated = false;

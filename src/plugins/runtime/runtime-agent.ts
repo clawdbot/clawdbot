@@ -31,7 +31,7 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
-import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   beginSessionWorkAdmission,

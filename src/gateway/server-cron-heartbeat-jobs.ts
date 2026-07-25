@@ -3,18 +3,11 @@
 // heartbeat-enabled agent, reconverged at startup and config reload.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  resolveHeartbeatAgents,
-  resolveHeartbeatSchedulerSeed,
-} from "../infra/heartbeat-runner.js";
-import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
-import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
+  heartbeatMonitorAgentId,
+  resolveHeartbeatMonitorSpecs,
+} from "../cron/heartbeat-monitor.js";
+import type { CronJob } from "../cron/types.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
-
-const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
-
-function heartbeatMonitorDeclarationKey(agentId: string): string {
-  return `${HEARTBEAT_DECLARATION_PREFIX}${agentId}`;
-}
 
 type HeartbeatJobCron = Pick<GatewayCronServiceContract, "add" | "list" | "remove">;
 
@@ -30,61 +23,40 @@ export async function reconcileHeartbeatMonitorJobs(params: {
   logger: { warn: (obj: unknown, msg?: string) => void };
 }): Promise<{ ok: boolean }> {
   let ok = true;
-  const schedulerSeed = resolveHeartbeatSchedulerSeed();
-  const desired = new Set<string>();
-  for (const agent of resolveHeartbeatAgents(params.cfg)) {
-    const intervalMs = resolveHeartbeatIntervalMs(params.cfg, undefined, agent.heartbeat);
-    if (!intervalMs) {
-      continue;
-    }
-    desired.add(agent.agentId);
+  let jobs: CronJob[];
+  try {
+    jobs = await params.cron.list({ includeDisabled: true });
+  } catch (error) {
+    params.logger.warn({ err: String(error) }, "cron-heartbeat: monitor inventory failed");
+    return { ok: false };
+  }
+
+  const specs = resolveHeartbeatMonitorSpecs(params.cfg, jobs);
+  const desired = new Set(specs.map((spec) => spec.agentId));
+  for (const spec of specs) {
     try {
-      await params.cron.add(
-        {
-          declarationKey: heartbeatMonitorDeclarationKey(agent.agentId),
-          displayName: `Heartbeat (${agent.agentId})`,
-          name: `heartbeat-${agent.agentId}`,
-          agentId: agent.agentId,
-          enabled: true,
-          schedule: {
-            kind: "every",
-            everyMs: intervalMs,
-            anchorMs: resolveHeartbeatPhaseMs({
-              schedulerSeed,
-              agentId: agent.agentId,
-              intervalMs,
-            }),
-          },
-          payload: { kind: "heartbeat" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-        },
-        {
-          enabledExplicit: true,
-          systemOwned: true,
-          // Scope declarative matching to real monitors: a pre-existing user
-          // job that happens to hold this key is left untouched.
-          matchesExisting: (job) => job.payload.kind === "heartbeat",
-        },
-      );
+      await params.cron.add(spec.input, {
+        enabledExplicit: true,
+        systemOwned: true,
+        // Scope declarative matching to real monitors: a pre-existing user
+        // job that happens to hold this key is left untouched.
+        matchesExisting: (job) => job.payload.kind === "heartbeat",
+      });
     } catch (error) {
       ok = false;
       params.logger.warn(
-        { agentId: agent.agentId, err: String(error) },
+        { agentId: spec.agentId, err: String(error) },
         "cron-heartbeat: monitor convergence failed",
       );
     }
   }
+
   try {
-    const jobs = await params.cron.list({ includeDisabled: true });
     for (const job of jobs) {
-      const key = job.declarationKey;
-      // Prune only proven monitors: prefix alone must never delete an
-      // unrelated declaration-keyed job that happens to share the namespace.
-      if (!key?.startsWith(HEARTBEAT_DECLARATION_PREFIX) || job.payload.kind !== "heartbeat") {
-        continue;
-      }
-      if (desired.has(key.slice(HEARTBEAT_DECLARATION_PREFIX.length))) {
+      const agentId = heartbeatMonitorAgentId(job);
+      // Disabled heartbeats retain their stable monitor row (and scratch). Only
+      // agents no longer enrolled in heartbeat are pruned.
+      if (!agentId || desired.has(agentId)) {
         continue;
       }
       await params.cron.remove(job.id, { systemOwned: true });

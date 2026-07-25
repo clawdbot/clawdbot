@@ -2,7 +2,7 @@
 import { join } from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-env.js";
-import type { MsgContext, TemplateContext } from "./templating.js";
+import type { RuntimeMsgContext as MsgContext, TemplateContext } from "./templating.js";
 
 export async function withSandboxMediaTempHome<T>(
   prefix: string,
@@ -21,9 +21,7 @@ export function createSandboxMediaContexts(mediaPath: string): {
     To: "+2000",
     ChatType: "group",
     Provider: "whatsapp",
-    MediaPath: mediaPath,
-    MediaType: "image/jpeg",
-    MediaUrl: mediaPath,
+    media: [{ path: mediaPath, url: mediaPath, contentType: "image/jpeg" }],
   };
   return { ctx, sessionCtx: { ...ctx } };
 }

@@ -27,6 +27,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
@@ -92,21 +93,7 @@ import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
-/**
- * Drops tools whose requiredClientCaps the originating gateway client did not
- * declare. Capability availability is a hard fact, not policy: every tool
- * assembly path (core, plugin-only plans) must apply it or gated tools leak
- * onto surfaces that cannot render them.
- */
-export function filterToolsByClientCaps(
-  tools: AnyAgentTool[],
-  declaredClientCaps: string[] | undefined,
-): AnyAgentTool[] {
-  const clientCaps = new Set(declaredClientCaps ?? []);
-  return tools.filter(
-    (tool) => !tool.requiredClientCaps?.some((requiredCap) => !clientCaps.has(requiredCap)),
-  );
-}
+export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 export function createOpenClawTools(
   options?: {
     sandboxBrowserBridgeUrl?: string;
@@ -122,6 +109,8 @@ export function createOpenClawTools(
     agentChannel?: GatewayMessageChannel;
     runId?: string;
     agentAccountId?: string;
+    /** Trusted account used only for Gateway authorization; delivery keeps agentAccountId. */
+    gatewayCallerAccountId?: string;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
@@ -262,6 +251,9 @@ export function createOpenClawTools(
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
+  // Scheduled turns keep delivery routing live, but Gateway authorization remains bound to the
+  // authenticated creator account captured in the immutable scheduled authority envelope.
+  const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
@@ -398,6 +390,7 @@ export function createOpenClawTools(
         sessionId: options?.sessionId,
         messageActionTurnCapability: options?.messageActionTurnCapability,
         config: options?.config,
+        preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
         currentChannelId: options?.currentChannelId,
         currentChatType: options?.currentChatType,
         currentMessagingTarget: options?.currentMessagingTarget,
@@ -494,6 +487,7 @@ export function createOpenClawTools(
               ]),
           createCronTool({
             agentSessionKey: options?.agentSessionKey,
+            agentAccountId: gatewayCallerAccountId,
             currentDeliveryContext: {
               channel: options?.agentChannel,
               to: options?.currentChannelId ?? options?.agentTo,
@@ -548,7 +542,9 @@ export function createOpenClawTools(
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
-    ...(includeTranscriptsTool ? [createTranscriptsTool({ config: resolvedConfig })] : []),
+    ...(includeTranscriptsTool
+      ? [createTranscriptsTool({ agentId: sessionAgentId, config: resolvedConfig })]
+      : []),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []
@@ -740,7 +736,10 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
-  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(hookAgentId, options);
+  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
+    hookAgentId,
+    options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
+  );
 
   if (options?.wrapBeforeToolCallHook === false) {
     return allTools.map(wrapGatewayCallerIdentity);

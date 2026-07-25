@@ -388,6 +388,12 @@ openclaw-board-widget-cell {
   width: 9px;
 }
 
+.swarm-widget__more {
+  color: var(--muted, #8a919e);
+  font-size: 10px;
+  line-height: 9px;
+}
+
 .swarm-widget__dot--running {
   animation: swarm-widget-pulse 1.25s ease-in-out infinite;
   background: var(--accent, #ff5c5c);

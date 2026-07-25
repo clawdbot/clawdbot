@@ -155,6 +155,39 @@ describe("sessions_search tool", () => {
     });
   });
 
+  it("never searches or returns incognito sessions", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const incognitoKey = "agent:main:dashboard:incognito-private";
+    const tool = createTool({
+      requests,
+      config: { tools: { sessions: { visibility: "all" } } },
+      results: [
+        hit({ sessionKey: "agent:main:visible", messageId: "visible" }),
+        hit({ sessionKey: incognitoKey, messageId: "private" }),
+      ],
+    });
+
+    const result = await tool.execute("blind", { query: "text" });
+    const explicit = await tool.execute("blind-explicit", {
+      query: "text",
+      sessionKey: incognitoKey,
+    });
+
+    expect(result.details).toMatchObject({
+      results: [expect.objectContaining({ messageId: "visible" })],
+    });
+    expect(JSON.stringify(result.details)).not.toContain("private");
+    expect(explicit.details).toMatchObject({ status: "forbidden" });
+    expect(
+      requests
+        .filter((request) => request.method === "sessions.search")
+        .flatMap((request) => {
+          const keys = (request.params as { sessionKeys?: unknown }).sessionKeys;
+          return Array.isArray(keys) ? keys : [];
+        }),
+    ).not.toContain(incognitoKey);
+  });
+
   it("excludes foreign unscoped sessions that cannot be reopened by session key", async () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({

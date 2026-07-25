@@ -133,7 +133,7 @@ describe("AppSidebar session catalog pagination", () => {
     const onOpenNewSession = vi.fn();
     sidebar.connected = true;
     sidebar.onOpenNewSession = onOpenNewSession;
-    sidebar.sessionCatalogs = [
+    sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",
         label: "Claude Code",
@@ -145,6 +145,7 @@ describe("AppSidebar session catalog pagination", () => {
         hosts: [],
       },
     ];
+    sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 
     const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-catalog-new");
@@ -160,7 +161,7 @@ describe("AppSidebar session catalog pagination", () => {
   ])("groups $label catalog rows by their owning host", async ({ id, label }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.sessionCatalogs = [
+    sidebar.sessionData.sessionCatalogs = [
       {
         id,
         label,
@@ -212,6 +213,7 @@ describe("AppSidebar session catalog pagination", () => {
         ],
       },
     ];
+    sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 
     const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
@@ -255,7 +257,7 @@ describe("AppSidebar session catalog pagination", () => {
         ],
       },
     );
-    sidebar.sessionCatalogs = [
+    sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",
         label: "Claude Code",
@@ -282,11 +284,15 @@ describe("AppSidebar session catalog pagination", () => {
         ],
       },
     ];
-    const backingRows = (sidebar.sessionsResult?.sessions ?? []).map((row) =>
+    const backingRows = (sidebar.sessionData.sessionsResult?.sessions ?? []).map((row) =>
       row.key === backingSessionKey ? Object.assign({}, row, { unread: true }) : row,
     );
-    sidebar.sessionsResult = { ...sidebar.sessionsResult!, sessions: backingRows };
-    sidebar.sessionRowsByAgent = { main: backingRows };
+    sidebar.sessionData.sessionsResult = {
+      ...sidebar.sessionData.sessionsResult!,
+      sessions: backingRows,
+    };
+    sidebar.sessionData.sessionRowsByAgent = { main: backingRows };
+    sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 
     expect(
@@ -333,8 +339,12 @@ describe("AppSidebar session catalog pagination", () => {
         ? Object.assign({}, row, { unread: false, hasActiveRun: true })
         : row,
     );
-    sidebar.sessionsResult = { ...sidebar.sessionsResult, sessions: runningRows };
-    sidebar.sessionRowsByAgent = { main: runningRows };
+    sidebar.sessionData.sessionsResult = {
+      ...sidebar.sessionData.sessionsResult,
+      sessions: runningRows,
+    };
+    sidebar.sessionData.sessionRowsByAgent = { main: runningRows };
+    sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 
     const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
@@ -481,7 +491,7 @@ describe("AppSidebar session catalog pagination", () => {
       await sidebar.updateComplete;
 
       expect(sidebar.textContent).not.toContain("Obsolete session");
-      expect(sidebar.sessionCatalogs[0]?.hosts).toHaveLength(1);
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

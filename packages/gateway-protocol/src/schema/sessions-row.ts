@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 /** Projected actor that caused a session node to be created. */
 export const SessionCreatedActorSchema = closedObject({
@@ -15,6 +16,7 @@ export const SessionRowSchema = Type.Object(
   {
     key: Type.String(),
     sessionId: Type.Optional(Type.String()),
+    incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
       Type.Literal("direct"),
       Type.Literal("group"),
@@ -32,6 +34,7 @@ export const SessionRowSchema = Type.Object(
     updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
+    archivedBy: Type.Optional(SessionCreatedActorSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
     icon: Type.Optional(Type.String()),
@@ -49,6 +52,7 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     lastRunError: Type.Optional(Type.String()),
+    activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),
@@ -84,6 +88,8 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
+    visibility: Type.Optional(SessionVisibilitySchema),
+    sharingRole: Type.Optional(SessionSharingRoleSchema),
     createdAt: Type.Optional(Type.Number()),
     forkSource: Type.Optional(
       Type.Object({

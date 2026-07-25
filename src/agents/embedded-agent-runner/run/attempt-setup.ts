@@ -28,8 +28,59 @@ type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
   prepared: true;
 };
 
-export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
+type AttemptWorkspaceParams = Pick<
+  EmbeddedRunAttemptParams,
+  | "agentId"
+  | "config"
+  | "cwd"
+  | "execOverrides"
+  | "sandboxSessionKey"
+  | "sessionId"
+  | "sessionKey"
+  | "workspaceDir"
+>;
+
+/** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
+export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspaceParams) {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  await fs.mkdir(resolvedWorkspace, { recursive: true });
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+  const sandbox = await resolveSandboxContext({
+    config: params.config,
+    execOverrides: params.execOverrides,
+    sessionKey: sandboxSessionKey,
+    workspaceDir: resolvedWorkspace,
+  });
+  const effectiveWorkspace =
+    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
+  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+    throw new Error(
+      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
+    );
+  }
+  await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  return {
+    effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
+    effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
+      config: params.config,
+      sessionAgentId,
+    }),
+    effectiveWorkspace,
+    resolvedWorkspace,
+    sandbox,
+    sandboxSessionKey,
+    sessionAgentId,
+  };
+}
+
+export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
   const agentCoreThinkingLevel = mapThinkingLevel(params.thinkLevel);
@@ -73,28 +124,8 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     }
   };
 
-  await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    execOverrides: params.execOverrides,
-    sessionKey: sandboxSessionKey,
-    workspaceDir: resolvedWorkspace,
-  });
-  const effectiveWorkspace = sandbox?.enabled
-    ? sandbox.workspaceAccess === "rw"
-      ? resolvedWorkspace
-      : sandbox.workspaceDir
-    : resolvedWorkspace;
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
-    );
-  }
-  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const workspace = await resolveAttemptWorkspaceSandbox(params);
+  const { effectiveWorkspace } = workspace;
 
   const getCurrentAttemptPluginMetadataSnapshot = (): PluginMetadataSnapshot | undefined =>
     params.preparedModelRuntime?.metadataSnapshot;
@@ -141,22 +172,11 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     };
     return providerRuntimeHandle;
   };
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
-    config: params.config,
-    sessionAgentId,
-  });
   prepStages.mark("workspace-sandbox");
 
   return {
     agentCoreThinkingLevel,
-    effectiveCwd,
-    effectiveFsWorkspaceOnly,
-    effectiveWorkspace,
+    ...workspace,
     emitCorePluginToolStageSummary,
     emitPrepStageSummary,
     getCurrentAttemptPluginMetadataSnapshot,
@@ -164,9 +184,5 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     prepStages,
     proactiveSubagentOrchestration,
     providerThinkingLevel,
-    resolvedWorkspace,
-    sandbox,
-    sandboxSessionKey,
-    sessionAgentId,
   };
 }

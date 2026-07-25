@@ -171,6 +171,22 @@ async function invoke(
 }
 
 describe("session message-cut methods", () => {
+  it("returns an empty branch list for a not-yet-materialized session", async () => {
+    const respond = vi.fn() as unknown as RespondFn;
+    await expectDefined(
+      sessionsHandlers["sessions.branches.list"],
+      "sessions.branches.list handler",
+    )({
+      req: { id: "fresh-branches-list" } as never,
+      params: { sessionKey: "agent:main:never-materialized" },
+      respond,
+      context: context(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { branches: [] }, undefined);
+  });
+
   it("lists branches and switches to an inactive tip", async () => {
     const listed = await invoke("sessions.branches.list");
     expect(listed).toHaveBeenCalledWith(

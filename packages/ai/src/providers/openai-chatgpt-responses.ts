@@ -60,6 +60,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { inspectTlsCertificateError } from "../utils/tls-certificate-errors.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
@@ -438,9 +439,14 @@ export const streamOpenAICodexResponses: StreamFunction<
               throw new Error(`Request timed out after ${requestTimeoutMs}ms`, { cause: error });
             }
           }
-          lastError = error instanceof Error ? error : new Error(String(error));
-          // Network errors are retryable
-          if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
+          const tlsCertificateError = inspectTlsCertificateError(error);
+          lastError = toLintErrorObject(error, String(error));
+          // Deterministic certificate failures cannot recover through backoff.
+          if (
+            attempt < maxRetries &&
+            !lastError.message.includes("usage limit") &&
+            !tlsCertificateError
+          ) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
             await sleepWithAbort(delayMs, activeSignal);
             continue;

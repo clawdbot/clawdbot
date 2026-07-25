@@ -260,7 +260,7 @@ async function main() {
   const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
   if (unmatchedExplicitTargets.length > 0) {
     for (const unmatched of unmatchedExplicitTargets) {
-      const suffix = unmatched.includePattern ? ` (${unmatched.includePattern})` : "";
+      const suffix = unmatched.includePattern ? ` (tried: ${unmatched.includePattern})` : "";
       console.error(
         `[test] explicit test target matched no test files: ${unmatched.target}${suffix}`,
       );

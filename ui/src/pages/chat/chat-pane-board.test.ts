@@ -58,7 +58,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.context = {
     sessions,
-    gateway: { snapshot: { client, connected: true } },
+    gateway: { snapshot: { client, phase: "connected" } },
   } as unknown as ApplicationContext;
   pane.state = {
     chatError: null,
@@ -156,7 +156,7 @@ describe("chat pane board shell", () => {
     pane.state.client = client;
     pane.context = {
       ...pane.context,
-      gateway: { snapshot: { client, connected: true } },
+      gateway: { snapshot: { client, phase: "connected" } },
     } as unknown as ApplicationContext;
     pane.connectedClient = client;
     pane.boardProvider = mockBoardProvider("agent:main:current");
@@ -400,7 +400,7 @@ describe("chat pane board shell", () => {
           ...pane.context.gateway,
           snapshot: {
             client,
-            connected: true,
+            phase: "connected",
             hello: { features: { methods: testCase.methods } },
           } as never,
         },
@@ -438,7 +438,7 @@ describe("chat pane board shell", () => {
         ...pane.context.gateway,
         snapshot: {
           client,
-          connected: true,
+          phase: "connected",
           hello: {
             auth: { role: "operator", scopes: profile.scopes },
             features: {

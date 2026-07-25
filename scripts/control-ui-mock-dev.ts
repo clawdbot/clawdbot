@@ -30,11 +30,25 @@ type CliOptions = {
 };
 
 type SessionListOptions = {
+  creators?: readonly SessionCreatorFixture[];
   hasMore: boolean;
   nextOffset: number | null;
   offset?: number;
   totalCount: number;
 };
+
+type SessionCreatorFixture = { type: "human" | "agent"; id: string; label: string };
+
+// Two creator identities so the sidebar's collaborative ownership chrome
+// (owner avatars + People filter) renders in the mock harness.
+const MOCK_SESSION_CREATORS: readonly SessionCreatorFixture[] = [
+  { type: "human", id: "profile-peter", label: "Peter" },
+  { type: "human", id: "profile-mira", label: "Mira" },
+];
+const [MOCK_CREATOR_PETER, MOCK_CREATOR_MIRA] = MOCK_SESSION_CREATORS as [
+  SessionCreatorFixture,
+  SessionCreatorFixture,
+];
 
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_MOCK_SESSIONS = 650;
@@ -175,6 +189,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     hasMore: options.hasMore,
     limitApplied: 50,
     nextOffset: options.nextOffset,
+    ...(options.creators ? { creators: options.creators } : {}),
     offset: options.offset ?? 0,
     path: "",
     sessions,
@@ -183,11 +198,16 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   };
 }
 
-function pagedSessionsListResponse(sessions: unknown[], offset: number) {
+function pagedSessionsListResponse(
+  sessions: unknown[],
+  offset: number,
+  creators?: readonly SessionCreatorFixture[],
+) {
   const normalizedOffset = Math.max(0, Math.floor(offset));
   const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
   const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
   return sessionsListResponse(page, {
+    creators,
     hasMore: nextOffset < sessions.length,
     nextOffset: nextOffset < sessions.length ? nextOffset : null,
     offset: normalizedOffset,
@@ -218,17 +238,18 @@ function buildSessionRows(params: {
 function buildSessionListCases(
   sessions: unknown[],
   matchBase: Record<string, unknown> = {},
+  creators?: readonly SessionCreatorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   const cases: Array<{ match: Record<string, unknown>; response: unknown }> = [];
   for (let offset = SESSION_PAGE_SIZE; offset < sessions.length; offset += SESSION_PAGE_SIZE) {
     cases.push({
       match: { ...matchBase, offset },
-      response: pagedSessionsListResponse(sessions, offset),
+      response: pagedSessionsListResponse(sessions, offset, creators),
     });
   }
   cases.push({
     match: matchBase,
-    response: pagedSessionsListResponse(sessions, 0),
+    response: pagedSessionsListResponse(sessions, 0, creators),
   });
   return cases;
 }
@@ -1080,6 +1101,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       status: "running",
     }),
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
+      createdActor: MOCK_CREATOR_MIRA,
       hasActiveRun: true,
       startedAt: baseTime - 45_000,
       status: "running",
@@ -1092,6 +1114,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       icon: "name:spark",
     }),
     sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
+      createdActor: MOCK_CREATOR_MIRA,
       execCwd: "/Users/peter/Projects/clawdbot",
     }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
@@ -1100,6 +1123,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
+      createdActor: MOCK_CREATOR_PETER,
       execCwd: "/Users/peter/Work/openclaw",
       lastReadAt: baseTime - 120_000,
       observerDigest: {
@@ -1144,6 +1168,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const archivedSessions = [
     sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
       archived: true,
+      archivedBy: MOCK_CREATOR_MIRA,
+      createdActor: MOCK_CREATOR_PETER,
       totalTokens: 42_000,
     }),
     sessionRow(
@@ -1708,7 +1734,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases([...sessions, ...archivedSessions]),
+          ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_CREATORS),
         ],
       },
     },

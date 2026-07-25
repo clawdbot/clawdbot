@@ -826,19 +826,13 @@ describe("ensureAgentWorkspace", () => {
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
   });
 
-  it("writes the clean HEARTBEAT runtime template into new workspaces", async () => {
+  it("no longer seeds HEARTBEAT.md into new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    const heartbeat = await fs.readFile(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8");
-    expect(heartbeat).not.toContain("```");
-    expect(heartbeat).toContain(
-      "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
-    );
-    expect(heartbeat).toContain(
-      "# Add tasks below when you want the agent to check something periodically.",
-    );
+    // Heartbeat monitor context lives in cron scratch now; new workspaces get no file.
+    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
   });
 
   it("does not recreate optional bootstrap files when workspace setup is already completed", async () => {
@@ -870,7 +864,6 @@ describe("ensureAgentWorkspace", () => {
     await fs.unlink(path.join(tempDir, DEFAULT_SOUL_FILENAME));
     await fs.unlink(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
     await fs.unlink(path.join(tempDir, DEFAULT_USER_FILENAME));
-    await fs.unlink(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
     await writeWorkspaceFile({
       dir: tempDir,
       name: DEFAULT_AGENTS_FILENAME,
@@ -1148,7 +1141,6 @@ describe("filterBootstrapFilesForSession", () => {
     { name: "TOOLS.md", path: "/w/TOOLS.md", content: "", missing: false },
     { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },
     { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
-    { name: "HEARTBEAT.md", path: "/w/HEARTBEAT.md", content: "", missing: false },
     { name: "BOOTSTRAP.md", path: "/w/BOOTSTRAP.md", content: "", missing: false },
     { name: "MEMORY.md", path: "/w/MEMORY.md", content: "", missing: false },
   ];

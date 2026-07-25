@@ -611,6 +611,33 @@ describe("Claude session catalog", () => {
     expect(provider?.resolveCreateSession?.({})).toBeUndefined();
   });
 
+  it("detects a Claude CLI route pinned to a non-default Claude model", () => {
+    // Regression: route detection previously probed only the packaged default
+    // model id, so bumping that default silently stopped advertising session
+    // creation for configs routing an older Claude model.
+    for (const routedModel of ["anthropic/claude-opus-4-8", "anthropic/claude-sonnet-4-6"]) {
+      const config = {
+        agents: { defaults: { models: { [routedModel]: { agentRuntime: { id: "claude-cli" } } } } },
+      } as unknown as OpenClawConfig;
+      let provider: SessionCatalogProvider | undefined;
+      const api = {
+        id: "anthropic",
+        config,
+        runtime: { config: { current: () => config } },
+        registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+          provider = candidate;
+        },
+      } as unknown as OpenClawPluginApi;
+
+      registerClaudeSessionCatalog(api);
+
+      expect(provider?.resolveCreateSession?.({})).toEqual({
+        model: routedModel,
+        agentRuntime: "claude-cli",
+      });
+    }
+  });
+
   it("resolves creation against the requested agent's runtime policy", () => {
     const config = {
       agents: {

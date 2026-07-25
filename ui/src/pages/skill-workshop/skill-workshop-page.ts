@@ -331,7 +331,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
           const gateway = context.gateway;
           this.gatewaySource = gateway;
           this.gatewayClient = gateway.snapshot.client;
-          this.gatewayConnected = gateway.snapshot.connected;
+          this.gatewayConnected = gateway.snapshot.phase === "connected";
           this.agentSelectionSource = context.agentSelection;
           this.selectedAgentId = context.agentSelection.state.selectedId;
           this.sessionsSource = context.sessions;
@@ -348,7 +348,8 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         const clientChanged =
           this.gatewaySource !== undefined && this.gatewayClient !== snapshot.client;
         const connectionChanged =
-          this.gatewaySource !== undefined && this.gatewayConnected !== snapshot.connected;
+          this.gatewaySource !== undefined &&
+          this.gatewayConnected !== (snapshot.phase === "connected");
         this.applyGatewaySnapshot(
           gateway,
           snapshot,
@@ -360,7 +361,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
           }
           const sourceEpochChanged =
             nextSnapshot.client !== this.gatewayClient ||
-            nextSnapshot.connected !== this.gatewayConnected;
+            (nextSnapshot.phase === "connected") !== this.gatewayConnected;
           this.applyGatewaySnapshot(gateway, nextSnapshot, sourceEpochChanged);
         });
         return cleanup;
@@ -536,11 +537,14 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   ) {
     this.gatewaySource = gateway;
     this.gatewayClient = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (sourceEpochChanged) {
       this.resetSourceState();
     }
-    if (snapshot.connected && (sourceEpochChanged || !this.state?.skillWorkshopLoaded)) {
+    if (
+      snapshot.phase === "connected" &&
+      (sourceEpochChanged || !this.state?.skillWorkshopLoaded)
+    ) {
       this.loadProposals(sourceEpochChanged);
     }
   }
@@ -564,7 +568,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   private loadProposals(force: boolean) {
     const state = this.state;
     const context = this.context;
-    if (!state || !context || !context.gateway.snapshot.connected) {
+    if (!state || !context || context.gateway.snapshot.phase !== "connected") {
       return;
     }
     void loadSkillWorkshopPageData({ state, context, force }).finally(this.requestPageUpdate);

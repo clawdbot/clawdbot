@@ -1,3 +1,4 @@
+import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 /** Shared contracts for the prepared attempt execution phases. */
 import type {
   createEmbeddedAttemptExternalAbortController,
@@ -21,17 +22,9 @@ type StreamRuntimeInput = Parameters<typeof prepareEmbeddedAttemptStreamRuntime>
 type AttemptContextEngine = NonNullable<StreamRuntimeInput["history"]["activeContextEngine"]>;
 
 export type EmbeddedAttemptExecutionState = {
-  aborted: boolean;
   beforeAgentRunBlocked: boolean;
   beforeAgentRunBlockedBy: string | undefined;
-  cleanupYieldAborted: boolean;
-  externalAbort: boolean;
-  idleTimedOut: boolean;
-  promptError: unknown;
-  timedOut: boolean;
-  timedOutByRunBudget: boolean;
-  timedOutDuringCompaction: boolean;
-  timedOutDuringToolExecution: boolean;
+  terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
 };
 

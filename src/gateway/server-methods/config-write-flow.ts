@@ -5,6 +5,7 @@ import {
   createConfigIO,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
+  resolveConfigSnapshotHash,
 } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -244,6 +245,9 @@ export async function commitGatewayConfigWrite(params: {
 }> {
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
+    // The early RPC hash check is only advisory until this lock-time CAS. Without
+    // it, concurrent writers can both succeed and overwrite each other's config.
+    baseHash: resolveConfigSnapshotHash(params.snapshot) ?? undefined,
     writeOptions: {
       ...params.writeOptions,
       auditOrigin: "config-rpc",

@@ -37,7 +37,6 @@ export type ResolvedAgentConfig = {
   memory?: AgentEntry["memory"];
   humanDelay?: AgentEntry["humanDelay"];
   typingMode?: AgentEntry["typingMode"];
-  typingIntervalSeconds?: AgentEntry["typingIntervalSeconds"];
   tts?: AgentEntry["tts"];
   contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
@@ -156,7 +155,6 @@ export function resolveAgentConfig(
     memory: entry.memory,
     humanDelay: entry.humanDelay,
     typingMode: entry.typingMode ?? agentDefaults?.typingMode,
-    typingIntervalSeconds: entry.typingIntervalSeconds ?? agentDefaults?.typingIntervalSeconds,
     tts: entry.tts,
     contextLimits:
       typeof entry.contextLimits === "object" && entry.contextLimits

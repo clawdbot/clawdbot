@@ -29,6 +29,10 @@ The web app keeps ownership and presence visually distinct:
 
 When fewer than two distinct creators appear in the loaded session list, OpenClaw hides all ownership and person-filter chrome. A single-user gateway therefore looks unchanged.
 
+## Drafts
+
+Start a session as a draft to keep work in progress out of teammates' sidebars until you publish it. Drafts are never hidden from admins, who see other people's drafts with a faded ghost marker. This is a coordination feature, not a security boundary.
+
 ## Turn attribution
 
 Turn sender attribution is best-effort. Steering can merge input into an active turn, so the transcript cannot always represent each person's contribution as a separate turn.

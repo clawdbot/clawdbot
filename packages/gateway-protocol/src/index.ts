@@ -31,6 +31,7 @@ export {
   type SessionCreatedActor,
   type SessionRow,
 } from "./schema/sessions-row.js";
+export * from "./schema/sessions-suggestions.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
@@ -196,6 +197,10 @@ import {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronScratchGetParamsSchema,
+  CronScratchGetResultSchema,
+  CronScratchSetParamsSchema,
+  CronScratchSetResultSchema,
   CronStatusParamsSchema,
   CronUpdateParamsSchema,
   DevicePairApproveParamsSchema,
@@ -320,6 +325,7 @@ import {
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -445,6 +451,23 @@ import {
   SessionObserverDigestSchema,
   SessionObserverHealthSchema,
   SessionObserverPlanProgressSchema,
+  SessionMemberAddParamsSchema,
+  SessionMemberMutationResultSchema,
+  SessionMemberRemoveParamsSchema,
+  SessionMemberSchema,
+  SessionMembersListParamsSchema,
+  SessionMembersListResultSchema,
+  SessionSharingActionSchema,
+  SessionSharingEventSchema,
+  SessionSharingIdentitySchema,
+  SessionSharingRoleSchema,
+  SessionSuggestionsAddParamsSchema,
+  SessionSuggestionsListParamsSchema,
+  SessionSuggestionsResolveParamsSchema,
+  SessionTypingParamsSchema,
+  SessionVisibilitySchema,
+  SessionVisibilitySetParamsSchema,
+  SessionVisibilitySetResultSchema,
   SessionsObserverAskParamsSchema,
   SessionsObserverAskResultSchema,
   SessionsObserverVisibilityParamsSchema,
@@ -794,6 +817,16 @@ export const validateSessionsObserverAskParams = lazyCompile(SessionsObserverAsk
 export const validateSessionsObserverVisibilityParams = lazyCompile(
   SessionsObserverVisibilityParamsSchema,
 );
+export const validateSessionVisibilitySetParams = lazyCompile(SessionVisibilitySetParamsSchema);
+export const validateSessionMembersListParams = lazyCompile(SessionMembersListParamsSchema);
+export const validateSessionMemberAddParams = lazyCompile(SessionMemberAddParamsSchema);
+export const validateSessionMemberRemoveParams = lazyCompile(SessionMemberRemoveParamsSchema);
+export const validateSessionSuggestionsAddParams = lazyCompile(SessionSuggestionsAddParamsSchema);
+export const validateSessionSuggestionsListParams = lazyCompile(SessionSuggestionsListParamsSchema);
+export const validateSessionSuggestionsResolveParams = lazyCompile(
+  SessionSuggestionsResolveParamsSchema,
+);
+export const validateSessionTypingParams = lazyCompile(SessionTypingParamsSchema);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
@@ -933,6 +966,8 @@ export const validateCronUpdateParams = lazyCompile(CronUpdateParamsSchema);
 export const validateCronRemoveParams = lazyCompile(CronRemoveParamsSchema);
 export const validateCronRunParams = lazyCompile(CronRunParamsSchema);
 export const validateCronRunsParams = lazyCompile(CronRunsParamsSchema);
+export const validateCronScratchGetParams = lazyCompile(CronScratchGetParamsSchema);
+export const validateCronScratchSetParams = lazyCompile(CronScratchSetParamsSchema);
 export const validateDevicePairListParams = lazyCompile(DevicePairListParamsSchema);
 export const validateDevicePairApproveParams = lazyCompile(DevicePairApproveParamsSchema);
 export const validateDevicePairRejectParams = lazyCompile(DevicePairRejectParamsSchema);
@@ -1036,6 +1071,7 @@ export {
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -1176,6 +1212,19 @@ export {
   SessionObserverDigestSchema,
   SessionObserverHealthSchema,
   SessionObserverPlanProgressSchema,
+  SessionMemberAddParamsSchema,
+  SessionMemberMutationResultSchema,
+  SessionMemberRemoveParamsSchema,
+  SessionMemberSchema,
+  SessionMembersListParamsSchema,
+  SessionMembersListResultSchema,
+  SessionSharingActionSchema,
+  SessionSharingEventSchema,
+  SessionSharingIdentitySchema,
+  SessionSharingRoleSchema,
+  SessionVisibilitySchema,
+  SessionVisibilitySetParamsSchema,
+  SessionVisibilitySetResultSchema,
   SessionsObserverAskParamsSchema,
   SessionsObserverAskResultSchema,
   SessionsObserverVisibilityParamsSchema,
@@ -1428,6 +1477,10 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronScratchGetParamsSchema,
+  CronScratchGetResultSchema,
+  CronScratchSetParamsSchema,
+  CronScratchSetResultSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
   TerminalOpenParamsSchema,
@@ -1847,6 +1900,19 @@ export type {
   SessionObserverDigest,
   SessionObserverHealth,
   SessionObserverPlanProgress,
+  SessionMember,
+  SessionMemberAddParams,
+  SessionMemberMutationResult,
+  SessionMemberRemoveParams,
+  SessionMembersListParams,
+  SessionMembersListResult,
+  SessionSharingAction,
+  SessionSharingEvent,
+  SessionSharingIdentity,
+  SessionSharingRole,
+  SessionVisibility,
+  SessionVisibilitySetParams,
+  SessionVisibilitySetResult,
   SessionsObserverAskParams,
   SessionsObserverAskResult,
   SessionsObserverVisibilityParams,
@@ -1923,6 +1989,10 @@ export type {
   CronRemoveParams,
   CronRunParams,
   CronRunsParams,
+  CronScratchGetParams,
+  CronScratchGetResult,
+  CronScratchSetParams,
+  CronScratchSetResult,
   CronRunLogEntry,
   ApprovalKind,
   ApprovalDecision,

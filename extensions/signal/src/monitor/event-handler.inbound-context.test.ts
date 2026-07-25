@@ -1974,11 +1974,10 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     const context = requireCapturedContext();
-    expect(context.MediaPath).toBe("/tmp/a1.dat");
-    expect(context.MediaType).toBe("image/jpeg");
-    expect(context.MediaPaths).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
-    expect(context.MediaUrls).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
-    expect(context.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
+    expect(context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/a1.dat", contentType: "image/jpeg" }),
+      expect.objectContaining({ path: "/tmp/a2.dat", contentType: "application/octet-stream" }),
+    ]);
   });
 
   it("marks failed attachment downloads unavailable without a phantom media placeholder", async () => {
@@ -2012,8 +2011,8 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.RawBody).toBe("please inspect this");
     expect(context.CommandBody).toBe("please inspect this");
     expect(context.BodyForAgent).not.toContain("<media:image>");
-    expect(context.MediaPath).toBeUndefined();
-    expect(context.MediaTypes).toEqual(["image/jpeg"]);
+    expect(context.media).toEqual([expect.objectContaining({ contentType: "image/jpeg" })]);
+    expect(context.media?.[0]?.path).toBeUndefined();
   });
   it("combines raw and command text across failed-media debounce batches", async () => {
     vi.useFakeTimers();
@@ -2115,9 +2114,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     const context = requireCapturedContext();
-    expect(context.MediaPath).toBe("/tmp/voice1.aac");
-    expect(context.MediaType).toBe("audio/aac");
-    expect(context.MediaTypes).toEqual(["audio/aac"]);
+    expect(context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/voice1.aac", contentType: "audio/aac" }),
+    ]);
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {

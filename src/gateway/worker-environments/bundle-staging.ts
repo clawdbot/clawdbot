@@ -9,6 +9,7 @@ import { collectPackageDistInventory } from "../../infra/package-dist-inventory.
 // workspace packages; bootstrap installs production dependencies on the box with
 // scripts disabled, mirroring the npm channel.
 const WORKER_PACKAGE_LIFECYCLE_FIELDS = ["devDependencies", "scripts", "pnpm"] as const;
+const CONTROL_UI_DIST_PREFIX = "dist/control-ui/";
 
 export type WorkerBundleManifestEntry = {
   path: string;
@@ -272,7 +273,11 @@ export async function collectWorkerBundleManifest(
   stagingRoot: string,
 ): Promise<WorkerBundleManifestEntry[]> {
   const sourceRootRealPath = await fs.realpath(sourceRoot);
-  const distFiles = await collectPackageDistInventory(sourceRoot);
+  // Control UI assets are built lazily after the Gateway starts and never execute on workers.
+  // Excluding them keeps worker identity stable across that startup race.
+  const distFiles = (await collectPackageDistInventory(sourceRoot)).filter(
+    (relativePath) => !relativePath.startsWith(CONTROL_UI_DIST_PREFIX),
+  );
   if (distFiles.length === 0) {
     throw new Error(
       `OpenClaw worker bundle has no packaged dist files; build the running package at ${sourceRoot}`,

@@ -218,7 +218,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -242,7 +242,7 @@ jobs:
           use-actions-cache: "false"
 
       - name: Checkout candidate runtime
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -437,6 +437,7 @@ jobs:
       - name: Install candidate dependencies without runner credentials
         id: install_candidate
         shell: bash
+        working-directory: .candidate
         run: |
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
@@ -449,7 +450,7 @@ jobs:
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            pnpm --dir .candidate install \
+            pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
@@ -462,6 +463,7 @@ jobs:
       - name: Build candidate runtime without runner credentials
         id: build_candidate
         shell: bash
+        working-directory: .candidate
         run: |
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
@@ -472,9 +474,10 @@ jobs:
             LANG=C.UTF-8 \
             NODE_OPTIONS=--max-old-space-size=8192 \
             NPM_CONFIG_USERCONFIG=/dev/null \
+            OPENCLAW_BUILD_PRIVATE_QA=1 \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            pnpm --dir .candidate exec node scripts/build-all.mjs qaRuntime
+            pnpm exec node scripts/build-all.mjs qaRuntime
 
       - name: Move built candidate outside trusted workspace
         id: move_candidate
@@ -499,7 +502,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Restore trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -652,7 +655,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" && "$BUILD_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA verifier
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -752,7 +755,7 @@ jobs:
           echo "archive_path=$archive_path" >>"$GITHUB_OUTPUT"
 
       - name: Checkout independent candidate source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -821,7 +824,7 @@ jobs:
 
       - name: Attest exact candidate archive bytes
         id: attest
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: ${{ steps.verify_candidate.outputs.archive_path }}
 
@@ -877,7 +880,7 @@ jobs:
              "$ATTESTATION_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -1330,10 +1333,12 @@ jobs:
             OPENAI_API_KEY
             OPENAI_BASE_URL
             OPENCLAW_ALLOW_SLOW_REPLY_TESTS
+            OPENCLAW_BUILD_PRIVATE_QA
             OPENCLAW_BUNDLED_PLUGINS_DIR
             OPENCLAW_COMPATIBILITY_HOST_VERSION
             OPENCLAW_CONFIG_PATH
             OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI
             OPENCLAW_GATEWAY_TOKEN
             OPENCLAW_HOME
             OPENCLAW_LOG_LEVEL

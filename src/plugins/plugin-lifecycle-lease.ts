@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   OpenClawStateLeaseError,
   withOpenClawStateLease,
   type OpenClawStateLeaseContext,
 } from "../state/openclaw-state-lease.js";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 
 const PLUGIN_LIFECYCLE_LEASE_SCOPE = "core:plugin-lifecycle";
 const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
@@ -17,8 +19,10 @@ type ActivePluginLifecycleLease = {
   lease: OpenClawStateLeaseContext;
 };
 
-type PluginLifecycleLeaseOptions = {
-  env?: NodeJS.ProcessEnv;
+type PluginLifecycleLeaseOptions = Pick<
+  OpenClawStateDatabaseOptions,
+  "env" | "path" | "database"
+> & {
   signal?: AbortSignal;
   leaseMs?: number;
   waitMs?: number;
@@ -45,7 +49,9 @@ export async function withPluginLifecycleLease<T>(
   run: (lease: OpenClawStateLeaseContext) => Promise<T>,
 ): Promise<T> {
   const env = resolveLifecycleLeaseEnv(options.env);
-  const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
+  const databasePath = path.resolve(
+    options.database?.path ?? options.path ?? resolveOpenClawStateSqlitePath(env),
+  );
   const active = activePluginLifecycleLease.getStore();
   if (active) {
     if (active.databasePath !== databasePath) {
@@ -63,14 +69,27 @@ export async function withPluginLifecycleLease<T>(
     {
       scope: PLUGIN_LIFECYCLE_LEASE_SCOPE,
       key: PLUGIN_LIFECYCLE_LEASE_KEY,
-      database: { scope: "shared", options: { env } },
+      database: {
+        scope: "shared",
+        options: {
+          env,
+          ...(options.path ? { path: options.path } : {}),
+          ...(options.database ? { database: options.database } : {}),
+        },
+      },
       leaseMs: options.leaseMs ?? DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS,
       waitMs: options.waitMs ?? DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS,
       ...(options.signal ? { signal: options.signal } : {}),
       leaseLabel: "plugin lifecycle lease",
       operationLabel: "plugins.lifecycle.lease",
     },
-    async (lease) =>
-      await activePluginLifecycleLease.run({ databasePath, lease }, async () => await run(lease)),
+    async (lease) => {
+      // Another process may have committed while this process waited for ownership.
+      clearLoadInstalledPluginIndexInstallRecordsCache();
+      return await activePluginLifecycleLease.run(
+        { databasePath, lease },
+        async () => await run(lease),
+      );
+    },
   );
 }

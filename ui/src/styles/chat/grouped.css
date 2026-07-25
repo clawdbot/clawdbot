@@ -22,6 +22,10 @@
   justify-content: flex-start;
 }
 
+.chat-group.user.chat-group--peer {
+  flex-direction: row;
+}
+
 /* Freshly submitted composer text flows up into the transcript. Applied only
    to the locally pending bubble (see shouldAnimateUserTurnEntry); the bubble
    keeps a stable key through the history handoff so this never replays. */
@@ -58,6 +62,13 @@
   justify-content: end;
 }
 
+.chat-group.user.chat-group--with-footer:where(.chat-group--peer) {
+  --chat-group-avatar-column: 1;
+  --chat-group-content-column: 2;
+  grid-template-columns: 36px minmax(0, var(--chat-message-column-max));
+  justify-content: start;
+}
+
 .chat-group.chat-group--with-footer .chat-avatar {
   grid-column: var(--chat-group-avatar-column);
   grid-row: 1;
@@ -92,12 +103,20 @@
   align-items: flex-end;
 }
 
+.chat-group.user.chat-group--peer .chat-group-messages {
+  align-items: flex-start;
+}
+
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
 }
 
 .chat-group.user .chat-group-footer {
   justify-content: flex-end;
+}
+
+.chat-group.user.chat-group--peer .chat-group-footer {
+  justify-content: flex-start;
 }
 
 /* Footer at bottom of a message group (role + time). It stays in flow while
@@ -385,6 +404,30 @@
   white-space: nowrap;
 }
 
+.chat-notice {
+  margin: 14px auto;
+  padding: 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.chat-notice .chat-text {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.chat-notice :where(ul, ol, pre, blockquote) {
+  display: inline-block;
+  text-align: left;
+}
+
+.chat-notice :where(:not(pre) > code) {
+  color: inherit;
+}
+
 /* Avatar Styles */
 .chat-avatar {
   width: 36px;
@@ -583,6 +626,20 @@ img.chat-avatar {
 .chat-group.user .chat-duplicate-count {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: color-mix(in srgb, var(--foreground) 80%, var(--primary) 20%);
+}
+
+.chat-reply-attribution {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-reply-attribution__icon,
+.chat-reply-attribution__icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 @media (hover: none),
@@ -839,6 +896,11 @@ details.msg-meta:not([open]) .msg-meta__details {
   left: auto;
 }
 
+.chat-group.user.chat-group--peer .msg-meta__details {
+  right: auto;
+  left: 0;
+}
+
 .msg-meta__time,
 .msg-meta__tokens,
 .msg-meta__cache,
@@ -992,7 +1054,8 @@ details.msg-meta:not([open]) .msg-meta__details {
     --chat-message-column-max: 88%;
   }
 
-  .chat-group.chat-group--with-footer {
+  .chat-group.chat-group--with-footer,
+  .chat-group.user.chat-group--peer.chat-group--with-footer {
     --chat-group-avatar-column: 1;
     --chat-group-content-column: 1;
     grid-template-columns: minmax(0, var(--chat-message-column-max));

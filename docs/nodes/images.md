@@ -50,9 +50,13 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 ## Inbound Media To Commands
 
 - When inbound web messages include media, OpenClaw downloads it to a temp file and exposes templating variables:
-  - `{{MediaUrl}}` — pseudo-URL for the inbound media.
-  - `{{MediaPath}}` — local temp path written before running the command.
-- When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and `MediaPath`/`MediaUrl` are rewritten to a sandbox-relative path like `media/inbound/<filename>`.
+  - `{{AttachmentUrl}}` — original URL or provider reference for the current attachment.
+  - `{{AttachmentPath}}` — local temp path written before running the command.
+  - `{{AttachmentContentType}}` — MIME content type.
+  - `{{AttachmentDir}}` — directory containing the local path.
+  - `{{AttachmentIndex}}` — zero-based source fact index.
+- When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and the attachment path/reference is rewritten to a sandbox-relative path like `media/inbound/<filename>`.
+- `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` remain deprecated compatibility aliases during the plugin SDK migration window.
 - Media understanding (configured via `tools.media.*` or shared `tools.media.models`) runs before templating and can insert `[Image]`, `[Audio]`, and `[Video]` blocks into `Body`.
   - Audio sets `{{Transcript}}` and uses the transcript for command parsing so slash commands still work.
   - Video and image descriptions preserve any caption text for command parsing.

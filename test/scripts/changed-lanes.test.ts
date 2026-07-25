@@ -282,7 +282,7 @@ describe("scripts/changed-lanes", () => {
     commitAll(dir, "initial");
     const binDir = path.join(dir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
     const result = spawnSync(process.execPath, [path.join(repoRoot, "scripts/check-changed.mjs")], {
       cwd: dir,
@@ -312,7 +312,7 @@ describe("scripts/changed-lanes", () => {
     writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
     const binDir = path.join(dir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
     const result = spawnSync(
       process.execPath,
@@ -939,8 +939,8 @@ describe("scripts/changed-lanes", () => {
     expect(changedCheckRequiresRemote(result)).toBe(true);
 
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
-      "crabbox:run",
-      "--",
+      "scripts/crabbox-wrapper.mjs",
+      "run",
       "--provider",
       "blacksmith-testbox",
       "--blacksmith-org",
@@ -1092,7 +1092,7 @@ describe("scripts/changed-lanes", () => {
   it.each([
     {
       name: "routes core test-only changes to core test lanes only",
-      path: "packages/normalization-core/src/string-normalization.test.ts",
+      path: "packages/normalization-core/src/string-normalization.test-support.ts",
       expected: {
         lanes: { coreTests: true },
         includes: ["tsgo:core:test"],
@@ -1110,7 +1110,7 @@ describe("scripts/changed-lanes", () => {
     },
     {
       name: "routes extension test-only changes to extension test lanes only",
-      path: "extensions/discord/src/index.test.ts",
+      path: "extensions/discord/src/index.test-helpers.ts",
       expected: {
         lanes: { extensionTests: true },
         includes: ["tsgo:extensions:test"],

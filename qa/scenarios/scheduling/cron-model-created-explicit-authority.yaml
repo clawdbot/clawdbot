@@ -6,11 +6,11 @@ scenario:
   runtimePairLane: core
   coverage:
     primary:
-      - scheduling.cron
+      - automation.model-authored-cron-jobs
     secondary:
-      - agents.tool-use
-      - scheduling.persistence
-      - channels.qa-channel
+      - automation.agent-cron-tool
+      - automation.scheduler-persistence
+      - automation.agent-cron-tool-qa-channel
   gatewayConfigPatch:
     commands:
       ownerAllowFrom:

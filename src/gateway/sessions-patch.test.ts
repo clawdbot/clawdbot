@@ -1,6 +1,7 @@
 // Session patch tests cover model/provider edits, subagent patching, provider
 // aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
 import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -39,6 +40,7 @@ async function runPatch(params: {
   storeKey?: string;
   agentId?: string;
   loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
+  archivedBy?: SessionCreatedActor;
 }) {
   return applySessionsPatchToStore({
     cfg: params.cfg ?? EMPTY_CFG,
@@ -47,6 +49,7 @@ async function runPatch(params: {
     agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    archivedBy: params.archivedBy,
   });
 }
 
@@ -271,23 +274,49 @@ describe("gateway sessions patch", () => {
     });
   });
 
-  test("archives and restores sessions without retaining a pin", async () => {
+  test("attributes the archive transition and clears attribution on restore", async () => {
+    const archivedBy = { type: "human" as const, id: "profile-ada", label: "Ada" };
     const archived = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ pinnedAt: 10 }),
         patch: { key: MAIN_SESSION_KEY, archived: true },
+        archivedBy,
       }),
     );
     expect(archived.archivedAt).toEqual(expect.any(Number));
+    expect(archived.archivedBy).toEqual(archivedBy);
     expect(archived.pinnedAt).toBeUndefined();
+
+    const idempotent = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+        archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      }),
+    );
+    expect(idempotent.archivedAt).toBe(archived.archivedAt);
+    expect(idempotent.archivedBy).toEqual(archivedBy);
 
     const restored = expectPatchOk(
       await runPatch({
-        store: mainStoreEntry({ archivedAt: archived.archivedAt }),
+        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
         patch: { key: MAIN_SESSION_KEY, archived: false },
       }),
     );
     expect(restored.archivedAt).toBeUndefined();
+    expect(restored.archivedBy).toBeUndefined();
+  });
+
+  test("does not fabricate archive attribution without an actor", async () => {
+    const archived = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+      }),
+    );
+
+    expect(archived.archivedAt).toEqual(expect.any(Number));
+    expect(archived.archivedBy).toBeUndefined();
   });
 
   test("pins active sessions and rejects pinned archived sessions", async () => {

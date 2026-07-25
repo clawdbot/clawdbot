@@ -9,7 +9,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
-import { readMatrixIdbSnapshotJson, writeMatrixIdbSnapshotJson } from "../crypto-state-store.js";
 import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
 import {
   claimCurrentTokenStorageState,
@@ -370,38 +369,6 @@ describe("matrix client storage paths", () => {
     const syncStore = new SqliteBackedMatrixSyncStore(storagePaths.rootDir);
     expect(syncStore.hasSavedSync()).toBe(true);
     await expect(syncStore.getSavedSyncToken()).resolves.toBe("account-token");
-  });
-
-  it("does not overwrite existing SQLite IDB snapshot state with a stale legacy sidecar", async () => {
-    const stateDir = setupStateDir();
-    const storagePaths = resolveDefaultStoragePaths();
-    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
-    const currentSnapshot = JSON.stringify([
-      {
-        name: "current",
-        version: 1,
-        stores: [],
-      },
-    ]);
-    writeMatrixIdbSnapshotJson({
-      storageRootDir: storagePaths.rootDir,
-      snapshotJson: currentSnapshot,
-      databaseCount: 1,
-    });
-    fs.writeFileSync(
-      storagePaths.idbSnapshotPath,
-      JSON.stringify([{ name: "stale", version: 1, stores: [] }]),
-    );
-    const env = createMigrationEnv(stateDir);
-
-    await maybeMigrateLegacyStorage({
-      storagePaths,
-      env,
-    });
-
-    expect(readMatrixIdbSnapshotJson(storagePaths.rootDir)).toBe(currentSnapshot);
-    expect(fs.existsSync(storagePaths.idbSnapshotPath)).toBe(false);
-    expect(fs.existsSync(`${storagePaths.idbSnapshotPath}.migrated`)).toBe(true);
   });
 
   it("ignores unrecognized account-scoped sync cache files without a migration snapshot", async () => {

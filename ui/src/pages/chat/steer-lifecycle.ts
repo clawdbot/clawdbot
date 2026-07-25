@@ -22,7 +22,7 @@ import {
   isTerminalFailureChatSendAck,
   type ChatSendAck,
   type TerminalFailureChatSendAck,
-} from "./chat-send-contract.ts";
+} from "./chat-send-ack.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {

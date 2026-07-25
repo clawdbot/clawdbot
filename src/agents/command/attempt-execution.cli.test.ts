@@ -15,7 +15,7 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../config/sessions/sqlite-marker.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";

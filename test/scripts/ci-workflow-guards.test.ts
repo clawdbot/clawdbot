@@ -987,6 +987,8 @@ describe("ci workflow guards", () => {
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
+    expect(workflow.on.push.paths).toContain("apps/android/app/src/play/**");
+    expect(workflow.on.push.paths).toContain("apps/android/app/src/thirdParty/**");
     expect(workflow.on.push.paths).toContain("apps/android/wear/src/main/**");
     expect(workflow.on.push.paths).toContain("scripts/android-app-i18n.ts");
     expect(workflow.on.push.paths).toContain("scripts/apple-app-i18n.ts");
@@ -1016,6 +1018,7 @@ describe("ci workflow guards", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
       "apps/android/app/src/main/res/values*/assistant.xml",
       "apps/android/app/src/main/res/values*/strings.xml",
+      "apps/android/app/src/thirdParty/res/values*/accessibility_strings.xml",
       "apps/android/wear/src/main/res/values*/strings.xml",
       "apps/ios/Resources/Localizable.xcstrings",
       "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
@@ -1027,6 +1030,10 @@ describe("ci workflow guards", () => {
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/android-app-i18n.ts");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/apple-app-i18n.ts");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/.i18n/native-source.json");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/android/app/src/play");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain(
+      "apps/android/app/src/thirdParty",
+    );
     expect(nativePublishStep.with["auto-merge"]).toBe("true");
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
@@ -2160,7 +2167,25 @@ describe("ci workflow guards", () => {
       "Sticky dependency snapshot matches the install fingerprint and importer contents; skipping pnpm install",
     );
     expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
+    expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 15m");
     expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
+    const forceStickyWriterInstall =
+      'if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ] &&\n' +
+      '  [ "$sticky_snapshot_matches" != "true" ]; then';
+    expect(installStep.run).toContain(forceStickyWriterInstall);
+    const clearStickyModules =
+      'find "$GITHUB_WORKSPACE/node_modules" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +';
+    expect(installStep.run).toContain(clearStickyModules);
+    expect(installStep.run).toContain("install_args+=(--force)");
+    expect(installStep.run).toContain('sticky_writer_rebuild="true"');
+    expect(installStep.run).toContain('if [ "$sticky_writer_rebuild" = "true" ]; then');
+    expect(installStep.run).toContain("install_attempts=1");
+    expect(installStep.run.indexOf(forceStickyWriterInstall)).toBeLessThan(
+      installStep.run.indexOf(clearStickyModules),
+    );
+    expect(installStep.run.indexOf(clearStickyModules)).toBeLessThan(
+      installStep.run.indexOf("run_pnpm_install()"),
+    );
     expect(installStep.run).toContain("install_attempts=2");
     expect(installStep.run).toContain("install_attempts=3");
     expect(installStep.run).toContain(
@@ -5129,7 +5154,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ]);
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     expect(smokeDockerCacheStep.uses).toBe(
-      "useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba",
+      "useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0",
     );
     expect(smokeDockerCacheStep.if).toContain("matrix.docker_cache == true");
     expect(smokeDockerCacheStep.if).toContain("github.event_name != 'workflow_dispatch'");

@@ -95,14 +95,14 @@ See [Hooks](/automation/hooks).
 
 ### Heartbeat
 
-Heartbeat is a periodic main-session turn (default every 30 minutes). It batches multiple checks (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records and do not extend daily/idle session reset freshness. Use `HEARTBEAT.md` for a small checklist, or a `tasks:` block when you want due-only periodic checks inside heartbeat itself. Empty heartbeat files skip as `empty-heartbeat-file`; due-only task mode skips as `no-tasks-due`. Heartbeats defer while cron work is active or queued, and `heartbeat.skipWhenBusy` can also defer an agent while that same agent's session-keyed subagent or nested lanes are busy.
+Heartbeat is a periodic main-session turn (default every 30 minutes). It batches checklist-style monitoring (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records and do not extend daily/idle session reset freshness. Heartbeat scratch is small prompt context; schedule recurring work as cron jobs. Empty heartbeat scratch skips as `empty-heartbeat-file`. Heartbeats defer while cron work is active or queued, and `heartbeat.skipWhenBusy` can also defer an agent while that same agent's session-keyed subagent or nested lanes are busy.
 
 See [Heartbeat](/gateway/heartbeat).
 
 ## How they work together
 
 - **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders. All cron executions create task records.
-- **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
+- **Heartbeat** handles one batched monitoring checklist every 30 minutes; cron owns checks that need independent cadences.
 - **Hooks** react to specific events (session resets, compaction, message flow) with custom scripts. Plugin hooks cover tool calls.
 - **Standing orders** give the agent persistent context and authority boundaries.
 - **Task Flow** coordinates multi-step flows above individual tasks.

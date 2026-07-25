@@ -45,9 +45,8 @@ function createGatewayHarness(
   let snapshot: ApplicationGatewaySnapshot = {
     assistantAgentId: "main",
     client: initialClient,
-    connected: initialConnected,
+    phase: initialConnected ? "connected" : "stopped",
     offlineStable: false,
-    reconnecting: false,
     hello: null,
     lastError: null,
     lastErrorCode: null,
@@ -133,7 +132,7 @@ describe("device-auth upgrade migration", () => {
     const overlays = createApplicationOverlays(harness.gateway);
     harness.update({
       client: client(request),
-      connected: true,
+      phase: "connected",
       hello: {
         server: { version: "1.0.0" },
         deviceAuthMigration: { pending: true },
@@ -171,7 +170,7 @@ describe("device-auth upgrade migration", () => {
     const overlays = createApplicationOverlays(harness.gateway);
     harness.update({
       client: client(request),
-      connected: true,
+      phase: "connected",
       hello: {
         server: { version: "1.0.0" },
         deviceAuthMigration: { pending: true },
@@ -211,7 +210,7 @@ describe("device-auth upgrade migration", () => {
     const overlays = createApplicationOverlays(harness.gateway);
     harness.update({
       client: client(request),
-      connected: true,
+      phase: "connected",
       hello: {
         server: { version: "1.0.0" },
         deviceAuthMigration: { pending: true },
@@ -247,7 +246,7 @@ describe("device-auth upgrade migration", () => {
     const overlays = createApplicationOverlays(harness.gateway);
     harness.update({
       client: client(firstRequest),
-      connected: true,
+      phase: "connected",
       hello: {
         server: { version: "1.0.0" },
         deviceAuthMigration: { pending: true },
@@ -279,7 +278,7 @@ describe("device-auth upgrade migration", () => {
     const overlays = createApplicationOverlays(harness.gateway);
     harness.update({
       client: client(request),
-      connected: true,
+      phase: "connected",
       hello: {
         server: { version: "1.0.0" },
         deviceAuthMigration: { pending: true },
@@ -318,14 +317,14 @@ describe("Control UI refresh nudge", () => {
       server: { version: "2.0.0" },
     } as ApplicationGatewaySnapshot["hello"];
 
-    harness.update({ client: gatewayClient, connected: true, hello: mismatchedHello });
+    harness.update({ client: gatewayClient, phase: "connected", hello: mismatchedHello });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
     harness.update({ sessionKey: "agent:main:same-connection" });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
-    harness.update({ connected: false, hello: null });
-    harness.update({ connected: true, hello: mismatchedHello });
+    harness.update({ phase: "stopped", hello: null });
+    harness.update({ phase: "connected", hello: mismatchedHello });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
 
     harness.update({ sessionKey: "agent:main:after-reconnect" });
@@ -345,17 +344,17 @@ describe("Control UI refresh nudge", () => {
       server: { version: "2.0.0" },
     } as ApplicationGatewaySnapshot["hello"];
 
-    harness.update({ client: gatewayClient, connected: true, hello: matchingHello });
-    harness.update({ connected: false, hello: null });
-    harness.update({ connected: true, hello: matchingHello });
+    harness.update({ client: gatewayClient, phase: "connected", hello: matchingHello });
+    harness.update({ phase: "stopped", hello: null });
+    harness.update({ phase: "connected", hello: matchingHello });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
-    harness.update({ connected: false, hello: null });
-    harness.update({ connected: true, hello: mismatchedHello });
+    harness.update({ phase: "stopped", hello: null });
+    harness.update({ phase: "connected", hello: mismatchedHello });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
 
-    harness.update({ client: null, connected: false, hello: null });
-    harness.update({ client: gatewayClient, connected: true, hello: mismatchedHello });
+    harness.update({ client: null, phase: "stopped", hello: null });
+    harness.update({ client: gatewayClient, phase: "connected", hello: mismatchedHello });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
     overlays.dispose();
@@ -396,20 +395,20 @@ describe("application approval overlays", () => {
     const harness = createGatewayHarness(null, false);
     const overlays = createApplicationOverlays(harness.gateway);
 
-    harness.update({ client: gatewayClient, connected: false });
+    harness.update({ client: gatewayClient, phase: "stopped" });
     await flushMicrotasks();
     expect(request).not.toHaveBeenCalled();
 
-    harness.update({ connected: true });
+    harness.update({ phase: "connected" });
     await flushMicrotasks();
     expect(execListRequests).toBe(1);
     expect(request).toHaveBeenCalledWith("exec.approval.list", {});
     expect(request).toHaveBeenCalledWith("plugin.approval.list", {});
     expect(request).toHaveBeenCalledWith("openclaw.approval.list", {});
 
-    harness.update({ connected: false });
+    harness.update({ phase: "stopped" });
     expect(overlays.snapshot.approvalQueue).toEqual([]);
-    harness.update({ connected: true });
+    harness.update({ phase: "connected" });
     await flushMicrotasks();
     expect(execListRequests).toBe(2);
 
@@ -542,13 +541,13 @@ describe("application approval overlays", () => {
 
     harness.emitApproval("approval-old", 1_000);
     const oldDecision = overlays.decideApproval("allow-once");
-    harness.update({ client: null, connected: false });
+    harness.update({ client: null, phase: "stopped" });
 
     const newResolve = deferred();
     const newClient = client((method) =>
       method.endsWith(".list") ? Promise.resolve([]) : newResolve.promise,
     );
-    harness.update({ client: newClient, connected: true });
+    harness.update({ client: newClient, phase: "connected" });
     await Promise.resolve();
     harness.emitApproval("approval-new", 2_000);
     const newDecision = overlays.decideApproval("deny");
@@ -577,8 +576,8 @@ describe("application approval overlays", () => {
 
     harness.emitApproval("approval-old", 1_000);
     const oldDecision = overlays.decideApproval("allow-once");
-    harness.update({ connected: false });
-    harness.update({ connected: true });
+    harness.update({ phase: "stopped" });
+    harness.update({ phase: "connected" });
     await flushMicrotasks();
     harness.emitApproval("approval-new", 2_000);
 
@@ -739,8 +738,8 @@ describe("application update overlays", () => {
 
     try {
       await overlays.runUpdate();
-      harness.update({ connected: false });
-      harness.update({ connected: true });
+      harness.update({ phase: "stopped" });
+      harness.update({ phase: "connected" });
       await flushMicrotasks();
       expect(statusRequests).toBe(1);
 

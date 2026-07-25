@@ -45,6 +45,9 @@ describe("widget-card", () => {
       app,
     );
     expect(app.querySelector("mcp-app-view")).not.toBeNull();
+    expect(app.querySelector(".chat-tool-card__preview")?.getAttribute("data-content-kind")).toBe(
+      "mcp-app",
+    );
     expect(app.querySelector("iframe")).toBeNull();
     expect(app.querySelector('button[aria-label="Widget actions"]')).toBeNull();
 

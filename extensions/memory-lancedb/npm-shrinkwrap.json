@@ -10,8 +10,8 @@
       "dependencies": {
         "@lancedb/lancedb": "0.30.0",
         "apache-arrow": "18.1.0",
-        "openai": "6.45.0",
-        "typebox": "1.3.3"
+        "openai": "6.48.0",
+        "typebox": "1.3.6"
       }
     },
     "node_modules/@lancedb/lancedb": {
@@ -372,9 +372,9 @@
       "license": "MIT"
     },
     "node_modules/openai": {
-      "version": "6.45.0",
-      "resolved": "https://registry.npmjs.org/openai/-/openai-6.45.0.tgz",
-      "integrity": "sha512-5DQVNErssk0afNpTTHUm/qZPU4iKR9OYdNid8Ib4puq4gHNNvGWZht2zY4h9a8JMF949Ik6m8gQutllVPbjdnw==",
+      "version": "6.48.0",
+      "resolved": "https://registry.npmjs.org/openai/-/openai-6.48.0.tgz",
+      "integrity": "sha512-KhVp+FyV50QrXNextvL9hIU5l6ox5HYuKQjGVk7lIqprgJol90+dQXWONV6S1lRWsKA1bXjrow8RsUT14M1hNA==",
       "license": "Apache-2.0",
       "peerDependencies": {
         "@aws-sdk/credential-provider-node": ">=3.972.0 <4",
@@ -448,9 +448,9 @@
       "license": "0BSD"
     },
     "node_modules/typebox": {
-      "version": "1.3.3",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.3.tgz",
-      "integrity": "sha512-URXGUE31PJDQC+PtRMJeLdF4kmmOdFoVPikPCtV2oOIhUpNpppEdIz7W8bH8cFYPYHdDpaRvqwdegMTmHliudg==",
+      "version": "1.3.6",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.6.tgz",
+      "integrity": "sha512-Sc8RA0NCMEFmApHNU9ZMzqcpQj46She44J8ffpLM/bdhLNUZKq7DJumcLcsFx1gRmDfQPgCgOmFFJ7rcnfWNyA==",
       "license": "MIT"
     },
     "node_modules/typical": {

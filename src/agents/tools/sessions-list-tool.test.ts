@@ -98,6 +98,22 @@ describe("sessions-list-tool", () => {
     expect(getSessionsListDetails(result).sessions?.[1]?.stateVersion).toBeUndefined();
   });
 
+  it("never exposes incognito rows to cross-session tools", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "(multiple)",
+      sessions: [
+        { key: "agent:main:dashboard:visible", kind: "other" },
+        { key: "agent:main:dashboard:incognito-private", kind: "other", incognito: true },
+      ],
+    });
+
+    const result = await createSessionsListTool({ config: {} as never }).execute("blind", {});
+
+    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
+      "agent:main:dashboard:visible",
+    ]);
+  });
+
   it("declares a complete focused row contract", async () => {
     mocks.gatewayCall.mockResolvedValue({
       path: "/tmp/sessions.json",

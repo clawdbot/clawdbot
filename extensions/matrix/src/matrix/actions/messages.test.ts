@@ -19,6 +19,7 @@ function installMatrixActionTestRuntime(): void {
     channel: {
       text: {
         resolveMarkdownTableMode: () => "code",
+        resolveTextChunkLimit: () => 4_000,
         convertMarkdownTables: (text: string) => text,
       },
     },

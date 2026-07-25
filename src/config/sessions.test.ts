@@ -1,20 +1,17 @@
-// Covers session config persistence and compatibility behavior.
-import fsSync from "node:fs";
+// Covers session config path and compatibility behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildGroupDisplayName,
   deriveSessionKey,
-  loadSessionStore,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
-  updateSessionStore,
 } from "./sessions.js";
 
 describe("sessions", () => {
@@ -37,16 +34,6 @@ describe("sessions", () => {
 
   const withStateDir = <T>(stateDir: string, fn: () => T): T =>
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, fn);
-
-  async function createSessionStoreFixture(params: {
-    prefix: string;
-    entries: Record<string, Record<string, unknown>>;
-  }): Promise<{ storePath: string }> {
-    const dir = await createCaseDir(params.prefix);
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, JSON.stringify(params.entries), "utf-8");
-    return { storePath };
-  }
 
   function expectedBot1FallbackSessionPath() {
     return path.join(
@@ -206,128 +193,6 @@ describe("sessions", () => {
     });
   }
 
-  it("updateSessionStore preserves concurrent additions", async () => {
-    const dir = await createCaseDir("updateSessionStore");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
-
-    await Promise.all([
-      updateSessionStore(storePath, (store) => {
-        store["agent:main:one"] = { sessionId: "sess-1", updatedAt: Date.now() };
-      }),
-      updateSessionStore(storePath, (store) => {
-        store["agent:main:two"] = { sessionId: "sess-2", updatedAt: Date.now() };
-      }),
-    ]);
-
-    const store = loadSessionStore(storePath);
-    expect(store["agent:main:one"]?.sessionId).toBe("sess-1");
-    expect(store["agent:main:two"]?.sessionId).toBe("sess-2");
-  });
-
-  it("recovers from array-backed session stores", async () => {
-    const dir = await createCaseDir("updateSessionStore");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "[]", "utf-8");
-
-    await updateSessionStore(storePath, (store) => {
-      store["agent:main:main"] = { sessionId: "sess-1", updatedAt: Date.now() };
-    });
-
-    const store = loadSessionStore(storePath);
-    expect(store["agent:main:main"]?.sessionId).toBe("sess-1");
-
-    const raw = await fs.readFile(storePath, "utf-8");
-    expect(raw.trim().startsWith("{")).toBe(true);
-  });
-
-  it("normalizes last route fields on write", async () => {
-    const dir = await createCaseDir("updateSessionStore");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
-
-    await updateSessionStore(storePath, (store) => {
-      store["agent:main:main"] = {
-        sessionId: "sess-normalized",
-        updatedAt: Date.now(),
-        lastChannel: " Demo Chat ",
-        lastTo: " +1555 ",
-        lastAccountId: " acct-1 ",
-      };
-    });
-
-    const store = loadSessionStore(storePath);
-    expect(store["agent:main:main"]?.lastChannel).toBe("demo chat");
-    expect(store["agent:main:main"]?.lastTo).toBe("+1555");
-    expect(store["agent:main:main"]?.lastAccountId).toBe("acct-1");
-    expect(store["agent:main:main"]?.deliveryContext).toEqual({
-      channel: "demo chat",
-      to: "+1555",
-      accountId: "acct-1",
-    });
-  });
-
-  it("updateSessionStore keeps deletions when concurrent writes happen", async () => {
-    const dir = await createCaseDir("updateSessionStore");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:old": { sessionId: "sess-old", updatedAt: Date.now() },
-          "agent:main:keep": { sessionId: "sess-keep", updatedAt: Date.now() },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-
-    await Promise.all([
-      updateSessionStore(storePath, (store) => {
-        delete store["agent:main:old"];
-      }),
-      updateSessionStore(storePath, (store) => {
-        store["agent:main:new"] = { sessionId: "sess-new", updatedAt: Date.now() };
-      }),
-    ]);
-
-    const store = loadSessionStore(storePath);
-    expect(store["agent:main:old"]).toBeUndefined();
-    expect(store["agent:main:keep"]?.sessionId).toBe("sess-keep");
-    expect(store["agent:main:new"]?.sessionId).toBe("sess-new");
-  });
-
-  it("loadSessionStore auto-migrates legacy provider keys to channel keys", async () => {
-    const mainSessionKey = "agent:main:main";
-    const dir = await createCaseDir("loadSessionStore");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [mainSessionKey]: {
-            sessionId: "sess-legacy",
-            updatedAt: 123,
-            provider: "slack",
-            lastProvider: "telegram",
-            lastTo: "user:U123",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-
-    const store = loadSessionStore(storePath) as unknown as Record<string, Record<string, unknown>>;
-    const entry = store[mainSessionKey] ?? {};
-    expect(entry.channel).toBe("slack");
-    expect(entry.provider).toBeUndefined();
-    expect(entry.lastChannel).toBe("telegram");
-    expect(entry.lastProvider).toBeUndefined();
-  });
-
   it("derives session transcripts dir from OPENCLAW_STATE_DIR", () => {
     const dir = resolveSessionTranscriptsDir(
       { OPENCLAW_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
@@ -455,89 +320,5 @@ describe("sessions", () => {
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(expectedPath),
     );
-  });
-
-  it("updateSessionStore uses the writer-owned mutable cache without disk read", async () => {
-    const mainSessionKey = "agent:main:main";
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "updateSessionStore-mutable-cache",
-      entries: {
-        [mainSessionKey]: {
-          sessionId: "sess-1",
-          updatedAt: 123,
-          thinkingLevel: "low",
-        },
-      },
-    });
-
-    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
-
-    const readSpy = vi.spyOn(fsSync, "readFileSync");
-    try {
-      await updateSessionStore(
-        storePath,
-        (store) => {
-          const existing = store[mainSessionKey];
-          if (!existing) {
-            throw new Error("missing session entry");
-          }
-          store[mainSessionKey] = {
-            ...existing,
-            thinkingLevel: "high",
-          };
-        },
-        { skipMaintenance: true },
-      );
-
-      expect(readSpy).not.toHaveBeenCalled();
-    } finally {
-      readSpy.mockRestore();
-    }
-
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
-  });
-
-  it("updateSessionStore drops a borrowed cache entry when a mutator throws", async () => {
-    const mainSessionKey = "agent:main:main";
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "updateSessionStore-mutable-cache-throw",
-      entries: {
-        [mainSessionKey]: {
-          sessionId: "sess-1",
-          updatedAt: 123,
-          thinkingLevel: "low",
-        },
-      },
-    });
-
-    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
-
-    await expect(
-      updateSessionStore(
-        storePath,
-        (store) => {
-          const existing = store[mainSessionKey];
-          if (!existing) {
-            throw new Error("missing session entry");
-          }
-          store[mainSessionKey] = {
-            ...existing,
-            thinkingLevel: "mutated-before-throw",
-          };
-          throw new Error("boom");
-        },
-        { skipMaintenance: true },
-      ),
-    ).rejects.toThrow("boom");
-
-    const readSpy = vi.spyOn(fsSync, "readFileSync");
-    try {
-      const store = loadSessionStore(storePath);
-      expect(readSpy).toHaveBeenCalled();
-      expect(store[mainSessionKey]?.thinkingLevel).toBe("low");
-    } finally {
-      readSpy.mockRestore();
-    }
   });
 });

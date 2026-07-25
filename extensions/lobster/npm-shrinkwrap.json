@@ -9,7 +9,7 @@
       "version": "2026.7.2",
       "dependencies": {
         "@clawdbot/lobster": "2026.6.11",
-        "typebox": "1.3.3"
+        "typebox": "1.3.6"
       }
     },
     "node_modules/@clawdbot/lobster": {
@@ -84,9 +84,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.3.3",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.3.tgz",
-      "integrity": "sha512-URXGUE31PJDQC+PtRMJeLdF4kmmOdFoVPikPCtV2oOIhUpNpppEdIz7W8bH8cFYPYHdDpaRvqwdegMTmHliudg==",
+      "version": "1.3.6",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.6.tgz",
+      "integrity": "sha512-Sc8RA0NCMEFmApHNU9ZMzqcpQj46She44J8ffpLM/bdhLNUZKq7DJumcLcsFx1gRmDfQPgCgOmFFJ7rcnfWNyA==",
       "license": "MIT"
     },
     "node_modules/yaml": {

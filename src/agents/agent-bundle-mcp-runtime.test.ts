@@ -65,6 +65,7 @@ async function writeListToolsMcpServer(params: {
   notifyListChangedAfterFirstList?: boolean;
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
+  listToolsJsonRpcErrorMessage?: string;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   resourceListJsonRpcError?: boolean;
@@ -86,6 +87,7 @@ const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized =
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
+const listToolsJsonRpcErrorMessage = ${JSON.stringify(params.listToolsJsonRpcErrorMessage)};
 const tools = ${JSON.stringify(
       params.tools ?? [
         {
@@ -160,6 +162,15 @@ function handle(message) {
         jsonrpc: "2.0",
         id: message.id,
         error: { code: -32601, message: "Method not found" },
+      });
+      return;
+    }
+    if (listToolsJsonRpcErrorMessage) {
+      log("reject tools/list with configured error");
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32000, message: listToolsJsonRpcErrorMessage },
       });
       return;
     }
@@ -984,6 +995,46 @@ describe("session MCP runtime", () => {
       expect(catalog.diagnostics?.[0]?.serverName).toBe("fuzzplugin");
       expect(catalog.diagnostics?.[0]?.message).toContain("Invalid input: expected");
       expect(catalog.diagnostics?.[0]?.message).toContain("object");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts credentials from MCP catalog diagnostics", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-diagnostic-redaction-"));
+    const serverPath = path.join(tempDir, "diagnostic-redaction.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const secret = "test-diagnostic-token";
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      listToolsJsonRpcErrorMessage: `Authorization: Bearer ${secret}`,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-diagnostic-redaction",
+      sessionKey: "agent:test:session-diagnostic-redaction",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            diagnostic: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      const diagnostic = catalog.diagnostics?.[0];
+      expect(diagnostic?.serverName).toBe("diagnostic");
+      expect(diagnostic?.message).toContain("Authorization: Bearer ");
+      expect(diagnostic?.message).toContain("…");
+      expect(diagnostic?.message).not.toContain(secret);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

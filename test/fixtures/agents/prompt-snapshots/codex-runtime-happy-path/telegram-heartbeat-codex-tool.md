@@ -133,7 +133,7 @@
   "collaborationMode": {
     "mode": "default",
     "settings": {
-      "developer_instructions": "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.\n\nWhen you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.\n\n### Heartbeats\n\nHeartbeat = useful proactive progress, not chatter. Wake, orient, read HEARTBEAT.md, act.\nAssigned/ongoing work: pursue spirit with judgment. Quiet check counts only if real blocker/urgent interruption.\nNo rote loops; orientation != accomplishment. Prefer action/silent progress.\nNever repetitive \"same/no change/still\" updates.\nInterrupt only for meaningful development/result/blocker/decision/time risk. Unchanged: work, change approach, dig deeper, or silence.\n\n## OpenClaw Agent Soul\n\nOpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.\n\n### /tmp/openclaw-happy-path/workspace/IDENTITY.md\n\n<IDENTITY.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/USER.md\n\n<USER.md contents will be here>\n\n## OpenClaw Heartbeat Workspace\n\nHEARTBEAT.md exists in the active agent workspace. Read it before proceeding with this heartbeat, then decide what action is appropriate.\n\n- /tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
+      "developer_instructions": "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.\n\nWhen you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.\n\n### Heartbeats\n\nHeartbeat = useful proactive progress, not chatter. Wake, orient, use the provided monitor scratch, act.\nAssigned/ongoing work: pursue spirit with judgment. Quiet check counts only if real blocker/urgent interruption.\nNo rote loops; orientation != accomplishment. Prefer action/silent progress.\nNever repetitive \"same/no change/still\" updates.\nInterrupt only for meaningful development/result/blocker/decision/time risk. Unchanged: work, change approach, dig deeper, or silence.\n\n## OpenClaw Agent Soul\n\nOpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.\n\n### /tmp/openclaw-happy-path/workspace/IDENTITY.md\n\n<IDENTITY.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/USER.md\n\n<USER.md contents will be here>",
       "model": "gpt-5.5",
       "reasoning_effort": "medium"
     }
@@ -201,8 +201,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "codexCollaborationModeDeveloperInstructions": {
-    "chars": 1715,
-    "roughTokens": 429
+    "chars": 1507,
+    "roughTokens": 377
   },
   "codexModelInstructions": {
     "chars": 21335,
@@ -217,24 +217,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 60186,
-    "roughTokens": 15047
+    "chars": 60458,
+    "roughTokens": 15115
   },
   "openClawDeveloperInstructions": {
     "chars": 2469,
     "roughTokens": 618
   },
   "totalTextOnly": {
-    "chars": 27105,
-    "roughTokens": 6777
+    "chars": 27014,
+    "roughTokens": 6754
   },
   "totalWithDynamicToolsJson": {
-    "chars": 87293,
-    "roughTokens": 21824
+    "chars": 87474,
+    "roughTokens": 21869
   },
   "userInputText": {
-    "chars": 1271,
-    "roughTokens": 318
+    "chars": 1388,
+    "roughTokens": 347
   }
 }
 ```
@@ -460,7 +460,7 @@ When you are ready to end the heartbeat, prefer the structured `heartbeat_respon
 
 ### Heartbeats
 
-Heartbeat = useful proactive progress, not chatter. Wake, orient, read HEARTBEAT.md, act.
+Heartbeat = useful proactive progress, not chatter. Wake, orient, use the provided monitor scratch, act.
 Assigned/ongoing work: pursue spirit with judgment. Quiet check counts only if real blocker/urgent interruption.
 No rote loops; orientation != accomplishment. Prefer action/silent progress.
 Never repetitive "same/no change/still" updates.
@@ -481,12 +481,6 @@ OpenClaw loaded these workspace instruction files from the active agent workspac
 ### /tmp/openclaw-happy-path/workspace/USER.md
 
 <USER.md contents will be here>
-
-## OpenClaw Heartbeat Workspace
-
-HEARTBEAT.md exists in the active agent workspace. Read it before proceeding with this heartbeat, then decide what action is appropriate.
-
-- /tmp/openclaw-happy-path/workspace/HEARTBEAT.md
 ```
 
 ### User: Turn Input Text
@@ -521,7 +515,7 @@ Conversation info (untrusted metadata):
 }
 ```
 
-Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
+Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
 ````
 
 ### Tools: Dynamic Tool Catalog
@@ -685,7 +679,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   },
   {
     "deferLoading": true,
-    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
+    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -707,6 +701,10 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "reason": {
+          "type": "string"
+        },
+        "scratch": {
+          "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
           "type": "string"
         },
         "summary": {

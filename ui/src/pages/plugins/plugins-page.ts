@@ -195,7 +195,7 @@ class PluginsPage extends OpenClawLightDomElement {
   };
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, sourceChanged: boolean) {
-    const connectionChanged = snapshot.connected !== this.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
     const clientChanged = snapshot.client !== this.client;
     const nextIconAuthCandidates = resolveControlUiAuthCandidates({
       hello: snapshot.hello,
@@ -210,13 +210,13 @@ class PluginsPage extends OpenClawLightDomElement {
     this.iconAuthCandidates = nextIconAuthCandidates;
     const shouldRefreshAfterChange =
       (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       this.routeDataConsumed;
     if (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) {
       this.invalidateRequests();
       this.resetPluginIcons();
       this.client = snapshot.client;
-      this.connected = snapshot.connected;
+      this.connected = snapshot.phase === "connected";
       this.loading = false;
       this.searchLoading = false;
       this.busy = {};
@@ -239,12 +239,12 @@ class PluginsPage extends OpenClawLightDomElement {
     } else {
       this.ensureInitialData();
     }
-    if (snapshot.connected) {
+    if (snapshot.phase === "connected") {
       void this.context?.runtimeConfig.ensureLoaded().then(() => this.syncMcpServers());
     }
     if (
       (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       this.activeTab === "discover"
     ) {
       this.scheduleSearch();
@@ -271,7 +271,7 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     this.loading = false;
     this.replaceResult(data.result);
     this.error = data.error;

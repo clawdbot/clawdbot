@@ -1178,8 +1178,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
     );
+    expect(workflow).toContain('fallback_version="$(npm view openclaw@latest version)"');
+    expect(workflow).toContain('echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"');
     expect(workflow).toContain(
-      "published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}",
+      "published_upgrade_survivor_baseline: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline }}",
     );
     expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}",
@@ -1806,10 +1808,11 @@ describe("package artifact reuse", () => {
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-smoke");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS=300000");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-opus");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku");
     expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-anthropic");
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-8");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-5");
     expect(workflow).toContain("anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5");
     expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?advisory: true/u,
@@ -2505,19 +2508,24 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("rerun_group:");
     expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain("repo_live_suite_filter:");
+    expect(workflow).toContain('repo_filter_tokens+=("$token")');
+    expect(workflow).toContain(
+      'repo_live_suite_filter="$(IFS=,; printf \'%s\' "${repo_filter_tokens[*]}")"',
+    );
     expect(workflow).toContain("cross_os_suite_filter:");
     expect(workflow).toContain("advisory: false");
     expect(workflow).toContain(
       "suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}",
     );
     expect(workflow).toContain(
-      "live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}",
+      "live_suite_filter: ${{ needs.resolve_target.outputs.repo_live_suite_filter }}",
     );
     expect(workflow).toContain(
-      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
+      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.repo_live_suite_filter == '')",
     );
     expect(workflow).toContain(
-      "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.live_suite_filter == ''",
+      "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.repo_live_suite_filter == ''",
     );
     expect(workflow).toContain(
       'if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then\n            run_release_soak=true',
@@ -3668,6 +3676,7 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("full_release_validation_run_id");
     expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
+    expect(maintainerSkill).toContain("full_release_validation_run_id=<saved-run-id>");
     expect(maintainerSkill).toContain("full_release_validation_run_attempt=<saved-attempt>");
     expect(npmWorkflow).toContain(
       "Workflow-dispatched real publish requires release_publish_run_id",
@@ -3900,7 +3909,7 @@ describe("package artifact reuse", () => {
     expect(androidWorkflow).toContain('--artifact", "third-party');
     expect(androidWorkflow).toContain("OpenClaw-Android.apk");
     expect(androidWorkflow).toContain("OpenClaw-Android-SHA256SUMS.txt");
-    expect(androidWorkflow).toContain("actions/attest@a1948c3f048ba23858d222213b7c278aabede763");
+    expect(androidWorkflow).toContain("actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6");
     expect(androidWorkflow).toContain("--signer-workflow");
     expect(androidWorkflow).toContain('--source-ref "refs/tags/${RELEASE_TAG}"');
     expect(androidWorkflow).toContain("--deny-self-hosted-runners");

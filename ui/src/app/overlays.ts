@@ -135,7 +135,7 @@ export function createApplicationOverlays(
   } | null = null;
   const devicePairSetupState = createDevicePairSetupState({
     client: gateway.snapshot.client,
-    connected: gateway.snapshot.connected,
+    connected: gateway.snapshot.phase === "connected",
   });
   const promptState: ExecApprovalPromptState = {
     client: activeClient,
@@ -174,7 +174,7 @@ export function createApplicationOverlays(
     !disposed &&
     activeClient === client &&
     gateway.snapshot.client === client &&
-    gateway.snapshot.connected;
+    gateway.snapshot.phase === "connected";
   const isCurrentDeviceAuthMigration = (client: NonNullable<typeof activeClient>, epoch: number) =>
     epoch === connectedEpoch &&
     isCurrentClient(client) &&
@@ -192,7 +192,7 @@ export function createApplicationOverlays(
     const client = gateway.snapshot.client;
     if (
       !client ||
-      !gateway.snapshot.connected ||
+      gateway.snapshot.phase !== "connected" ||
       disposed ||
       !devicePairSetupState.devicePairSetupOpen
     ) {
@@ -209,7 +209,7 @@ export function createApplicationOverlays(
       disposed ||
       generation !== devicePairPendingCountGeneration ||
       gateway.snapshot.client !== client ||
-      !gateway.snapshot.connected ||
+      gateway.snapshot.phase !== "connected" ||
       !devicePairSetupState.devicePairSetupOpen
     ) {
       return;
@@ -282,7 +282,7 @@ export function createApplicationOverlays(
       !disposed &&
       activeClient === client &&
       gateway.snapshot.client === client &&
-      gateway.snapshot.connected;
+      gateway.snapshot.phase === "connected";
     const deadline =
       Date.now() +
       (pendingHandoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS);
@@ -353,25 +353,26 @@ export function createApplicationOverlays(
 
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
     const previousClient = activeClient;
-    const nextConnectedSource = next.connected ? next.client : null;
+    const connected = next.phase === "connected";
+    const nextConnectedSource = connected ? next.client : null;
     const connectedSourceChanged = connectedSource !== nextConnectedSource;
     activeClient = next.client;
     connectedSource = nextConnectedSource;
     promptState.client = next.client;
     devicePairSetupState.client = next.client;
-    devicePairSetupState.connected = next.connected;
+    devicePairSetupState.connected = connected;
     if (connectedSourceChanged) {
       updateRunGeneration += 1;
       cancelUpdateVerification();
     }
-    if (previousClient !== next.client || !next.connected) {
+    if (previousClient !== next.client || !connected) {
       approvalDecision = null;
       devicePairPendingCountGeneration += 1;
       deviceAuthMigration.reset();
       closeDevicePairSetupState(devicePairSetupState);
       devicePairSetupState.pendingCount = 0;
     }
-    if (!next.connected || !next.client) {
+    if (!connected || !next.client) {
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
       promptState.execApprovalErrors.clear();
@@ -452,7 +453,7 @@ export function createApplicationOverlays(
     },
     async runUpdate() {
       const client = gateway.snapshot.client;
-      if (!client || !gateway.snapshot.connected || disposed || snapshot.updateRunning) {
+      if (!client || gateway.snapshot.phase !== "connected" || disposed || snapshot.updateRunning) {
         return;
       }
       const generation = ++updateRunGeneration;

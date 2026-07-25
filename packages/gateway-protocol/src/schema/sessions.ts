@@ -188,6 +188,8 @@ export const SessionsFilesListParamsSchema = closedObject({
 export const SessionsFilesListResultSchema = closedObject({
   sessionKey: NonEmptyString,
   root: Type.Optional(NonEmptyString),
+  /** Whether the session workspace directory is inside a git checkout; absent when the workspace root is unknown or the gateway predates the field. */
+  gitCheckout: Type.Optional(Type.Boolean()),
   files: Type.Array(SessionFileEntrySchema),
   browser: Type.Optional(SessionFileBrowserResultSchema),
 });
@@ -392,6 +394,8 @@ export const SessionsCreateResultSchema = Type.Object(
     sessionId: Type.Optional(NonEmptyString),
     entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     runStarted: Type.Optional(Type.Boolean()),
+    runId: Type.Optional(NonEmptyString),
+    messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
     runError: Type.Optional(ErrorShapeSchema),
     worktree: Type.Optional(SessionWorktreeInfoSchema),
   },
@@ -428,6 +432,8 @@ export const SessionsAbortParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  /** Also discard followup and lane queues for a key-only non-global session abort. */
+  clearQueued: Type.Optional(Type.Boolean()),
 });
 
 /** Mutable per-session preferences and routing metadata. */

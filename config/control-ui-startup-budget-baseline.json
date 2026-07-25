@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 323342,
-  "reason": "repair red main: CI-measured startup JS after post-#112880 UI landings (#112859 #112866 #112853 #111861); Linux CI builds measure ~800B larger than macOS — baseline follows CI truth (max of 4 QA profiles, run 29980596056)",
+  "startupJsGzipBytes": 318587,
+  "reason": "move presentation preferences to browser-local state",
   "updatedAt": "2026-07-23"
 }

@@ -11,7 +11,7 @@
     "./test-api.js": "./test-api.ts"
   },
   "dependencies": {
-    "typebox": "1.3.3",
+    "typebox": "1.3.6",
     "zod": "4.4.3"
   },
   "devDependencies": {

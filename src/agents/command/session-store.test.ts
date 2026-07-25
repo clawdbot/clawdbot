@@ -2425,6 +2425,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const replacementEntry: SessionEntry = {
         sessionId: "replacement-session-id",
         updatedAt: 2,
+        delivery: { kind: "none" },
         modelProvider: "openai",
         model: "gpt-5.5",
       };

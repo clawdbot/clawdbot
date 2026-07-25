@@ -101,8 +101,6 @@ describe("resolveAgentConfig", () => {
         defaults: {
           contextLimits: {
             memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 18_000,
           },
         },
         list: [
@@ -121,8 +119,6 @@ describe("resolveAgentConfig", () => {
 
     expect(resolveAgentConfig(cfg, "main")?.contextLimits).toEqual({
       memoryGetMaxChars: 24_000,
-      memoryGetDefaultLines: 180,
-      toolResultMaxChars: 18_000,
     });
   });
 

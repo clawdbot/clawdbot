@@ -392,8 +392,6 @@ describe("agent defaults schema", () => {
     const defaults = AgentDefaultsSchema.parse({
       contextLimits: {
         memoryGetMaxChars: 20_000,
-        memoryGetDefaultLines: 200,
-        toolResultMaxChars: 24_000,
         postCompactionMaxChars: 4_000,
       },
     })!;
@@ -408,8 +406,6 @@ describe("agent defaults schema", () => {
     });
 
     expect(defaults.contextLimits?.memoryGetMaxChars).toBe(20_000);
-    expect(defaults.contextLimits?.memoryGetDefaultLines).toBe(200);
-    expect(defaults.contextLimits?.toolResultMaxChars).toBe(24_000);
     expect(agent.skillsLimits?.maxSkillsPromptChars).toBe(30_000);
     expect(agent.contextLimits?.memoryGetMaxChars).toBe(18_000);
   });

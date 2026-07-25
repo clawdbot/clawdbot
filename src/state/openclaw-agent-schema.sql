@@ -1,3 +1,7 @@
+-- Session storage doctrine: session_nodes.entry_json is the canonical logical-session
+-- record. Promoted session_nodes columns are query indexes projected only by the
+-- session entry writer; session_windows and their children own transcript generations.
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
   role TEXT NOT NULL,
@@ -27,9 +31,60 @@ CREATE INDEX IF NOT EXISTS idx_agent_state_leases_expiry
 CREATE INDEX IF NOT EXISTS idx_agent_state_leases_owner
   ON state_leases(owner, updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE IF NOT EXISTS session_nodes (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  current_session_id TEXT NOT NULL,
+  entry_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
+  created_at INTEGER,
+  created_via TEXT CHECK (created_via IS NULL OR created_via IN ('operator', 'spawn', 'channel', 'cron', 'talk', 'run', 'plugin', 'internal')),
+  created_actor_type TEXT CHECK (created_actor_type IS NULL OR created_actor_type IN ('human', 'agent', 'system')),
+  created_actor_id TEXT,
+  parent_session_key TEXT,
+  spawned_by TEXT,
+  fork_source_session_key TEXT,
+  fork_source_session_id TEXT,
+  fork_source_entry_id TEXT,
+  label TEXT,
+  display_name TEXT,
+  category TEXT,
+  icon TEXT,
+  pinned_at INTEGER,
+  archived_at INTEGER,
+  last_read_at INTEGER,
+  last_interaction_at INTEGER,
+  last_activity_at INTEGER
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_updated_at
+  ON session_nodes(updated_at DESC, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_last_interaction_at
+  ON session_nodes(last_interaction_at DESC, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_parent_session_key
+  ON session_nodes(parent_session_key, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_spawned_by
+  ON session_nodes(spawned_by, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_status
+  ON session_nodes(status, session_key)
+  WHERE status IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_archived_at
+  ON session_nodes(archived_at, session_key)
+  WHERE archived_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_current_session_id
+  ON session_nodes(current_session_id);
+
+CREATE TABLE IF NOT EXISTS session_windows (
   session_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
+  previous_session_id TEXT,
+  reason TEXT CHECK (reason IS NULL OR reason IN ('initial', 'reset', 'rollover', 'fork', 'rewind', 'switch', 'recovery', 'compaction')),
   session_scope TEXT NOT NULL DEFAULT 'conversation' CHECK (session_scope IN ('conversation', 'shared-main', 'group', 'channel')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -52,28 +107,19 @@ CREATE TABLE IF NOT EXISTS sessions (
   parent_session_key TEXT,
   spawned_by TEXT,
   display_name TEXT,
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
   FOREIGN KEY (primary_conversation_id) REFERENCES conversations(conversation_id) ON DELETE SET NULL
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at
-  ON sessions(updated_at DESC, session_id);
+CREATE INDEX IF NOT EXISTS idx_agent_session_windows_updated_at
+  ON session_windows(updated_at DESC, session_id);
 
-CREATE INDEX IF NOT EXISTS idx_agent_sessions_created_at
-  ON sessions(created_at DESC, session_id);
+CREATE INDEX IF NOT EXISTS idx_agent_session_windows_created_at
+  ON session_windows(created_at DESC, session_id);
 
-CREATE INDEX IF NOT EXISTS idx_agent_sessions_conversation
-  ON sessions(primary_conversation_id, updated_at DESC, session_id)
+CREATE INDEX IF NOT EXISTS idx_agent_session_windows_conversation
+  ON session_windows(primary_conversation_id, updated_at DESC, session_id)
   WHERE primary_conversation_id IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS session_routes (
-  session_key TEXT NOT NULL PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_session_routes_session_id
-  ON session_routes(session_id);
 
 CREATE TABLE IF NOT EXISTS conversations (
   conversation_id TEXT NOT NULL PRIMARY KEY,
@@ -147,7 +193,7 @@ CREATE TABLE IF NOT EXISTS session_conversations (
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, conversation_id, role),
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE,
   FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
 ) STRICT;
 
@@ -158,24 +204,41 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_conversations_primary
   ON session_conversations(session_id)
   WHERE role = 'primary';
 
-CREATE TABLE IF NOT EXISTS session_entries (
-  session_key TEXT NOT NULL PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  entry_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS session_members (
+  session_key TEXT NOT NULL,
+  identity_id TEXT NOT NULL,
+  added_by TEXT NOT NULL,
+  added_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, identity_id),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_agent_session_entries_updated_at
-  ON session_entries(updated_at DESC, session_key);
+CREATE INDEX IF NOT EXISTS idx_agent_session_members_identity
+  ON session_members(identity_id, session_key);
 
-CREATE INDEX IF NOT EXISTS idx_agent_session_entries_session_updated
-  ON session_entries(session_id, updated_at DESC, session_key);
+CREATE TABLE IF NOT EXISTS session_suggestions (
+  id TEXT PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  author_id TEXT NOT NULL,
+  author_label TEXT,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'accepted', 'dismissed')),
+  dispatch_token TEXT,
+  dispatch_started_at INTEGER,
+  dispatch_resolution TEXT CHECK (dispatch_resolution IN ('send', 'queue', 'edit', 'dismiss')),
+  CHECK (
+    (dispatch_token IS NULL AND dispatch_started_at IS NULL AND dispatch_resolution IS NULL)
+    OR (dispatch_token IS NOT NULL AND dispatch_started_at IS NOT NULL AND dispatch_resolution IS NOT NULL)
+  ),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_agent_session_entries_status
-  ON session_entries(status, session_key)
-  WHERE status IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_session_state_created
+  ON session_suggestions(session_key, state, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_author_created
+  ON session_suggestions(author_id, created_at, id);
 
 CREATE TABLE IF NOT EXISTS board_tabs (
   session_key TEXT NOT NULL,
@@ -185,7 +248,8 @@ CREATE TABLE IF NOT EXISTS board_tabs (
   chat_dock TEXT NOT NULL DEFAULT 'right' CHECK (chat_dock IN ('left', 'right', 'bottom', 'hidden')),
   created_by TEXT NOT NULL CHECK (created_by IN ('user', 'agent')),
   revision INTEGER NOT NULL CHECK (revision >= 0),
-  PRIMARY KEY (session_key, tab_id)
+  PRIMARY KEY (session_key, tab_id),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS board_widgets (
@@ -234,7 +298,8 @@ CREATE TABLE IF NOT EXISTS heartbeat_outcomes (
   occurred_at INTEGER NOT NULL,
   context_run_id TEXT,
   context_claimed_at INTEGER,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS transcript_events (
@@ -243,14 +308,14 @@ CREATE TABLE IF NOT EXISTS transcript_events (
   event_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, seq),
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+  FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS session_transcript_generations (
+CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (
   session_id TEXT NOT NULL PRIMARY KEY,
   generation TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+  FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
@@ -260,7 +325,7 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
   event_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, seq),
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+  FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
@@ -274,7 +339,7 @@ CREATE TABLE IF NOT EXISTS acp_parent_stream_events (
   event_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, run_id, seq),
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+  FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_acp_parent_stream_run
@@ -383,7 +448,8 @@ CREATE TABLE IF NOT EXISTS session_transcript_index_state (
   needs_rebuild INTEGER NOT NULL DEFAULT 0,
   active_event_count INTEGER NOT NULL DEFAULT 0,
   active_message_count INTEGER NOT NULL DEFAULT 0,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS session_transcript_active_events (

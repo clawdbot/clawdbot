@@ -154,7 +154,7 @@ jobs:
           fi
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -286,7 +286,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout trusted workflow source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -344,7 +344,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 0
@@ -468,7 +468,7 @@ jobs:
           fi
 
       - name: Run Codex maturity scorecard agent
-        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
         env:
           MATURITY_EVIDENCE_DIR: .artifacts/maturity-evidence
           MATURITY_SCORES_PATH: qa/maturity-scores.yaml
@@ -600,7 +600,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout trusted workflow source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -608,7 +608,7 @@ jobs:
           submodules: false
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           path: selected

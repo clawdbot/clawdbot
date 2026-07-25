@@ -30,7 +30,7 @@ function createSessionContext(
     gateway: {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected",
         hello: { features: { methods: [] } },
       },
     },

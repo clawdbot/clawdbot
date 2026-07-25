@@ -145,7 +145,9 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
       }),
     buildSessionLeaveScript: teamsMeetingLeaveScript,
     captions: {
-      enabled: (mode) => mode === "transcribe",
+      // Durable notes observe the caption stream in every mode; live transcript
+      // visibility remains gated by MeetingSessionRuntime.
+      enabled: () => true,
       buildTranscriptScript: ({ finalize, meetingSessionId, meetingUrl }) =>
         teamsMeetingTranscriptScript(meetingUrl, meetingSessionId, finalize),
     },

@@ -27,7 +27,7 @@ export function sessionCatalogListClient(
 ): GatewayBrowserClient | null {
   if (
     !connected ||
-    !snapshot?.connected ||
+    snapshot?.phase !== "connected" ||
     !snapshot.client ||
     isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true
   ) {

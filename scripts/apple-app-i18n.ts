@@ -240,6 +240,18 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "private func detailMetric(label: OpenClawTextValue, value: String)",
     "title: OpenClawTextValue,\n        detail: OpenClawTextValue",
   ],
+  "apps/ios/Sources/Design/AgentProDreamingDestination.swift": [
+    "private func detailMetric(label: OpenClawTextValue, value: String)",
+    "label.text",
+    "Text(verbatim: value)",
+  ],
+  "apps/ios/Sources/Design/AgentProTab+DetailComponents.swift": [
+    "func detailMetric(label: OpenClawTextValue, value: String)",
+    "Text(verbatim: value)",
+    "func emptyDetailRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue)",
+    "title.text",
+    "detail.text",
+  ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(verbatim: self.item.title)",
     "Text(verbatim: self.item.trailing)",

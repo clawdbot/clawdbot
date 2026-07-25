@@ -77,8 +77,7 @@ class CronPage extends OpenClawLightDomElement {
           }
           // Replace the mutable request state so responses started for the old
           // scope cannot populate the newly selected agent's page.
-          const snapshot = { client: this.cron.client, connected: this.cron.connected };
-          this.resetGatewayState(snapshot);
+          this.resetGatewayState(this.context.gateway.snapshot);
           this.cron.cronAgentId = selection.scopeId;
           this.listTab = "tasks";
           this.detailTab = "settings";
@@ -107,7 +106,7 @@ class CronPage extends OpenClawLightDomElement {
         gateway.subscribeEvents((event) => {
           if (
             this.gatewaySource === gateway &&
-            gateway.snapshot.connected &&
+            gateway.snapshot.phase === "connected" &&
             gateway.snapshot.client &&
             event.event === "cron"
           ) {
@@ -123,10 +122,14 @@ class CronPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
-  private resetGatewayState(snapshot: Partial<Pick<CronState, "client" | "connected">> = {}) {
-    this.cron = createInitialCronState(snapshot);
+  private resetGatewayState(snapshot?: ApplicationContext["gateway"]["snapshot"]) {
+    const connected = snapshot?.phase === "connected";
+    this.cron = createInitialCronState({
+      client: snapshot?.client ?? null,
+      connected,
+    });
     this.cron.cronAgentId = this.context.agentSelection.state.scopeId;
-    this.agentsList = snapshot.connected ? this.context.agents.state.agentsList : null;
+    this.agentsList = connected ? this.context.agents.state.agentsList : null;
     this.cronModelSuggestions = [];
     this.modelSuggestionsState = null;
   }
@@ -138,7 +141,7 @@ class CronPage extends OpenClawLightDomElement {
     if (
       sourceChanged ||
       this.cron.client !== snapshot.client ||
-      this.cron.connected !== snapshot.connected
+      this.cron.connected !== (snapshot.phase === "connected")
     ) {
       // Each connection epoch owns a fresh mutable state object. In-flight work
       // can finish against the old object without leaking into the next session.

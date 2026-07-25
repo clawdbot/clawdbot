@@ -137,6 +137,7 @@ jobs:
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
+      repo_live_suite_filter: ${{ steps.inputs.outputs.repo_live_suite_filter }}
       cross_os_suite_filter: ${{ steps.inputs.outputs.cross_os_suite_filter }}
       qa_live_matrix_enabled: ${{ steps.inputs.outputs.qa_live_matrix_enabled }}
       qa_live_telegram_enabled: ${{ steps.inputs.outputs.qa_live_telegram_enabled }}
@@ -181,7 +182,7 @@ jobs:
           fi
 
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -202,7 +203,7 @@ jobs:
 
       - name: Checkout selected ref for reachability fallback
         if: steps.fast_ref.outputs.fallback == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -389,8 +390,10 @@ jobs:
           fi
 
           filter="$(printf '%s' "$RELEASE_LIVE_SUITE_FILTER_INPUT" | tr '[:upper:]' '[:lower:]')"
+          repo_live_suite_filter="$filter"
           if [[ -n "${filter// }" ]]; then
             qa_filter_seen=false
+            repo_filter_tokens=()
             matrix_selected=false
             telegram_selected=false
             discord_selected=false
@@ -448,8 +451,15 @@ jobs:
                   slack_selected="$qa_live_slack_ci_enabled"
                   [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
                   ;;
+                *)
+                  repo_filter_tokens+=("$token")
+                  ;;
               esac
             done
+
+            if [[ "$qa_filter_seen" == "true" ]]; then
+              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]}")"
+            fi
 
             if [[ "${#disabled_required_lanes[@]}" -gt 0 ]]; then
               echo "live_suite_filter explicitly requested disabled QA live lane(s): ${disabled_required_lanes[*]}" >&2
@@ -476,6 +486,7 @@ jobs:
             printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
+            printf 'repo_live_suite_filter=%s\n' "$repo_live_suite_filter"
             printf 'cross_os_suite_filter=%s\n' "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT"
             printf 'qa_live_matrix_enabled=%s\n' "$qa_live_matrix_enabled"
             printf 'qa_live_telegram_enabled=%s\n' "$qa_live_telegram_enabled"
@@ -550,7 +561,7 @@ jobs:
   prepare_release_package:
     name: Prepare release package artifact
     needs: [resolve_target]
-    if: contains(fromJSON('["all","cross-os","package"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')
+    if: contains(fromJSON('["all","cross-os","package"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.repo_live_suite_filter == '')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -568,7 +579,7 @@ jobs:
       source_sha: ${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}
     steps:
       - name: Checkout trusted workflow ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -783,7 +794,7 @@ jobs:
       include_openwebui: false
       include_live_suites: true
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
-      live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}
+      live_suite_filter: ${{ needs.resolve_target.outputs.repo_live_suite_filter }}
       shared_image_artifact_namespace: release-live
       shared_image_policy: no-push-artifact
     secrets: &live_e2e_release_secrets
@@ -837,7 +848,7 @@ jobs:
   docker_e2e_release_checks:
     name: Run Docker release-path validation
     needs: [resolve_target, prepare_release_package]
-    if: (needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.live_suite_filter == ''
+    if: (needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.repo_live_suite_filter == ''
     permissions:
       actions: read
       contents: read
@@ -1004,7 +1015,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1131,7 +1142,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1221,7 +1232,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1439,7 +1450,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1689,7 +1700,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1807,7 +1818,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1903,7 +1914,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}

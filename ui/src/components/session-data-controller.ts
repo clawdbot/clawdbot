@@ -26,7 +26,6 @@ import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
 import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
 import {
   SIDEBAR_AGENT_SESSION_LIST_LIMIT,
-  SIDEBAR_SESSION_PAGE_SIZE,
   resolveSidebarSessionsScrollState,
   type SidebarSessionMutationScope,
   type SidebarSessionStatusFilter,
@@ -47,7 +46,7 @@ import {
 export class SessionDataController implements ReactiveController, SessionCatalogDataOwner {
   sessionCatalogs: SessionCatalog[] = [];
   loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
-  visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+  visibleSessionLimits = new Map<string, number>();
   sessionsResult: SessionsListResult | null = null;
   sessionsAgentId: string | null = null;
   sessionsLoading = false;
@@ -385,7 +384,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       gateway === this.gatewaySource &&
       gateway.snapshot.client !== null &&
       gateway.snapshot.client === this.gatewayClient &&
-      !gateway.snapshot.connected;
+      gateway.snapshot.phase !== "connected";
     if (sameClientDisconnected && this.reconnectListRevision === null) {
       this.reconnectListRevision = sessions.canonicalListRevision + 1;
     }
@@ -420,7 +419,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       this.sessionsSource = sessions;
     }
     this.updateSessions(sessions);
-    if (this.context?.gateway.snapshot.connected) {
+    if (this.context?.gateway.snapshot.phase === "connected") {
       // Group catalog hydration is idempotent per connection.
       void sessions.groupsLoad();
       if (this.host.sidebarSessionStatusFilter() !== "active") {
@@ -431,7 +430,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]): void {
     const client = gateway.snapshot.client;
-    const connected = gateway.snapshot.connected;
+    const connected = gateway.snapshot.phase === "connected";
     const clientChanged = client !== this.gatewayClient;
     const connectedStarted = connected && !this.gatewayConnected;
     const sourceOrClientChanged = gateway !== this.gatewaySource || client !== this.gatewayClient;
@@ -482,7 +481,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       this.activeSessionLineageRetryTimer = null;
     }
     this.sessionCreatedOrder.clear();
-    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+    this.visibleSessionLimits.clear();
     this.notify();
   }
 
@@ -623,7 +622,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       this.activeSessionLineageLoaded ||
       this.activeSessionLineageRequestToken !== null ||
       this.activeSessionLineageRetryTimer !== null ||
-      !gateway?.snapshot.connected ||
+      gateway?.snapshot.phase !== "connected" ||
       !client ||
       typeof client.request !== "function"
     ) {
@@ -669,8 +668,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.activeSessionLineageLoaded = true;
   }
 
-  setVisibleSessionLimit(limit: number): void {
-    this.visibleSessionLimit = limit;
+  setVisibleSessionLimit(sectionId: string, limit: number): void {
+    this.visibleSessionLimits.set(sectionId, limit);
     this.notify();
   }
 
@@ -680,7 +679,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   resetForStatusFilter(statusFilter: SidebarSessionStatusFilter): void {
-    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+    this.visibleSessionLimits.clear();
     this.childSessionRowsByParent = {};
     this.loadedChildSessionKeys = new Set();
     this.failedChildSessionKeys = new Set();
@@ -728,7 +727,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
     const gateway = context.gateway;
     const client = gateway.snapshot.client;
-    if (!gateway.snapshot.connected || !client) {
+    if (gateway.snapshot.phase !== "connected" || !client) {
       return null;
     }
     this.sessionMutationError = null;
@@ -752,7 +751,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       context === scope.context &&
       gateway === scope.gateway &&
       context.sessions === scope.sessions &&
-      gateway.snapshot.connected &&
+      gateway.snapshot.phase === "connected" &&
       gateway.snapshot.client === scope.client
     );
   }

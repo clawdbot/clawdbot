@@ -989,7 +989,6 @@ export async function handleControlUiHttpRequest(
             ? "strict"
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
-      chatMessageMaxWidth: config?.ui?.prefs?.chatMessageMaxWidth,
       seamColor: config?.ui?.seamColor,
       timeFormat: "auto",
       terminalEnabled,

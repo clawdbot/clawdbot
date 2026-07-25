@@ -1,11 +1,6 @@
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
-} from "./session-transcript-turn-lifecycle.types.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
-import type {
   DeleteSessionEntryLifecycleResult,
   ResetSessionEntryLifecycleMutation,
   ResetSessionEntryLifecycleResult,
@@ -18,7 +13,12 @@ import type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-} from "./store.js";
+} from "./session-accessor.lifecycle-types.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
@@ -27,12 +27,8 @@ import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
  * identity, and this module resolves the current entry/transcript target while
  * preserving canonical-key, transcript-linking, and update-notification rules.
  *
- * Ownership contract (#88838): this accessor is the permanent storage-neutral
- * domain boundary for session/transcript runtime access; the SQLite storage
- * flip implements this interface. The entry workflow helpers in store.ts are
- * the file-backend implementation it delegates to plus the plugin-SDK
- * deprecation-window surface (RFC 0007); they become internal as direct
- * callers migrate here. New runtime callers use this module, not store.ts.
+ * This accessor is the permanent storage-neutral domain boundary for
+ * session/transcript runtime access. Legacy JSON import remains doctor-only.
  */
 export type SessionAccessScope = {
   /** Agent owner used when the session key does not already encode one. */
@@ -835,7 +831,9 @@ export type {
 };
 
 export type ResetSessionEntryLifecycleParams = {
-  /** Runs after the persisted entry rotates and retired transcripts are archived. */
+  /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
+  archivePreviousTranscript?: boolean;
+  /** Runs after the persisted entry changes and any requested archival completes. */
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
@@ -844,6 +842,8 @@ export type ResetSessionEntryLifecycleParams = {
     currentEntry?: SessionEntry;
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
+  /** Atomically append this boundary with the reset entry mutation. */
+  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
@@ -855,6 +855,8 @@ export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
   archiveTranscript: boolean;
+  /** Delete transcript rows without writing an archive artifact. */
+  deleteTranscriptWithoutArchive?: boolean;
   /** Optional exact row guard checked under the storage writer lock. */
   expectedEntry?: SessionEntry;
   /** Optional provider-run identity guard checked under the storage writer lock. */

@@ -960,7 +960,7 @@ test("sessions.delete sessions.changed event always carries the resolved owner",
     "sessions.changed",
     expect.objectContaining({ sessionKey: "agent:main:side", agentId: "main", reason: "delete" }),
     new Set(["conn-1"]),
-    { dropIfSlow: true },
+    { agentId: "main", dropIfSlow: true },
   );
 });
 

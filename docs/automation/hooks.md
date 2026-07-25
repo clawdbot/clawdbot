@@ -147,11 +147,11 @@ conversation) and for `session:compact:before` / `session:compact:after`
 
 **Command events** (`command:stop`): `context.sessionEntry`, `context.sessionId`, `context.commandSource`, `context.senderId`.
 
-**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
+**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.media` (ordered staged attachment facts), `context.originalMedia` plus `context.mediaStagingPending` when remote media is not locally staged yet, and `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries. Legacy media aliases inside `metadata` are deprecated.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`, plus `context.error` when sending failed.
 
-**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
+**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, and `context.media`. `context.mediaPath` and `context.mediaType` remain deprecated aliases for the first fact.
 
 **Message events** (`message:preprocessed`): `context.bodyForAgent` (final enriched body), `context.from`, `context.channelId`.
 
