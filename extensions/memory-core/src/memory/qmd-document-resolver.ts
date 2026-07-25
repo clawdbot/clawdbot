@@ -91,7 +91,11 @@ export class QmdDocumentResolver {
       }
       throw err;
     }
-    const location = rows.length > 0 ? this.pickDocLocation(rows, normalizedHints) : null;
+    // QMD hits can include both docid and file; keep the file hint usable when
+    // OpenClaw's local hash lookup is stale or missing so valid hits survive.
+    const location =
+      (rows.length > 0 ? this.pickDocLocation(rows, normalizedHints) : null) ??
+      this.resolveDocLocationFromHints(normalizedHints);
     if (location) {
       this.docPathCache.set(cacheKey, location);
     }

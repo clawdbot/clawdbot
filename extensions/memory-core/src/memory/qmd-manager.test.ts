@@ -6058,6 +6058,53 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+  it("uses qmd file hints when docid lookup misses", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              docid: "missing-from-openclaw-index",
+              file: "qmd://workspace-main/notes/welcome.md",
+              score: 0.91,
+              snippet: "@@ -3,1\nQMD activation",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: () => { all: () => unknown[] }; close: () => void };
+    };
+    inner.db = {
+      prepare: () => ({
+        all: () => [],
+      }),
+      close: () => {},
+    };
+
+    await expect(
+      manager.search("QMD activation", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 3,
+        endLine: 3,
+        score: 0.91,
+        snippet: "@@ -3,1\nQMD activation",
+        source: "memory",
+      },
+    ]);
+    await manager.close();
+  });
+
   it("throws when stdout is empty without the no-results marker", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
