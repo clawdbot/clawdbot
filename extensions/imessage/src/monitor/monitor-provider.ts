@@ -14,6 +14,7 @@ import {
   type ChannelInboundTurnPlan,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
@@ -96,11 +97,7 @@ import {
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
-import {
-  buildIMessageFlushIngressLifecycle,
-  createIMessageDurableIngress,
-  type IMessageIngressLifecycle,
-} from "./ingress.js";
+import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { createPollCommentFolder } from "./poll-comment.js";
@@ -620,7 +617,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         unitEntries: { message: IMessagePayload; ingressLifecycle?: IMessageIngressLifecycle }[],
         message: IMessagePayload,
       ) => {
-        const { lifecycle, settle, abandon } = buildIMessageFlushIngressLifecycle(
+        const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
           unitEntries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
         );
         try {

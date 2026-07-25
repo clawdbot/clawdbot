@@ -178,7 +178,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: typed owner-required error for session store path resolution.
       // +1: native approval messaging target resolver.
       // +1: shared plugin SecretRef setup plan helper.
-      4723,
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      4724,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -202,7 +203,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: focused media-local-roots helpers.
       // +3: channel DM policy factory and its account/patch callbacks.
       // +1: native approval messaging target resolver.
-      2861,
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      2862,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

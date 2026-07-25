@@ -5,6 +5,7 @@ import {
   implicitMentionKindWhen,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   buildChannelProgressDraftLineForEntry,
@@ -79,7 +80,6 @@ import {
   shouldDropEmptyMattermostBody,
 } from "./monitor-helpers.js";
 import {
-  buildMattermostFlushIngressLifecycle,
   createMattermostIngressMonitor,
   type MattermostIngressLifecycle,
 } from "./monitor-ingress.js";
@@ -1981,7 +1981,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (!last) {
         return;
       }
-      const { lifecycle, settle } = buildMattermostFlushIngressLifecycle(entries);
+      const { lifecycle, settle } = fanInChannelIngressLifecycles(
+        entries.map((entry) => entry.turnAdoptionLifecycle),
+      );
       try {
         if (entries.length === 1) {
           await handlePost(last.post, last.payload, lifecycle);
