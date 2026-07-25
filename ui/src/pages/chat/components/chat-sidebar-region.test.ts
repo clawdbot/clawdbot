@@ -251,4 +251,17 @@ describe("chat sidebar region", () => {
 
     expect(region.querySelector('[data-panel="detail"]')?.parentElement?.hidden).toBe(false);
   });
+
+  it("keeps the narrow grid off when no panel is open", async () => {
+    const region = await createRegion(true);
+    region.layout = { columns: [] };
+    await region.updateComplete;
+
+    // The two-row narrow grid must not reserve a panel row for an empty layout,
+    // or every default mobile chat pane loses half its height.
+    expect(
+      region.querySelector(".sidebar-region")?.classList.contains("sidebar-region--narrow"),
+    ).toBe(false);
+    expect(region.querySelector("[data-primary]")).not.toBeNull();
+  });
 });

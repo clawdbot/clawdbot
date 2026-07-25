@@ -310,7 +310,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       this.layout.columns.at(-1)?.activePanelId ??
       panels[0]?.id ??
       "";
-    return html`<div class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""}">
+    // The narrow grid reserves a second row for the collapsed panel strip; with no
+    // panels open that row would just steal height from the primary surface, which
+    // is the default state of every mobile chat pane.
+    const narrowShell = collapsed && panels.length > 0;
+    return html`<div class="sidebar-region ${narrowShell ? "sidebar-region--narrow" : ""}">
       ${collapsed
         ? nothing
         : left.map(
