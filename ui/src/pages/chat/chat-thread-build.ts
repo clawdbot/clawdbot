@@ -171,7 +171,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     (queued) => !chatMessagesContainQueuedSend(history, queued, true),
   );
   const currentRunQueuedSends = threadQueuedSends.filter(
-    (queued) => queued.sendState === "sending" || queued.sendState === "waiting-model",
+    (queued) =>
+      queued.sendState === "sending" ||
+      queued.sendState === "waiting-model" ||
+      (queued.sendState === "waiting-reconnect" &&
+        props.runId != null &&
+        queued.sendRunId === props.runId),
   );
   const futureQueuedSends = threadQueuedSends.filter(
     (queued) => !currentRunQueuedSends.includes(queued),

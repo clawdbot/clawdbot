@@ -173,6 +173,7 @@ describe("assistant commentary grouping", () => {
       text: "Future prompt",
       createdAt: 3_000,
       sendAttempts: 1,
+      sendRunId: "run-future",
       sendState: "waiting-reconnect" as const,
     };
     const liveGroups = messageGroups({
@@ -213,6 +214,7 @@ describe("assistant commentary grouping", () => {
       text: "Future prompt",
       createdAt: 3_000,
       sendAttempts: 1,
+      sendRunId: "run-future",
       sendState: "waiting-reconnect" as const,
     };
     const liveItems = buildCachedChatItems(
@@ -238,6 +240,33 @@ describe("assistant commentary grouping", () => {
 
     expect(visibleKinds(liveItems)).toEqual(["user", "stream", "user"]);
     expect(visibleKinds(stableItems)).toEqual(["user", "assistant", "user"]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps a reconnecting current prompt above its retained stream", () => {
+    const paneId = "clock-skew-reconnecting-current-turn";
+    const reconnectingSend = {
+      id: "reconnecting-send",
+      text: "Current prompt",
+      createdAt: 2_000,
+      sendAttempts: 1,
+      sendRunId: "run-active",
+      sendState: "waiting-reconnect" as const,
+    };
+    const items = buildCachedChatItems(
+      createProps({
+        paneId,
+        runId: "run-active",
+        queue: [reconnectingSend],
+        stream: "Retained partial reply",
+        streamStartedAt: 1_000,
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+    ]);
     resetChatThreadState(paneId);
   });
 
