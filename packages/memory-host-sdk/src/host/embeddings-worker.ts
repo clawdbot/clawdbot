@@ -179,6 +179,7 @@ function resolveWorkerExecArgv(): string[] {
 /** IPC client that serializes local embedding calls through one child process. */
 class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
+  private shutdownPromise: Promise<void> | null = null;
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
   private lastRuntimeFacts: LocalEmbeddingRuntimeFacts | undefined;
@@ -216,6 +217,10 @@ class LocalEmbeddingWorkerClient {
 
   /** Ask the child to close gracefully, then force shutdown after a short grace period. */
   async close(): Promise<void> {
+    if (this.shutdownPromise) {
+      await this.shutdownPromise;
+      return;
+    }
     const child = this.child;
     if (!child) {
       return;
@@ -279,6 +284,7 @@ class LocalEmbeddingWorkerClient {
     request: LocalEmbeddingWorkerRequestPayload,
     options?: EmbeddingProviderCallOptions,
   ): Promise<number[] | number[][] | undefined> {
+    await this.shutdownPromise;
     options?.signal?.throwIfAborted();
     const child = this.ensureChild();
     const id = this.nextRequestId++;
@@ -342,18 +348,34 @@ class LocalEmbeddingWorkerClient {
   }
 
   /** Disconnect and kill the current child process if it is still alive. */
-  private async shutdownChild(): Promise<void> {
+  private shutdownChild(): Promise<void> {
+    if (this.shutdownPromise) {
+      return this.shutdownPromise;
+    }
     const child = this.child;
     this.child = null;
     if (!child) {
-      return;
+      return Promise.resolve();
     }
-    const exited =
-      child.exitCode !== null || child.signalCode !== null
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => {
-            child.once("exit", () => resolve());
-          });
+    const shutdown = this.stopChild(child);
+    this.shutdownPromise = shutdown;
+    const clearShutdown = () => {
+      if (this.shutdownPromise === shutdown) {
+        this.shutdownPromise = null;
+      }
+    };
+    void shutdown.then(clearShutdown, clearShutdown);
+    return shutdown;
+  }
+
+  private async stopChild(child: ChildProcess): Promise<void> {
+    const exited = new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      child.once("exit", () => resolve());
+    });
     this.rejectPending(
       createLocalEmbeddingWorkerFailureError({
         message: "Local embedding worker exited unexpectedly (shutdown)",
@@ -364,9 +386,25 @@ class LocalEmbeddingWorkerClient {
     if (child.connected) {
       child.disconnect();
     }
-    if (!child.killed) {
-      child.kill();
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return;
     }
+    child.kill();
+    let timeout: NodeJS.Timeout | undefined;
+    const exitedGracefully = await Promise.race([
+      exited.then(() => true),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), WORKER_CLOSE_GRACE_MS);
+        timeout.unref?.();
+      }),
+    ]);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    if (exitedGracefully) {
+      return;
+    }
+    child.kill("SIGKILL");
     await exited;
   }
 

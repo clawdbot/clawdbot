@@ -665,6 +665,82 @@ process.on("message", (message) => {
     await expect(fs.readFile(exitMarker, "utf8")).resolves.toBe("exited");
   });
 
+  it("joins cancellation shutdown before a later close resolves", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    const embedStarted = path.join(tempDir, "embed-started");
+    const exitMarker = path.join(tempDir, "worker-exited");
+    await fs.writeFile(
+      workerScript,
+      `
+const fs = require("node:fs");
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    fs.writeFileSync(${JSON.stringify(exitMarker)}, "exited");
+    process.exit(0);
+  }, 50);
+});
+process.on("message", (message) => {
+  if (message.type === "initialize") {
+    process.send({ id: message.id, ok: true });
+  } else if (message.type === "embedQuery") {
+    fs.writeFileSync(${JSON.stringify(embedStarted)}, "started");
+  }
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: workerScript },
+    );
+    const controller = new AbortController();
+    const embedPromise = provider.embedQuery("cancel me", { signal: controller.signal });
+    await expect
+      .poll(async () => {
+        try {
+          return await fs.readFile(embedStarted, "utf8");
+        } catch {
+          return "";
+        }
+      })
+      .toBe("started");
+
+    controller.abort(new Error("cancelled"));
+    await expect(embedPromise).rejects.toThrow("cancelled");
+    await expect(provider.close?.()).resolves.toBeUndefined();
+
+    await expect(fs.readFile(exitMarker, "utf8")).resolves.toBe("exited");
+  });
+
+  it("escalates worker shutdown when the child ignores SIGTERM", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {});
+process.on("message", (message) => {
+  process.send({ id: message.id, ok: true });
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(
+      { config: {} as never, provider: "local", model: "", fallback: "none" },
+      { workerScriptPath: workerScript },
+    );
+
+    await expect(
+      settleWithin(
+        (provider.close?.() ?? Promise.resolve()).then(() => "closed" as const),
+        1_000,
+      ),
+    ).resolves.toBe("closed");
+  });
+
   it("rejects pending and queued requests when closing a busy worker", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
     const workerScript = path.join(tempDir, "worker.cjs");
