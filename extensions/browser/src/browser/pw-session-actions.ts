@@ -336,27 +336,21 @@ async function readPagesViaPlaywright(
     { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, attempt },
     async (browser) => {
       const pages = await getAllPages(browser);
-      const results: Array<{
-        targetId: string;
-        title: string;
-        url: string;
-        type: string;
-      }> = [];
-
-      for (const page of pages) {
-        if (isBlockedPageRef(opts.cdpUrl, page)) {
-          continue;
-        }
-        let targetInfo: Awaited<ReturnType<typeof pageTargetInfo>>;
-        try {
-          targetInfo = await pageTargetInfo(page);
-        } catch (err) {
-          if (isRecoverablePlaywrightDisconnectError(err)) {
-            throw err;
+      const candidatePages = pages.filter((page) => !isBlockedPageRef(opts.cdpUrl, page));
+      const pageResults = await Promise.all(
+        candidatePages.map(async (page) => {
+          let targetInfo: Awaited<ReturnType<typeof pageTargetInfo>>;
+          try {
+            targetInfo = await pageTargetInfo(page);
+          } catch (err) {
+            if (isRecoverablePlaywrightDisconnectError(err)) {
+              throw err;
+            }
+            targetInfo = null;
           }
-          targetInfo = null;
-        }
-        if (targetInfo && !isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
+          if (!targetInfo || isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
+            return null;
+          }
           let url = "";
           try {
             url = page.url();
@@ -365,15 +359,17 @@ async function readPagesViaPlaywright(
               throw err;
             }
           }
-          results.push({
+          return {
             targetId: targetInfo.targetId,
             title: targetInfo.title,
             url,
             type: "page",
-          });
-        }
-      }
-      return results;
+          };
+        }),
+      );
+      // Promise.all preserves candidate order and still propagates recoverable disconnects
+      // to the outer reconnect path when any per-page task rejects.
+      return pageResults.filter((result) => result !== null);
     },
   );
 }

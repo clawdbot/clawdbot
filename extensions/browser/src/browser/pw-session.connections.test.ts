@@ -592,13 +592,20 @@ describe("pw-session connection scoping", () => {
     ]);
   });
 
-  it("times out a stuck target-info read and shares it across concurrent enumerations", async () => {
+  it("times out stuck target-info reads in one window and shares them across enumerations", async () => {
     vi.useFakeTimers();
     const fixture = makePageEnumerationBrowser([
       {
-        targetId: "STUCK",
-        title: "Stuck",
-        url: "https://stuck.example",
+        targetId: "STUCK_A",
+        title: "Stuck A",
+        url: "https://stuck-a.example",
+        readTargetInfo: () => new Promise(() => {}),
+        detach: () => new Promise(() => {}),
+      },
+      {
+        targetId: "STUCK_B",
+        title: "Stuck B",
+        url: "https://stuck-b.example",
         readTargetInfo: () => new Promise(() => {}),
         detach: () => new Promise(() => {}),
       },
@@ -639,8 +646,13 @@ describe("pw-session connection scoping", () => {
       ],
     ]);
     expect(
-      fixture.newCDPSession.mock.calls.filter(([page]) => page === fixture.pages[0]),
-    ).toHaveLength(1);
+      fixture.pages
+        .slice(0, 2)
+        .map(
+          (page) =>
+            fixture.newCDPSession.mock.calls.filter(([candidate]) => candidate === page).length,
+        ),
+    ).toEqual([1, 1]);
   });
 
   it("times out stuck page enumeration and evicts the scoped connection", async () => {
