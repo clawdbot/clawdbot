@@ -463,6 +463,58 @@ describe("runtime parity", () => {
     expect(cell.toolCalls[0]?.argsHash).toBe(stableHash({ query: "release marker" }));
   });
 
+  it("captures tool evidence across multiple root sessions", async () => {
+    const now = Date.now();
+    const tempRoot = await seedRuntimeParityTranscript({
+      sessionId: "session-status-happy",
+      sessionKey: "agent:qa:runtime-tool:session_status:happy",
+      messages: [{ role: "user", content: "tool search qa check target=session_status" }],
+      updatedAt: now - 1_000,
+      trajectoryEvents: [
+        {
+          type: "tool.call",
+          data: {
+            toolCallId: "session-status-1",
+            name: "session_status",
+            arguments: {},
+          },
+        },
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "session-status-1",
+            name: "session_status",
+            status: "completed",
+            result: { status: "completed" },
+          },
+        },
+      ],
+    });
+    await seedRuntimeParityTranscript({
+      tempRoot,
+      sessionId: "session-status-failure",
+      sessionKey: "agent:qa:runtime-tool:session_status:failure",
+      messages: [
+        {
+          role: "user",
+          content: "tool search qa failure target=session_status",
+        },
+      ],
+      updatedAt: now,
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.transcriptBytes).toContain("target=session_status");
+    expect(cell.transcriptBytes).toContain("failure target=session_status");
+    expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "session_status" })]);
+  });
+
   it("keeps an explicitly identified orphan result separate", async () => {
     const tempRoot = await seedRuntimeParityTranscript({
       sessionId: "orphan-trajectory-result",

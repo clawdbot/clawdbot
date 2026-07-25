@@ -136,6 +136,7 @@ type RuntimeParityCaptureParams = {
 };
 
 type RuntimeParitySessionEntry = {
+  createdAt?: number;
   sessionId?: string;
   sessionFile?: string;
   updatedAt?: number;
@@ -175,8 +176,11 @@ type RuntimeParityPendingToolCall = RuntimeParityObservedToolCall & {
 };
 
 type RuntimeParityCaptureSources = {
+  sessions: Array<{
+    transcriptBytes: string;
+    trajectoryToolCalls: RuntimeParityObservedToolCall[];
+  }>;
   transcriptBytes: string;
-  trajectoryToolCalls: RuntimeParityObservedToolCall[];
 };
 
 const DEFAULT_AGENT_ID = "qa";
@@ -1215,9 +1219,11 @@ function readRuntimeParitySessionEntries(params: {
       .filter(({ entry }) => !readNonEmptyString(entry.heartbeatIsolatedBaseSessionKey));
     const rootEntries = entries.filter(({ entry }) => isRuntimeParityRootSession(entry));
     const candidates = rootEntries.length > 0 ? rootEntries : entries;
-    return candidates.toSorted(
-      (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
-    );
+    return candidates.toSorted((left, right) => {
+      const leftCreatedAt = left.entry.createdAt ?? left.entry.updatedAt ?? 0;
+      const rightCreatedAt = right.entry.createdAt ?? right.entry.updatedAt ?? 0;
+      return leftCreatedAt - rightCreatedAt || left.sessionKey.localeCompare(right.sessionKey);
+    });
   } catch {
     return [];
   }
@@ -1234,6 +1240,7 @@ async function loadRuntimeParityCaptureSources(params: {
     stateDir,
     agentId: params.agentId,
   });
+  const sessions: RuntimeParityCaptureSources["sessions"] = [];
   for (const { entry, sessionKey } of sessionEntries) {
     const sessionId = readNonEmptyString(entry.sessionId);
     if (!sessionId) {
@@ -1270,10 +1277,16 @@ async function loadRuntimeParityCaptureSources(params: {
       // Transcript evidence remains authoritative when diagnostics are unavailable.
     }
     if (transcriptBytes || trajectoryToolCalls.length > 0) {
-      return { transcriptBytes, trajectoryToolCalls };
+      sessions.push({ transcriptBytes, trajectoryToolCalls });
     }
   }
-  return { transcriptBytes: "", trajectoryToolCalls: [] };
+  return {
+    sessions,
+    transcriptBytes: sessions
+      .map((session) => session.transcriptBytes)
+      .filter(Boolean)
+      .join("\n"),
+  };
 }
 
 async function loadRuntimeParityMockToolCalls(
@@ -1325,17 +1338,20 @@ export async function captureRuntimeParityCell(
   params: RuntimeParityCaptureParams,
 ): Promise<RuntimeParityCell> {
   const agentId = params.agentId ?? DEFAULT_AGENT_ID;
-  const { transcriptBytes, trajectoryToolCalls } = await loadRuntimeParityCaptureSources({
+  const { sessions, transcriptBytes } = await loadRuntimeParityCaptureSources({
     gateway: params.gateway,
     agentId,
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
-  const transcriptToolCalls = resolveToolCallOrder(transcriptRecords);
+  // Runtime-tool fixtures split happy and failure paths across root sessions.
+  // Resolve each session separately so repeated tool-call ids cannot cross-link.
   const runtimeToolCalls = removeRuntimeParityToolCallIdentity(
-    mergeRuntimeParityToolCalls({
-      transcriptToolCalls,
-      trajectoryToolCalls,
-    }),
+    sessions.flatMap((session) =>
+      mergeRuntimeParityToolCalls({
+        transcriptToolCalls: resolveToolCallOrder(buildTranscriptRecords(session.transcriptBytes)),
+        trajectoryToolCalls: session.trajectoryToolCalls,
+      }),
+    ),
   );
   const parentPrompts = transcriptRecords
     .filter((record) => record.role === "user")
