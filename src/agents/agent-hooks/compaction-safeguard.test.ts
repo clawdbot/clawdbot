@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  type Model,
+  type StreamFn,
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -34,6 +38,7 @@ vi.mock("../compaction.js", async () => {
 });
 
 const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
+const actualCompactionModule = await vi.importActual<typeof compactionModule>("../compaction.js");
 
 function summaryResult(text: string) {
   return { kind: "summary" as const, text };
@@ -1587,41 +1592,68 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summaryCall.headers?.["x-initiator"]).toBe("user");
   });
 
-  it("threads the agent stream function into built-in compaction summarization", async () => {
-    // Regression: the safeguard summarizer previously omitted streamFn, so the
-    // core HTTP client (completeSimple) built the request from an empty
-    // model.baseUrl for OpenRouter-provider models and failed with a connection
-    // error. The agent's stream function resolves the real provider base URL.
-    mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
-
+  it("sends safeguard summaries through the prepared model execution context", async () => {
+    testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
     const sessionManager = stubSessionManager();
-    const model = createAnthropicModelFixture();
+    const model = createAnthropicModelFixture({
+      api: "test-api" as never,
+      baseUrl: "",
+      reasoning: true,
+    });
     setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
 
-    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
+    const providerPrompts: string[] = [];
+    const streamFn: StreamFn = (_activeModel, context, options) => {
+      expect(options?.reasoning).toBe("high");
+      providerPrompts.push(JSON.stringify(context));
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "provider summary" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+        },
+      });
+      stream.end();
+      return stream;
+    };
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyAndHeadersMock,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
     });
     const compactionHandler = createCompactionHandler();
-    const event = createCompactionEvent({
-      messageText: "summarize me",
-      tokensBefore: 1000,
-    });
-    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
-      reserveTokens: 4000,
+    const event = {
+      ...createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_000 }),
+      thinkingLevel: "high" as const,
+      streamFn,
     };
-    const streamFn = vi.fn();
-    (event as { streamFn?: unknown }).streamFn = streamFn;
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
 
-    const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
 
     expect(result.cancel).not.toBe(true);
-    const summaryCall = latestMockCallArg(mockSummarizeInStages) as {
-      streamFn?: unknown;
-    };
-    expect(summaryCall.streamFn).toBe(streamFn);
+    expect(result.compaction?.summary).toContain("provider summary");
+    expect(providerPrompts).toHaveLength(1);
+    expect(providerPrompts[0]).toContain("[User]: summarize me");
   });
 
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {

@@ -615,12 +615,9 @@ interface SessionBeforeCompactEvent {
   branchEntries: SessionEntry[];
   customInstructions?: string;
   signal: AbortSignal;
-  /**
-   * The agent's egress stream function. Handlers that summarize via an LLM must
-   * thread this into the summarizer so the request uses the provider's
-   * boundary-aware stream (which resolves the real base URL) instead of the core
-   * HTTP client, whose `model.baseUrl` is empty for OpenRouter-provider models.
-   */
+  /** Prepared reasoning level for extension-owned summarization. */
+  thinkingLevel?: ThinkingLevel;
+  /** Prepared provider stream for extension-owned summarization. */
   streamFn?: StreamFn;
 }
 

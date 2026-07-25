@@ -72,32 +72,6 @@ export type CompactionSummarizationInstructions = {
   identifierInstructions?: string;
 };
 
-type GenerateSummaryCompat = {
-  (
-    currentMessages: AgentMessage[],
-    model: NonNullable<ExtensionContext["model"]>,
-    reserveTokens: number,
-    apiKey: string,
-    signal?: AbortSignal,
-    customInstructions?: string,
-    previousSummary?: string,
-  ): Promise<string>;
-  (
-    currentMessages: AgentMessage[],
-    model: NonNullable<ExtensionContext["model"]>,
-    reserveTokens: number,
-    apiKey: string,
-    headers: Record<string, string> | undefined,
-    signal?: AbortSignal,
-    customInstructions?: string,
-    previousSummary?: string,
-    thinkingLevel?: ThinkingLevel,
-    streamFn?: StreamFn,
-  ): Promise<string>;
-};
-
-const generateSummaryCompat = agentGenerateSummary as unknown as GenerateSummaryCompat;
-
 function resolveIdentifierPreservationInstructions(
   instructions?: CompactionSummarizationInstructions,
 ): string | undefined {
@@ -142,6 +116,7 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
 }): Promise<string> {
   if (params.messages.length === 0) {
@@ -172,6 +147,7 @@ async function summarizeChunks(params: {
             params.signal,
             effectiveInstructions,
             summary,
+            params.thinkingLevel,
             params.streamFn,
           ),
         {
@@ -241,34 +217,20 @@ function generateSummary(
   signal: AbortSignal,
   customInstructions?: string,
   previousSummary?: string,
+  thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
 ): Promise<string> {
-  if (agentGenerateSummary.length >= 8) {
-    return generateSummaryCompat(
-      currentMessages,
-      model,
-      reserveTokens,
-      apiKey,
-      headers,
-      signal,
-      customInstructions,
-      previousSummary,
-      // thinkingLevel is unused for compaction summaries; pass undefined to
-      // reach the streamFn slot so the summarizer uses the boundary-aware
-      // stream (which resolves the real provider base URL) instead of the
-      // core HTTP client that reads an empty model.baseUrl.
-      undefined,
-      streamFn,
-    );
-  }
-  return generateSummaryCompat(
+  return agentGenerateSummary(
     currentMessages,
     model,
     reserveTokens,
     apiKey,
+    headers,
     signal,
     customInstructions,
     previousSummary,
+    thinkingLevel,
+    streamFn,
   );
 }
 
@@ -288,6 +250,7 @@ async function summarizeWithFallbackResult(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
 }): Promise<CompactionSummaryResult> {
   const { messages, contextWindow } = params;
@@ -402,6 +365,7 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
+  thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
 }): Promise<CompactionSummaryResult> {
   const { messages } = params;
