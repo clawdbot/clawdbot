@@ -8,11 +8,13 @@ import "./logs-page.ts";
 type TestLogsPage = HTMLElement & {
   context: MutableTestContext;
   gatewayScope: { connected: boolean };
-  logsAtBottom: boolean;
   logsAutoFollow: boolean;
   logsEntries: unknown[];
   logsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
-  scheduleScroll: (force?: boolean) => void;
+  streamFollow: {
+    atBottom: boolean;
+    schedule: (force?: boolean) => void;
+  };
   readonly updateComplete: Promise<boolean>;
   loadLogs: (opts?: { reset?: boolean; quiet?: boolean }) => Promise<boolean>;
   requestUpdate: () => void;
@@ -79,7 +81,7 @@ describe("LogsPage lifecycle", () => {
     await Promise.resolve();
     requestFrame.mockClear();
 
-    page.scheduleScroll();
+    page.streamFollow.schedule();
     page.remove();
     await Promise.resolve();
 
@@ -102,8 +104,8 @@ describe("LogsPage lifecycle", () => {
 
     page.logsAutoFollow = false;
     await page.updateComplete;
-    const scheduleScroll = vi.spyOn(page, "scheduleScroll");
-    page.logsAtBottom = false;
+    const scheduleScroll = vi.spyOn(page.streamFollow, "schedule");
+    page.streamFollow.atBottom = false;
     page.logsAutoFollow = true;
     await page.updateComplete;
 
@@ -234,9 +236,10 @@ describe("LogsPage lifecycle", () => {
     document.body.append(page);
     await page.updateComplete;
     page.context.gateway.emit(true);
+    await page.updateComplete;
     requestFrame.mockClear();
 
-    page.scheduleScroll();
+    page.streamFollow.schedule();
     page.context.gateway.emit(false);
     page.context.gateway.emit(true);
     await Promise.resolve();
