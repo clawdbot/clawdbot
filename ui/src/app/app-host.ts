@@ -70,10 +70,6 @@ import {
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import {
-  CriticalObserverNoticeTracker,
-  showCriticalSessionObserverNotice,
-} from "../pages/chat/critical-observer-notice.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
@@ -562,7 +558,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
   >();
-  private readonly observerNoticeTracker = new CriticalObserverNoticeTracker();
+  // Lazy: the critical-notice module stays out of the startup chunk (perf
+  // budget); loaded on the first session.observer digest after boot.
+  private criticalNoticeRuntime: Promise<
+    typeof import("../pages/chat/critical-observer-notice.runtime.ts")
+  > | null = null;
   private readonly subscriptions = new SubscriptionsController(this);
 
   private get context(): ApplicationContext<RouteId> | undefined {
@@ -791,7 +791,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.navDrawerTrigger = null;
     this.lastWorkspaceLocation = null;
     this.activeSessionKey = "";
-    this.observerNoticeTracker.clear();
+    void this.criticalNoticeRuntime?.then((runtime) => runtime.resetCriticalObserverTracker());
     this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
     this.agentsListClient = null;
@@ -816,16 +816,21 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (event.event === "session.observer") {
       const context = this.context;
       if (context) {
-        showCriticalSessionObserverNotice({
-          payload: event.payload,
-          selectedSessionKey: this.activeSessionKey,
-          sessions: context.sessions.state.result?.sessions ?? [],
-          tracker: this.observerNoticeTracker,
-          onOpen: (sessionKey) => {
-            context.gateway.setSessionKey(sessionKey);
-            this.navigate("chat", { search: searchForSession(sessionKey) });
-          },
-        });
+        // All digests flow through (not just critical ones): the runtime
+        // tracker must see recovery transitions for its re-announce dedupe.
+        this.criticalNoticeRuntime ??= import("../pages/chat/critical-observer-notice.runtime.ts");
+        const payload = event.payload;
+        void this.criticalNoticeRuntime.then((runtime) =>
+          runtime.handleCriticalObserverDigest({
+            payload,
+            selectedSessionKey: this.activeSessionKey,
+            sessions: context.sessions.state.result?.sessions ?? [],
+            onOpen: (sessionKey) => {
+              context.gateway.setSessionKey(sessionKey);
+              this.navigate("chat", { search: searchForSession(sessionKey) });
+            },
+          }),
+        );
       }
       return;
     }
