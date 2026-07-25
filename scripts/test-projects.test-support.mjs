@@ -2350,6 +2350,7 @@ const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast
 const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
   "extensions/codex/src/manifest.test.ts",
   "extensions/openai/openai-provider.test.ts",
+  "test/scripts/codex-client-version-contract.test.ts",
 ];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
