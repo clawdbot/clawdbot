@@ -650,7 +650,7 @@ describe("session observer", () => {
     harness.observer.removeConnection("conn-1");
     await vi.advanceTimersByTimeAsync(12_000);
 
-    expect(harness.observer.getSnapshot("agent:main:session-1").notes).toEqual([]);
+    expect(harness.observer.getCompanionSnapshot("agent:main:session-1").notes).toEqual([]);
     expect(harness.completeModel).not.toHaveBeenCalled();
     harness.observer.dispose();
   });
