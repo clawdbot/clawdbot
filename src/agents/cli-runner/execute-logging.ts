@@ -118,7 +118,7 @@ function listPresentCliEnvKeys(
 function formatCliEnvKeyList(keys: readonly string[]): string {
   return keys.length > 0 ? keys.join(",") : "none";
 }
-export function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
+function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
   return [
     `token=${childEnv.OPENCLAW_MCP_TOKEN ? "set" : "missing"}`,
     `capture=${childEnv.OPENCLAW_MCP_CLI_CAPTURE_KEY ? "set" : "missing"}`,
