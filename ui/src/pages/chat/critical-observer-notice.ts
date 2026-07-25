@@ -78,7 +78,7 @@ export function showCriticalSessionObserverNotice(params: {
   );
   const label = resolveSessionDisplayName(sessionKey, row);
   showToast({
-    message: `${t("chat.attentionRequired")}: ${label} — ${headline}`,
+    message: `${t("sessionsView.attentionRequired")}: ${label} — ${headline}`,
     actionLabel: t("sessionsView.openSession"),
     onAction: () => params.onOpen(sessionKey),
   });
