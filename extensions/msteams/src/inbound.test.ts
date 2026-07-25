@@ -124,6 +124,14 @@ describe("msteams inbound", () => {
       ).toBe("this is a quoted reply");
     });
 
+    it("preserves authored indentation, blank lines, and Markdown hard breaks", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "before\r\n  indented\r\n\r\n\r\nstill separated  \r\nafter",
+        }),
+      ).toBe("before\n  indented\n\n\nstill separated  \nafter");
+    });
+
     it("labels forwarded message bodies from Teams HTML attachments", () => {
       expect(
         buildMSTeamsNormalizedText({
@@ -138,6 +146,37 @@ describe("msteams inbound", () => {
           ],
         }),
       ).toBe("see this\n\n[Forwarded message]\nthe forwarded body text\n[/Forwarded message]");
+    });
+
+    it("preserves indentation while labeling forwarded code", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "see this\r\n\r\n  const x = 1;\r\n  run(x);",
+          attachments: [
+            {
+              contentType: "text/html",
+              content:
+                '<p>see this</p><blockquote itemtype="http://schema.skype.com/Forward">' +
+                "<pre>const x = 1;\nrun(x);</pre></blockquote>",
+            },
+          ],
+        }),
+      ).toBe("see this\n\n[Forwarded message]\n  const x = 1;\n  run(x);\n[/Forwarded message]");
+    });
+
+    it("does not nest markers for duplicate forwarded attachments", () => {
+      const attachment = {
+        contentType: "text/html",
+        content:
+          '<p>see this</p><blockquote itemtype="http://schema.skype.com/Forward">' +
+          "<pre>const x = 1;\nrun(x);</pre></blockquote>",
+      };
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "see this\r\n\r\n  const x = 1;\r\n  run(x);",
+          attachments: [attachment, attachment],
+        }),
+      ).toBe("see this\n\n[Forwarded message]\n  const x = 1;\n  run(x);\n[/Forwarded message]");
     });
 
     it("does not replace forwarded body text inside an authored word", () => {

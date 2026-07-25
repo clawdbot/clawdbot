@@ -176,6 +176,10 @@ function normalizeMSTeamsWhitespace(text: string): string {
     .trim();
 }
 
+function normalizeMSTeamsLineEndings(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
 function stripMSTeamsQuotedMarkers(text: string): string {
   return text.replace(/<quoted\b[^>]*\/>/gi, "").trim();
 }
@@ -251,15 +255,23 @@ function escapeRegExp(value: string): string {
 
 function labelMSTeamsForwardBody(text: string, body: string): string {
   const marker = `[Forwarded message]\n${body}\n[/Forwarded message]`;
-  if (text.includes(marker)) {
+  const comparableBody = body.trim().split(/\s+/).join(" ");
+  const alreadyLabeled = [
+    ...text.matchAll(/\[Forwarded message\]\n([\s\S]*?)\n\[\/Forwarded message\]/g),
+  ].some((match) => (match[1] ?? "").trim().split(/\s+/).join(" ") === comparableBody);
+  if (alreadyLabeled) {
     return text;
   }
   const bodyPattern = body.trim().split(/\s+/).map(escapeRegExp).join("\\s+");
-  const collapsedPattern = new RegExp(`(^|\\n\\s*\\n|\\n)${bodyPattern}(?=$|\\n)`, "g");
+  const collapsedPattern = new RegExp(
+    `(^|\\n[ \\t]*\\n|\\n)([ \\t]*)(${bodyPattern})(?=$|\\n)`,
+    "g",
+  );
   const matches = [...text.matchAll(collapsedPattern)];
   const match = matches.at(-1);
   if (match?.index !== undefined) {
-    const replacement = `${match[1] ?? ""}${marker}`;
+    const authoredBody = `${match[2] ?? ""}${match[3] ?? body}`;
+    const replacement = `${match[1] ?? ""}[Forwarded message]\n${authoredBody}\n[/Forwarded message]`;
     return `${text.slice(0, match.index)}${replacement}${text.slice(match.index + match[0].length)}`;
   }
   return `${text}\n\n${marker}`;
@@ -270,13 +282,13 @@ export function buildMSTeamsNormalizedText(params: BuildMSTeamsNormalizedTextPar
   const attachments = params.attachments ?? [];
   let text = normalizeMSTeamsMentionTags(params.text, entities, params.botId, params.botName);
   text = stripMSTeamsQuotedMarkers(text);
-  text = normalizeMSTeamsWhitespace(text);
+  text = normalizeMSTeamsLineEndings(text);
 
   for (const forwardBody of extractMSTeamsForwardBodies(attachments)) {
     text = labelMSTeamsForwardBody(text, forwardBody);
   }
 
-  return normalizeMSTeamsWhitespace(text);
+  return text.trim();
 }
 
 /**
