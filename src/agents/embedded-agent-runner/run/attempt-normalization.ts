@@ -112,7 +112,6 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
       sessionPromptState.sessionFile = formatSqliteSessionFileMarker({
         agentId: nextSessionTarget.agentId ?? marker.agentId,
         sessionId: nextSessionTarget.sessionId ?? marker.sessionId,
-        sessionKey: nextSessionTarget.sessionKey ?? marker.sessionKey,
         storePath: nextSessionTarget.storePath ?? marker.storePath,
       });
     }
