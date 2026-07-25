@@ -131,9 +131,9 @@ describe("dir.fetch archive extraction", () => {
           () => ({ status: "resolved" as const }),
           (error: unknown) => ({ status: "rejected" as const, error }),
         ),
-        new Promise<{ status: "timeout" }>((resolve) =>
-          setTimeout(() => resolve({ status: "timeout" }), 2_000),
-        ),
+        new Promise<{ status: "timeout" }>((resolve) => {
+          setTimeout(() => resolve({ status: "timeout" }), 2_000);
+        }),
       ]);
 
       expect(settled.status).toBe("rejected");

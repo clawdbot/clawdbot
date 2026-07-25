@@ -14,6 +14,8 @@
   "channel-streaming",
   "setup-tools",
   "archive",
+  "root-walk",
+  "secret-file",
   "approval-auth-runtime",
   "approval-client-runtime",
   "approval-delivery-runtime",

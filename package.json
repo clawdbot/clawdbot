@@ -413,6 +413,14 @@
       "types": "./dist/plugin-sdk/archive.d.ts",
       "default": "./dist/plugin-sdk/archive.js"
     },
+    "./plugin-sdk/root-walk": {
+      "types": "./dist/plugin-sdk/root-walk.d.ts",
+      "default": "./dist/plugin-sdk/root-walk.js"
+    },
+    "./plugin-sdk/secret-file": {
+      "types": "./dist/plugin-sdk/secret-file.d.ts",
+      "default": "./dist/plugin-sdk/secret-file.js"
+    },
     "./plugin-sdk/approval-auth-runtime": {
       "types": "./dist/plugin-sdk/approval-auth-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-auth-runtime.js"
