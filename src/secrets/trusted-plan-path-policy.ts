@@ -1,24 +1,8 @@
 const WINDOWS_TRUSTED_INSTALLER_SID =
   "s-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
-const WINDOWS_SAFE_DIRECTORY_ACL_TOKENS = new Set([
-  "AD",
-  "CI",
-  "GE",
-  "GR",
-  "I",
-  "IO",
-  "NP",
-  "OI",
-  "R",
-  "RA",
-  "RC",
-  "RD",
-  "REA",
-  "RX",
-  "S",
-  "WD",
-  "X",
-]);
+const WINDOWS_SAFE_DIRECTORY_ACL_TOKENS = new Set(
+  "AD CI GE GR I IO NP OI R RA RC RD REA RX S WD X".split(" "),
+);
 const WINDOWS_SAFE_EXECUTABLE_PARENT_ACL_TOKENS = new Set(
   [...WINDOWS_SAFE_DIRECTORY_ACL_TOKENS].filter((token) => token !== "AD" && token !== "WD"),
 );
