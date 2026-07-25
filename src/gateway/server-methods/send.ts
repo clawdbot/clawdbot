@@ -15,8 +15,12 @@ import {
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelPlugin,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -54,7 +58,7 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
-import { normalizeAgentId, normalizeOptionalAccountId } from "../../routing/session-key.js";
+import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   resolveMissingAgentHarnessSessionError,
@@ -185,26 +189,48 @@ function resolveGatewayInflightRequest(params: {
   });
 }
 
-function resolveMessageOperationDedupeScope(params: {
-  channel?: unknown;
+function resolveMessageOperationAccountRoute(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  plugin: ChannelPlugin;
   accountIds: readonly unknown[];
-}): string {
-  const normalizeAccountScope = (value: unknown): string | null => {
-    const raw = normalizeOptionalString(value);
-    if (!raw) {
-      return null;
-    }
-    return normalizeOptionalAccountId(raw) ?? `invalid:${raw}`;
+  conflictMessage: string;
+}): { accountId: string | undefined; requestScope: string } {
+  const accountIds = params.accountIds
+    .map((accountId) =>
+      validateExplicitMessageAccountSelection({
+        cfg: params.cfg,
+        channel: params.channel,
+        accountId,
+        plugin: params.plugin,
+      }),
+    )
+    .filter((accountId): accountId is string => accountId !== undefined);
+  const distinctAccountIds = [...new Set(accountIds)];
+  if (distinctAccountIds.length > 1) {
+    throw new Error(params.conflictMessage);
+  }
+  const accountId = distinctAccountIds[0];
+  // Missing input remains host-derived authority; this value only canonicalizes
+  // idempotency and is not forwarded as a caller-supplied explicit selection.
+  const effectiveAccountId =
+    accountId ??
+    normalizeAccountId(resolveChannelDefaultAccountId({ plugin: params.plugin, cfg: params.cfg }));
+  return {
+    accountId,
+    requestScope: JSON.stringify([params.channel, effectiveAccountId]),
   };
-  const accountScopes = params.accountIds
-    .map(normalizeAccountScope)
-    .filter((value): value is string => value !== null);
-  const distinctAccountScopes = [...new Set(accountScopes)];
-  const accountScope =
-    distinctAccountScopes.length <= 1
-      ? (distinctAccountScopes[0] ?? null)
-      : { conflict: distinctAccountScopes.toSorted() };
-  return JSON.stringify([normalizeOptionalLowercaseString(params.channel) ?? null, accountScope]);
+}
+
+function respondGatewayInvalidRequest(params: {
+  respond: RespondFn;
+  channel: string;
+  error: unknown;
+}): void {
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(params.error)), {
+    channel: params.channel,
+    error: formatForLog(params.error),
+  });
 }
 
 async function resolveRequestedChannel(params: {
@@ -517,16 +543,50 @@ export const sendHandlers: GatewayRequestHandlers = {
       client,
       requestedOrigin: request.conversationReadOrigin,
     });
+    const resolvedChannel = await resolveRequestedChannel({
+      requestChannel: request.channel,
+      unsupportedMessage: (input) => `unsupported channel: ${input}`,
+      context,
+      rejectWebchatAsInternalOnly: true,
+    });
+    if ("error" in resolvedChannel) {
+      respond(false, undefined, resolvedChannel.error);
+      return;
+    }
+    const { cfg: selectedCfg, sourceCfg, channel } = resolvedChannel;
+    const cfg = resolveMessageActionRuntimeConfig({ cfg: selectedCfg, sourceCfg });
+    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+    if (!plugin?.actions?.handleAction) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Channel ${channel} does not support action ${request.action}.`,
+        ),
+      );
+      return;
+    }
+    let accountRoute: ReturnType<typeof resolveMessageOperationAccountRoute>;
+    try {
+      accountRoute = resolveMessageOperationAccountRoute({
+        cfg,
+        channel,
+        plugin,
+        accountIds: [request.accountId, request.params.accountId],
+        conflictMessage: "message.action accountId does not match params.accountId",
+      });
+    } catch (error) {
+      respondGatewayInvalidRequest({ respond, channel, error });
+      return;
+    }
     const inflight = resolveGatewayInflightRequest({
       context,
       prefix: "message.action",
       idempotencyKey: request.idempotencyKey,
       respond,
       conversationReadOrigin,
-      requestScope: resolveMessageOperationDedupeScope({
-        channel: request.channel,
-        accountIds: [request.accountId, request.params.accountId],
-      }),
+      requestScope: accountRoute.requestScope,
     });
     if (inflight.kind === "handled") {
       await inflight.done;
@@ -534,49 +594,12 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const { dedupeKey, inflightMap } = inflight;
     const work = (async (): Promise<InflightResult> => {
-      const resolvedChannel = await resolveRequestedChannel({
-        requestChannel: request.channel,
-        unsupportedMessage: (input) => `unsupported channel: ${input}`,
-        context,
-        rejectWebchatAsInternalOnly: true,
-      });
-      if ("error" in resolvedChannel) {
-        return { ok: false, error: resolvedChannel.error };
-      }
-      const { cfg: selectedCfg, sourceCfg, channel } = resolvedChannel;
-      const cfg = resolveMessageActionRuntimeConfig({ cfg: selectedCfg, sourceCfg });
-      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-      if (!plugin?.actions?.handleAction) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Channel ${channel} does not support action ${request.action}.`,
-          ),
-        };
-      }
-
       try {
         const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
         const agentId =
           normalizeOptionalString(request.agentId) ??
           (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
-        const envelopeAccountId = validateExplicitMessageAccountSelection({
-          cfg,
-          channel,
-          accountId: request.accountId,
-          plugin,
-        });
-        const nestedAccountId = validateExplicitMessageAccountSelection({
-          cfg,
-          channel,
-          accountId: request.params.accountId,
-          plugin,
-        });
-        if (envelopeAccountId && nestedAccountId && envelopeAccountId !== nestedAccountId) {
-          throw new Error("message.action accountId does not match params.accountId");
-        }
-        const accountId = envelopeAccountId ?? nestedAccountId;
+        const accountId = accountRoute.accountId;
         if (accountId) {
           request.params.accountId = accountId;
         }
@@ -701,21 +724,6 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionKey?: string;
       idempotencyKey: string;
     };
-    const inflight = resolveGatewayInflightRequest({
-      context,
-      prefix: "send",
-      idempotencyKey: request.idempotencyKey,
-      respond,
-      requestScope: resolveMessageOperationDedupeScope({
-        channel: request.channel,
-        accountIds: [request.accountId],
-      }),
-    });
-    if (inflight.kind === "handled") {
-      await inflight.done;
-      return;
-    }
-    const { idem, dedupeKey, inflightMap } = inflight;
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -736,29 +744,52 @@ export const sendHandlers: GatewayRequestHandlers = {
     const requestedAccountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
+    const resolvedChannel = await resolveInternalDeliveryChannel(request.channel, context);
+    if (resolvedChannel.kind !== "ready") {
+      const result = resolvedChannel.result;
+      respond(result.ok, result.payload, result.error, result.meta);
+      return;
+    }
+    const { cfg, channel } = resolvedChannel;
+    const outboundChannel = channel;
+    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+    if (!plugin) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
+      );
+      return;
+    }
+    let accountRoute: ReturnType<typeof resolveMessageOperationAccountRoute>;
+    try {
+      accountRoute = resolveMessageOperationAccountRoute({
+        cfg,
+        channel,
+        plugin,
+        accountIds: [requestedAccountId],
+        conflictMessage: "send account selections do not match",
+      });
+    } catch (error) {
+      respondGatewayInvalidRequest({ respond, channel, error });
+      return;
+    }
+    const accountId = accountRoute.accountId;
+    const inflight = resolveGatewayInflightRequest({
+      context,
+      prefix: "send",
+      idempotencyKey: request.idempotencyKey,
+      respond,
+      requestScope: accountRoute.requestScope,
+    });
+    if (inflight.kind === "handled") {
+      await inflight.done;
+      return;
+    }
+    const { idem, dedupeKey, inflightMap } = inflight;
 
     const work = (async (): Promise<InflightResult> => {
-      const resolvedChannel = await resolveInternalDeliveryChannel(request.channel, context);
-      if (resolvedChannel.kind !== "ready") {
-        return resolvedChannel.result;
-      }
-      const { cfg, channel } = resolvedChannel;
-      const outboundChannel = channel;
-      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-      if (!plugin) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
-        };
-      }
-
       try {
-        const accountId = validateExplicitMessageAccountSelection({
-          cfg,
-          channel,
-          accountId: requestedAccountId,
-          plugin,
-        });
         const resolvedTarget = resolveGatewayOutboundTarget({
           channel: outboundChannel,
           to,
@@ -957,15 +988,70 @@ export const sendHandlers: GatewayRequestHandlers = {
       accountId?: string;
       idempotencyKey: string;
     };
+    const resolvedChannel = await resolveRequestedChannel({
+      requestChannel: request.channel,
+      unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
+      context,
+    });
+    if ("error" in resolvedChannel) {
+      respond(false, undefined, resolvedChannel.error);
+      return;
+    }
+    const { cfg, channel } = resolvedChannel;
+    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+    const outbound = plugin?.outbound;
+    if (
+      typeof request.durationSeconds === "number" &&
+      outbound?.supportsPollDurationSeconds !== true
+    ) {
+      // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `durationSeconds is not supported for ${channel} polls`,
+        ),
+      );
+      return;
+    }
+    if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `isAnonymous is not supported for ${channel} polls`),
+      );
+      return;
+    }
+    if (!plugin || !outbound?.sendPoll) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
+      );
+      return;
+    }
+    const sendPoll = outbound.sendPoll;
+    let accountRoute: ReturnType<typeof resolveMessageOperationAccountRoute>;
+    try {
+      accountRoute = resolveMessageOperationAccountRoute({
+        cfg,
+        channel,
+        plugin,
+        accountIds: [request.accountId],
+        conflictMessage: "poll account selections do not match",
+      });
+    } catch (error) {
+      respondGatewayInvalidRequest({ respond, channel, error });
+      return;
+    }
+    const accountId = accountRoute.accountId;
     const inflight = resolveGatewayInflightRequest({
       context,
       prefix: "poll",
       idempotencyKey: request.idempotencyKey,
       respond,
-      requestScope: resolveMessageOperationDedupeScope({
-        channel: request.channel,
-        accountIds: [request.accountId],
-      }),
+      requestScope: accountRoute.requestScope,
     });
     if (inflight.kind === "handled") {
       await inflight.done;
@@ -973,39 +1059,6 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const { idem, dedupeKey, inflightMap } = inflight;
     const work = (async (): Promise<InflightResult> => {
-      const resolvedChannel = await resolveRequestedChannel({
-        requestChannel: request.channel,
-        unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
-        context,
-      });
-      if ("error" in resolvedChannel) {
-        return { ok: false, error: resolvedChannel.error };
-      }
-      const { cfg, channel } = resolvedChannel;
-      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-      const outbound = plugin?.outbound;
-      if (
-        typeof request.durationSeconds === "number" &&
-        outbound?.supportsPollDurationSeconds !== true
-      ) {
-        // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `durationSeconds is not supported for ${channel} polls`,
-          ),
-        };
-      }
-      if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `isAnonymous is not supported for ${channel} polls`,
-          ),
-        };
-      }
       const poll = {
         question: request.question,
         options: request.options,
@@ -1015,19 +1068,6 @@ export const sendHandlers: GatewayRequestHandlers = {
       };
       const threadId = normalizeOptionalString(request.threadId);
       try {
-        if (!outbound?.sendPoll) {
-          const error = errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `unsupported poll channel: ${channel}`,
-          );
-          return { ok: false, error };
-        }
-        const accountId = validateExplicitMessageAccountSelection({
-          cfg,
-          channel,
-          accountId: request.accountId,
-          plugin,
-        });
         const resolvedTarget = resolveGatewayOutboundTarget({
           channel,
           to: request.to.trim(),
@@ -1040,7 +1080,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const normalized = outbound.pollMaxOptions
           ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
           : normalizePollInput(poll);
-        const result = await outbound.sendPoll({
+        const result = await sendPoll({
           cfg,
           to: resolvedTarget.to,
           poll: normalized,
