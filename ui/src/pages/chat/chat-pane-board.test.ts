@@ -305,6 +305,25 @@ describe("chat pane board shell", () => {
     expect(pane.resolveBoardView().dock).toBe("right");
   });
 
+  it("persists the moved panel as the collapsed active panel", () => {
+    const pane = createTestPane();
+    const renderedLayout = openSlot(openSlot({ columns: [] }, "detail"), "discussion");
+    pane.state.sidebarLayout = renderedLayout;
+    const discussionPanel = renderedLayout.columns[1]!.panels[0]!;
+    const moved = mergePanelIntoColumn(
+      renderedLayout,
+      discussionPanel.id,
+      renderedLayout.columns[0]!.id,
+      0,
+    );
+
+    pane.commitSidebarPanelMove(moved, discussionPanel.id, "right", pane.resolveBoardView());
+
+    // The collapsed layout reads this separate selection, so a drag must update it
+    // or the narrow view foregrounds a stale panel after resizing.
+    expect(pane.state.sidebarFocusPanelId).toBe(discussionPanel.id);
+  });
+
   it("activates an existing tabbed chat panel when reopening a side dock", () => {
     const pane = createTestPane();
     const withChat = openSlot(openSlot({ columns: [] }, "chat"), "discussion");

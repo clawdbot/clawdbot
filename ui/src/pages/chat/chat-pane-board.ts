@@ -64,13 +64,22 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       .find((candidate) => candidate.id === panelId);
     if (panel?.slot !== "chat" || board.dock === targetSide) {
       this.commitSidebarLayout(layout);
+      this.commitSidebarMovedPanelActive(panelId);
       return;
     }
     if (!board.provider.canMutate || board.activeTabReadOnly) {
       return;
     }
     this.commitSidebarLayout(layout);
+    this.commitSidebarMovedPanelActive(panelId);
     this.handleBoardDockChange(targetSide);
+  }
+
+  // A move activates the panel in its destination column, but the collapsed layout
+  // reads a separate persisted selection. Without this the narrow view foregrounds
+  // a stale panel after a drag, and the stale choice survives reload.
+  private commitSidebarMovedPanelActive(panelId: string): void {
+    this.state?.updateSidebarActivePanel(panelId);
   }
 
   protected commitSidebarColumnResize(
