@@ -245,7 +245,7 @@ export type NativeHookRelayBridgeRequestAuth = {
   bridge: NativeHookRelayBridgeRegistration;
 };
 
-export type NativeHookRelaySharedState = {
+type NativeHookRelaySharedState = {
   relays: Map<string, ActiveNativeHookRelayRegistration>;
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
   invocations: NativeHookRelayInvocation[];
