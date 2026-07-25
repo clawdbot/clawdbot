@@ -36,6 +36,7 @@ import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   limitSidebarSessionRows,
   SIDEBAR_SESSION_NO_ATTENTION,
+  SIDEBAR_SESSION_PAGE_SIZE,
   type SidebarRecentSession,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
@@ -173,7 +174,12 @@ export function buildSidebarSessionNavigationState(input: {
 }
 
 export type SidebarVisibleSections = {
-  sections: (SidebarSessionSection<SidebarRecentSession> & { totalRowCount: number })[];
+  sections: (SidebarSessionSection<SidebarRecentSession> & {
+    totalRowCount: number;
+    visibleRowCount: number;
+    visibleLimit: number;
+    collapsedVisibleRowCount: number;
+  })[];
   expandedRows: SidebarRecentSession[];
   visibleRows: SidebarRecentSession[];
 };
@@ -184,7 +190,7 @@ export function partitionSidebarVisibleSections(input: {
   knownGroups: string[] | undefined;
   collapsedSections: ReadonlySet<string>;
   hideEmptyCreatorFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
-  visibleSessionLimit: number;
+  visibleSessionLimits: ReadonlyMap<string, number>;
 }): SidebarVisibleSections {
   const isCollapsed = (sectionId: string) =>
     sidebarSectionHasHeader(sectionId, input.grouping) && input.collapsedSections.has(sectionId);
@@ -196,18 +202,33 @@ export function partitionSidebarVisibleSections(input: {
       section.id !== "pinned" &&
       !input.hideEmptyCreatorFilteredGroup(section.category, section.rows.length),
   );
-  const expandedRows = sections.flatMap((section) => (isCollapsed(section.id) ? [] : section.rows));
-  const visibleRows = limitSidebarSessionRows(expandedRows, input.visibleSessionLimit);
-  const keep = new Set(visibleRows.map((row) => row.key));
+  const expandedRows: SidebarRecentSession[] = [];
+  const visibleRows: SidebarRecentSession[] = [];
   // totalRowCount is the pre-pagination size: headers and empty-zone
   // checks must not mistake a page-filtered section for an empty one.
   const limitedSections: SidebarVisibleSections["sections"] = [];
   for (const section of sections) {
     const totalRowCount = section.rows.length;
+    const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
+    const collapsedVisibleRowCount = limitSidebarSessionRows(
+      section.rows,
+      SIDEBAR_SESSION_PAGE_SIZE,
+    ).length;
+    let visibleRowCount = 0;
     if (!isCollapsed(section.id)) {
-      section.rows = section.rows.filter((row) => keep.has(row.key));
+      expandedRows.push(...section.rows);
+      section.rows = limitSidebarSessionRows(section.rows, visibleLimit);
+      visibleRows.push(...section.rows);
+      visibleRowCount = section.rows.length;
     }
-    limitedSections.push(Object.assign(section, { totalRowCount }));
+    limitedSections.push(
+      Object.assign(section, {
+        totalRowCount,
+        visibleRowCount,
+        visibleLimit,
+        collapsedVisibleRowCount,
+      }),
+    );
   }
   return { sections: limitedSections, expandedRows, visibleRows };
 }

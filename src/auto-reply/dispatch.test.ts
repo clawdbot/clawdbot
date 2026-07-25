@@ -13,6 +13,8 @@ type DispatchReplyFromConfigFn =
 type FinalizeInboundContextFn = typeof import("./reply/inbound-context.js").finalizeInboundContext;
 type DeriveInboundMessageHookContextFn =
   typeof import("../hooks/message-hook-mappers.js").deriveInboundMessageHookContext;
+type ResolveInboundReplyHookTargetFn =
+  typeof import("../hooks/message-hook-mappers.js").resolveInboundReplyHookTarget;
 type GetGlobalHookRunnerFn = typeof import("../plugins/hook-runner-global.js").getGlobalHookRunner;
 type CreateReplyDispatcherFn = typeof import("./reply/reply-dispatcher.js").createReplyDispatcher;
 type CreateReplyDispatcherWithTypingFn =
@@ -49,6 +51,10 @@ vi.mock("../hooks/message-hook-mappers.js", () => ({
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
   }),
+  resolveInboundReplyHookTarget: (...args: Parameters<ResolveInboundReplyHookTargetFn>) => {
+    const [finalized, hookCtx] = args;
+    return finalized.OriginatingTo || hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
+  },
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({

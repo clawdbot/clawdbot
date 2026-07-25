@@ -9,6 +9,7 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
@@ -144,8 +145,7 @@ export function collectConfiguredAgentModelProviderIds(
   addModelProviderRefs(defaults?.utilityModel);
   addModelMapProviderIds(defaults?.models);
 
-  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
-  for (const agent of agents) {
+  for (const agent of listAgentEntries(config)) {
     if (!isRecord(agent)) {
       continue;
     }
@@ -366,8 +366,7 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
     }
   };
   addEffectiveProviders(undefined);
-  const agents = config.agents?.list;
-  const agentEntries = Array.isArray(agents) ? agents.filter(isRecord) : [];
+  const agentEntries = listAgentEntries(config);
   if (agentEntries.length === 0) {
     return [...byConfiguredIdAndSource.values()];
   }

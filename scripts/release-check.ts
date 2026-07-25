@@ -32,6 +32,7 @@ import {
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
   isLegacyPluginDependencyInstallStagePath,
   LOCAL_BUILD_METADATA_DIST_PATHS,
@@ -201,21 +202,6 @@ const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
 );
 
-function positiveEnvInt(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  if (!/^[1-9]\d*$/u.test(raw)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  return value;
-}
-
 export function runReleaseCheckCommand(
   invocation: ReleaseCheckCommandInvocation,
   options: {
@@ -235,16 +221,18 @@ export function runReleaseCheckCommand(
     killSignal: "SIGKILL",
     maxBuffer:
       options.maxBuffer ??
-      positiveEnvInt(
+      readPositiveEnvInt(
         "OPENCLAW_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES",
+        process.env,
         DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES,
       ),
     shell: invocation.shell ?? options.shell,
     stdio: options.stdio,
     timeout:
       options.timeoutMs ??
-      positiveEnvInt(
+      readPositiveEnvInt(
         "OPENCLAW_RELEASE_CHECK_COMMAND_TIMEOUT_MS",
+        process.env,
         DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,
       ),
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,

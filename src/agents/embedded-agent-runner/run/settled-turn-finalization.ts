@@ -215,15 +215,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
   // Finalization bypasses ordinary attempt normalization. Rebuild only the
   // terminal projection so settled side effects and retry state cannot leak in.
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    timedOutByRunBudget: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: settledAttempt.sessionIdUsed,
     sessionFileUsed: settledAttempt.sessionFileUsed,
     ...(input.agentHarnessId ? { agentHarnessId: input.agentHarnessId } : {}),

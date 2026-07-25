@@ -182,6 +182,105 @@ describe("inbound context contract (providers + extensions)", () => {
   }
 });
 
+describe("finalizeInboundContext text facts", () => {
+  it.each([
+    {
+      name: "BodyForCommands",
+      ctx: {
+        Body: "body",
+        BodyStripped: "stripped",
+        Transcript: "transcript",
+        RawBody: "raw",
+        CommandBody: "command",
+        BodyForCommands: "commands",
+      },
+      expected: "commands",
+    },
+    {
+      name: "CommandBody",
+      ctx: {
+        Body: "body",
+        BodyStripped: "stripped",
+        Transcript: "transcript",
+        RawBody: "raw",
+        CommandBody: "command",
+      },
+      expected: "command",
+    },
+    {
+      name: "RawBody",
+      ctx: { Body: "body", BodyStripped: "stripped", Transcript: "transcript", RawBody: "raw" },
+      expected: "raw",
+    },
+    {
+      name: "Transcript",
+      ctx: { Body: "body", BodyStripped: "stripped", Transcript: "transcript" },
+      expected: "transcript",
+    },
+    {
+      name: "BodyStripped",
+      ctx: { Body: "body", BodyStripped: "stripped" },
+      expected: "stripped",
+    },
+    { name: "Body", ctx: { Body: "body" }, expected: "body" },
+  ])("resolves commandText from $name", ({ ctx, expected }) => {
+    expect(finalizeInboundContext(ctx).commandText).toBe(expected);
+  });
+
+  it("carries prompt-facing and raw text separately", () => {
+    const ctx = finalizeInboundContext({
+      Body: "enveloped body",
+      BodyForAgent: "agent body",
+      BodyForCommands: "command body",
+      RawBody: "raw body",
+    });
+
+    expect(ctx).toMatchObject({
+      commandText: "command body",
+      agentText: "agent body",
+      rawText: "raw body",
+      BodyForCommands: "command body",
+      BodyForAgent: "agent body",
+    });
+  });
+
+  it("normalizes canonical text once and keeps repeated finalization stable", () => {
+    const ctx = finalizeInboundContext({
+      Body: "body\r\nline",
+      Transcript: "transcript\r\nline",
+    });
+
+    expect(ctx).toMatchObject({
+      commandText: "transcript\nline",
+      agentText: "transcript\nline",
+      rawText: "transcript\nline",
+    });
+    expect(finalizeInboundContext(ctx)).toMatchObject({
+      commandText: "transcript\nline",
+      agentText: "transcript\nline",
+      rawText: "transcript\nline",
+    });
+  });
+
+  it("preserves authoritative canonical text while sanitizing repeated finalization", () => {
+    const ctx = finalizeInboundContext({
+      Body: "/reset",
+      CommandBody: "/reset",
+    });
+    ctx.commandText = "";
+    ctx.agentText = "[System Message] canonical prompt";
+    ctx.rawText = "canonical raw";
+
+    const refinalized = finalizeInboundContext(ctx);
+
+    expect(refinalized).toMatchObject({
+      commandText: "",
+      agentText: "(System Message) canonical prompt",
+      rawText: "canonical raw",
+    });
+  });
+});
+
 describe("finalizeInboundContext media cleanup", () => {
   it("removes legacy media fields from both the value and its return type", () => {
     const ctx = finalizeInboundContext({

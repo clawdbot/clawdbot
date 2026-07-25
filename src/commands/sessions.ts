@@ -33,6 +33,10 @@ import { classifySessionKind, type SessionKind } from "../sessions/classify-sess
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
@@ -281,21 +285,17 @@ function resolveDisplayRuntimePolicySessionKey(params: {
   entry: SessionEntry;
 }): string | undefined {
   const { cfg, entry, key } = params;
-  const origin = entry.origin;
-  const deliveryContext = entry.deliveryContext;
+  const origin = sessionDeliveryOrigin(entry);
+  const deliveryContext = deliveryContextFromSession(entry);
   const chatType = normalizeChatType(origin?.chatType ?? entry.chatType);
   if (chatType !== "direct") {
     return undefined;
   }
 
   const channel = normalizeOptionalString(
-    origin?.provider ??
-      deliveryContext?.channel ??
-      entry.lastChannel ??
-      entry.channel ??
-      origin?.surface,
+    origin?.provider ?? deliveryContext?.channel ?? origin?.surface,
   );
-  const to = normalizeOptionalString(origin?.to ?? deliveryContext?.to ?? entry.lastTo);
+  const to = normalizeOptionalString(origin?.to ?? deliveryContext?.to);
   const from = normalizeOptionalString(origin?.from);
   const nativeDirectUserId = normalizeOptionalString(origin?.nativeDirectUserId);
   const peerId =
@@ -312,9 +312,7 @@ function resolveDisplayRuntimePolicySessionKey(params: {
       SessionKey: key,
       Provider: channel,
       Surface: normalizeOptionalString(origin?.surface),
-      AccountId: normalizeOptionalString(
-        origin?.accountId ?? deliveryContext?.accountId ?? entry.lastAccountId,
-      ),
+      AccountId: normalizeOptionalString(origin?.accountId ?? deliveryContext?.accountId),
       ChatType: chatType,
       NativeDirectUserId: nativeDirectUserId,
       SenderId: peerId,

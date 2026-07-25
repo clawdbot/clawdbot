@@ -9,7 +9,7 @@ export function parseArgs(argv: string[]) {
 
 function printUsage(): void {
   process.stdout.write(
-    "Usage: node --import tsx scripts/ios-sync-versioning.ts [--write|--check] [--version YYYY.M.D] [--revision 0-99] [--root dir]\n\nValidates that iOS versioning inputs can produce generated local artifacts.\n",
+    "Usage: node --import tsx scripts/ios-sync-versioning.ts [--write|--check] [--version YYYY.M.D] [--revision 0-9] [--root dir]\n\nValidates that iOS versioning inputs can produce generated local artifacts.\n",
   );
 }
 

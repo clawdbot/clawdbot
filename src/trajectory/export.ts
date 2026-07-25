@@ -27,6 +27,7 @@ import {
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
+import { projectPersistedMessageMediaFacts } from "../media/media-facts.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
 import { isRegularNonSymlinkFile, resolveTrajectoryRuntimeFile } from "./runtime-file.js";
@@ -611,6 +612,32 @@ function buildTranscriptEvents(params: {
   return events;
 }
 
+function projectTrajectoryBranchMediaFacts(entries: SessionEntry[]): SessionEntry[] {
+  return entries.map((entry) =>
+    entry.type === "message"
+      ? { ...entry, message: projectPersistedMessageMediaFacts(entry.message) }
+      : entry,
+  );
+}
+
+function projectRuntimeTrajectoryMediaFacts(event: TrajectoryEvent): TrajectoryEvent {
+  const messagesSnapshot = event.data?.messagesSnapshot;
+  if (!Array.isArray(messagesSnapshot)) {
+    return event;
+  }
+  return {
+    ...event,
+    data: {
+      ...event.data,
+      messagesSnapshot: messagesSnapshot.map((message) =>
+        message && typeof message === "object" && !Array.isArray(message)
+          ? projectPersistedMessageMediaFacts(message)
+          : message,
+      ),
+    },
+  };
+}
+
 function sortTrajectoryEvents(events: TrajectoryEvent[]): TrajectoryEvent[] {
   const sourceOrder: Record<TrajectoryEvent["source"], number> = {
     runtime: 0,
@@ -1078,9 +1105,10 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     sessionId: params.sessionId,
   });
   const runtimeFile = runtimeParse.runtimeFile;
-  const runtimeEvents = runtimeParse.events;
+  const runtimeEvents = runtimeParse.events.map(projectRuntimeTrajectoryMediaFacts);
+  const projectedBranchEntries = projectTrajectoryBranchMediaFacts(branchEntries);
   const transcriptEvents = buildTranscriptEvents({
-    entries: branchEntries,
+    entries: projectedBranchEntries,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -1173,7 +1201,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
         {
           header,
           leafId,
-          entries: branchEntries,
+          entries: projectedBranchEntries,
         },
         redaction,
       ),

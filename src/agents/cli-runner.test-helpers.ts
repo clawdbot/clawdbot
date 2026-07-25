@@ -120,6 +120,7 @@ export type PreparedCliRunContextOverrides = {
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
   preparedEnv?: PreparedCliRunContext["preparedBackend"]["env"];
   resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
+  toolAvailabilityEnforcement?: PreparedCliRunContext["backendResolved"]["toolAvailabilityEnforcement"];
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
   mcpDeliveryCapture?: boolean;
@@ -221,6 +222,9 @@ export function buildPreparedCliRunContext(
             ? "google"
             : "openai",
       resolveExecutionArgs: overrides.resolveExecutionArgs,
+      toolAvailabilityEnforcement:
+        overrides.toolAvailabilityEnforcement ??
+        (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
     },
     preparedBackend: {

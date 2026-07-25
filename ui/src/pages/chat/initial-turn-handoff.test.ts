@@ -161,10 +161,12 @@ describe("initial user message handoff", () => {
     const persisted = {
       role: "user",
       content: "inspect this image",
-      MediaPath: "/media/image-1",
-      MediaType: "image/png",
       idempotencyKey: "initial-image-send:user",
-      __openclaw: { id: "persisted-image-prompt", seq: 1 },
+      __openclaw: {
+        id: "persisted-image-prompt",
+        seq: 1,
+        media: [{ path: "/media/image-1", contentType: "image/png" }],
+      },
     };
     const createdSession = { chatMessages: [persisted] as unknown[], hello };
     const projectedMessage = projectedSession.chatMessages[0];

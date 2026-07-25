@@ -6,7 +6,10 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "./delivery-context.js";
-import { normalizeSessionDeliveryFields } from "./delivery-context.shared.js";
+import {
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+} from "./delivery-context.shared.js";
 
 describe("delivery context helpers", () => {
   it("normalizes channel/to/accountId and drops empty contexts", () => {
@@ -109,259 +112,110 @@ describe("delivery context helpers", () => {
   });
 
   it("derives delivery context from a session entry", () => {
+    const delivery = normalizeSessionDeliveryState({
+      route: {
+        channel: "slack",
+        accountId: "work",
+        target: { to: "channel:C123" },
+        thread: { id: "177000.123" },
+      },
+    });
+    expect(deliveryContextFromSession({ delivery })).toEqual({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "work",
+      threadId: "177000.123",
+    });
+  });
+
+  it("does not reconstruct delivery from retired session fields at runtime", () => {
     expect(
       deliveryContextFromSession({
         route: {
           channel: "slack",
-          accountId: "work",
           target: { to: "channel:C123" },
-          thread: { id: "177000.123" },
         },
-        channel: "webchat",
-        lastChannel: "webchat",
-        lastTo: "user:old",
-      }),
-    ).toEqual({
-      channel: "slack",
-      to: "channel:C123",
-      accountId: "work",
-      threadId: "177000.123",
-    });
+        lastChannel: "slack",
+        lastTo: "channel:C123",
+      } as unknown as { delivery?: never }),
+    ).toBeUndefined();
+  });
+
+  it("normalizes the closed none, internal, and external states", () => {
+    expect(normalizeSessionDeliveryState()).toEqual({ kind: "none" });
+    expect(
+      normalizeSessionDeliveryState({ context: { channel: "webchat", to: "dashboard" } }),
+    ).toEqual({ kind: "internal" });
 
     expect(
-      deliveryContextFromSession({
-        channel: "webchat",
-        lastChannel: " demo-channel ",
-        lastTo: " +1777 ",
-        lastAccountId: " acct-9 ",
+      normalizeSessionDeliveryState({
+        route: {
+          channel: "Slack",
+          accountId: " work ",
+          target: { to: " channel:C123 ", rawTo: " slack://C123 ", chatType: "channel" },
+          thread: { id: " 177000.123 ", kind: "thread", source: "target" },
+        },
+        context: { channel: "discord", to: "channel:old" },
+        origin: { label: "Support" },
       }),
     ).toEqual({
-      channel: "demo-channel",
-      to: "+1777",
-      accountId: "acct-9",
-    });
-
-    expect(
-      deliveryContextFromSession({
-        channel: "demo-channel",
-        lastTo: " 123 ",
-        lastThreadId: " 999 ",
-      }),
-    ).toEqual({
-      channel: "demo-channel",
-      to: "123",
-      accountId: undefined,
-      threadId: "999",
-    });
-
-    expect(
-      deliveryContextFromSession({
-        channel: "demo-channel",
-        lastTo: " -1001 ",
-        origin: { threadId: 42 },
-      }),
-    ).toEqual({
-      channel: "demo-channel",
-      to: "-1001",
-      accountId: undefined,
-      threadId: 42,
-    });
-
-    expect(
-      deliveryContextFromSession({
-        channel: "demo-channel",
-        lastTo: " -1001 ",
-        deliveryContext: { threadId: " 777 " },
-        origin: { threadId: 42 },
-      }),
-    ).toEqual({
-      channel: "demo-channel",
-      to: "-1001",
-      accountId: undefined,
-      threadId: "777",
+      kind: "external",
+      route: {
+        channel: "slack",
+        accountId: "work",
+        target: { to: "channel:C123", rawTo: "slack://C123", chatType: "channel" },
+        thread: { id: "177000.123", kind: "thread", source: "target" },
+      },
+      context: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "work",
+        threadId: "177000.123",
+      },
+      origin: {
+        label: "Support",
+        provider: "slack",
+        to: "channel:C123",
+        accountId: "work",
+        threadId: "177000.123",
+        chatType: "channel",
+      },
     });
   });
 
-  it("prefers explicit external delivery context over stale webchat legacy fields", () => {
-    expect(
-      deliveryContextFromSession({
-        channel: "webchat",
-        deliveryContext: {
-          channel: "room-chat",
-          to: " peer-1 ",
-          accountId: " acct-1 ",
-          threadId: " thread-1 ",
-        },
-      }),
-    ).toEqual({
-      channel: "room-chat",
-      to: "peer-1",
-      accountId: "acct-1",
-      threadId: "thread-1",
+  it("projects compatibility fields without duplicating them in the session row", () => {
+    const delivery = normalizeSessionDeliveryState({
+      context: { channel: "telegram", to: "-1001", accountId: "bot", threadId: 42 },
+      origin: { label: "Ops" },
     });
-
-    expect(
-      deliveryContextFromSession({
-        channel: "webchat",
-        lastChannel: "webchat",
-        lastTo: "session:dashboard",
-        lastAccountId: "work",
-        lastThreadId: "thread-2",
-        deliveryContext: {
-          channel: "room-chat",
-          to: "peer-2",
-        },
-      }),
-    ).toEqual({
-      channel: "room-chat",
-      to: "peer-2",
-      accountId: "work",
-      threadId: "thread-2",
-    });
-
-    expect(
-      deliveryContextFromSession({
-        lastChannel: "heartbeat",
-        lastTo: "heartbeat",
-        deliveryContext: {
-          channel: "telegram",
-          to: "-100123",
-        },
-      }),
-    ).toEqual({
+    const expectedProjection = {
+      route: {
+        channel: "telegram",
+        accountId: "bot",
+        target: { to: "-1001" },
+        thread: { id: 42 },
+      },
+      deliveryContext: {
+        channel: "telegram",
+        to: "-1001",
+        accountId: "bot",
+        threadId: 42,
+      },
+      origin: {
+        label: "Ops",
+        provider: "telegram",
+        to: "-1001",
+        accountId: "bot",
+        threadId: 42,
+      },
       channel: "telegram",
-      to: "-100123",
-      accountId: undefined,
-    });
-
-    const routeNormalized = normalizeSessionDeliveryFields({
-      route: {
-        channel: "webchat",
-        accountId: "work",
-        target: { to: "session:dashboard" },
-        thread: { id: "thread-route" },
-      },
-      deliveryContext: {
-        channel: "room-chat",
-        to: "peer-route",
-      },
-    });
-    expect(routeNormalized.deliveryContext).toEqual({
-      channel: "room-chat",
-      to: "peer-route",
-      accountId: "work",
-      threadId: "thread-route",
-    });
-    expect(routeNormalized.route).toEqual({
-      channel: "room-chat",
-      accountId: "work",
-      target: { to: "peer-route" },
-      thread: { id: "thread-route" },
-    });
-  });
-
-  it("does not promote tool-only context over internal session delivery", () => {
-    const normalized = normalizeSessionDeliveryFields({
-      route: {
-        channel: "webchat",
-        accountId: "work",
-        target: { to: "session:dashboard" },
-      },
-      deliveryContext: {
-        channel: "sessions_send",
-        to: "session:handoff",
-      },
-    });
-
-    expect(normalized.deliveryContext).toEqual({
-      channel: "webchat",
-      to: "session:dashboard",
-      accountId: "work",
-    });
-    expect(normalized.route).toEqual({
-      channel: "webchat",
-      accountId: "work",
-      target: { to: "session:dashboard" },
-    });
-
-    const staleLegacyExternal = normalizeSessionDeliveryFields({
-      route: {
-        channel: "webchat",
-        accountId: "work",
-        target: { to: "session:dashboard" },
-      },
-      lastChannel: "room-chat",
-      lastTo: "peer-old",
-      lastAccountId: "old-workspace",
-    });
-
-    expect(staleLegacyExternal.deliveryContext).toEqual({
-      channel: "webchat",
-      to: "session:dashboard",
-      accountId: "work",
-    });
-    expect(staleLegacyExternal.route).toEqual({
-      channel: "webchat",
-      accountId: "work",
-      target: { to: "session:dashboard" },
-    });
-  });
-
-  it("normalizes delivery fields, mirrors session fields, and avoids cross-channel carryover", () => {
-    const normalized = normalizeSessionDeliveryFields({
-      deliveryContext: {
-        channel: " demo-fallback ",
-        to: " channel:1 ",
-        accountId: " acct-2 ",
-        threadId: " 444 ",
-      },
-      lastChannel: " demo-primary ",
-      lastTo: " +1555 ",
-    });
-
-    expect(normalized.deliveryContext).toEqual({
-      channel: "demo-primary",
-      to: "+1555",
-      accountId: undefined,
-    });
-    expect(normalized.lastChannel).toBe("demo-primary");
-    expect(normalized.lastTo).toBe("+1555");
-    expect(normalized.lastAccountId).toBeUndefined();
-    expect(normalized.lastThreadId).toBeUndefined();
-  });
-
-  it("normalizes route-first delivery fields and mirrors legacy fields", () => {
-    const normalized = normalizeSessionDeliveryFields({
-      route: {
-        channel: "Slack",
-        accountId: " work ",
-        target: { to: " channel:C123 ", rawTo: " slack://C123 ", chatType: "channel" },
-        thread: { id: " 177000.123 ", kind: "thread", source: "target" },
-      },
-      deliveryContext: {
-        channel: "discord",
-        to: "channel:old",
-        threadId: "old-thread",
-      },
-      lastChannel: "discord",
-      lastTo: "channel:older",
-    });
-
-    expect(normalized.route).toEqual({
-      channel: "slack",
-      accountId: "work",
-      target: { to: "channel:C123", rawTo: "slack://C123", chatType: "channel" },
-      thread: { id: "177000.123", kind: "thread", source: "target" },
-    });
-    expect(normalized.deliveryContext).toEqual({
-      channel: "slack",
-      to: "channel:C123",
-      accountId: "work",
-      threadId: "177000.123",
-    });
-    expect(normalized.lastChannel).toBe("slack");
-    expect(normalized.lastTo).toBe("channel:C123");
-    expect(normalized.lastAccountId).toBe("work");
-    expect(normalized.lastThreadId).toBe("177000.123");
+      lastChannel: "telegram",
+      lastTo: "-1001",
+      lastAccountId: "bot",
+      lastThreadId: 42,
+    };
+    const projection = projectSessionDeliveryFields(delivery);
+    expect(projection).toEqual(expectedProjection);
+    expect(JSON.stringify(projection)).toBe(JSON.stringify(expectedProjection));
   });
 });

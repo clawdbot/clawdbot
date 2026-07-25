@@ -11,6 +11,8 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 
@@ -180,7 +182,7 @@ const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
 ): Parameters<typeof runPreparedReply>[0] {
-  return {
+  const defaults = {
     ctx: {
       Body: "",
       RawBody: "",
@@ -194,7 +196,7 @@ function baseParams(
       Body: "",
       BodyStripped: "",
       ThreadHistoryBody: "Earlier message in this thread",
-      MediaPath: "/tmp/input.png",
+      media: [{ path: "/tmp/input.png" }],
       Provider: "slack",
       ChatType: "group",
       OriginatingChannel: "slack",
@@ -249,8 +251,27 @@ function baseParams(
     sessionKey: "session-key",
     workspaceDir: "/tmp/workspace",
     abortedLastRun: false,
-    ...overrides,
   };
+  const ctx = overrides.ctx ?? defaults.ctx;
+  const sessionCtx = overrides.sessionCtx ?? defaults.sessionCtx;
+  const resolveTestCanonicalText = (value: Record<string, unknown>) => {
+    const { commandText, agentText, rawText } = finalizeInboundContextForSdk({ ...value });
+    return { commandText, agentText, rawText };
+  };
+  const sessionText = resolveTestCanonicalText(sessionCtx);
+  return {
+    ...defaults,
+    ...overrides,
+    ctx: { ...ctx, ...resolveTestCanonicalText(ctx) },
+    sessionCtx: {
+      ...sessionCtx,
+      ...sessionText,
+      agentText:
+        typeof sessionCtx.BodyStripped === "string"
+          ? sessionCtx.BodyStripped
+          : sessionText.agentText,
+    },
+  } as Parameters<typeof runPreparedReply>[0];
 }
 
 function ownerParams(): Parameters<typeof runPreparedReply>[0] {
@@ -531,7 +552,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           BodyStripped: "",
           ThreadHistoryBody: "Earlier direct message",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "direct",
           OriginatingChannel: "slack",
@@ -561,7 +582,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "yo",
           BodyStripped: "yo",
           ThreadHistoryBody: "Earlier direct message",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "telegram",
           ChatType: "direct",
           OriginatingChannel: "telegram",
@@ -586,13 +607,16 @@ describe("runPreparedReply media-only handling", () => {
         Body: "yo",
         BodyStripped: "yo",
         ThreadHistoryBody: "Earlier direct message",
-        MediaPath: "/tmp/input.png",
+        media: [{ path: "/tmp/input.png" }],
         Provider: "telegram",
         ChatType: "direct",
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram-direct-test-id",
         InboundHistory: undefined,
         ThreadStarterBody: undefined,
+        commandText: "yo",
+        agentText: "yo",
+        rawText: "yo",
       },
       expect.anything(),
       undefined,
@@ -667,7 +691,7 @@ describe("runPreparedReply media-only handling", () => {
             Body: "",
             BodyStripped: "",
             ThreadHistoryBody: "Earlier direct message",
-            MediaPath: "/tmp/input.png",
+            media: [{ path: "/tmp/input.png" }],
             Provider: "slack",
             ChatType: chatType,
             OriginatingChannel: "slack",
@@ -706,7 +730,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           BodyStripped: "",
           ThreadHistoryBody: "Earlier direct message",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "telegram",
           ChatType: "direct",
           OriginatingChannel: "telegram",
@@ -878,7 +902,7 @@ describe("runPreparedReply media-only handling", () => {
           BodyStripped: "",
           ThreadStarterBody: "starter message",
           ThreadHistoryBody: undefined,
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "group",
           OriginatingChannel: "slack",
@@ -912,7 +936,7 @@ describe("runPreparedReply media-only handling", () => {
           BodyStripped: "",
           ThreadStarterBody: "starter message",
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "group",
           OriginatingChannel: "slack",
@@ -952,7 +976,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           BodyStripped: "",
           ThreadStarterBody: "starter message",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "group",
           OriginatingChannel: "slack",
@@ -2913,18 +2937,18 @@ describe("runPreparedReply media-only handling", () => {
           updatedAt: 1,
           systemSent: true,
           chatType: "channel",
-          channel: "discord",
           groupId: "guild-1",
           groupChannel: "#ops",
-          lastChannel: "discord",
-          lastTo: "channel-1",
-          origin: {
-            provider: "discord",
-            surface: "discord",
-            chatType: "channel",
-            to: "channel-1",
-          },
-        } as SessionEntry,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "discord", to: "channel-1" },
+            origin: {
+              provider: "discord",
+              surface: "discord",
+              chatType: "channel",
+              to: "channel-1",
+            },
+          }),
+        },
       }),
     );
 
@@ -2977,15 +3001,15 @@ describe("runPreparedReply media-only handling", () => {
         updatedAt: 1,
         systemSent: true,
         chatType: "group",
-        channel: "telegram",
-        lastChannel: "telegram",
-        lastTo: "-100123",
-        origin: {
-          provider: "telegram",
-          surface: "telegram",
-          chatType: "group",
-          to: "-100123",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "-100123" },
+          origin: {
+            provider: "telegram",
+            surface: "telegram",
+            chatType: "group",
+            to: "-100123",
+          },
+        }),
       };
 
       await runPreparedReply(
@@ -3205,15 +3229,15 @@ describe("runPreparedReply media-only handling", () => {
       updatedAt: 1,
       systemSent: true,
       chatType: "group",
-      channel: "telegram",
-      lastChannel: "telegram",
-      lastTo: "-100123",
-      origin: {
-        provider: "telegram",
-        surface: "telegram",
-        chatType: "group",
-        to: "-100123",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "-100123" },
+        origin: {
+          provider: "telegram",
+          surface: "telegram",
+          chatType: "group",
+          to: "-100123",
+        },
+      }),
     };
 
     await runPreparedReply(
@@ -3398,7 +3422,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           BodyStripped: "",
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "telegram",
           ChatType: "group",
           OriginatingChannel: "telegram",
@@ -3437,7 +3461,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           BodyStripped: "",
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "webchat",
           ChatType: "group",
           OriginatingChannel: undefined,
@@ -3467,7 +3491,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           BodyStripped: "",
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "discord",
           ChatType: "group",
           OriginatingChannel: "discord",
@@ -3506,7 +3530,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           BodyStripped: "",
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "group",
           OriginatingChannel: "slack",
@@ -3556,23 +3580,21 @@ describe("runPreparedReply media-only handling", () => {
           sessionId: "session-1",
           updatedAt: 1,
           chatType: "direct",
-          channel: "matrix",
-          lastChannel: "slack",
-          lastTo: "user:U1",
-          lastAccountId: "work",
-          deliveryContext: {
-            channel: "slack",
-            to: "user:U1",
-            accountId: "work",
-          },
-          origin: {
-            provider: "matrix",
-            surface: "matrix",
-            chatType: "direct",
-            to: "room:origin",
-            accountId: "origin",
-          },
-        } as SessionEntry,
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "slack",
+              to: "user:U1",
+              accountId: "work",
+            },
+            origin: {
+              provider: "matrix",
+              surface: "matrix",
+              chatType: "direct",
+              to: "room:origin",
+              accountId: "origin",
+            },
+          }),
+        },
       }),
     );
 
@@ -3605,7 +3627,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           BodyStripped: "",
           ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
+          media: [{ path: "/tmp/input.png" }],
           Provider: "slack",
           ChatType: "direct",
           OriginatingChannel: "slack",

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { normalizeSessionDeliveryState } from "openclaw/plugin-sdk/session-store-runtime";
 import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { replaceQmdSessionArtifactMappings } from "./qmd-session-artifacts.js";
@@ -15,6 +16,7 @@ type TestSessionEntry = {
   updatedAt: number;
   sessionFile: string;
   chatType?: "direct" | "group" | "channel";
+  delivery?: ReturnType<typeof normalizeSessionDeliveryState>;
   origin?: { chatType?: "direct" | "group" | "channel" };
 };
 
@@ -254,13 +256,24 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
         sessionId: "current",
         updatedAt: 2,
         sessionFile: "/tmp/sessions/current.jsonl",
-        origin: { chatType: "direct" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", to: "user:current" },
+          origin: { provider: "discord", chatType: "direct", to: "user:current" },
+        }),
       },
       "agent:main:explicit:phone:group:shadow": {
         sessionId: "explicit-private",
         updatedAt: 1,
         sessionFile: "/tmp/sessions/explicit-private.jsonl",
         chatType: "direct",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", to: "user:explicit-private" },
+          origin: {
+            provider: "discord",
+            chatType: "direct",
+            to: "user:explicit-private",
+          },
+        }),
       },
     };
     const hit: MemorySearchResult = {

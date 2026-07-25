@@ -1,6 +1,7 @@
 // The system heartbeat monitor payload replaces the dedicated interval
 // scheduler: firing it must only poke the heartbeat wake queue.
 import { describe, expect, it } from "vitest";
+import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import {
   createCronStoreHarness,
   createNoopLogger,
@@ -76,6 +77,45 @@ describe("heartbeat payload execution", () => {
       );
       // The monitor never fabricates a system event; the wake is the whole run.
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    } finally {
+      cron.stop();
+      await cleanup();
+    }
+  });
+
+  it("routes migrated task jobs through the guarded task wake path", async () => {
+    const { storePath, cleanup } = await makeStorePath();
+    const { cron, enqueueSystemEvent, requestHeartbeat } =
+      createStartedCronServiceWithFinishedBarrier({ storePath, logger: noopLogger });
+    try {
+      await cron.start();
+      const added = await cron.add({
+        declarationKey: heartbeatTaskDeclarationKey("main", "inbox"),
+        name: "inbox",
+        agentId: "main",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "Check urgent inbox items" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      const job = "job" in added ? added.job : added;
+
+      await expect(cron.run(job.id, "force")).resolves.toMatchObject({ ok: true });
+      expect(requestHeartbeat).toHaveBeenCalledWith({
+        source: "interval",
+        intent: "task",
+        reason: `heartbeat-task:${job.id}`,
+        agentId: "main",
+        tasks: [{ jobId: job.id, name: "inbox", prompt: "Check urgent inbox items" }],
+      });
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+      // These stay ordinary cron rows: operators can edit and remove them.
+      await expect(
+        cron.update(job.id, { payload: { kind: "systemEvent", text: "Check priority inbox" } }),
+      ).resolves.toMatchObject({ id: job.id });
+      await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
     } finally {
       cron.stop();
       await cleanup();

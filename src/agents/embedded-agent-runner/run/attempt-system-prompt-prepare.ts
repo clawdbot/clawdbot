@@ -167,6 +167,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     agentId: params.sessionAgentId,
     workspaceDir: params.effectiveWorkspace,
     cwd: params.effectiveCwd,
+    ...(attempt.preparedModelRuntime && Object.hasOwn(attempt.preparedModelRuntime, "repoRoot")
+      ? { preparedRepoRoot: attempt.preparedModelRuntime.repoRoot }
+      : {}),
     runtime: {
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,

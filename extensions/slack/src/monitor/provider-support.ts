@@ -309,6 +309,7 @@ export function createSlackBoltApp(params: {
   signingSecret?: string;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
+  dispatcher?: SlackSocketModeReceiverOptions["dispatcher"];
   wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
 }) {
   const socketModeLogger = createSlackSocketModeLogger();
@@ -317,6 +318,7 @@ export function createSlackBoltApp(params: {
     autoReconnectEnabled: true,
     clientPingTimeout: OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS,
     logger: socketModeLogger,
+    ...(params.dispatcher ? { dispatcher: params.dispatcher } : {}),
     installerOptions: {
       clientOptions: params.clientOptions,
     },

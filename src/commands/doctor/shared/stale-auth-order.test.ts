@@ -494,6 +494,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -578,6 +579,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
         JSON.stringify(tokenStore({ profileId: "anthropic:legacy", provider: "anthropic" })),
       );
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -599,6 +601,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
         path.join(stateDir, "agents", "retained", "agent"),
       );
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -994,6 +997,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -1145,6 +1149,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 
@@ -1284,6 +1289,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       closeOpenClawStateDatabaseForTest();
       await fs.rm(databasePath);
       const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
         auth: { order: { anthropic: ["anthropic:missing"] } },
       } satisfies OpenClawConfig;
 

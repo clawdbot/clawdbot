@@ -17,7 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
@@ -132,10 +132,7 @@ function createModelManifestPluginContext(params: {
 function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string): ModelAliasCandidate[] {
   const modelMaps = [cfg.agents?.defaults?.models];
   if (agentId) {
-    const normalizedAgentId = normalizeAgentId(agentId);
-    const agentModels = cfg.agents?.list?.find(
-      (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
-    )?.models;
+    const agentModels = resolveAgentConfig(cfg, agentId)?.models;
     modelMaps.push(agentModels);
   }
   return modelMaps.flatMap((models) =>
@@ -1499,10 +1496,7 @@ export function resolveConfiguredModelPolicyAllow(params: {
 }): { refs: readonly string[]; configPath: string | null; repairConfigPath: string } {
   const defaults = params.cfg?.agents?.defaults;
   if (params.agentId) {
-    const normalizedAgentId = normalizeAgentId(params.agentId);
-    const agent = params.cfg?.agents?.list?.find(
-      (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
-    );
+    const agent = params.cfg ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
     const agentPolicy = agent?.modelPolicy;
     if (hasExplicitModelPolicyAllow(agentPolicy)) {
       return {

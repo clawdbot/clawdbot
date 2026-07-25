@@ -62,18 +62,14 @@ function makeIsolatedLastTargetConfig(tmpDir: string, storePath: string): OpenCl
 }
 
 describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => {
-  it("uses the isolated run key for outbound delivery while base session owns target and state", async () => {
+  it("uses the isolated run key for outbound delivery while the base session owns delivery state", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);
       const baseSessionKey = resolveMainSessionKey(cfg);
       const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
       const nowMs = Date.now();
       await seedHeartbeatScratchForTest({
-        content: `tasks:
-  - name: check-in
-    interval: 5m
-    prompt: "Check whether the user needs a status update."
-`,
+        content: "Check whether the user needs a status update.",
       });
       await seedSessionStore(storePath, baseSessionKey, {
         sessionId: "base-session",
@@ -108,20 +104,17 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       });
 
       const store = readSessionStoreForTest<{
-        heartbeatTaskState?: Record<string, number>;
         lastHeartbeatText?: string;
         lastHeartbeatSentAt?: number;
         heartbeatIsolatedBaseSessionKey?: string;
       }>(storePath);
       expect(store[baseSessionKey]).toMatchObject({
-        heartbeatTaskState: { "check-in": nowMs },
         lastHeartbeatText: "Status needs attention.",
         lastHeartbeatSentAt: nowMs,
       });
       expect(store[isolatedSessionKey]).toMatchObject({
         heartbeatIsolatedBaseSessionKey: baseSessionKey,
       });
-      expect(store[isolatedSessionKey]?.heartbeatTaskState).toBeUndefined();
       expect(store[isolatedSessionKey]?.lastHeartbeatText).toBeUndefined();
     });
   });

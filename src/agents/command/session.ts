@@ -38,6 +38,7 @@ import {
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
@@ -255,13 +256,15 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   agentId?: string;
 }): SessionKeyResolution {
   const sessionId = opts.sessionId.trim();
-  const storeAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
+  const storeAgentId = opts.agentId?.trim()
+    ? normalizeAgentId(opts.agentId)
+    : resolveDefaultAgentId(opts.cfg);
   const storePath = resolveStorePath(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
   const sessionStore = loadCommandSessionStore({
     storePath,
-    ...(storeAgentId ? { agentId: storeAgentId } : {}),
+    agentId: storeAgentId,
   });
   if (!sessionId) {
     return { sessionKey: undefined, sessionStore, storePath };
@@ -310,7 +313,7 @@ export function resolveSessionKeyForRequest(opts: {
   const storeAgentId = explicitSessionKey
     ? isUnscopedSessionKeySentinel(explicitSessionKey)
       ? (requestedAgentId ?? defaultAgentId)
-      : resolveAgentIdFromSessionKey(explicitSessionKey)
+      : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
     : (requestedAgentId ?? defaultAgentId);
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
@@ -406,12 +409,12 @@ export function resolveSession(opts: {
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
   const sessionAgentId = opts.agentId?.trim()
     ? normalizeAgentId(opts.agentId)
-    : resolveAgentIdFromSessionKey(sessionKey);
+    : resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(opts.cfg));
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel ?? sessionEntry?.origin?.provider,
+    channel: sessionDeliveryChannel(sessionEntry),
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,

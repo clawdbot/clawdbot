@@ -27,7 +27,12 @@ const HeartbeatResponseToolSchema = Type.Object(
     reason: Type.Optional(Type.String()),
     priority: optionalStringEnum(HEARTBEAT_TOOL_PRIORITIES),
     nextCheck: Type.Optional(Type.String()),
-    scratch: Type.Optional(Type.String()),
+    scratch: Type.Optional(
+      Type.String({
+        description:
+          "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -48,7 +53,7 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
     name: HEARTBEAT_RESPONSE_TOOL_NAME,
     displaySummary: "Record heartbeat outcome/notify choice.",
     description:
-      "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
+      "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
       if (!isRecord(args)) {

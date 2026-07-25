@@ -70,6 +70,7 @@ import {
   mergeCronRunDiagnostics,
   toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
+import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
 import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
 import type {
@@ -805,7 +806,7 @@ async function prepareCronRunContext(params: {
     };
   }
   const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-  const thinkingCatalog = modelOwner.catalog;
+  const thinkingCatalog = modelOwner.modelCatalog.entries;
   const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
   const matchesDefaultFallbackAgentStringModel =
     typeof ownerAgentConfig?.model === "string" &&
@@ -878,7 +879,7 @@ async function prepareCronRunContext(params: {
   if (selectedPreflightCandidate && modelFallbacksOverride) {
     if (firstUnavailablePreflight?.status === "unavailable") {
       logWarn(
-        `[cron:${input.job.id}] Local provider preflight failed for ${firstUnavailablePreflight.provider}/${firstUnavailablePreflight.model} at ${firstUnavailablePreflight.baseUrl}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
+        `[cron:${input.job.id}] ${firstUnavailablePreflight.reason}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
       );
     }
     provider = selectedPreflightCandidate.provider;
@@ -1126,6 +1127,11 @@ async function prepareCronRunContext(params: {
           thinkingLevel: requestedThinkLevel,
           toolsAllow: agentPayload?.toolsAllow,
           toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,
+          scheduledToolPolicy: resolveCronScheduledToolPolicy({
+            toolsAllow: agentPayload?.toolsAllow,
+            scheduledToolPolicy: input.job.scheduledToolPolicy,
+            owner: input.job.owner,
+          }),
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,

@@ -1,6 +1,5 @@
 // Imessage plugin module implements send behavior.
 import { constants, accessSync } from "node:fs";
-import { createRequire } from "node:module";
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
@@ -13,6 +12,7 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { kindFromMime, resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import {
@@ -45,7 +45,6 @@ import {
   parseIMessageTarget,
 } from "./targets.js";
 
-const require = createRequire(import.meta.url);
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
 const MIN_PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
 const PENDING_PERSISTED_ECHO_GRACE_MS = 5_000;
@@ -177,14 +176,6 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
   return trimmed && !isNumericMessageRowId(trimmed) ? trimmed : null;
 }
 
-function loadNodeSqlite(): typeof import("node:sqlite") | null {
-  try {
-    return require("node:sqlite") as typeof import("node:sqlite");
-  } catch {
-    return null;
-  }
-}
-
 function resolveMessageGuidFromChatDb(params: {
   dbPath?: string;
   messageId: string;
@@ -194,13 +185,9 @@ function resolveMessageGuidFromChatDb(params: {
   if (!dbPath || !isNumericMessageRowId(messageId)) {
     return null;
   }
-  const sqlite = loadNodeSqlite();
-  if (!sqlite) {
-    return null;
-  }
   let db: import("node:sqlite").DatabaseSync | null = null;
   try {
-    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    db = openNodeSqliteDatabase(dbPath, { readOnly: true });
     const row = db.prepare("SELECT guid FROM message WHERE ROWID = ?").get(messageId) as
       | { guid?: unknown }
       | undefined;
@@ -239,13 +226,9 @@ function resolveLatestSentMessageGuidFromChatDb(params: {
   if (!dbPath) {
     return null;
   }
-  const sqlite = loadNodeSqlite();
-  if (!sqlite) {
-    return null;
-  }
   let db: import("node:sqlite").DatabaseSync | null = null;
   try {
-    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    db = openNodeSqliteDatabase(dbPath, { readOnly: true });
     const targetClauses: string[] = [];
     const targetParams: Array<string | number> = [];
     const lowerBound = appleMessageDateLowerBoundMs(params.sentAfterMs);
@@ -298,7 +281,7 @@ function resolveLatestSentMessageGuidFromChatDb(params: {
 
 function canResolveLatestSentMessageGuidFromChatDb(dbPath?: string): boolean {
   const normalizedDbPath = dbPath?.trim();
-  if (!normalizedDbPath || !loadNodeSqlite()) {
+  if (!normalizedDbPath) {
     return false;
   }
   try {

@@ -12,6 +12,7 @@ import {
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery-store.js";
+import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import {
   setChannelSourceTurnId,
@@ -350,6 +351,12 @@ export function startAgentRunExecution(params: {
           runtimePluginToolGrant,
           trustedInternalHandoff,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
+          scheduledToolPolicy: params.restoredCronContinuation
+            ? resolveScheduledToolPolicyContext({
+                toolsAllow: params.restoredCronContinuation.toolsAllow,
+                scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
+              })
+            : undefined,
           requireExplicitMessageTarget:
             params.restoredCronContinuation?.cliSessionBindingFacts?.requireExplicitMessageTarget,
           cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,

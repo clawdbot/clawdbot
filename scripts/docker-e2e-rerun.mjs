@@ -417,10 +417,14 @@ function downloadDockerArtifacts(runId, repo, outputDir) {
   if (names.length === 0) {
     throw new Error(`No docker-e2e-* artifacts found for run ${runId}`);
   }
-  for (const name of names) {
+  for (const [index, name] of names.entries()) {
+    const artifactDir = path.join(
+      outputDir,
+      `${String(index).padStart(3, "0")}-${safePathSegment(name)}`,
+    );
     run(
       "gh",
-      ["run", "download", String(runId), "--repo", repo, "--name", name, "--dir", outputDir],
+      ["run", "download", String(runId), "--repo", repo, "--name", name, "--dir", artifactDir],
       {
         stdio: "inherit",
       },

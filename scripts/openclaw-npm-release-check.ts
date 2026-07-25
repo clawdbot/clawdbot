@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase } from "./lib/npm-publish-plan.mjs";
+import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -280,25 +281,10 @@ export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null
   return null;
 }
 
-function positiveEnvInt(name: string, env: NodeJS.ProcessEnv, fallback: number): number {
-  const raw = env[name]?.trim();
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  if (!/^[1-9]\d*$/u.test(raw)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  return value;
-}
-
 export function resolveNpmReleaseCheckCommandTimeoutMs(
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  return positiveEnvInt(
+  return readPositiveEnvInt(
     "OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS",
     env,
     DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,

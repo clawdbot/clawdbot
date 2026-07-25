@@ -101,7 +101,7 @@ describe("agent timeoutSeconds config", () => {
     ["fractional", 1.5, false],
   ])("agents.defaults.timeoutSeconds %s", (_label, timeoutSeconds, ok) => {
     const result = OpenClawSchema.safeParse({
-      agents: { defaults: { timeoutSeconds } },
+      agents: { defaults: { timeoutSeconds }, entries: { main: { default: true } } },
     });
     expect(result.success).toBe(ok);
   });
@@ -567,52 +567,6 @@ describe("gateway.controlUi.sessionObserver", () => {
   });
 });
 
-describe("ui.prefs.chatMessageMaxWidth", () => {
-  it("accepts constrained CSS width values", () => {
-    for (const value of ["960px", "82%", "min(1280px, 82%)", "calc(100% - 2rem)"]) {
-      const result = OpenClawSchema.safeParse({
-        ui: {
-          prefs: {
-            chatMessageMaxWidth: value,
-          },
-        },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.ui?.prefs?.chatMessageMaxWidth).toBe(value);
-      }
-    }
-  });
-
-  it("normalizes whitespace around the width value", () => {
-    const result = OpenClawSchema.safeParse({
-      ui: {
-        prefs: {
-          chatMessageMaxWidth: "  min(1280px,   82%)  ",
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.ui?.prefs?.chatMessageMaxWidth).toBe("min(1280px, 82%)");
-    }
-  });
-
-  it("rejects arbitrary CSS injection", () => {
-    for (const value of ["url(https://example.com/x)", "960px; color: red", "var(--x)"]) {
-      const result = OpenClawSchema.safeParse({
-        ui: {
-          prefs: {
-            chatMessageMaxWidth: value,
-          },
-        },
-      });
-      expect(result.success).toBe(false);
-    }
-  });
-});
-
 describe("plugins.entries.*.hooks", () => {
   it.each([true, false])("accepts allowConversationAccess=%s", (allowConversationAccess) => {
     const result = OpenClawSchema.safeParse({
@@ -1074,6 +1028,7 @@ describe("model compat config schema", () => {
                   compat: {
                     supportsUsageInStreaming: true,
                     supportsStrictMode: false,
+                    supportsJsonSchemaResponseFormat: true,
                     requiresStringContent: true,
                     thinkingFormat,
                     requiresToolResultName: true,
@@ -1304,11 +1259,17 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.issues)).toContain("agents");
+      expect(issuePaths(snap.issues)).toContain("agents.entries.openclaw.sandbox");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.legacyIssues)).toContain("agents.list");
-      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
-      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
+      expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
+        perSession: true,
+      });
+      expect(snap.sourceConfigBeforeMigrations?.agents?.list?.[0]?.sandbox).toEqual({
+        perSession: false,
+      });
+      expect(snap.sourceConfig.agents?.entries?.openclaw?.sandbox).toEqual({
+        perSession: false,
+      });
     });
   });
 

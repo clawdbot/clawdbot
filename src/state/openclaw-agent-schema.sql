@@ -215,6 +215,31 @@ CREATE TABLE IF NOT EXISTS session_members (
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_members_identity
   ON session_members(identity_id, session_key);
+
+CREATE TABLE IF NOT EXISTS session_suggestions (
+  id TEXT PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  author_id TEXT NOT NULL,
+  author_label TEXT,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'accepted', 'dismissed')),
+  dispatch_token TEXT,
+  dispatch_started_at INTEGER,
+  dispatch_resolution TEXT CHECK (dispatch_resolution IN ('send', 'queue', 'edit', 'dismiss')),
+  CHECK (
+    (dispatch_token IS NULL AND dispatch_started_at IS NULL AND dispatch_resolution IS NULL)
+    OR (dispatch_token IS NOT NULL AND dispatch_started_at IS NOT NULL AND dispatch_resolution IS NOT NULL)
+  ),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_session_state_created
+  ON session_suggestions(session_key, state, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_author_created
+  ON session_suggestions(author_id, created_at, id);
+
 CREATE TABLE IF NOT EXISTS board_tabs (
   session_key TEXT NOT NULL,
   tab_id TEXT NOT NULL,

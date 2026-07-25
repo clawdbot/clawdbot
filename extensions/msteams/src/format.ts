@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   convertMarkdownTables,
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   type MarkdownIR,
   markdownToIR,
   renderMarkdownWithMarkers,
@@ -12,30 +12,21 @@ const ESCAPED_MARKDOWN_RE = /\\[\\`*_{}[\]()#+\-.!|>~]/gu;
 const MARKDOWN_ENTITY_RE = /&(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);/giu;
 const TOKEN_END = "\u{E002}";
 
-const MSTEAMS_FORMAT_CAPABILITIES = {
+// Teams supports strikethrough on desktop and iOS, but not Android.
+const MSTEAMS_FORMAT_CAPABILITIES = FormatCapabilityProfile.define({
   mechanism: "markdown",
   constructs: {
-    bold: "native",
-    italic: "native",
     underline: "strip",
-    // Teams supports strikethrough on desktop and iOS, but not Android.
-    strikethrough: "native",
     spoiler: "fallback",
-    codeInline: "native",
-    codeBlock: "native",
     codeLanguage: "fallback",
-    linkLabel: "native",
     heading: "fallback",
     bulletList: "fallback",
     orderedList: "fallback",
     taskList: "fallback",
     table: "fallback",
-    blockquote: "native",
-    image: "native",
-    mention: "native",
   },
   chunk: { limit: 80_000, unit: "utf16", hardCap: 100_000 },
-} satisfies FormatCapabilityProfile;
+});
 
 const MSTEAMS_MARKERS = {
   bold: { open: "**", close: "**" },

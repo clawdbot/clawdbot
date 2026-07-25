@@ -19,6 +19,7 @@ import type { McpCatalogTool, SessionMcpRuntime } from "../agents/agent-bundle-m
 import {
   acquireMcpAppViewRequest,
   getMcpAppViewLease,
+  getMcpAppViewLeaseForSession,
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -113,11 +114,18 @@ export async function resolveMcpAppActiveView(params: {
   viewId: string;
   cfg?: OpenClawConfig;
 }): Promise<McpAppActiveView> {
+  if (params.cfg && params.cfg.mcp?.apps?.enabled !== true) {
+    throw new Error("MCP App runtime is unavailable");
+  }
+  const liveView = getMcpAppViewLeaseForSession(params.viewId, params.sessionKey);
+  if (liveView) {
+    if (liveView.runtime.mcpAppsEnabled !== true) {
+      throw new Error("MCP App runtime is unavailable");
+    }
+    return { runtime: liveView.runtime, view: liveView };
+  }
   const existingRuntime = peekSessionMcpRuntime({ sessionKey: params.sessionKey });
-  if (
-    (existingRuntime && existingRuntime.mcpAppsEnabled !== true) ||
-    (params.cfg && params.cfg.mcp?.apps?.enabled !== true)
-  ) {
+  if (existingRuntime && existingRuntime.mcpAppsEnabled !== true) {
     throw new Error("MCP App runtime is unavailable");
   }
   const existingView = existingRuntime

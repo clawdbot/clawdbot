@@ -506,7 +506,12 @@ function renderWidgetCard(
         </button>`
       : nothing;
   return html`
-    <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
+    <div
+      class="chat-tool-card__preview"
+      data-content-kind=${contentKind}
+      data-kind="canvas"
+      data-surface=${surface}
+    >
       <div class="chat-tool-card__preview-header">
         <span class="chat-tool-card__preview-label">${label}</span>
         <div class="chat-tool-card__preview-actions">

@@ -285,6 +285,9 @@ export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginHookInboundMessageMetadata,
+  PluginHookMediaFact,
+  PluginHookMessageReceivedEvent,
 } from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {

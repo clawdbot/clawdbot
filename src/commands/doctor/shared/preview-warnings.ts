@@ -1,6 +1,6 @@
 // Doctor preview warning aggregation for config that can surprise users before repair.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
+import { listAgentEntries, resolveAgentConfig } from "../../../agents/agent-scope-config.js";
 import {
   normalizeToolProviderPolicyKey,
   resolveProviderToolPolicy,
@@ -35,7 +35,7 @@ function loadChannelDoctorModule(): Promise<ChannelDoctorModule> {
 }
 
 function listAgentRecords(cfg: OpenClawConfig): Record<string, unknown>[] {
-  return Array.isArray(cfg.agents?.list) ? cfg.agents.list.filter(hasRecord) : [];
+  return listAgentEntries(cfg).filter(hasRecord);
 }
 
 function hasChannels(cfg: OpenClawConfig): boolean {

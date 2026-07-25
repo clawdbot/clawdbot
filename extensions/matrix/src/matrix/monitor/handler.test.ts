@@ -7,7 +7,13 @@ import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  deliveryContextFromSession,
+  getSessionEntry,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
@@ -87,22 +93,22 @@ async function writeMatrixSessionMeta(
     sessionId: `sess-${sessionKey}`,
     updatedAt: Date.now(),
   };
-  const existingOrigin =
-    typeof existing.origin === "object" && existing.origin !== null
-      ? (existing.origin as Record<string, unknown>)
-      : {};
+  const existingOrigin = sessionDeliveryOrigin(existing) ?? {};
   await upsertSessionEntry({
     storePath,
     sessionKey,
     entry: {
       ...existing,
-      origin: {
-        ...existingOrigin,
-        provider: "matrix",
-        surface: "matrix",
-        accountId: "ops",
-        ...origin,
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: deliveryContextFromSession(existing),
+        origin: {
+          ...existingOrigin,
+          provider: "matrix",
+          surface: "matrix",
+          accountId: "ops",
+          ...origin,
+        },
+      }),
     },
   });
 }
@@ -1506,11 +1512,13 @@ describe("matrix monitor handler pairing account scope", () => {
       entry: {
         sessionId: "sess-main",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!other:example.org",
-          accountId: "ops",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        }),
       },
     });
     const sendNotice = vi.fn(async () => "$notice");
@@ -1551,11 +1559,13 @@ describe("matrix monitor handler pairing account scope", () => {
       entry: {
         sessionId: "sess-bound",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!other:example.org",
-          accountId: "ops",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        }),
       },
     });
     const sendNotice = vi.fn(async () => "$notice");

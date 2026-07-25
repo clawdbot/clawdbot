@@ -21,7 +21,7 @@ afterAll(async () => {
 });
 
 function sessionEntry(sessionId: string, updatedAt: number): SessionEntry {
-  return { sessionId, updatedAt };
+  return { sessionId, updatedAt, delivery: { kind: "none" } };
 }
 
 async function createStore(entries: Record<string, SessionEntry>): Promise<string> {

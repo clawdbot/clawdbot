@@ -444,17 +444,17 @@ describe("resolveAnnounceTarget", () => {
     expect(requireGatewayRequest().method).toBe("sessions.list");
   });
 
-  it("falls back to origin provider and accountId from sessions.list when legacy route fields are absent", async () => {
+  it("hydrates provider and accountId from the canonical delivery projection", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {
           key: "agent:main:whatsapp:group:123@g.us",
-          origin: {
-            provider: "whatsapp",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
             accountId: "work",
+            threadId: 271,
           },
-          lastTo: "123@g.us",
-          lastThreadId: 271,
         },
       ],
     });
@@ -498,24 +498,14 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
-  it("hydrates announce delivery from explicit external context over stale webchat session fields", async () => {
+  it("hydrates announce delivery from the canonical external projection", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {
           key: "agent:main:feishu:direct:ou_user",
-          channel: "webchat",
-          lastChannel: "webchat",
-          lastTo: "session:dashboard",
-          route: {
-            channel: "webchat",
-            target: { to: "session:dashboard" },
-          },
           deliveryContext: {
             channel: "feishu",
             to: "user:ou_user",
-          },
-          origin: {
-            provider: "feishu",
             accountId: "work",
             threadId: "thread-77",
           },

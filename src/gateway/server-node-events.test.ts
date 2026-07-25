@@ -4,10 +4,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -46,10 +48,11 @@ const buildSessionLookup = (
     updatedAt: entry.updatedAt ?? Date.now(),
     model: entry.model,
     modelProvider: entry.modelProvider,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId,
+    delivery: normalizeLegacySessionEntryDelivery({
+      ...entry,
+      sessionId: entry.sessionId ?? `sid-${sessionKey}`,
+      updatedAt: entry.updatedAt ?? Date.now(),
+    } as SessionEntry).delivery,
     label: entry.label,
     spawnedBy: entry.spawnedBy,
     parentSessionKey: entry.parentSessionKey,

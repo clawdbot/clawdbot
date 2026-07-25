@@ -273,10 +273,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
   "agents.defaults.contextLimits.memoryGetMaxChars":
     "Default max characters returned by memory_get before truncation metadata and continuation notice are added. Increase to approximate older larger excerpts, but keep it bounded.",
-  "agents.defaults.contextLimits.memoryGetDefaultLines":
-    "Default memory_get line window used when requests omit lines. This controls how many source lines are selected before the max-char cap is applied.",
-  "agents.defaults.contextLimits.toolResultMaxChars":
-    "Advanced ceiling for a single live tool result before truncation. Leave unset to use the model-context auto cap; explicit values affect both persisted live tool-result writes and overflow-recovery truncation heuristics.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
   "agents.entries":
@@ -289,10 +285,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
   "agents.entries.*.contextLimits.memoryGetMaxChars":
     "Per-agent override for the default memory_get max character budget.",
-  "agents.entries.*.contextLimits.memoryGetDefaultLines":
-    "Per-agent override for the default memory_get line window when lines is omitted.",
-  "agents.entries.*.contextLimits.toolResultMaxChars":
-    "Per-agent advanced ceiling for the live tool-result max character budget. Omit to inherit defaults or the model-context auto cap.",
   "agents.entries.*.contextLimits.postCompactionMaxChars":
     "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
   "agents.entries.*.thinkingDefault":

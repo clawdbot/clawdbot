@@ -2,12 +2,13 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
 } from "./exec-approvals-test-helpers.js";
 import type { ExecApprovalsFile } from "./exec-approvals.js";
+import { buildHashedArgPatternFromArgv } from "./exec-command-resolution.js";
 
 vi.unmock("./exec-approvals.js");
 vi.unmock("./exec-approvals-effective.js");
@@ -373,6 +374,13 @@ describe("exec approvals policy helpers", () => {
       resolvedRealPath: "/usr/bin/echo",
       executableName: "echo",
     });
+    const allowlist = [
+      {
+        pattern: "/usr/bin/echo",
+        argPattern: buildHashedArgPatternFromArgv(["/usr/bin/echo", "ok"]),
+        source: "allow-always" as const,
+      },
+    ];
     const result = evaluateExecAllowlist({
       analysis: {
         ok: true,
@@ -398,7 +406,7 @@ describe("exec approvals policy helpers", () => {
           },
         ],
       },
-      allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+      allowlist,
       safeBins: new Set(),
       cwd: "/tmp",
       platform: process.platform,
@@ -412,7 +420,7 @@ describe("exec approvals policy helpers", () => {
       hasDurableExecApproval({
         analysisOk: true,
         segmentAllowlistEntries: result.segmentAllowlistEntries,
-        allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+        allowlist,
       }),
     ).toBe(false);
   });
@@ -821,7 +829,7 @@ describe("exec approvals policy helpers", () => {
           },
         },
         agents: {
-          list: [{ id: "runner" }],
+          list: [{ id: "runner", default: true }],
         },
       } satisfies OpenClawConfig,
       approvals: {
@@ -837,18 +845,14 @@ describe("exec approvals policy helpers", () => {
       },
     });
 
-    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual([
-      "tools.exec",
-      "agent:batch",
-      "agent:runner",
-    ]);
+    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec", "agent:batch"]);
     expectFields(snapshots[1]?.ask, {
       requested: "off",
       requestedSource: "tools.exec.ask",
       host: "always",
       effective: "always",
     });
-    expectFields(snapshots[2]?.security, {
+    expectFields(snapshots[0]?.security, {
       requested: "full",
       requestedSource: "tools.exec.security",
       host: "allowlist",
@@ -865,6 +869,7 @@ describe("exec approvals policy helpers", () => {
             ask: "off",
           },
         },
+        agents: { list: [{ id: DEFAULT_AGENT_ID, default: true }] },
       } satisfies OpenClawConfig,
       approvals: {
         version: 1,
@@ -901,6 +906,7 @@ describe("exec approvals policy helpers", () => {
           list: [
             {
               id: DEFAULT_AGENT_ID,
+              default: true,
               tools: {
                 exec: {
                   ask: "always",
@@ -919,6 +925,29 @@ describe("exec approvals policy helpers", () => {
     expectFields(snapshots[1]?.ask, {
       requested: "always",
       requestedSource: "agents.list.main.tools.exec.ask",
+    });
+  });
+
+  it("includes keyed agents with exec overrides", () => {
+    const snapshots = collectExecPolicyScopeSnapshots({
+      cfg: {
+        agents: {
+          entries: {
+            main: { default: true },
+            runner: { tools: { exec: { ask: "always" } } },
+          },
+        },
+      } satisfies OpenClawConfig,
+      approvals: { version: 1 },
+    });
+
+    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual([
+      "tools.exec",
+      "agent:runner",
+    ]);
+    expectFields(snapshots[1]?.ask, {
+      requested: "always",
+      requestedSource: "agents.list.runner.tools.exec.ask",
     });
   });
 });

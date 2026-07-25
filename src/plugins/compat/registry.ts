@@ -1,3 +1,4 @@
+import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 // Plugin compatibility registry exposes known plugin compatibility metadata to doctor/update flows.
 import type { PluginCompatRecord } from "./types.js";
 
@@ -135,7 +136,6 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS = DEPRECATED_PLUGIN_SDK_SUBPATH_SEED
 ) satisfies readonly PluginCompatRecord[];
 
 const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS = [
-  "agent-media-payload",
   "media-understanding",
   "memory-host-core",
   "plugin-config-runtime",
@@ -146,11 +146,6 @@ const DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS: Record<
   string,
   { replacement: string; docsPath: string }
 > = {
-  "agent-media-payload": {
-    replacement:
-      "typed outbound payload planning via `openclaw/plugin-sdk/channel-outbound`; retain the facade for operator-supplied local-media root resolution until a focused public seam exists",
-    docsPath: "/plugins/sdk-channel-plugins",
-  },
   "media-understanding": {
     replacement:
       "`api.registerMediaUnderstandingProvider(...)` with provider-owned request helpers and types from `openclaw/plugin-sdk/plugin-entry`",
@@ -199,6 +194,7 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS = BUNDLED_ONLY_PUBLIC_PLUGI
 const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS,
   ...BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
+  MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
     code: "removed-global-api-provider-publication",
     status: "removed",

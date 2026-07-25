@@ -1,6 +1,6 @@
 // Context engine tests cover context extraction and prompt context assembly.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -26,7 +26,10 @@ import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "./registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
+import {
+  captureContextEngineRegistryStateForTests,
+  resetContextEngineRuntimeQuarantineForTests,
+} from "./registry.test-support.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -92,6 +95,16 @@ function configWithSlot(engineId: string): OpenClawConfig {
 function makeMockMessage(role: "user" | "assistant" = "user", text = "hello"): AgentMessage {
   return { role, content: text, timestamp: Date.now() } as AgentMessage;
 }
+
+let restoreContextEngineRegistry = () => {};
+
+beforeAll(() => {
+  restoreContextEngineRegistry = captureContextEngineRegistryStateForTests();
+});
+
+afterAll(() => {
+  restoreContextEngineRegistry();
+});
 
 let uniqueEngineIdCounter = 0;
 function uniqueEngineId(prefix: string): string {

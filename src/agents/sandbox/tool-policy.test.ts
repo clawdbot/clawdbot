@@ -2,12 +2,46 @@
 // guidance for sandboxed agent sessions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSandboxConfigForAgent } from "./config.js";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
+import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
 import {
-  formatSandboxToolPolicyBlockedMessage,
-  resolveSandboxRuntimeStatus,
+  formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
+  resolveSandboxRuntimeStatus as resolveSandboxRuntimeStatusBase,
 } from "./runtime-status.js";
-import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
+import {
+  isToolAllowed,
+  resolveSandboxToolPolicyForAgent as resolveSandboxToolPolicyForAgentBase,
+} from "./tool-policy.js";
+
+function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
+  return migratePersistedImplicitMainRoster(config ?? {}).config as OpenClawConfig;
+}
+
+function resolveSandboxConfigForAgent(config: OpenClawConfig, agentId: string) {
+  return resolveSandboxConfigForAgentBase(loadedConfig(config), agentId);
+}
+
+function resolveSandboxToolPolicyForAgent(config: OpenClawConfig, agentId: string) {
+  return resolveSandboxToolPolicyForAgentBase(loadedConfig(config), agentId);
+}
+
+function resolveSandboxRuntimeStatus(
+  params: Parameters<typeof resolveSandboxRuntimeStatusBase>[0],
+) {
+  return resolveSandboxRuntimeStatusBase({
+    ...params,
+    cfg: loadedConfig(params.cfg),
+  });
+}
+
+function formatSandboxToolPolicyBlockedMessage(
+  params: Parameters<typeof formatSandboxToolPolicyBlockedMessageBase>[0],
+) {
+  return formatSandboxToolPolicyBlockedMessageBase({
+    ...params,
+    cfg: loadedConfig(params.cfg),
+  });
+}
 
 describe("sandbox/tool-policy", () => {
   it("merges sandbox alsoAllow into the default sandbox allowlist", () => {

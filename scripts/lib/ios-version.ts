@@ -4,8 +4,7 @@ import path from "node:path";
 import { parseReleaseVersion } from "./release-version.mjs";
 
 const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
-const IOS_APP_STORE_REVISIONS_PER_GATEWAY_VERSION = 100;
-const MAX_IOS_APP_STORE_REVISION = IOS_APP_STORE_REVISIONS_PER_GATEWAY_VERSION - 1;
+export const MAX_IOS_APP_STORE_REVISION = 9;
 
 type ResolvedIosVersion = {
   appStoreRevision: number | null;
@@ -71,9 +70,9 @@ export function encodeIosAppStoreVersion(
   }
 
   const revision = normalizeIosAppStoreRevision(appStoreRevision);
-  // Exact pre-cutover versions are immutable release history. Revision zero is
-  // deliberately packed too, so future trains never return to the old shape.
-  const encodedPatch = parsed.patch * IOS_APP_STORE_REVISIONS_PER_GATEWAY_VERSION + revision;
+  // Append one revision digit without padding. Keeping the revision to one
+  // digit preserves App Store ordering when the gateway patch increments.
+  const encodedPatch = Number(`${parsed.patch}${revision}`);
   if (!Number.isSafeInteger(encodedPatch)) {
     throw new Error(`Encoded iOS App Store version is too large for '${gatewayVersion}'.`);
   }

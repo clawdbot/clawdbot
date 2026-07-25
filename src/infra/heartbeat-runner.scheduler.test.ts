@@ -277,8 +277,52 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runner.stop();
+  });
+
+  it("keeps persisted monitor cadence authoritative when its tick joins a task turn", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+    const monitorAnchorMs = resolveHeartbeatPhaseMs({
+      schedulerSeed: TEST_SCHEDULER_SEED,
+      agentId: "main",
+      intervalMs: 5 * 60_000,
+    });
+
+    requestHeartbeat({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: "main",
+      scheduledEveryMs: 5 * 60_000,
+      scheduledAnchorMs: monitorAnchorMs,
+      coalesceMs: 100,
+    });
+    requestHeartbeat({
+      source: "interval",
+      intent: "task",
+      reason: "heartbeat-task:job-inbox",
+      agentId: "main",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+      coalesceMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expectRunCallFields(runSpy, 0, {
+      intent: "task",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+    });
+    expect((getRunCall(runSpy, 0).heartbeat as { every?: string }).every).toBe("300000ms");
+
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
     requestHeartbeat(wake("exec-event", { agentId: "main", coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
     runner.stop();
   });
@@ -764,8 +808,8 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).toHaveBeenCalledTimes(1);
 
     // Simulate the runaway: 4 more exec-event wakes from backgrounded process
-    // exits, fired well within the configured 30m interval. These should be
-    // debounced by the cooldown — the agent just ran, nothing has changed.
+    // exits, fired well within the configured 30m interval. They coalesce into
+    // one retained turn after the 30s floor instead of running every 10s.
     for (let i = 0; i < 4; i++) {
       await vi.advanceTimersByTimeAsync(10_000); // 10s between background exits
       requestHeartbeat({
@@ -778,10 +822,57 @@ describe("startHeartbeatRunner", () => {
       await vi.advanceTimersByTimeAsync(1);
     }
 
-    // Total elapsed: ~40s. Configured `every` is 30m. Subsequent exec-events
-    // should NOT trigger fresh runs within the cooldown window.
-    expect(runSpy).toHaveBeenCalledTimes(1);
+    // Total elapsed: ~40s. The queued events produced one follow-up at the
+    // spacing boundary; they did not bypass the floor or wait for the 30m tick.
+    expect(runSpy).toHaveBeenCalledTimes(2);
 
+    // Settle the final retained batch so this module-level wake queue is empty
+    // before the next runner lifecycle starts.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(runSpy).toHaveBeenCalledTimes(3);
+
+    runner.stop();
+  });
+
+  it("retains an event that collides with a task until the spacing floor", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "interval",
+      intent: "task",
+      reason: "heartbeat-task:job-inbox",
+      agentId: "main",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+      coalesceMs: 0,
+    });
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      agentId: "main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expectRunCallFields(runSpy, 0, {
+      intent: "task",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+    });
+
+    await vi.advanceTimersByTimeAsync(29_998);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expectRunCallFields(runSpy, 1, { intent: "event", reason: "exec-event" });
+    expect(getRunCall(runSpy, 1).tasks).toEqual([]);
     runner.stop();
   });
 

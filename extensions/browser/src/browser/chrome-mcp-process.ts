@@ -4,6 +4,7 @@ import { setTimeout as sleepTimeout } from "node:timers/promises";
 import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { toErrorObject } from "../infra/errors.js";
 import {
   CHROME_MCP_PROCESS_EXIT_GRACE_MS,
   ChromeMcpProcessSnapshotError,
@@ -13,7 +14,6 @@ import {
   type ChromeMcpProcessCleanupTarget,
   type ChromeMcpProcessSnapshot,
   type ChromeMcpSession,
-  toChromeMcpError,
 } from "./chrome-mcp-contracts.js";
 import {
   chromeMcpCleanupPromises as cleanupPromises,
@@ -252,7 +252,7 @@ async function terminateChromeMcpProcessTree(
       try {
         await taskkillChromeMcpProcessTree(target.root.pid, deps);
       } catch (err) {
-        firstError ??= toChromeMcpError(err, "Chrome MCP process-tree cleanup failed.");
+        firstError ??= toErrorObject(err, "Chrome MCP process-tree cleanup failed.");
       }
     }
     await (deps?.sleep ?? sleepTimeout)(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
@@ -260,7 +260,7 @@ async function terminateChromeMcpProcessTree(
       try {
         await taskkillChromeMcpProcessTree(descendant.pid, deps);
       } catch (err) {
-        firstError ??= toChromeMcpError(err, "Chrome MCP process-tree cleanup failed.");
+        firstError ??= toErrorObject(err, "Chrome MCP process-tree cleanup failed.");
       }
     }
     await (deps?.sleep ?? sleepTimeout)(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
@@ -311,7 +311,7 @@ async function closeChromeMcpSessionHandle(session: ChromeMcpSession): Promise<v
       await operation();
     } catch (err) {
       cleanupUncertain ||= err instanceof ChromeMcpProcessSnapshotError;
-      firstError ??= toChromeMcpError(err, "Chrome MCP session cleanup failed.");
+      firstError ??= toErrorObject(err, "Chrome MCP session cleanup failed.");
     }
   };
   await attempt(async () => await refreshChromeMcpCleanupProcess(session));

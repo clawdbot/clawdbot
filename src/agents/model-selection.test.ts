@@ -168,6 +168,15 @@ const ANTHROPIC_OPUS_CATALOG = [
   },
 ];
 
+const ANTHROPIC_OPUS_5_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
+    reasoning: true,
+  },
+];
+
 const ANTHROPIC_OPUS_47_CATALOG = [
   {
     provider: "anthropic",
@@ -212,6 +221,15 @@ function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
     provider: "anthropic",
     model: "claude-opus-4-6",
     catalog: ANTHROPIC_OPUS_CATALOG,
+  });
+}
+
+function resolveAnthropicOpus5Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic",
+    model: "claude-opus-5",
+    catalog: ANTHROPIC_OPUS_5_CATALOG,
   });
 }
 
@@ -2768,6 +2786,18 @@ describe("model-selection", () => {
           model: "deepseek-v4-pro",
         }),
       ).toBe("off");
+    });
+
+    it("defaults explicitly configured Anthropic Opus 5 to high adaptive thinking", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpus5Thinking(cfg)).toBe("high");
     });
 
     it("keeps thinking off by default for explicitly configured Anthropic Opus 4.7", () => {

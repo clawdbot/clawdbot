@@ -12,6 +12,7 @@ import {
   listRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
@@ -331,7 +332,7 @@ test("incognito sessions survive non-default-agent webchat reply initialization"
         resolveDispatch(
           await initSessionState({
             cfg: input.cfg,
-            ctx: input.ctx,
+            ctx: finalizeInboundContext(input.ctx),
             commandAuthorized: true,
             expectedExistingSessionId: input.replyOptions?.expectedExistingSessionId,
             pinExpectedExistingSession: input.replyOptions?.pinExpectedExistingSession,

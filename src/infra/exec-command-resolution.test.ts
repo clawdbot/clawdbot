@@ -340,6 +340,49 @@ describe("exec-command-resolution", () => {
     expect(deep.allowlistEval.allowlistSatisfied).toBe(false);
   });
 
+  it
+    .runIf(process.platform !== "win32")
+    .each([
+      "bwrap",
+      "chroot",
+      "cpulimit",
+      "eatmydata",
+      "firejail",
+      "gosu",
+      "nsenter",
+      "pkexec",
+      "proot",
+      "runuser",
+      "setpriv",
+      "su",
+      "systemd-run",
+      "torsocks",
+      "unshare",
+      "watch",
+      "xvfb-run",
+    ])("blocks opaque dispatch wrapper allowlist matches: %s", (wrapperName) => {
+    const dir = makeTempDir();
+    const wrapperPath = makeExecutable(dir, wrapperName);
+    const pythonPath = makeExecutable(dir, "python3");
+    const env = makePathEnv(dir);
+    const argv = [wrapperPath, pythonPath, "-c", "print(1)"];
+    const resolution = resolveCommandResolutionFromArgv(argv, dir, env);
+    const segment = { raw: argv.join(" "), argv, resolution };
+
+    expect(resolution?.policyBlocked).toBe(true);
+    expect(resolution?.blockedWrapper).toBe(wrapperName);
+    expect(resolvePlannedSegmentArgv(segment)).toBeNull();
+
+    const evaluation = evaluateExecAllowlist({
+      analysis: { ok: true, segments: [segment] },
+      allowlist: [{ pattern: wrapperPath }],
+      safeBins: normalizeSafeBins([]),
+      cwd: dir,
+      env,
+    });
+    expect(evaluation.allowlistSatisfied).toBe(false);
+  });
+
   it("resolves allowlist candidate paths from unresolved raw executables", () => {
     expect(
       resolveExecutionTargetCandidatePath(

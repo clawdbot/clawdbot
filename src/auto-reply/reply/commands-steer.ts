@@ -106,6 +106,9 @@ function resolveSteerSessionId(params: {
 
 function applySteerFallbackPrompt(ctx: HandleCommandsParams["ctx"], message: string): void {
   const mutableCtx = ctx as Record<string, unknown>;
+  mutableCtx.commandText = message;
+  mutableCtx.agentText = message;
+  mutableCtx.rawText = message;
   mutableCtx.Body = message;
   mutableCtx.RawBody = message;
   mutableCtx.CommandBody = message;

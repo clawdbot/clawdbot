@@ -3,7 +3,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
-import { hasSessionPresenceViewers, type PresenceViewer } from "./viewer-facepile.ts";
+import {
+  hasMultiplePresenceIdentities,
+  hasSessionPresenceViewers,
+  type PresenceViewer,
+} from "./viewer-facepile.ts";
 
 type ViewerAvatarElement = HTMLElement & {
   user: PresenceViewer | null;
@@ -183,4 +187,27 @@ it("detects only other viewers watching the requested session", () => {
   };
   expect(hasSessionPresenceViewers(payload, "self-instance", "agent:main:active")).toBe(false);
   expect(hasSessionPresenceViewers(payload, "self-instance", "agent:main:other")).toBe(true);
+});
+
+it("keeps collaboration UI dormant for a solo identity", () => {
+  const solo = {
+    presence: [
+      {
+        instanceId: "self-instance",
+        user: { id: "self", name: "Self" },
+        watchedSessions: ["agent:main:active"],
+      },
+      {
+        instanceId: "second-tab",
+        user: { id: "self", name: "Self" },
+        watchedSessions: ["agent:main:active"],
+      },
+    ],
+  };
+  expect(hasMultiplePresenceIdentities(solo)).toBe(false);
+  expect(
+    hasMultiplePresenceIdentities({
+      presence: [...solo.presence, { user: { id: "alice" }, watchedSessions: [] }],
+    }),
+  ).toBe(true);
 });

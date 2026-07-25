@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 323435,
-  "reason": "catalog session activity indicator",
+  "startupJsGzipBytes": 318587,
+  "reason": "move presentation preferences to browser-local state",
   "updatedAt": "2026-07-23"
 }

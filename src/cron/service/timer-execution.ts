@@ -5,6 +5,7 @@ import {
 } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
@@ -168,6 +169,25 @@ export async function executeJobCore(
     const result = { status: "ok" as const, summary: "heartbeat wake requested" };
     return triggerEval ? { ...result, triggerEval } : result;
   }
+  if (isHeartbeatTaskCronJob(effectiveJob)) {
+    // Migrated tasks stay editable public cron jobs, but execution uses the
+    // heartbeat wake bus so active-hours, cooldown, flood, and busy guards remain authoritative.
+    state.deps.requestHeartbeat({
+      source: "interval",
+      intent: "task",
+      reason: `heartbeat-task:${effectiveJob.id}`,
+      agentId: effectiveJob.agentId,
+      tasks: [
+        {
+          jobId: effectiveJob.id,
+          name: effectiveJob.name,
+          prompt: effectiveJob.payload.text,
+        },
+      ],
+    });
+    const result = { status: "ok" as const, summary: "heartbeat task wake requested" };
+    return triggerEval ? { ...result, triggerEval } : result;
+  }
   if (effectiveJob.sessionTarget === "main") {
     const result = await executeMainSessionCronJob(
       state,
@@ -219,7 +239,11 @@ async function executeMainSessionCronJob(
   }
   const cronStartedAt =
     typeof job.state.runningAtMs === "number" ? job.state.runningAtMs : state.deps.nowMs();
-  const cronRunSessionKey = resolveMainSessionCronRunSessionKey(job, cronStartedAt);
+  const cronRunSessionKey = resolveMainSessionCronRunSessionKey(
+    job,
+    cronStartedAt,
+    state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+  );
   const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
   // Main-session jobs enqueue text into a per-run child session so each cron
   // execution has its own transcript and task drill-down target.

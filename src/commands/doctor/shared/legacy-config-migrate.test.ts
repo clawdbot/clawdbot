@@ -1878,7 +1878,7 @@ describe("legacy migrate audio transcription", () => {
       {
         type: "cli",
         command: "whisper-cli",
-        args: ["--model", "small", "{{MediaPath}}", "--input={{MediaPath}}"],
+        args: ["--model", "small", "{{AttachmentPath}}", "--input={{AttachmentPath}}"],
         timeoutSeconds: 30,
         capabilities: ["audio"],
       },
@@ -1904,7 +1904,7 @@ describe("legacy migrate audio transcription", () => {
       {
         type: "cli",
         command: "whisper-cli",
-        args: ["{{MediaPath}}"],
+        args: ["{{AttachmentPath}}"],
         capabilities: ["audio"],
       },
     ]);
@@ -1925,7 +1925,7 @@ describe("legacy migrate audio transcription", () => {
     expect(res.config?.tools?.media?.models).toContainEqual({
       type: "cli",
       command: "whisper-cli",
-      args: ["{{MediaPath}}"],
+      args: ["{{AttachmentPath}}"],
       capabilities: ["audio"],
     });
   });

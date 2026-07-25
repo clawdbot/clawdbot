@@ -174,8 +174,15 @@ export async function createGatewayRuntimeState(params: {
     const gatewayBroadcaster = createGatewayBroadcaster({
       clients,
       sessionMessageSubscribers,
-      canReceiveSessionEvent: (client, sessionKeys, agentId) =>
-        canReceiveSessionEvent({ cfg: loadRuntimeConfig(), client, sessionKeys, agentId }),
+      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
+        canReceiveSessionEvent({
+          cfg: loadRuntimeConfig(),
+          client,
+          sessionKeys,
+          agentId,
+          event,
+          payload,
+        }),
     });
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;

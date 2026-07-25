@@ -130,6 +130,7 @@ import {
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
   reconcileStaleChatRunAfterSessionStatePublication,
+  type PendingChatAbort,
 } from "./run-lifecycle.ts";
 import {
   cancelChatScroll,
@@ -215,7 +216,6 @@ export type ChatPageHost = ChatHost &
     localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
-    chatMessageMaxWidth: string | null;
     chatToolMessages: Record<string, unknown>[];
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
@@ -241,7 +241,7 @@ export type ChatPageHost = ChatHost &
     agentsList: AgentsListResult | null;
     agentsSelectedId: string | null;
     refreshSessionsAfterChat: Map<string, { sessionKey: string; agentId?: string }>;
-    pendingAbort: { runId?: string | null; sessionKey: string; agentId?: string } | null;
+    pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Map<string, Promise<void>>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
@@ -1271,7 +1271,6 @@ export function createPageState(
     localMediaPreviewRoots: appConfig.localMediaPreviewRoots,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
-    chatMessageMaxWidth: appConfig.chatMessageMaxWidth,
     client: null,
     connected: false,
     connectionEpoch: 0,

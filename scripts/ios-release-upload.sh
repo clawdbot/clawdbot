@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-release-upload.sh --version 2026.7.2 --revision 1 [--build-number 3]
+  scripts/ios-release-upload.sh [--version 2026.7.2] [--revision 1] [--build-number 3]
 
 Generates App Store screenshots, updates release metadata, archives, and uploads
 an App Store distribution build to App Store Connect. This does not submit the
@@ -61,19 +61,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${RELEASE_VERSION}" ]]; then
-  echo "Missing required --version." >&2
-  usage >&2
-  exit 1
+FASTLANE_ARGS=(ios release_upload)
+if [[ -n "${RELEASE_VERSION}" ]]; then
+  FASTLANE_ARGS+=("release_version:${RELEASE_VERSION}")
 fi
-
-if [[ -z "${APP_STORE_REVISION}" ]]; then
-  echo "Missing required --revision." >&2
-  usage >&2
-  exit 1
+if [[ -n "${APP_STORE_REVISION}" ]]; then
+  FASTLANE_ARGS+=("app_store_revision:${APP_STORE_REVISION}")
 fi
-
-FASTLANE_ARGS=(ios release_upload "release_version:${RELEASE_VERSION}" "app_store_revision:${APP_STORE_REVISION}")
 if [[ -n "${BUILD_NUMBER}" ]]; then
   FASTLANE_ARGS+=("build_number:${BUILD_NUMBER}")
 fi

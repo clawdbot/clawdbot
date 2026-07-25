@@ -127,6 +127,7 @@ import {
 } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { createCliOutputFailoverError } from "./output-error.js";
+import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
@@ -521,14 +522,21 @@ export async function executePreparedCliRun(
     // not exist on the node, and --allowedTools auto-approval must never cross
     // the node boundary. Dropping availability entirely would let a restricted
     // session run with the node's full native toolset.
-    toolAvailability:
-      nodePlacement && params.cliToolAvailability
-        ? { native: params.cliToolAvailability.native, mcp: [] }
-        : params.cliToolAvailability,
+    toolAvailability: params.cliToolAvailability
+      ? buildCliBackendToolAvailability(
+          nodePlacement
+            ? { native: params.cliToolAvailability.native, openClaw: [] }
+            : params.cliToolAvailability,
+        )
+      : undefined,
     useResume,
     baseArgs: baseArgsWithSkills,
   });
-  if (params.cliToolAvailability && !resolvedExecutionArgs) {
+  if (
+    params.cliToolAvailability &&
+    context.backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+    !resolvedExecutionArgs
+  ) {
     throw new Error(
       `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
     );

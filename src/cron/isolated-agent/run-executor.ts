@@ -26,6 +26,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
@@ -273,6 +274,11 @@ function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
+  const scheduledToolPolicy = resolveCronScheduledToolPolicy({
+    toolsAllow: params.agentPayload?.toolsAllow,
+    scheduledToolPolicy: params.job.scheduledToolPolicy,
+    owner: params.job.owner,
+  });
   if (!params.sourceDelivery) {
     logWarn(
       `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
@@ -463,6 +469,7 @@ function createCronPromptExecutor(params: {
                   params.agentPayload?.toolsAllow,
                   params.agentPayload?.toolsAllowIsDefault,
                 ),
+                scheduledToolPolicy,
                 abortSignal: params.abortSignal,
                 onExecutionStarted: params.onExecutionStarted,
                 onExecutionPhase: params.onExecutionPhase,
@@ -557,6 +564,7 @@ function createCronPromptExecutor(params: {
           bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
+          scheduledToolPolicy,
           execOverrides: params.suppressExecNotifyOnExit
             ? {
                 notifyOnExit: false,

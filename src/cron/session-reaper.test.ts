@@ -2,15 +2,26 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import {
+  listKnownSessionStoreAgentIds,
+  resolveExistingAgentSessionStoreTargetsSync,
+} from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  isSameOpenClawAgentDatabasePath,
+  listOpenClawRegisteredAgentDatabases,
+  unregisterOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
-import { sweepCronRunSessions } from "./session-reaper.js";
+import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
 import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
 const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
@@ -18,6 +29,12 @@ const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAc
 const taskStatusMocks = vi.hoisted(() => ({
   buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
 }));
+
+function sweepCronRunSessions(
+  params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId" | "defaultAgentId">,
+) {
+  return sweepCronRunSessionsImpl({ ...params, agentId: "main", defaultAgentId: "main" });
+}
 
 vi.mock("../tasks/task-status-access.js", () => ({
   buildPendingGeneratedMediaSessionKeySet: taskStatusMocks.buildPendingSet,
@@ -37,13 +54,16 @@ async function seedSessionEntries(
   entries: Record<string, SessionEntry>,
 ): Promise<void> {
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
   }
 }
 
 function readSessionEntries(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
 }
 
@@ -156,6 +176,94 @@ describe("sweepCronRunSessions", () => {
     });
   });
 
+  it("discovers, accesses, and reaps a logical owner in one shared exact store", async () => {
+    const now = Date.now();
+    const exactStorePath = path.join(tmpDir, "shared.sqlite");
+    const cfg: OpenClawConfig = {
+      session: { store: exactStorePath },
+      agents: { entries: { main: { default: true } } },
+    };
+    const mainKey = "agent:main:cron:main-job:run:keep";
+    const opsKey = "agent:ops:cron:ops-job:run:expired";
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: mainKey,
+      },
+      { sessionId: "main-run", updatedAt: now - 1 * 3_600_000 },
+    );
+    await replaceSessionEntry(
+      {
+        agentId: "ops",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: opsKey,
+      },
+      { sessionId: "ops-run", updatedAt: now - 25 * 3_600_000 },
+    );
+    closeOpenClawAgentDatabasesForTest();
+    unregisterOpenClawAgentDatabase({ agentId: "main", path: exactStorePath });
+    expect(
+      listOpenClawRegisteredAgentDatabases().filter((entry) =>
+        isSameOpenClawAgentDatabasePath(entry.path, exactStorePath),
+      ),
+    ).toEqual([]);
+
+    expect(listKnownSessionStoreAgentIds(cfg).toSorted()).toEqual(["main", "ops"]);
+    expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "ops")).toEqual([
+      { agentId: "ops", storePath: exactStorePath },
+    ]);
+    expect(Object.keys(loadCombinedSessionStoreForGateway(cfg).store).toSorted()).toEqual([
+      mainKey,
+      opsKey,
+    ]);
+    expect(
+      sessionAccessor.loadSessionEntry({
+        agentId: "ops",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: opsKey,
+      }),
+    ).toMatchObject({ sessionId: "ops-run" });
+
+    expect(
+      await sweepCronRunSessionsImpl({
+        agentId: "main",
+        defaultAgentId: "main",
+        sessionStorePath: exactStorePath,
+        nowMs: now,
+        log,
+      }),
+    ).toEqual({ swept: true, pruned: 0 });
+    const result = await sweepCronRunSessionsImpl({
+      agentId: "ops",
+      defaultAgentId: "main",
+      sessionStorePath: exactStorePath,
+      nowMs: now,
+      log,
+    });
+
+    expect(result).toEqual({ swept: true, pruned: 1 });
+    expect(
+      sessionAccessor.loadSessionEntry({
+        agentId: "main",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: mainKey,
+      }),
+    ).toMatchObject({ sessionId: "main-run" });
+    expect(
+      sessionAccessor.loadSessionEntry({
+        agentId: "ops",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: opsKey,
+      }),
+    ).toBeUndefined();
+  });
+
   it("falls back to the default retention when the configured duration is invalid", async () => {
     const now = Date.now();
     await seedSessionEntries(storePath, {
@@ -183,6 +291,7 @@ describe("sweepCronRunSessions", () => {
       [sessionKey]: {
         sessionId: "pending-run",
         updatedAt: now - 25 * 3_600_000,
+        delivery: { kind: "none" },
         cronRunContinuation: { lifecycleRevision: "revision-1", phase: "ready" },
       },
     };

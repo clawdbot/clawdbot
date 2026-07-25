@@ -1699,6 +1699,7 @@ html.openclaw-native-macos
 
 .sidebar-session-pagination {
   display: flex;
+  justify-content: center;
   gap: 14px;
   padding: 0 10px 10px;
 }
@@ -3020,8 +3021,98 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
   padding: 6px 12px;
+}
+
+.sidebar-identity-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  transition: background var(--duration-fast) ease;
+}
+
+.sidebar-identity-card:hover,
+.sidebar-identity-card:focus-visible,
+.sidebar-identity-card[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-identity-card:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-identity-card .viewer-avatar--footer {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  font-size: 10px;
+}
+
+.sidebar-identity-card__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sidebar-identity-card__name,
+.sidebar-identity-card__subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-identity-card__name {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.sidebar-identity-card__subtitle {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.sidebar-identity-card__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.sidebar-identity-card__chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.sidebar-identity-card__chevron svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 openclaw-tooltip.sidebar-hover-tooltip {
@@ -3149,40 +3240,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   font-size: 11px;
 }
 
-.sidebar-footer-bar__identity {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-  max-width: 132px;
-  padding: 2px 5px 2px 2px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease;
-}
-
-.sidebar-footer-bar__identity:hover,
-.sidebar-footer-bar__identity:focus-visible {
-  background: var(--bg-hover);
-}
-
-.sidebar-footer-bar__identity-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 550;
-}
-
-.sidebar-footer-bar__spacer {
-  flex: 1 1 auto;
-}
-
 .sidebar-footer-bar__status {
   display: inline-flex;
   align-items: center;
@@ -3220,39 +3277,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--danger);
-}
-
-.sidebar-footer-bar__settings {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  flex: none;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  cursor: default;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-footer-bar__settings:hover,
-.sidebar-footer-bar__settings:focus-visible {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
-.sidebar-footer-bar__settings svg {
-  width: 17px;
-  height: 17px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Groups zone: quiet compact rows. Coding zone: muted until expanded. */
@@ -3298,6 +3322,18 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .sidebar-identity-menu {
   overflow: visible;
+}
+
+wa-dropdown.sidebar-identity-menu::part(menu) {
+  min-width: max(224px, var(--sidebar-identity-menu-min-width, 224px));
+}
+
+.sidebar-identity-menu__header {
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .sidebar-agent-menu__filter {

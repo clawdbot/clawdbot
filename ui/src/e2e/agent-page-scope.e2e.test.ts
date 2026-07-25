@@ -126,7 +126,12 @@ describeControlUiE2e("Control UI agent page scope", () => {
         )
         .toBe("Writer");
 
-      await sidebar.getByRole("link", { name: "Usage" }).click();
+      await sidebar.getByRole("link", { name: "Home" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar
+        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
+        .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequest(gateway, "sessions.usage", (params) => params.agentId === "writer");
       const pageScope = page.locator(".agent-scope-control openclaw-agent-select");

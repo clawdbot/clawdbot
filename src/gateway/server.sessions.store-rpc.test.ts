@@ -11,6 +11,7 @@ import {
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
@@ -569,8 +570,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
       sessionId: string;
       modelProvider?: string;
       model?: string;
-      lastAccountId?: string;
-      lastThreadId?: string | number;
+      delivery?: import("../config/sessions/types.js").SessionDeliveryState;
     };
   }>("sessions.reset", { key: "agent:main:main" });
   expect(reset.ok).toBe(true);
@@ -578,11 +578,11 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(reset.payload?.entry.sessionId).toBe("sess-main");
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
-  expect(reset.payload?.entry.lastAccountId).toBe("work");
-  expect(reset.payload?.entry.lastThreadId).toBe("1737500000.123456");
+  expect(deliveryContextFromSession(reset.payload?.entry)?.accountId).toBe("work");
+  expect(deliveryContextFromSession(reset.payload?.entry)?.threadId).toBe("1737500000.123456");
   const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-  expect(entryAfterReset?.lastAccountId).toBe("work");
-  expect(entryAfterReset?.lastThreadId).toBe("1737500000.123456");
+  expect(deliveryContextFromSession(entryAfterReset)?.accountId).toBe("work");
+  expect(deliveryContextFromSession(entryAfterReset)?.threadId).toBe("1737500000.123456");
   // Retained history stays in the same SQLite transcript behind the reset boundary.
   const resetTranscript = await loadTranscriptRows({
     sessionId: "sess-main",

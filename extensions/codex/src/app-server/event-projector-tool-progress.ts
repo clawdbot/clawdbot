@@ -2,10 +2,10 @@ import {
   inferToolMetaFromArgs,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
@@ -67,6 +67,7 @@ export type ToolTranscriptResultInput = {
   name: string;
   text?: string;
   isError: boolean;
+  details?: unknown;
 };
 
 type ToolProgressRawSignature = { length: number; prefix: string };

@@ -83,6 +83,8 @@ export type GatewayClient = {
   internal?: {
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
+    /** Overrides persisted sender attribution without changing the authorizing client identity. */
+    senderAttribution?: { id: string; name?: string };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
     sessionCreation?: TrustedSessionCreation;
     allowModelOverride?: boolean;

@@ -9,6 +9,7 @@ import {
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -49,15 +50,20 @@ interface SidebarMenusRenderHost extends ReactiveControllerHost, SessionOrganize
   readonly basePath: string;
   readonly canPairDevice: boolean;
   readonly connected: boolean;
+  readonly offline: boolean;
   readonly gatewayVersion: string | null;
   readonly onNavigate?: (
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
   ) => void;
   readonly onPairMobile?: () => void;
+  readonly onRetryConnect?: () => void;
   readonly pinnedAgentIds: readonly string[];
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
-    Pick<SessionDataController, "approvalBadgeSnapshot" | "sessionsLoading">;
+    Pick<
+      SessionDataController,
+      "approvalBadgeSnapshot" | "presenceInstanceId" | "presencePayload" | "sessionsLoading"
+    >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
   readonly sessionCreatorFilterActive: boolean;
@@ -92,7 +98,7 @@ interface SidebarMenusRenderController {
   readonly agentMenuTrigger: HTMLElement | null;
   readonly customizeMenuPosition: { x: number; y: number } | null;
   readonly customizeMenuTrigger: HTMLElement | null;
-  readonly identityMenuPosition: { x: number; bottom: number } | null;
+  readonly identityMenuPosition: { x: number; bottom: number; width: number } | null;
   readonly identityMenuTrigger: HTMLElement | null;
   readonly moreMenuPosition: { x: number; y: number } | null;
   readonly moreMenuTrigger: HTMLElement | null;
@@ -196,12 +202,21 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusR
   const { host } = controller;
   const position = controller.identityMenuPosition;
   const trigger = controller.identityMenuTrigger;
+  const selfUser = resolveCurrentSelfUser({
+    snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
+    presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
+    presenceInstanceId: host.sessionData.presenceInstanceId,
+  });
   return renderSidebarIdentityMenu({
     position,
     canPairDevice: host.canPairDevice,
     basePath: host.basePath,
     gatewayVersion: host.gatewayVersion,
+    selfName: selfUser?.name ?? undefined,
+    selfEmail: selfUser?.email ?? undefined,
+    offline: host.offline,
     themeMode: host.themeMode,
+    triggerWidth: position?.width ?? 0,
     onTabAway: () => trigger?.focus(),
     onClose: (restoreFocus) => {
       if (controller.identityMenuPosition !== position) {
@@ -211,6 +226,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusR
     },
     onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
     onPairMobile: () => host.onPairMobile?.(),
+    onRetryConnect: host.onRetryConnect,
   });
 }
 

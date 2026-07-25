@@ -13,7 +13,7 @@ import {
   upsertConfigSnapshotAuditRecord,
 } from "./config-journal-snapshot.js";
 import { EnvRefArrayMutationError, restoreEnvVarRefs } from "./env-preserve.js";
-import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
+import { INCLUDE_KEY, readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
   capConfigAuditIssues,
@@ -72,6 +72,27 @@ import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
 
+function hasOwnIncludeDirective(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && Object.hasOwn(value, INCLUDE_KEY);
+}
+
+function hasIncludedGatewayModeOwner(value: unknown): boolean {
+  if (hasOwnIncludeDirective(value)) {
+    return true;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const gateway = (value as Record<string, unknown>).gateway;
+  if (hasOwnIncludeDirective(gateway)) {
+    return true;
+  }
+  if (gateway === null || typeof gateway !== "object" || Array.isArray(gateway)) {
+    return false;
+  }
+  return hasOwnIncludeDirective((gateway as Record<string, unknown>).mode);
+}
+
 export async function writeConfigFileFromContext(
   context: ConfigIoContext,
   cfg: OpenClawConfig,
@@ -106,15 +127,20 @@ export async function writeConfigFileFromContext(
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
   const hasResolvedAuthoredIncludes =
     hasAuthoredIncludes && !containsConfigIncludeDirective(snapshot.sourceConfig);
-  if (snapshot.valid && snapshot.exists) {
+  // Missing snapshots still need runtime-to-authored projection. Callers authoring an
+  // exact bootstrap roster mark that intent through explicitSetPaths.
+  if (snapshot.valid) {
     persistCandidate = resolvePersistCandidateForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       nextConfig: cfg,
       rootAuthoredConfig: snapshot.parsed,
+      agentRosterIncludeOwned: snapshot.includeProvenance?.agentRoster,
       unsetPaths,
       explicitSetPaths: options.explicitSetPaths,
       explicitSetValueSource: options.explicitSetValueSource,
+      allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
       modelIdNormalizationPolicies: resolveModelIdNormalizationPolicies(
         snapshotRead.pluginMetadataSnapshot,
       ),
@@ -245,7 +271,29 @@ export async function writeConfigFileFromContext(
   const hasMetaBefore = hasConfigMeta(snapshot.parsed);
   const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
   const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
-  const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
+  const authoredGateway = (snapshot.parsed as { gateway?: unknown }).gateway;
+  const authoredGatewayMode =
+    authoredGateway !== null &&
+    typeof authoredGateway === "object" &&
+    !Array.isArray(authoredGateway)
+      ? (authoredGateway as Record<string, unknown>).mode
+      : undefined;
+  const gatewayModeAuthoredLocally =
+    authoredGateway !== null &&
+    typeof authoredGateway === "object" &&
+    !Array.isArray(authoredGateway) &&
+    Object.hasOwn(authoredGateway, "mode") &&
+    !hasOwnIncludeDirective(authoredGatewayMode);
+  const preservesIncludedGatewayMode =
+    options.allowIncludeAncestorExplicitSetPaths === true &&
+    gatewayModeBefore != null &&
+    !gatewayModeAuthoredLocally &&
+    hasIncludedGatewayModeOwner(stampedOutputConfig) &&
+    !options.explicitSetPaths?.some((explicitPath) => explicitPath[0] === "gateway");
+  const gatewayModeAfter =
+    resolveGatewayMode(stampedOutputConfig) ??
+    (preservesIncludedGatewayMode ? gatewayModeBefore : null) ??
+    null;
   const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
     existsBefore: snapshot.exists,
     unreadableBefore: snapshot.readError != null,

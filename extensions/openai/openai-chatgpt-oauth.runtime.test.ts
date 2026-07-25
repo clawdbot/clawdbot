@@ -37,4 +37,27 @@ describe("OpenAI Codex OAuth runtime", () => {
 
     expect(cancel).toHaveBeenCalledOnce();
   });
+
+  it("uses the shared classifier for hostname mismatch failures", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed", {
+        cause: {
+          code: "ERR_TLS_CERT_ALTNAME_INVALID",
+          message: "Hostname/IP does not match certificate's altnames",
+        },
+      });
+    });
+
+    await expect(
+      runOpenAIOAuthTlsPreflight({
+        timeoutMs: 20,
+        fetchImpl,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      kind: "tls-cert",
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+      message: "Hostname/IP does not match certificate's altnames",
+    });
+  });
 });

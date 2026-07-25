@@ -101,8 +101,6 @@ describe("resolveAgentConfig", () => {
         defaults: {
           contextLimits: {
             memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 18_000,
           },
         },
         list: [
@@ -121,8 +119,6 @@ describe("resolveAgentConfig", () => {
 
     expect(resolveAgentConfig(cfg, "main")?.contextLimits).toEqual({
       memoryGetMaxChars: 24_000,
-      memoryGetDefaultLines: 180,
-      toolResultMaxChars: 18_000,
     });
   });
 
@@ -1122,7 +1118,10 @@ describe("resolveAgentConfig", () => {
   it("uses OPENCLAW_HOME for default agent workspace", () => {
     const home = path.join(path.sep, "srv", "openclaw-home");
     withEnv({ OPENCLAW_HOME: home }, () => {
-      const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
+      const workspace = resolveAgentWorkspaceDir(
+        { agents: { entries: { main: { default: true } } } },
+        "main",
+      );
       expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
     });
   });
@@ -1135,7 +1134,10 @@ describe("resolveAgentConfig", () => {
         OPENCLAW_HOME: path.join(path.sep, "srv", "openclaw-home"),
       },
       () => {
-        const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
+        const workspace = resolveAgentWorkspaceDir(
+          { agents: { entries: { main: { default: true } } } },
+          "main",
+        );
         expect(workspace).toBe(path.resolve(workspaceDir));
       },
     );

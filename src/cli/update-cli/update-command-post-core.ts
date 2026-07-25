@@ -35,6 +35,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import {
+  POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
@@ -82,7 +83,7 @@ import {
 } from "./update-command-service.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
-export const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
+export { POST_CORE_UPDATE_ENV };
 export const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 export const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 export const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
@@ -430,8 +431,9 @@ function stopPostCoreUpdateChild(child: ChildProcess): void {
  */
 export function resolvePostCoreUpdateChildStdio(
   platform: NodeJS.Platform = process.platform,
+  jsonMode = false,
 ): "inherit" | "pipe" {
-  return platform === "win32" ? "pipe" : "inherit";
+  return platform === "win32" || jsonMode ? "pipe" : "inherit";
 }
 
 function preparePostCorePluginInstallRecordsForFreshProcess(params: {
@@ -515,7 +517,8 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
-    const childStdio = resolvePostCoreUpdateChildStdio();
+    const jsonMode = params.opts.json === true;
+    const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
     const child = spawn(params.nodeRunner ?? resolveNodeRunner(), argv, {
       stdio: childStdio,
       env: {
@@ -537,9 +540,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
           : {}),
       },
     });
-    // When piped, relay child output to the parent process so terminal output is preserved.
+    // JSON callers own stdout, so child diagnostics must remain off that protocol stream.
     if (childStdio === "pipe") {
-      child.stdout?.pipe(process.stdout);
+      child.stdout?.pipe(jsonMode ? process.stderr : process.stdout);
       child.stderr?.pipe(process.stderr);
     }
 

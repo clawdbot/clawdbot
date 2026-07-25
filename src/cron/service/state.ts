@@ -2,8 +2,10 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
   CronTriggerEvaluationResult,
@@ -83,6 +85,8 @@ export type CronServiceDeps = {
   defaultAgentId?: string;
   /** Resolve the current default when runtime config can change after startup. */
   resolveDefaultAgentId?: () => string;
+  /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
+  resolveSessionStoreAgentIds?: () => string[];
   /** Revalidate agent ownership inside the cron mutation lock. */
   isAgentAvailable?: (agentId: string) => boolean;
   /** Resolve session store path for a given agent id. */
@@ -275,8 +279,12 @@ export type CronServiceState = {
 
 /** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
+  // The public CronService constructor shipped before roster-aware callers.
+  // Preserve its implicit owner unless a static or dynamic configured default exists.
+  const defaultAgentId =
+    deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
   return {
-    deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
+    deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
@@ -360,8 +368,14 @@ export type CronAddOptions = {
   enabledExplicit?: boolean;
   /** Gateway-owned system payloads (heartbeat monitors) require this opt-in. */
   systemOwned?: boolean;
+  /** Authenticated caller provenance stamped by the service, never public input. */
+  scheduledToolPolicy?: CronScheduledToolPolicy;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
+/** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
+export type CronUpdateOptions = {
+  scheduledToolPolicy?: CronScheduledToolPolicy;
+};
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

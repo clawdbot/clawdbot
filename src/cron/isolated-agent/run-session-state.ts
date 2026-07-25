@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
+import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -10,6 +11,7 @@ import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marke
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
@@ -203,6 +205,7 @@ export function createCronRunContinuationSession(params: {
   thinkingLevel?: string;
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
+  scheduledToolPolicy?: CronScheduledToolPolicy;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -210,11 +213,16 @@ export function createCronRunContinuationSession(params: {
   };
   persistSessionEntry: PersistSessionEntry;
 }): CronRunContinuationSession {
+  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+    toolsAllow: params.toolsAllow,
+    scheduledToolPolicy: params.scheduledToolPolicy,
+  });
   const continuation: NonNullable<SessionEntry["cronRunContinuation"]> = {
     lifecycleRevision: params.cronSession.lifecycleRevision,
     phase: "running" as const,
     ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
     ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
+    ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     ...(params.cliSessionBindingFacts
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
       : {}),

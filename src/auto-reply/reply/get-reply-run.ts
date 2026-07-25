@@ -43,7 +43,7 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { isImageMediaFact, resolveMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { isImageMediaFact, normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -59,6 +59,10 @@ import {
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -346,8 +350,10 @@ function resolvePromptSessionContextForSystemEvent(params: {
     return sessionCtx;
   }
 
+  const origin = sessionDeliveryOrigin(sessionEntry);
+  const deliveryContext = deliveryContextFromSession(sessionEntry);
   const persistedChatType =
-    normalizeChatType(sessionEntry.chatType) ?? normalizeChatType(sessionEntry.origin?.chatType);
+    normalizeChatType(sessionEntry.chatType) ?? normalizeChatType(origin?.chatType);
   const liveChatType = normalizeChatType(sessionCtx.ChatType);
   const effectiveChatType = liveChatType ?? persistedChatType;
   const persistedProvider = resolvePersistedPromptProvider(sessionEntry);
@@ -392,26 +398,12 @@ function resolvePromptSessionContextForSystemEvent(params: {
     setIfMissing("GroupSpace", normalizeOptionalString(sessionEntry.space));
   }
   setIfMissing("OriginatingChannel", persistedProvider);
-  setIfMissing(
-    "OriginatingTo",
-    normalizeOptionalString(
-      sessionEntry.lastTo ?? sessionEntry.deliveryContext?.to ?? sessionEntry.origin?.to,
-    ),
-  );
+  setIfMissing("OriginatingTo", normalizeOptionalString(deliveryContext?.to ?? origin?.to));
   setIfMissing(
     "AccountId",
-    normalizeOptionalString(
-      sessionEntry.lastAccountId ??
-        sessionEntry.deliveryContext?.accountId ??
-        sessionEntry.origin?.accountId,
-    ),
+    normalizeOptionalString(deliveryContext?.accountId ?? origin?.accountId),
   );
-  setIfMissing(
-    "MessageThreadId",
-    sessionEntry.lastThreadId ??
-      sessionEntry.deliveryContext?.threadId ??
-      sessionEntry.origin?.threadId,
-  );
+  setIfMissing("MessageThreadId", deliveryContext?.threadId ?? origin?.threadId);
 
   return changed ? next : sessionCtx;
 }
@@ -772,9 +764,8 @@ export async function runPreparedReply(
     directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
       : "generic";
-  const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
-  const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
+  const baseBody = sessionCtx.agentText ?? "";
+  const rawBodyTrimmed = (ctx.commandText ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   const normalizedCommandBody = command.commandBodyNormalized.trim();
   const softResetTriggered = command.softResetTriggered === true;
@@ -1534,7 +1525,7 @@ export async function runPreparedReply(
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
-  const ctxMediaForPersistence = resolveMediaFacts(ctx);
+  const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
   const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
   const mediaImageLayout = buildPersistedMediaImageLayout({
     ctx,

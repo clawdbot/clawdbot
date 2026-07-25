@@ -2,7 +2,7 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   chunkTextForOutbound,
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   markdownToIR,
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
@@ -107,29 +107,21 @@ type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
 };
 
-const SLACK_FORMAT_PROFILE = {
+const SLACK_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "markdown",
   constructs: {
-    bold: "native",
-    italic: "native",
     underline: "strip",
-    strikethrough: "native",
     spoiler: "fallback",
-    codeInline: "native",
-    codeBlock: "native",
     codeLanguage: "fallback",
-    linkLabel: "native",
     heading: "fallback",
     bulletList: "fallback",
     orderedList: "fallback",
     taskList: "fallback",
     table: "fallback",
-    blockquote: "native",
     image: "fallback",
-    mention: "native",
   },
   chunk: { limit: 4000, unit: "chars", hardCap: 40_000 },
-} satisfies FormatCapabilityProfile;
+});
 
 type SlackCodeMarker = "`" | "```";
 const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";

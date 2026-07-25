@@ -4,6 +4,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   DEFAULT_HEARTBEAT_EVERY,
+  HEARTBEAT_CRON_TASK_GUIDANCE,
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -88,5 +89,8 @@ export function resolveHeartbeatPromptForSystemPrompt(params: {
   if (!shouldIncludeHeartbeatGuidanceForSystemPrompt(params)) {
     return undefined;
   }
-  return resolveHeartbeatPromptText(heartbeat?.prompt);
+  const prompt = resolveHeartbeatPromptText(heartbeat?.prompt);
+  return prompt.includes(HEARTBEAT_CRON_TASK_GUIDANCE)
+    ? prompt
+    : `${prompt} ${HEARTBEAT_CRON_TASK_GUIDANCE}`;
 }

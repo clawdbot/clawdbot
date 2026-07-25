@@ -29,12 +29,13 @@ Root rules still apply. This file adds the iOS release guardrails.
 ## App Store Releases
 
 - Agent-driven App Store uploads must use only `pnpm ios:release:upload`.
-- App Store uploads must include explicit release intent: `pnpm ios:release:upload -- --version <YYYY.M.D> --revision <0-99>` and `--build-number <n>` when a specific build has been chosen.
-- `--version` is the gateway version. `--revision` is the public iOS release ordinal encoded into `CFBundleShortVersionString`; never pass the encoded App Store version through `--version`.
-- Release selection is deterministic. If the user does not supply a gateway version, resolve it with `node --import tsx scripts/ios-version.ts --field canonicalVersion`. The user must explicitly supply the App Store revision; do not infer it.
-- Never derive a gateway version or App Store revision from the current date, `## Unreleased`, mobile-release refs, App Store Connect builds, or existing version records.
-- Existing builds for the same gateway version and App Store revision mean upload the next build to that exact App Store version. Start a different App Store revision only when the user explicitly supplies it.
+- Release selection belongs to the pipeline. Run `pnpm ios:release:plan -- --json`; if it reports `changelogStatus: needs-cut`, run `pnpm ios:release:cut`, review and commit `apps/ios/CHANGELOG.md`, then run `pnpm ios:release:upload` without release arguments.
+- The planner derives the gateway version from the canonical root version, reuses the one editable App Store revision for that gateway, retries an unreleased revision found in App Store Connect build-upload history, and allocates the next revision only after released history. Historical exact gateway versions consume revision zero.
+- Build allocation uses App Store Connect `buildUploads`, including awaiting, processing, failed, and complete uploads. Every Apple-visible attempt consumes its build number; retries increment the build within the same App Store revision.
+- Only one iOS release uploader may run at a time. Multiple active App Store versions, locked/in-review state, a different active gateway, unknown upload state, or revision exhaustion must fail closed for human resolution.
+- `--version`, `--revision`, and `--build-number` remain checked overrides. The pipeline must reject an override that differs from the live deterministic plan. `--version` is always the gateway version, never the encoded App Store version.
+- Do not infer release identity from the current date, mobile-release refs, or generated local files. `## Unreleased` supplies notes only through the deterministic cutter; it does not select a revision.
 - If `pnpm ios:release:upload` exits non-zero, stop immediately and report the failing step.
-- After a failed `pnpm ios:release:upload`, do not continue with `pnpm ios:release:archive`, `asc builds upload`, `asc release stage`, `asc publish appstore`, `asc review submit`, direct Fastlane lanes, or any manual App Store Connect mutation command.
+- After a failed `pnpm ios:release:upload`, do not continue with a lower-level upload path. A human may repair App Store Connect state; the next pipeline run re-plans the same revision and next build automatically.
 - Do not submit an iOS App Store version for App Review. App Review submission stays manual unless the user explicitly asks to submit a specific already-prepared version after the failed state has been reported.
 - `pnpm ios:release:archive` is for local archive validation only. It is not a fallback release path after screenshot, metadata, or upload-lane failure.
