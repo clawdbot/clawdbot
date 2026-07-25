@@ -98,7 +98,15 @@ async function syncPublishedArchiveCommit(
   }
   // Publication success requires a real directory fsync. Unsupported
   // filesystems fail closed instead of weakening crash durability.
-  await syncDirectory(plan.parentReceipt, { label: "backup publication directory" });
+  const outcome = await syncDirectory(plan.parentReceipt, {
+    label: "backup publication directory",
+  });
+  if (outcome.status === "unsupported") {
+    const code = outcome.code ? ` (${outcome.code})` : "";
+    throw new Error(
+      `Backup publication directory does not support crash-durable synchronization${code}.`,
+    );
+  }
 }
 
 function isUnsupportedHardLinkError(error: unknown): boolean {
