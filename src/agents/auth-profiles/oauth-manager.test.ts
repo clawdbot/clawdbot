@@ -292,6 +292,70 @@ describe("createOAuthManager", () => {
     });
   });
 
+  it("skips main-store adoption and bootstrap substitution in no-refresh mode", async () => {
+    await withOAuthAgentDirs("oauth-manager-no-refresh-", async ({ mainAgentDir, agentDir }) => {
+      const profileId = "openai:oauth";
+      const localCredential = createCredential({
+        access: "expired-local-access",
+        refresh: "local-refresh",
+        expires: Date.now() - 60_000,
+      });
+      const mainCredential = createCredential({
+        access: "fresh-main-access",
+        refresh: "main-refresh",
+        expires: Date.now() + 10 * 60_000,
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: mainCredential,
+          },
+        },
+        mainAgentDir,
+        { filterExternalAuthProfiles: false },
+      );
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          [profileId]: localCredential,
+        },
+      };
+      const readBootstrapCredential = vi.fn(() =>
+        createCredential({
+          access: "fresh-bootstrap-access",
+          refresh: "bootstrap-refresh",
+          expires: Date.now() + 10 * 60_000,
+        }),
+      );
+      const refreshCredential = vi.fn(async () => null);
+      const buildApiKey = vi.fn(
+        async (_provider, credential: OAuthCredential) => credential.access,
+      );
+      const manager = createOAuthManager({
+        buildApiKey,
+        refreshCredential,
+        readBootstrapCredential,
+        isRefreshTokenReusedError: () => false,
+      });
+
+      await expect(
+        manager.resolveOAuthAccess({
+          store,
+          profileId,
+          credential: localCredential,
+          agentDir,
+          allowRefresh: false,
+        }),
+      ).resolves.toBeNull();
+
+      expect(readBootstrapCredential).not.toHaveBeenCalled();
+      expect(refreshCredential).not.toHaveBeenCalled();
+      expect(buildApiKey).not.toHaveBeenCalled();
+      expect(store.profiles[profileId]).toEqual(localCredential);
+    });
+  });
+
   it("does not overlay external auth while checking main-store adoption", async () => {
     await withOAuthAgentDirs("oauth-manager-main-adopt-", async ({ mainAgentDir, agentDir }) => {
       const profileId = "openai:oauth";

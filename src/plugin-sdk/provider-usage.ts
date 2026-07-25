@@ -6,6 +6,8 @@ export type {
   ProviderUsageCostHistory,
   ProviderUsageModelBreakdown,
   ProviderUsageBilling,
+  ProviderUsageProfileReadParams,
+  ProviderUsageProfileSnapshot,
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,

@@ -700,6 +700,22 @@ two-party event loops that do not go through the shared inbound reply runner.
     ```
 
   </Accordion>
+  <Accordion title="api.runtime.providerUsage">
+    Read one provider usage snapshot for an exact auth profile without credential fallback or refresh.
+
+    ```typescript
+    const snapshot = await api.runtime.providerUsage.read({
+      providerId: "openai",
+      authProfileId: "openai:work",
+      includeIdentity: false,
+      refreshCredentials: false,
+      timeoutMs: 5_000,
+    });
+    ```
+
+    The method is read-only and returns a token-free snapshot. It resolves only `authProfileId`; a missing, expired, or provider-mismatched profile does not fall back to another credential. Identity output and credential refresh are intentionally unsupported on this surface.
+
+  </Accordion>
   <Accordion title="api.runtime.state">
     State directory resolution and SQLite-backed keyed storage.
 

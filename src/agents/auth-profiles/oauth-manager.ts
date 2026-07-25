@@ -697,7 +697,21 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     agentDir?: string;
     cfg?: OpenClawConfig;
     forceRefresh?: boolean;
+    allowRefresh?: boolean;
   }): Promise<ResolvedOAuthAccess | null> {
+    if (params.allowRefresh === false) {
+      if (params.forceRefresh || !hasUsableOAuthCredential(params.credential)) {
+        return null;
+      }
+      return {
+        apiKey: await adapter.buildApiKey(params.credential.provider, params.credential, {
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+        }),
+        credential: params.credential,
+      };
+    }
+
     const adoptedCredential =
       adoptNewerMainOAuthCredential({
         store: params.store,

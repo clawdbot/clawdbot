@@ -485,4 +485,10 @@ export type PluginRuntimeCore = {
       workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
   };
+  providerUsage: {
+    /** Read one exact auth profile without refresh, fallback, identity, or token output. */
+    read: (
+      params: import("openclaw/plugin-sdk/provider-usage").ProviderUsageProfileReadParams,
+    ) => Promise<import("openclaw/plugin-sdk/provider-usage").ProviderUsageProfileSnapshot>;
+  };
 };
