@@ -39,7 +39,6 @@ extensions/codex/src/app-server/compact.ts
 extensions/codex/src/app-server/computer-use.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
-extensions/codex/src/app-server/config.ts
 extensions/codex/src/app-server/dynamic-tool-build.test.ts
 extensions/codex/src/app-server/dynamic-tool-build.ts
 extensions/codex/src/app-server/dynamic-tools.test.ts
