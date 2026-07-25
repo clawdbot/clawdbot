@@ -1,17 +1,14 @@
 # Pipeline status (autonomous Git ops)
 
-Updated by Lisa Option A ship/pull cron (Cursor ACP) and/or Lisa. Cursor Automations are backup only. **One line per checkpoint. No lists. No links.**
+One-line shapes only. Updated by Ship/Pull ACP + Lisa clock.
 
-Format examples:
+Examples (replace with live values; do not invent Clear):
 
-```
-Ship 06: Clear
-Pull 08: Clear
-Ship 16: Issues
+```text
+Ship 05: Clear
+Pull 07: Clear
+Ship 16: Clear
 Pull 18: Clear
-Staging promote (Tue): Clear
-Main ready (Mon): Clear
 ```
 
-Doctrine: IDE Development `docs/AUTONOMOUS-GIT-OPERATIONS.md`.
 Lisa procedure: `agents/pipeline-status.md`.

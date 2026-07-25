@@ -64,7 +64,7 @@ Before any success claim to Carlos (Control UI, Telegram, or "done"), walk this 
 ## Chosen model (2026-07-22)
 
 - **Primary local coder:** `ollama/qwen3.5:9b` (installed; verified with `ollama list`)
-- **Routing:** local-coder is automatic for coding from 7pm–7am and whenever Carlos explicitly asks for local-coder/Qwen local coding.
+- **Routing:** local-coder is automatic for coding from 19:00–04:00 Asia/Taipei and whenever Carlos explicitly asks for local-coder/Qwen local coding.
 - **Overflow fix:** spawning onto `local-coder` uses a tiny workspace bootstrap; ollama overrides on `main` auto-enable `lightContext` so Lisa's 40k+ AGENTS/TOOLS dump is not injected.
 
 ## Failure behavior

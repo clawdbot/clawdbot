@@ -83,7 +83,7 @@ Edit `HEARTBEAT.md` with a short checklist. Keep it small to limit token burn.
 
 **Tip:** Batch periodic checks into `HEARTBEAT.md`. Lisa's visible heartbeat itself is also a cron (`lisa-heartbeat-45`) because OpenClaw native `heartbeat.every` has no wall-clock `:45` anchor.
 
-**Example in production:** (1) **06:45 digest** — `lisa-morning-digest` (`45 6 * * *` Asia/Taipei): email via `tools/bin/lisa-safe email-send`, Telegram via cron announce; Battery Monitoring Telegram-only; never `cron.add` from digest. Procedure: `agents/morning-digest.md`. (2) **`:45` heartbeats** — `lisa-heartbeat-45` (`45 0,2,4,8,10,12,14,16,18,20,22 * * *`, skips 06:45 / 17:45 / 21:45): full `HEARTBEAT.md` output to Telegram. Schedule table: `HEARTBEAT.md`.
+**Example in production:** (1) **08:30 digest** — `lisa-morning-digest` (`30 8 * * *` Asia/Taipei): email via `tools/bin/lisa-safe email-send` (A+B+D + Main Approve when needed), Telegram via cron announce (A–D + Approve when needed); Battery Monitoring Telegram-only; never `cron.add` from digest. Procedure: `agents/morning-digest.md`. (2) **`:45` heartbeats** — `lisa-heartbeat-45` (`45 0,2,4,6,10,12,14,16,18,20,22 * * *`, includes 06:45; skips 08:45 / 17:45 / 21:45): full `HEARTBEAT.md` output to Telegram. Schedule table: `HEARTBEAT.md`.
 
 ### Things to Check (Rotate 2–4× Daily)
 

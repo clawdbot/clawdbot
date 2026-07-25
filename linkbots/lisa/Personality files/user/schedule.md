@@ -73,7 +73,9 @@ Ideally hobby, exercise, or free time. Until business targets are met, usually t
 
 ## Autonomous Background Work (Mac mini)
 
-**When Carlos is away from the desk** — weekday evenings (after 17:00 until next morning routine), nights (until 08:15), and most of the weekend — the Mac mini usually stays on and compute is often idle. Good windows for **autonomous background work**: local Ollama models, batch jobs, tasks not needing Carlos at the keyboard.
+**When Carlos is away from the desk** — weekday evenings (after 17:00 until next morning routine), nights, and most of the weekend — the Mac mini usually stays on and compute is often idle. Good windows for **autonomous background work**: local Ollama models, batch jobs, tasks not needing Carlos at the keyboard.
+
+**Overnight local coding window (weekdays):** **19:00–04:00** Asia/Taipei (after Pull 18; stop by 04:00 so Ship 05 can run). Outside that window, default coding delegates to Cursor (04:00–19:00). See `AGENTS.md` / `TOOLS.md` routing.
 
 **Autonomous work is not limited to those windows.** Run whenever the task requires it. Off-hours are when hardware is most often free.
 

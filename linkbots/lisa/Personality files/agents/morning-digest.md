@@ -1,18 +1,20 @@
 ---
 type: AgentProcedure
-title: 06:45 Morning Digest
-description: Day-ahead digest for Carlos — email via gws gmail, Telegram via cron announce
+title: 08:30 Morning Digest
+description: Day-ahead digest for Carlos — email via gws gmail, Telegram via cron announce; includes Pipeline + Monday Main Approve
 load: on_demand
 read_when:
   - Running lisa-morning-digest cron
   - Force-running an existing digest cron job for catch-up
-tags: [cron, digest, calendar, tasks, telegram, email, battery-monitoring]
+tags: [cron, digest, calendar, tasks, telegram, email, battery-monitoring, pipeline]
 ---
 
-# 06:45 Morning Digest (`lisa-morning-digest`)
+# 08:30 Morning Digest (`lisa-morning-digest`)
 
-Native cron: `45 6 * * *` Asia/Taipei, isolated session, `agentId: lisa-cron`, announce → Telegram `1123023078`. `lisa-cron` has `sandbox.mode: off`, so this is a fresh transcript on the Mac mini host, not Docker clean room; host `tools/bin/lisa-safe` / `tools/bin/lisa-carlos-tasks` can use `/opt/homebrew/bin` and `~/.config/gws*`. `main` remains the protected default chat agent (`sandbox.mode: non-main`), and `main.tools.exec.host: gateway` must stay unset. Main must not spawn `lisa-cron` for digest catch-ups.
+Native cron: `30 8 * * *` Asia/Taipei, isolated session, `agentId: lisa-cron`, announce → Telegram `1123023078`. `lisa-cron` has `sandbox.mode: off`, so this is a fresh transcript on the Mac mini host, not Docker clean room; host `tools/bin/lisa-safe` / `tools/bin/lisa-carlos-tasks` can use `/opt/homebrew/bin` and `~/.config/gws*`. `main` remains the protected default chat agent (`sandbox.mode: non-main`), and `main.tools.exec.host: gateway` must stay unset. Main must not spawn `lisa-cron` for digest catch-ups.
 Email is **not** a second cron announce channel — send it yourself with `tools/bin/lisa-safe email-send` (never improvised bare `gws`, never pipes).
+
+**Why 08:30:** Covers prior evening Ship 16 + Pull 18 and this morning’s Ship 05 + Pull 07 before Review #1. There is **no** 08:45 heartbeat — this digest replaces that slot. A normal heartbeat runs at **06:45**.
 
 ## Catch-up / force-run
 
@@ -22,7 +24,7 @@ For a same-day catch-up, use the existing cron job; do **not** ask main to spawn
 PATH="/opt/homebrew/opt/node@24/bin:$PATH" node /Users/linktrend/Projects/openclaw_prime/openclaw.mjs --profile lisa cron run <lisa-morning-digest-id> --wait --expect-final --wait-timeout 20m
 ```
 
-If CLI force-run is unavailable, tell Carlos to wait for the next scheduled 06:45 run or repair the cron job first.
+If CLI force-run is unavailable, tell Carlos to wait for the next scheduled 08:30 run or repair the cron job first.
 
 ### HARD RULES (digest — no improvisation)
 
@@ -41,7 +43,7 @@ OpenClaw cron has **one** announce target (Telegram). Email is a separate `lisa-
    ```
    Never `gws gmail send`, never `--body "$(cat …)"`, never `2>&1`.
    From `lisa@linktrend.media`. Never put the email body into the final assistant reply.
-2. **TELEGRAM path:** The **final plain-text reply** is the Telegram digest only (cron announces it). Produce the **Morning Digest Output Format** below (sections A–C). Include Battery Monitoring in Telegram only.
+2. **TELEGRAM path:** The **final plain-text reply** is the Telegram digest only (cron announces it). Produce the **Morning Digest Output Format** below (sections A–D, plus Main Approve when required). Include Battery Monitoring in Telegram only.
 3. **Never concatenate.** Do **not** label sections `📧 EMAIL` / `💬 TELEGRAM` in the final reply. Do **not** paste a failed email draft into Telegram.
 4. **If email send fails** (including gws auth): put **one short line** in the Telegram digest (e.g. `Email digest not sent — gws auth needs Carlos to run \`gws auth login\`.`). Then continue with the normal Telegram digest. Do not dump email content.
 5. Battery Monitoring / battery / selfie / compliance / evening-out: **Telegram only**. Never in email.
@@ -99,6 +101,16 @@ Review memory/logs and ACP/session state for Cursor-delegated coding, local `Qwe
 
 **Stale ACP filter:** Do **not** treat old failed `agent:cursor:acp:*` sessions (or Open Issues like "Fix wired default model for Cursor ACP agent") as current coding work when the failure was an unadvertised model that is already fixed in live config (`model.primary` = `grok-4.5[effort=high,fast=true]`). Only list Coding Work / Open Issues for activity in the digest window that still needs a decision, or for successful coding that actually completed overnight.
 
+### Pipeline status (section D)
+
+`read` `/Users/linktrend/.openclaw-lisa/workspace/memory/pipeline-status.md` (or workspace-relative `memory/pipeline-status.md`). Include exact Ship/Pull/Staging/Main shapes only — see `agents/pipeline-status.md`. Prefer reflecting Ship 05, Pull 07, Ship 16, Pull 18 for the current cycle when present. If the file is missing, omit section D rather than inventing Clear.
+
+### Main Approve (Mondays only — section E when needed)
+
+On **Monday**, after reading pipeline status: if `Main ready (Mon): Clear`, include a short **Main Approve** ask in **both** email and Telegram (same wording). Carlos answers **Approve / yes on Telegram only** (email is notify-only). Do **not** merge from this digest cron. Full dispatch rules: `agents/pipeline-status.md` (main session after Telegram Approve).
+
+If not Monday, or Main is not Clear / unknown: omit the Approve ask entirely.
+
 ### Auth / gws failure fallback
 
 On exit `2`, `invalid_rapt`, or reauth errors:
@@ -115,7 +127,9 @@ Produce this exact structure with **real data** each run. Section rules:
 - **A. Work:** always show the full itemized detail (i through v). Use "None." under ii–v when empty.
 - **`i. Summary` lines are strictly `Yes.` or `No.` — nothing else.** No counts, no parentheticals, no brief reasons, no descriptions appended — even in the digest. All real counts and descriptions belong exclusively in sections `ii`–`v` — never in the Summary line itself.
 - **B. Coding Work & Evals:** when Yes, show full itemized detail (Method / Description / Open Issues per coding item, plus Eval Comparisons). When no coding work and no evals: just `## B. Coding Work & Evals: No`.
-- **C. Battery Monitoring:** always show all 7 numbered items in full (never condensed). Concise, no commentary. Identical to heartbeat section C.
+- **C. Battery Monitoring:** always show all 7 numbered items in full (never condensed). Concise, no commentary. Identical to heartbeat section C. **Telegram only — never copy into email.**
+- **D. Pipeline:** one or more exact status lines (or omit if unknown).
+- **E. Main Approve:** Monday + Clear only; otherwise omit the whole section.
 
 ```text
 Morning Digest — <weekday, date>
@@ -182,6 +196,11 @@ iii. Eval Comparisons:
 ## D. Pipeline
 <one or more lines from memory/pipeline-status.md, exact Ship/Pull/Staging/Main shapes only>
 (omit section D entirely if no status file / no known checkpoint)
+
+## E. Main Approve
+(Monday only, and only when Main ready (Mon): Clear:)
+Ready to Approve staging→main for inherited repos? Reply Approve / yes on Telegram (email is notify-only).
+(omit section E entirely otherwise)
 ```
 
 ### Battery Monitoring Checks (item 7)
@@ -189,7 +208,7 @@ iii. Eval Comparisons:
 Same three checks as heartbeat, reported via Yes/No + alert bullets (not "All OK"):
 
 1. Files exist, readable, and agree
-2. Cron jobs healthy (`lisa-morning-digest` 06:45 + `lisa-heartbeat-45` + `battery-selfie-1745` + `battery-selfie-2145`)
+2. Cron jobs healthy (`lisa-morning-digest` 08:30 + `lisa-heartbeat-45` + `battery-selfie-1745` + `battery-selfie-2145`)
 3. 35% alert path healthy (`pendingAlert35` written if needed; no attempt to cron.add from this digest; no leftover 45%/98% projected jobs)
 
 - **Checks: No** = all clear — print only `7. Checks: No` (no "All OK", no alert bullets).
@@ -203,7 +222,7 @@ Optional one-line email send status (sent / not sent + reason) may appear above 
 2. **Telegram Battery Monitoring source of truth:** use the newest **confirmed** reading (`confirmed: true`). If a confirmed report is newer than any estimate, project expected current charge from that confirmed % / plug state to _now_ for section C item 1. Only use an overnight projection/estimate when there is no newer confirmed report.
 3. **Recalculate learned rates (once daily, here):** Count every plug/unplug segment with two confirmed % readings and duration ≥ 15 minutes in the prior 24h. pp/h = Δ% / hours; average charging vs discharging separately. Update `learned.chargeRate` / `learned.dischargeRate`. If fewer than 1 usable segment of a type, keep previous learned (or baseline +30 / −6.5 if never learned). Persist in state.json.
 4. **Routine Changes:** Merge Carlos chat reports + Google Calendar named **Routine**; persist; show `None` or one short line in item 5.
-5. Record this fixed 06:45 prompt with the real Asia/Taipei timestamp — do not invent Carlos's response. Never overwrite a newer confirmed reading with an estimate when writing state.
+5. Record this fixed 08:30 prompt with the real Asia/Taipei timestamp — do not invent Carlos's response. Never overwrite a newer confirmed reading with an estimate when writing state.
 6. **`battery-monitor.md` is append-only:** when recording the prompt, you MUST preserve all prior events. Standard method: `read` the full file, then `write` the previous contents plus the new entry. Never `write` only the new entry. Do **not** use `exec` shell append (`>>`) — piped/redirected shell never gets "Allow Always".
 7. Only a Carlos report confirms percentage, plug state, plans, location, or selfie status.
 8. Carlos Telegram replies land on `agent:main:main` (not this isolated cron). Main session must persist both Battery Monitoring files **before** other work, recalculate projections, and schedule/reconcile `battery-monitor-alert-35` (skip if plugged). **This digest must not schedule alerts.**
@@ -212,4 +231,6 @@ Optional one-line email send status (sent / not sent + reason) may appear above 
 
 ## Email body shape
 
-Fuller day-ahead covering the same Work (A) and Coding Work & Evals (B) content as the Telegram digest (calendar, Carlos Google Tasks via `lisa-carlos-tasks`, email, unanswered messages, coding/evals). **Exclude** all Battery Monitoring / battery / plugged / selfie / restriction / compliance / evening-out content (section C is Telegram-only).
+Same Work (A) and Coding Work & Evals (B) content as the Telegram digest, **plus** Pipeline (D) exact one-liners, **plus** Main Approve ask when section E applies.
+
+**Exclude** all Battery Monitoring / battery / plugged / selfie / restriction / compliance / evening-out content (section C is Telegram-only).
