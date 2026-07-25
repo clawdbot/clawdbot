@@ -114,6 +114,16 @@ describe("bundled plugin postinstall", () => {
         fileURLToPath(new URL("../../scripts/lib/package-dist-imports.mjs", import.meta.url)),
         path.join(scriptRoot, "lib", "package-dist-imports.mjs"),
       );
+      await fs.copyFile(
+        fileURLToPath(new URL("../../scripts/lib/guard-inventory-utils.mjs", import.meta.url)),
+        path.join(scriptRoot, "lib", "guard-inventory-utils.mjs"),
+      );
+      await fs.mkdir(path.join(packageRoot, "node_modules"), { recursive: true });
+      await fs.symlink(
+        fileURLToPath(new URL("../../node_modules/typescript", import.meta.url)),
+        path.join(packageRoot, "node_modules", "typescript"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
       for (const sentinel of sentinels) {
         await fs.mkdir(path.dirname(sentinel), { recursive: true });
         await fs.writeFile(sentinel, "owned by another Node application\n");
@@ -689,6 +699,40 @@ describe("bundled plugin postinstall", () => {
 
     await expectPathExists(importedChunk);
     await expectPathMissing(staleFile);
+  });
+
+  it("keeps named imported chunks without preserving template-literal pseudoimports", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-named-import-");
+    const entryFile = path.join(packageRoot, "dist", "cli", "run-main.js");
+    const importedChunk = path.join(packageRoot, "dist", "memory-state-current.js");
+    const phantomChunk = path.join(packageRoot, "dist", "memory-state-phantom.js");
+    await fs.mkdir(path.dirname(entryFile), { recursive: true });
+    await fs.writeFile(
+      entryFile,
+      [
+        "import {",
+        "  value,",
+        '} from "../memory-state-current.js";',
+        "const example = `",
+        'import "../memory-state-phantom.js"',
+        "`;",
+        "export { value, example };",
+        "",
+      ].join("\n"),
+    );
+    await writePackageDistInventory(packageRoot);
+    await fs.writeFile(importedChunk, "export const value = 42;\n");
+    await fs.writeFile(phantomChunk, "export const stale = true;\n");
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/memory-state-phantom.js"]);
+
+    await expectPathExists(importedChunk);
+    await expectPathMissing(phantomChunk);
   });
 
   it("does not abort dist pruning when a listed chunk disappears before import expansion", async () => {

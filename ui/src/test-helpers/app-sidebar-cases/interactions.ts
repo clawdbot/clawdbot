@@ -496,7 +496,8 @@ describe("AppSidebar catalog session rows", () => {
       const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
       const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
       const node = section?.querySelector('[data-session-catalog-host="node:devbox"]');
-      expect(section?.querySelector(".sidebar-session-group-count")?.textContent?.trim()).toBe("2");
+      // Counts only render while a catalog section is collapsed.
+      expect(section?.querySelector(".sidebar-session-group-count")).toBeNull();
       expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
       expect(local?.textContent).toContain("Local session");
       expect(local?.textContent).not.toContain("Node session");
@@ -505,6 +506,14 @@ describe("AppSidebar catalog session rows", () => {
       );
       expect(node?.textContent).toContain("Node session");
       expect(node?.textContent).not.toContain("Local session");
+
+      // Collapsing the catalog surfaces the row count as the closed-state indicator.
+      section?.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
+      await sidebar.updateComplete;
+      const collapsedSection = sidebar.querySelector('[data-session-section="catalog:codex"]');
+      expect(
+        collapsedSection?.querySelector(".sidebar-session-group-count")?.textContent?.trim(),
+      ).toBe("2");
     } finally {
       vi.useRealTimers();
     }
