@@ -1,8 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { finalizeEvent, type Event } from "nostr-tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 const relayMocks = vi.hoisted(() => ({
   connect: vi.fn<() => Promise<void>>(),
@@ -42,13 +40,14 @@ import { sendBuzzTextOneShot, startBuzzBus } from "./buzz-bus.js";
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const SENDER_PRIVATE_KEY = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
 const ACCOUNT_ID = "default";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let previousStateDir: string | undefined;
 let stateDir: string;
 
 describe("Buzz bus lifecycle", () => {
   beforeEach(() => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-dedupe-"));
+    stateDir = tempDirs.make("openclaw-buzz-dedupe-");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     vi.clearAllMocks();
     relayMocks.onevent = undefined;
@@ -64,7 +63,6 @@ describe("Buzz bus lifecycle", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
-    rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("closes a connected relay when authentication fails", async () => {
