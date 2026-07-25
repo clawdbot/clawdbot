@@ -2,7 +2,7 @@ import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercio
 import { toErrorObject } from "../../../infra/errors.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
-import { resetSessionFileFenceStateForTest } from "./attempt.session-lock.state.js";
+import { resetSessionFileFenceStateForTest } from "./attempt.session-lock.fence-controller.js";
 
 type SessionFileOwnerWaiter = {
   resolve: () => void;

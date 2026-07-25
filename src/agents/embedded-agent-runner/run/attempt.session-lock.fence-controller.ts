@@ -3,11 +3,11 @@ import type {
   OwnedSessionTranscriptCacheSnapshot,
   OwnedSessionTranscriptPublishedEntry,
 } from "../../../config/sessions/transcript-write-context.js";
+import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
 import {
   haveSamePublishedEntries,
   type PromptReleasedSessionEntry,
 } from "./attempt.session-lock.entries.js";
-import { EmbeddedAttemptSessionTakeoverError } from "./attempt.session-lock.error.js";
 import {
   classifySessionFenceChange,
   readByteIdenticalSessionFenceSnapshot,
@@ -19,16 +19,139 @@ import {
   type SessionFileFingerprint,
   type TrustedSessionFileSnapshot,
 } from "./attempt.session-lock.fence.js";
-import {
-  getOwnedSessionFileWriteHistory,
-  isTrustedSessionFileState,
-  pruneOwnedSessionFileWriteHistory,
-  recordOwnedSessionFileWrite,
-  recordTrustedSessionFileState,
-  resolveOwnedSessionFileWriteHistory,
-  resolveSessionFileFenceKey,
-  trustSessionFileState,
-} from "./attempt.session-lock.state.js";
+
+export class EmbeddedAttemptSessionTakeoverError extends Error {
+  constructor(sessionFile: string) {
+    super(`session file changed while embedded prompt lock was released: ${sessionFile}`);
+    this.name = "EmbeddedAttemptSessionTakeoverError";
+  }
+}
+
+type OwnedSessionFileWrite = {
+  generation: number;
+  fingerprint: SessionFileFingerprint;
+  publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
+  requiresReload?: true;
+};
+
+type OwnedSessionFileWriteHistory = {
+  activeFenceGenerations: Map<symbol, number>;
+  writes: OwnedSessionFileWrite[];
+};
+
+type TrustedSessionFileState = {
+  generation: number;
+  fingerprint: SessionFileFingerprint;
+};
+
+// Controllers in the same OpenClaw process can legitimately take turns writing
+// the same session file while another attempt is released for model I/O. Track
+// only fingerprints that changed while OpenClaw held the write lock so the
+// takeover fence can distinguish those locked in-process writes from unowned
+// external file changes.
+const ownedSessionFileWrites = new Map<string, OwnedSessionFileWriteHistory>();
+const trustedSessionFileStates = new Map<string, TrustedSessionFileState>();
+let ownedSessionFileWriteGeneration = 0;
+
+function resolveSessionFileFenceKey(sessionFile: string): string {
+  return resolveEmbeddedSessionFileKey(sessionFile);
+}
+
+export function resetSessionFileFenceStateForTest(): void {
+  ownedSessionFileWrites.clear();
+  trustedSessionFileStates.clear();
+  ownedSessionFileWriteGeneration = 0;
+}
+
+function resolveOwnedSessionFileWriteHistory(sessionFileKey: string): OwnedSessionFileWriteHistory {
+  const existing = ownedSessionFileWrites.get(sessionFileKey);
+  if (existing) {
+    return existing;
+  }
+  const created = {
+    activeFenceGenerations: new Map<symbol, number>(),
+    writes: [],
+  };
+  ownedSessionFileWrites.set(sessionFileKey, created);
+  return created;
+}
+
+function getOwnedSessionFileWriteHistory(
+  sessionFileKey: string,
+): OwnedSessionFileWriteHistory | undefined {
+  return ownedSessionFileWrites.get(sessionFileKey);
+}
+
+function pruneOwnedSessionFileWriteHistory(
+  sessionFileKey: string,
+  history: OwnedSessionFileWriteHistory,
+): void {
+  if (history.activeFenceGenerations.size === 0) {
+    ownedSessionFileWrites.delete(sessionFileKey);
+    return;
+  }
+  const oldestFenceGeneration = Math.min(...history.activeFenceGenerations.values());
+  history.writes = history.writes.filter((write) => write.generation > oldestFenceGeneration);
+}
+
+function recordOwnedSessionFileWrite(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+  publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[],
+  requiresReload?: true,
+): number {
+  ownedSessionFileWriteGeneration += 1;
+  const state = {
+    generation: ownedSessionFileWriteGeneration,
+    fingerprint,
+    ...(publishedEntries ? { publishedEntries: [...publishedEntries] } : {}),
+    ...(requiresReload ? { requiresReload } : {}),
+  };
+  const history = resolveOwnedSessionFileWriteHistory(sessionFileKey);
+  history.writes.push(state);
+  pruneOwnedSessionFileWriteHistory(sessionFileKey, history);
+  trustedSessionFileStates.set(sessionFileKey, state);
+  return ownedSessionFileWriteGeneration;
+}
+
+function recordTrustedSessionFileState(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): number {
+  ownedSessionFileWriteGeneration += 1;
+  const state = {
+    generation: ownedSessionFileWriteGeneration,
+    fingerprint,
+  };
+  trustedSessionFileStates.set(sessionFileKey, state);
+  return ownedSessionFileWriteGeneration;
+}
+
+function trustSessionFileState(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): number | undefined {
+  const trusted = trustedSessionFileStates.get(sessionFileKey);
+  if (trusted) {
+    return sameSessionFileFingerprint(trusted.fingerprint, fingerprint)
+      ? trusted.generation
+      : undefined;
+  }
+  ownedSessionFileWriteGeneration += 1;
+  trustedSessionFileStates.set(sessionFileKey, {
+    generation: ownedSessionFileWriteGeneration,
+    fingerprint,
+  });
+  return ownedSessionFileWriteGeneration;
+}
+
+function isTrustedSessionFileState(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): boolean {
+  const trusted = trustedSessionFileStates.get(sessionFileKey);
+  return trusted !== undefined && sameSessionFileFingerprint(trusted.fingerprint, fingerprint);
+}
 
 export type SessionFileWriteAppendValidator<T> = (result: T, appendedText: string) => boolean;
 

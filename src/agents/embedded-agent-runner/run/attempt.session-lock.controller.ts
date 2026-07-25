@@ -8,9 +8,9 @@ import type {
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import type { PromptReleasedSessionEntry } from "./attempt.session-lock.entries.js";
-import { EmbeddedAttemptSessionTakeoverError } from "./attempt.session-lock.error.js";
 import {
   EmbeddedAttemptSessionFileFence,
+  EmbeddedAttemptSessionTakeoverError,
   type SessionFileWriteAppendValidator,
 } from "./attempt.session-lock.fence-controller.js";
 import {
