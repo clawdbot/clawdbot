@@ -538,10 +538,6 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
         case swarmEnabled
     }
 
-    public init(swarmEnabled: Bool) {
-        self.swarmEnabled = swarmEnabled
-    }
-
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.swarmEnabled = if container.contains(.swarmEnabled) {
