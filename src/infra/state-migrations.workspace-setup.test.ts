@@ -110,6 +110,40 @@ describe("legacy workspace Doctor migration", () => {
     });
   });
 
+  it("detects setup state for every canonical agents.entries workspace", async () => {
+    const context = setup();
+    const secondWorkspaceDir = path.join(context.homeDir, "workspace-second");
+    await fsp.mkdir(secondWorkspaceDir, { recursive: true });
+    const entriesContext = {
+      ...context,
+      cfg: {
+        agents: {
+          defaults: { workspace: context.workspaceDir },
+          entries: {
+            hex: { default: true },
+            june: { workspace: secondWorkspaceDir },
+          },
+        },
+      } satisfies OpenClawConfig,
+    };
+    const setupPaths = [context.workspaceDir, secondWorkspaceDir].map((workspaceDir) =>
+      path.join(
+        resolveWorkspaceStateIdentity(workspaceDir).workspacePath,
+        "openclaw-workspace-state.json",
+      ),
+    );
+    for (const setupPath of setupPaths) {
+      await fsp.writeFile(setupPath, JSON.stringify({ version: 1 }), "utf8");
+    }
+
+    expect(detect(entriesContext)).toMatchObject({
+      hasLegacy: true,
+      sources: expect.arrayContaining(
+        setupPaths.map((sourcePath) => expect.objectContaining({ kind: "setup", sourcePath })),
+      ),
+    });
+  });
+
   it("imports setup and attestation state, records receipts, and removes files", async () => {
     const context = setup();
     const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
