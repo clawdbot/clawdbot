@@ -64,6 +64,7 @@ Phase 2F.4G is implemented and activation-proved on the loopback Gateway:
 - database-backed execution engine and ordered fallback are implemented;
 - constructor and configuration validation are implemented;
 - the typed `ai.execute` Gateway boundary is implemented;
+- the development Gateway image packages the bridge and its pinned Python dependency;
 - focused Gateway, TypeScript, and AI Intelligence tests pass;
 - live `ai.execute` primary success is demonstrated for `telegram_ranch_bot`;
 - live primary failure with approved fallback success is demonstrated;

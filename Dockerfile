@@ -164,7 +164,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git hostname lsof openssl procps python3 tini && \
+      ca-certificates curl git hostname lsof openssl procps python3 python3-venv tini && \
     update-ca-certificates
 
 RUN chown node:node /app
@@ -179,6 +179,12 @@ COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
+COPY --from=runtime-assets --chown=node:node /app/tools/ai_intelligence ./tools/ai_intelligence
+
+RUN python3 -m venv /app/tools/ai_intelligence/.venv && \
+    /app/tools/ai_intelligence/.venv/bin/pip install \
+      --no-cache-dir \
+      --requirement /app/tools/ai_intelligence/requirements.txt
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a

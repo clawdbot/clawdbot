@@ -410,6 +410,7 @@ Implemented:
 - `operator.write` method registration;
 - disabled-by-default activation control;
 - bounded Node.js to Python process bridge;
+- development Gateway image packaging for the bridge and its pinned Python dependency;
 - engine construction from the approved database environment;
 - ordered attempt details in successful results;
 - sanitized Gateway error responses;
