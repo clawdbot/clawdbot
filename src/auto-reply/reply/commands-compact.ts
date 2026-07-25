@@ -18,6 +18,7 @@ import {
 } from "../../agents/openai-routing.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -235,6 +236,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
+  const compactionStorePath = resolveSessionStorePathForScope({
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    storePath:
+      params.storePath ?? resolveStorePath(params.cfg.session?.store, { agentId: sessionAgentId }),
+  });
   const result = await runtime.compactEmbeddedAgentSession({
     abortSignal: params.opts?.abortSignal,
     sessionId,
@@ -243,7 +250,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       agentId: sessionAgentId,
       sessionId,
       sessionKey: params.sessionKey,
-      storePath: resolveStorePath(params.cfg.session?.store, { agentId: sessionAgentId }),
+      storePath: compactionStorePath,
     },
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
@@ -306,7 +313,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      storePath: compactionStorePath,
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,

@@ -222,6 +222,23 @@ describe("exportTrajectoryBundle", () => {
     ).rejects.toThrow("transcript target does not match the requested session");
   });
 
+  it("rejects a legacy SQLite marker for a different session", async () => {
+    const outputDir = makeTempDir();
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(outputDir, "bundle"),
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "stale-session",
+          storePath: path.join(outputDir, "sessions.json"),
+        }),
+        sessionId: "requested-session",
+        workspaceDir: outputDir,
+      }),
+    ).rejects.toThrow("legacy marker does not match the requested session");
+  });
+
   it("sanitizes session ids in default export directory names", () => {
     const outputDir = resolveDefaultTrajectoryExportDir({
       workspaceDir: "/tmp/workspace",

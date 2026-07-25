@@ -146,6 +146,14 @@ describe("session cost usage", () => {
       expect(
         resolveExistingUsageSessionFile({
           agentId: "main",
+          sessionFile: `sqlite:main:stale-session:${storePath}`,
+          sessionId,
+        }),
+      ).toBeUndefined();
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
           sessionEntry: {
             sessionFile: `sqlite:main:stale-session:${storePath}`,
             sessionId,

@@ -237,6 +237,9 @@ async function readSessionEntries(params: {
       rowByEntry,
     };
   }
+  if (marker.sessionId !== params.sessionId) {
+    throw new Error("Trajectory export legacy marker does not match the requested session");
+  }
   const targetKeyAgentId = parseAgentSessionKey(target?.sessionKey)?.agentId;
   const targetKeyEntry =
     target?.sessionKey && marker
@@ -451,7 +454,10 @@ async function readRuntimeTrajectoryEvents(params: {
   warnings: JsonlParseWarning[];
 }> {
   const marker = params.sessionTarget ?? parseSqliteSessionFileMarker(params.sessionFile);
-  if (marker && (params.sessionTarget ? marker.sessionId === params.sessionId : true)) {
+  if (marker && marker.sessionId !== params.sessionId) {
+    throw new Error("Trajectory runtime target does not match the requested session");
+  }
+  if (marker) {
     const events = await loadSqliteTrajectoryRuntimeEvents({
       agentId: marker.agentId,
       sessionId: marker.sessionId,

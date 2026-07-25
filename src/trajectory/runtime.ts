@@ -300,7 +300,7 @@ function createSqliteTrajectoryRuntimeSink(params: {
           storePath: target.storePath,
         }
       : legacyMarker;
-  if (!marker || (completeTarget && marker.sessionId !== params.sessionId)) {
+  if (!marker || marker.sessionId !== params.sessionId) {
     return null;
   }
   let pendingEvents: TrajectoryEvent[] = [];

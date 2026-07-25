@@ -1,6 +1,7 @@
 /**
  * Queues embedded-agent session compaction onto the correct command lane.
  */
+import path from "node:path";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -687,8 +688,13 @@ async function compactResolvedContextEngine(
             sessionKey: delegatedSessionTarget.sessionKey ?? params.sessionKey,
             sessionTarget: delegatedSessionTarget,
           });
-          if (resolvedDelegatedTarget.agentId !== runtimeTarget.agentId) {
-            throw new Error("Context-engine successor target changed agent ownership");
+          if (
+            resolvedDelegatedTarget.agentId !== runtimeTarget.agentId ||
+            resolvedDelegatedTarget.sessionKey !== runtimeTarget.sessionKey ||
+            path.resolve(resolvedDelegatedTarget.storePath) !==
+              path.resolve(runtimeTarget.storePath)
+          ) {
+            throw new Error("Context-engine successor target changed the active session binding");
           }
           postCompactionSessionId = resolvedDelegatedTarget.sessionId;
           postCompactionSessionFile = resolvedDelegatedTarget.sessionKey;

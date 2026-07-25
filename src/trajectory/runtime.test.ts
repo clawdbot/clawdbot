@@ -130,6 +130,21 @@ describe("trajectory runtime", () => {
     );
   });
 
+  it("rejects a legacy SQLite marker for another session", () => {
+    const storePath = path.join(makeTempDir(), "sessions.json");
+
+    expect(
+      createTrajectoryRuntimeRecorder({
+        sessionId: "current-session",
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "stale-session",
+          storePath,
+        }),
+      }),
+    ).toBeNull();
+  });
+
   it("stores bounded oversized runtime events in SQLite", async () => {
     const tempDir = makeTempDir();
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
