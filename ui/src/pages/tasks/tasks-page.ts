@@ -12,7 +12,10 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
 import { pathForSessionKey } from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import {
   applyTaskEvent,
   mergeTaskLists,
@@ -363,6 +366,10 @@ class TasksPage extends OpenClawLightDomElement {
       </section>
       ${renderTasks({
         basePath: this.context.basePath,
+        mainKey: resolveUiConfiguredMainKey({
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+        }),
         connected: this.connected,
         // tasks.cancel needs operator.write; read-only operators get no button.
         canCancel: hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
@@ -373,7 +380,16 @@ class TasksPage extends OpenClawLightDomElement {
         onCancel: (taskId) => void this.cancelTask(taskId),
         onNavigateToChat: (sessionKey) =>
           this.context.navigate("chat", {
-            pathname: pathForSessionKey("chat", sessionKey, this.context.basePath),
+            pathname: pathForSessionKey(
+              "chat",
+              sessionKey,
+              this.context.basePath,
+              undefined,
+              resolveUiConfiguredMainKey({
+                agentsList: this.context.agents.state.agentsList,
+                hello: this.context.gateway.snapshot.hello,
+              }),
+            ),
           }),
       })}
     `;

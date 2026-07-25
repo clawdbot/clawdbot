@@ -14,7 +14,11 @@ import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/displ
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { pathForSessionKey } from "../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import { renderSidebarPluginTab, shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
@@ -131,7 +135,13 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   });
   return html`
     <a
-      href=${pathForSessionKey("chat", mainKey, host.basePath, mainRow ?? undefined)}
+      href=${pathForSessionKey(
+        "chat",
+        mainKey,
+        host.basePath,
+        mainRow ?? undefined,
+        parseAgentSessionKey(mainKey)?.rest,
+      )}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {

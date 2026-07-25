@@ -696,7 +696,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     shell.runtime = {
       context: {
         navigation: { update },
-        gateway: { setSessionKey },
+        gateway: { setSessionKey, snapshot: { hello: null } },
+        agents: { state: { agentsList: { mainKey: "main" } } },
         navigate,
       } as unknown as ApplicationContext,
     };

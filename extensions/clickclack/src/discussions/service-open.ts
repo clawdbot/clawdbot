@@ -59,6 +59,7 @@ export function controlSessionUrl(
   baseUrl: string | undefined,
   sessionKey: string,
   fallbackAgentId: string,
+  mainKey: string | undefined,
   displayName?: string,
 ): string | undefined {
   if (!baseUrl) {
@@ -71,6 +72,7 @@ export function controlSessionUrl(
     fallbackAgentId,
     basePath: url.pathname,
     displayName,
+    mainKey,
   });
   if (!path) {
     return undefined;
@@ -218,6 +220,7 @@ export async function openClickClackDiscussionBinding(
     account.discussions.controlUrlBase,
     sessionKey,
     account.agentId ?? "main",
+    (runtime.config.current() as CoreConfig).session?.mainKey,
     label,
   );
   const archived = entry.archivedAt !== undefined;

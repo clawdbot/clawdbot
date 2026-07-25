@@ -9,7 +9,7 @@ import { renderPluginsHubTabs } from "../../components/plugins-hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { pathForSessionKey, resolveSessionKey } from "../../lib/sessions/index.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { normalizeAgentId, resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -468,7 +468,16 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       return;
     }
     scope.navigate("chat", {
-      pathname: pathForSessionKey("chat", sessionKey, scope.context.basePath),
+      pathname: pathForSessionKey(
+        "chat",
+        sessionKey,
+        scope.context.basePath,
+        undefined,
+        resolveUiConfiguredMainKey({
+          agentsList: scope.context.agents.state.agentsList,
+          hello: scope.context.gateway.snapshot.hello,
+        }),
+      ),
     });
   };
 

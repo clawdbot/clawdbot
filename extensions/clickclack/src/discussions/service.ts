@@ -335,8 +335,13 @@ export class ClickClackDiscussionService {
     const label = entry ? resolveDiscussionLabel(entry.label, sessionKey) : binding.label;
     const section = entry?.category?.trim() || account.discussions.section;
     const externalUrl =
-      controlSessionUrl(account.discussions.controlUrlBase, sessionKey, binding.agentId, label) ??
-      "";
+      controlSessionUrl(
+        account.discussions.controlUrlBase,
+        sessionKey,
+        binding.agentId,
+        this.#currentConfig().session?.mainKey,
+        label,
+      ) ?? "";
     const patch: {
       archived?: boolean;
       external_url?: string;

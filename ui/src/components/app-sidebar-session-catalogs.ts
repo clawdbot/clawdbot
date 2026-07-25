@@ -2,11 +2,14 @@ import type {
   SessionCatalog,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import type {
   CatalogSessionContinuedDetail,
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
+import { catalogSessionSearch } from "../lib/sessions/catalog-key.ts";
+import { pathForSessionKey } from "../lib/sessions/index.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
@@ -47,6 +50,16 @@ export type CatalogSessionMenuRequest = {
   canOpenTerminal: boolean;
   meta: string;
 };
+
+export function catalogSessionNavigation(
+  agentId: string,
+  key: CatalogSessionKey,
+  basePath = "",
+): { href: string; navigation: ApplicationNavigationOptions } {
+  const pathname = pathForSessionKey("chat", `agent:${agentId}:main`, basePath);
+  const search = catalogSessionSearch(key);
+  return { href: `${pathname}${search}`, navigation: { pathname, search } };
+}
 
 /** Stamps a freshly adopted session key onto its catalog row so the sidebar
     binds it before the next catalog poll confirms the adoption. */

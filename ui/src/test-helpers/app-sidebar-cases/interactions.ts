@@ -482,8 +482,9 @@ describe("AppSidebar catalog session rows", () => {
       await sidebar.updateComplete;
       const row = sidebar.querySelector('[data-session-key*="thread-1"]') as HTMLElement;
       (row.querySelector("a") as HTMLElement).click();
-      expect(navigate).toHaveBeenCalledWith("new-session", {
-        search: "?agent=main&catalog=codex",
+      expect(navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/chat/main",
+        search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1",
       });
       row.dispatchEvent(
         new MouseEvent("contextmenu", {

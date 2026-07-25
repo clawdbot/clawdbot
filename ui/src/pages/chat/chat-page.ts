@@ -107,6 +107,7 @@ export class ChatPage extends OpenClawLightDomElement {
     this.addEventListener("drop", this.handleDrop);
     window.addEventListener("dragend", this.handleWindowDragEnd);
     window.addEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
+    this.syncRouteAgent();
     this.syncRouteToActivePane();
   }
 
@@ -138,6 +139,7 @@ export class ChatPage extends OpenClawLightDomElement {
         this.context.replace(data.face ?? "chat", data.canonicalLocation);
         return;
       }
+      this.syncRouteAgent();
       this.syncRouteToActivePane();
     }
     if (data && routeDraftWasRendered) {
@@ -363,6 +365,13 @@ export class ChatPage extends OpenClawLightDomElement {
       return;
     }
     this.persistLayout(setPaneSession(layout, activePane.id, sessionKey));
+  }
+
+  private syncRouteAgent() {
+    const agentId = this.data?.agentId?.trim();
+    if (agentId) {
+      this.context.agentSelection.set(agentId);
+    }
   }
 
   private persistLayout(layout: ChatSplitLayout | undefined) {

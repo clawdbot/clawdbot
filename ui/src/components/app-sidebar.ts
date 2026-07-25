@@ -363,6 +363,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         basePath: this.basePath,
         routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
+        mainKey: this.sessionMainKey(),
         loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
         projectGrouping: this.catalogProjectGrouping,
         liveRows,

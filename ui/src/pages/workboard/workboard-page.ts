@@ -13,6 +13,7 @@ import { renderAgentScopeControl } from "../../components/agent-scope-control.ts
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { pathForSessionKey } from "../../lib/sessions/index.ts";
+import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { resetDraftState } from "../../lib/workboard/card-state.ts";
 import {
@@ -379,7 +380,16 @@ class WorkboardPage extends OpenClawLightDomElement {
         showAgentFilter: context.agentSelection.state.scopeId === null,
         onOpenSession: (sessionKey) => {
           context.navigate("chat", {
-            pathname: pathForSessionKey("chat", sessionKey, context.basePath),
+            pathname: pathForSessionKey(
+              "chat",
+              sessionKey,
+              context.basePath,
+              undefined,
+              resolveUiConfiguredMainKey({
+                agentsList: context.agents.state.agentsList,
+                hello: context.gateway.snapshot.hello,
+              }),
+            ),
             hash: "",
           });
         },

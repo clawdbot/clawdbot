@@ -402,14 +402,12 @@ describe("routeIdFromPath", () => {
       kind: "short",
       agentId: "main",
       shortId: "12345678",
-      literalSessionKey: "agent:main:12345678",
     });
     expect(sessionRefFromPath("/chat/wrong/wrong-slug-1234567890ab")).toEqual({
       namespace: "chat",
       kind: "short",
       agentId: "wrong",
       shortId: "1234567890ab",
-      literalSessionKey: "agent:wrong:wrong-slug-1234567890ab",
     });
     expect(sessionRefFromPath("/chat/main/telegram/12345")).toEqual({
       namespace: "chat",
@@ -422,6 +420,44 @@ describe("routeIdFromPath", () => {
       kind: "literal",
       agentId: "ops",
       sessionKey: "agent:ops:cron:nightly:run:8821",
+    });
+    for (const reserved of ["main", "global", "boot", "sessions"]) {
+      expect(sessionRefFromPath(`/chat/main/${reserved}`)).toMatchObject({
+        kind: "literal",
+        sessionKey: `agent:main:${reserved}`,
+      });
+    }
+    expect(sessionRefFromPath("/chat/main/workspace", "", "workspace")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:main:workspace",
+    });
+    expect(sessionRefFromPath("/chat/main/not-a-short-id")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:main:not-a-short-id",
+    });
+    expect(pathForSession("chat", "main", "agent:main:not-reserved")).toBe(
+      "/chat/main/not-reserved",
+    );
+    expect(pathForSession("chat", "main", "agent:main:12345678")).toBeNull();
+    const collidingMainKey = "deadbeef";
+    const collisionPath = pathForSession(
+      "chat",
+      "main",
+      "agent:main:dashboard:deadbeef-0aaa-4000-8000-000000000001",
+      "",
+      { mainKey: collidingMainKey },
+    );
+    expect(collisionPath).toBe("/chat/main/deadbeef0");
+    expect(sessionRefFromPath(collisionPath ?? "", "", collidingMainKey)).toMatchObject({
+      kind: "short",
+      shortId: "deadbeef0",
+    });
+    expect(
+      pathForSession("chat", "main", "agent:main:workspace", "", { mainKey: "workspace" }),
+    ).toBe("/chat/main");
+    expect(sessionRefFromPath("/chat/main/deadbeef/child")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:main:deadbeef:child",
     });
     expect(pathForSession("chat", "main", "agent:main:cron:..:run")).toBe(
       "/chat/main/cron/~dotdot/run",

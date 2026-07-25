@@ -32,7 +32,7 @@ function result(
   };
 }
 
-function contextFor(listResult: SessionsListResult) {
+function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
   const client = {};
   const list = vi.fn(async (_options?: { offset?: number; search?: string }) => listResult);
   const context = {
@@ -41,7 +41,7 @@ function contextFor(listResult: SessionsListResult) {
       snapshot: { phase: "connected", client, hello: null },
       subscribe: vi.fn(() => () => undefined),
     },
-    agents: { state: { agentsList: { mainKey: "main" } } },
+    agents: { state: { agentsList: { mainKey } } },
     sessions: { list },
   } as unknown as ApplicationContext;
   return { context, list };
@@ -144,32 +144,6 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("falls back from an unmatched short-looking segment to its literal key", async () => {
-    const { context, list } = contextFor(result([]));
-    list
-      .mockResolvedValueOnce(
-        result([row({ key: "agent:main:telegram:noise" })], {
-          hasMore: true,
-          nextOffset: 20,
-        }),
-      )
-      .mockResolvedValueOnce(result([], { offset: 20, hasMore: false }));
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual({
-      kind: "session",
-      sessionKey: "agent:main:deadbeef",
-      draft: undefined,
-      face: "chat",
-    });
-    expect(list).toHaveBeenCalledTimes(2);
-  });
-
   it("queries the full supplied prefix so longer disambiguation links can resolve", async () => {
     const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
     const { context, list } = contextFor(result([target]));
@@ -253,6 +227,19 @@ describe("loadChatRoute", () => {
     expect(list).toHaveBeenCalledTimes(5);
   });
 
+  it("stops after one unavailable session-list result", async () => {
+    const { context, list } = contextFor(null);
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("Session list unavailable while resolving URL");
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
   it("builds distinct working links for ambiguous prefixes", async () => {
     const rows = [
       row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" }),
@@ -264,7 +251,7 @@ describe("loadChatRoute", () => {
     const { context } = contextFor(result(rows));
     const ambiguous = await loadChatRoute(
       context,
-      { pathname: "/dashboard/ignored/deploy-12345678", search: "", hash: "" },
+      { pathname: "/dashboard/ignored/deploy-12345678", search: "?draft=ship", hash: "" },
       "dashboard",
       new AbortController().signal,
     );
@@ -273,8 +260,8 @@ describe("loadChatRoute", () => {
       throw new Error("expected an ambiguous route");
     }
     expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual([
-      "/dashboard/main/deploy-monitor-123456780a",
-      "/dashboard/work/deploy-monitor-two-123456780b",
+      "/dashboard/main/deploy-monitor-123456780a?draft=ship",
+      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship",
     ]);
 
     for (const [candidate, expectedRow] of ambiguous.candidates.map(
@@ -283,14 +270,18 @@ describe("loadChatRoute", () => {
       await expect(
         loadChatRoute(
           context,
-          { pathname: candidate.href, search: "", hash: "" },
+          {
+            pathname: new URL(candidate.href, "https://control.test").pathname,
+            search: new URL(candidate.href, "https://control.test").search,
+            hash: "",
+          },
           "dashboard",
           new AbortController().signal,
         ),
       ).resolves.toEqual({
         kind: "session",
         sessionKey: expectedRow?.key,
-        draft: undefined,
+        draft: "ship",
         face: "dashboard",
       });
     }
@@ -312,5 +303,66 @@ describe("loadChatRoute", () => {
       face: "dashboard",
     });
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("treats a configured main key as a reserved literal", async () => {
+    const { context, list } = contextFor(result([]), "workspace");
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/workspace", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "agent:main:workspace",
+      draft: undefined,
+      face: "chat",
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("loads a specific synthetic catalog thread from its URL target", async () => {
+    const { context, list } = contextFor(result([]));
+    await expect(
+      loadChatRoute(
+        context,
+        {
+          pathname: "/chat/main",
+          search: "?catalog=claude&host=gateway%3Alocal&thread=thread-2",
+          hash: "",
+        },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      agentId: "main",
+      draft: undefined,
+      face: "chat",
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("preserves the path agent for synthetic catalog sessions", async () => {
+    const { context } = contextFor(result([]));
+    await expect(
+      loadChatRoute(
+        context,
+        {
+          pathname: "/chat/research",
+          search: "?catalog=claude&host=gateway%3Alocal&thread=thread-2",
+          hash: "",
+        },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      agentId: "research",
+    });
   });
 });

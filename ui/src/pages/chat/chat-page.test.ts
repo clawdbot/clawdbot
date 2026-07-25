@@ -106,12 +106,21 @@ function getDropIndicator(page: ChatPage) {
 function setNavigationContext(page: ChatPage) {
   const navigate = vi.fn();
   const replace = vi.fn();
-  (page as unknown as { context: { navigate: typeof navigate; replace: typeof replace } }).context =
-    {
-      navigate,
-      replace,
-    };
-  return { navigate, replace };
+  const setAgent = vi.fn();
+  (
+    page as unknown as {
+      context: {
+        navigate: typeof navigate;
+        replace: typeof replace;
+        agentSelection: { set: typeof setAgent };
+      };
+    }
+  ).context = {
+    navigate,
+    replace,
+    agentSelection: { set: setAgent },
+  };
+  return { navigate, replace, setAgent };
 }
 
 function stubMatchMedia(matches: boolean) {
@@ -143,6 +152,19 @@ describe("chat page split layout host", () => {
     document.body.replaceChildren();
     localStorage.clear();
     vi.unstubAllGlobals();
+  });
+
+  it("selects the path agent for a synthetic catalog session", () => {
+    const page = new ChatPage();
+    const { setAgent } = setNavigationContext(page);
+    page.data = {
+      sessionKey: "catalog:claude:gateway%3Alocal:thread-1",
+      agentId: "research",
+    };
+
+    document.body.append(page);
+
+    expect(setAgent).toHaveBeenCalledWith("research");
   });
 
   it("renders one chrome-free active pane in classic mode", async () => {

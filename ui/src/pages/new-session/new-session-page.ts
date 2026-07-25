@@ -14,7 +14,11 @@ import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { pathForSessionKey } from "../../lib/sessions/index.ts";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -1447,7 +1451,16 @@ class NewSessionPage extends OpenClawLightDomElement {
         }
         this.context?.gateway.setSessionKey(sessionKey);
         this.context?.navigate("chat", {
-          pathname: pathForSessionKey("chat", sessionKey, this.context.basePath),
+          pathname: pathForSessionKey(
+            "chat",
+            sessionKey,
+            this.context.basePath,
+            undefined,
+            resolveUiConfiguredMainKey({
+              agentsList: this.context.agents.state.agentsList,
+              hello: this.context.gateway.snapshot.hello,
+            }),
+          ),
         });
       },
     });

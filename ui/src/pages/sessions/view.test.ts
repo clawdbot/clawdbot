@@ -31,6 +31,7 @@ function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsLis
 function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
+    mainKey: "main",
     result,
     error: null,
     activeMinutes: "",

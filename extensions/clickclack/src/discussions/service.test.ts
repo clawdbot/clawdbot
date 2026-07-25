@@ -79,6 +79,20 @@ describe("ClickClack discussion service", () => {
     expect(harness.updateChannel).not.toHaveBeenCalled();
   });
 
+  it("uses the configured main key when building control links", async () => {
+    const harness = createHarness({ label: "Workspace main" });
+    harness.config.session = { mainKey: "workspace" };
+
+    await harness.service.open("agent:research:workspace");
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({
+        external_url: "https://control.example/control/chat/research",
+      }),
+    );
+  });
+
   it("builds control links from URL path and query components", async () => {
     const harness = createHarness({ label: "Control link" });
     harness.config.channels!.clickclack!.discussions!.controlUrlBase =

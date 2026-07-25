@@ -378,13 +378,14 @@ describe("AppSidebar brand actions", () => {
 
 describe("AppSidebar agent chip", () => {
   it("resumes the newest session when the menu switches to an agent with cached rows", async () => {
+    const taskKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKey = vi.fn();
     (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
       setSessionKey;
     const { sidebar } = await mountSidebar(
       gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main", "agent:main:task"]),
+      createSessions("main", ["agent:main:main", taskKey]),
       "panel",
       TWO_AGENTS,
     );
@@ -402,7 +403,7 @@ describe("AppSidebar agent chip", () => {
     ];
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
     // createSessionState stamps ascending updatedAt, so the last key is newest.
-    expect(setSessionKey).toHaveBeenCalledWith("agent:main:task");
+    expect(setSessionKey).toHaveBeenCalledWith(taskKey);
     expect(onNavigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/00000002" });
   });
 

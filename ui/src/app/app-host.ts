@@ -905,7 +905,13 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     context.gateway.setSessionKey(command.sessionKey);
     this.navigate("chat", {
-      pathname: pathForSessionKey("chat", command.sessionKey, context.basePath),
+      pathname: pathForSessionKey(
+        "chat",
+        command.sessionKey,
+        context.basePath,
+        undefined,
+        this.sessionMainKey(),
+      ),
     });
   };
 
@@ -981,9 +987,24 @@ class OpenClawShell extends OpenClawLightDomElement {
     return (
       options ??
       (sessionKey
-        ? { pathname: pathForSessionKey(face, sessionKey, this.context?.basePath ?? "") }
+        ? {
+            pathname: pathForSessionKey(
+              face,
+              sessionKey,
+              this.context?.basePath ?? "",
+              undefined,
+              this.sessionMainKey(),
+            ),
+          }
         : undefined)
     );
+  }
+
+  private sessionMainKey(): string {
+    return resolveUiConfiguredMainKey({
+      agentsList: this.context?.agents.state.agentsList,
+      hello: this.context?.gateway.snapshot.hello,
+    });
   }
 
   private navigate(routeId: string, options?: ApplicationNavigationOptions) {
@@ -1748,7 +1769,13 @@ class OpenClawShell extends OpenClawLightDomElement {
             .onSelectSession=${(sessionKey: string) => {
               context.gateway.setSessionKey(sessionKey);
               this.navigate("chat", {
-                pathname: pathForSessionKey("chat", sessionKey, context.basePath),
+                pathname: pathForSessionKey(
+                  "chat",
+                  sessionKey,
+                  context.basePath,
+                  undefined,
+                  this.sessionMainKey(),
+                ),
               });
             }}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}

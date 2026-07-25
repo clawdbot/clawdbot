@@ -10,7 +10,6 @@ export type ControlUiSessionPathTarget =
       kind: "short";
       agentId: string;
       shortId: string;
-      literalSessionKey: string;
     }
   | {
       namespace: ControlUiSessionNamespace;
@@ -36,6 +35,7 @@ const INVALID_AGENT_ID_CHARS_RE = /[^a-z0-9_-]+/giu;
 const SESSION_SLUG_MAX_LENGTH = 48;
 const DEFAULT_AGENT_ID = "main";
 const DEFAULT_MAIN_KEY = "main";
+const FIXED_RESERVED_SESSION_RESTS = new Set(["main", "global", "boot", "sessions"]);
 
 function optionalString(value: string | undefined | null): string | null {
   const trimmed = value?.trim() ?? "";
@@ -109,6 +109,14 @@ function encodePathSegment(segment: string): string {
   }
   const encoded = encodeURIComponent(segment);
   return encoded.startsWith("~") ? `~${encoded}` : encoded;
+}
+
+function isReservedSessionRest(rest: string, mainKey: string | undefined): boolean {
+  const normalized = rest.toLowerCase();
+  return (
+    FIXED_RESERVED_SESSION_RESTS.has(normalized) ||
+    normalized === (optionalString(mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY)
+  );
 }
 
 export function controlUiSessionSlug(displayName: string | undefined | null): string {
@@ -193,14 +201,29 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   const uuid = parsed ? controlUiSessionKeyUuid(rawKey) : null;
   if (uuid) {
     const requestedLength = params.shortIdLength ?? 8;
-    const length = Math.min(uuid.length, Math.max(8, Math.floor(requestedLength)));
-    const shortId = uuid.slice(0, length);
+    let length = Math.min(uuid.length, Math.max(8, Math.floor(requestedLength)));
     const slug = controlUiSessionSlug(params.displayName);
-    return `${namespace}/${encodedAgentId}/${slug ? `${slug}-` : ""}${shortId}`;
+    let sessionRef = `${slug ? `${slug}-` : ""}${uuid.slice(0, length)}`;
+    while (length < uuid.length && isReservedSessionRest(sessionRef, params.mainKey)) {
+      length += 1;
+      sessionRef = `${slug ? `${slug}-` : ""}${uuid.slice(0, length)}`;
+    }
+    return isReservedSessionRest(sessionRef, params.mainKey)
+      ? null
+      : `${namespace}/${encodedAgentId}/${sessionRef}`;
   }
   const segments = rest.split(":");
   if (segments.some((segment) => !segment)) {
     return null;
+  }
+  if (segments.length === 1) {
+    const segment = segments[0] ?? "";
+    if (
+      !isReservedSessionRest(segment, params.mainKey) &&
+      controlUiShortIdFromSessionRef(segment)
+    ) {
+      return null;
+    }
   }
   return `${namespace}/${encodedAgentId}/${segments.map(encodePathSegment).join("/")}`;
 }
@@ -208,6 +231,7 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
 export function parseControlUiSessionPath(
   pathname: string,
   basePath = "",
+  mainKey?: string,
 ): ControlUiSessionPathTarget | null {
   const normalizedPath = normalizePath(pathname);
   for (const namespace of CONTROL_UI_SESSION_NAMESPACES) {
@@ -229,10 +253,16 @@ export function parseControlUiSessionPath(
     if (!sessionKey) {
       return null;
     }
-    const shortId =
-      restSegments.length === 1 ? controlUiShortIdFromSessionRef(restSegments[0] ?? "") : null;
+    if (restSegments.length !== 1) {
+      return { namespace, kind: "literal", agentId, sessionKey };
+    }
+    const segment = restSegments[0] ?? "";
+    if (isReservedSessionRest(segment, mainKey)) {
+      return { namespace, kind: "literal", agentId, sessionKey };
+    }
+    const shortId = controlUiShortIdFromSessionRef(segment);
     return shortId
-      ? { namespace, kind: "short", agentId, shortId, literalSessionKey: sessionKey }
+      ? { namespace, kind: "short", agentId, shortId }
       : { namespace, kind: "literal", agentId, sessionKey };
   }
   return null;

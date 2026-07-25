@@ -12,7 +12,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { pathForSessionKey } from "../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
 import type {
@@ -532,9 +532,16 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       return nothing;
     }
     const routeSessionKey = isSessionRouteId(routeId) ? this.host.getRouteSessionKey() : "";
+    const context = this.host.sessionDataContext;
+    const mainKey = context
+      ? resolveUiConfiguredMainKey({
+          agentsList: context.agents.state.agentsList,
+          hello: context.gateway.snapshot.hello,
+        })
+      : undefined;
     const sessionPath =
       routeId === "chat" && routeSessionKey
-        ? pathForSessionKey("chat", routeSessionKey, this.host.basePath)
+        ? pathForSessionKey("chat", routeSessionKey, this.host.basePath, undefined, mainKey)
         : "";
     return renderSidebarNavRoute({
       routeId,

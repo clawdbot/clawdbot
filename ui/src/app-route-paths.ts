@@ -108,8 +108,12 @@ export function pathForSession(
   });
 }
 
-export function sessionRefFromPath(pathname: string, basePath = ""): SessionPathTarget | null {
-  return parseControlUiSessionPath(pathname, basePath);
+export function sessionRefFromPath(
+  pathname: string,
+  basePath = "",
+  mainKey?: string,
+): SessionPathTarget | null {
+  return parseControlUiSessionPath(pathname, basePath, mainKey);
 }
 
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {

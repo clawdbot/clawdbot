@@ -17,6 +17,10 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import {
+  buildCatalogSessionKey,
+  catalogSessionKeyFromSearch,
+} from "../../lib/sessions/catalog-key.ts";
+import {
   buildAgentMainSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
@@ -36,6 +40,7 @@ export type ChatRouteData =
   | {
       kind: "session";
       sessionKey: string;
+      agentId?: string;
       draft?: string;
       face: BoardFace;
       canonicalLocation?: RouteLocation;
@@ -125,30 +130,28 @@ async function querySessionPrefix(
   shortId: string,
   signal: AbortSignal,
 ): Promise<SessionPrefixResolution> {
-  while (!signal.aborted) {
-    const client = await waitForGatewayClient(context, signal);
-    let cache = resolutionCache.get(client);
-    if (!cache) {
-      cache = new Map();
-      resolutionCache.set(client, cache);
+  const client = await waitForGatewayClient(context, signal);
+  let cache = resolutionCache.get(client);
+  if (!cache) {
+    cache = new Map();
+    resolutionCache.set(client, cache);
+  }
+  let pending = cache.get(shortId);
+  if (!pending) {
+    pending = querySessionPrefixPages(context, shortId);
+    cache.set(shortId, pending);
+  }
+  try {
+    const resolved = await pending;
+    if (!resolved) {
+      throw new Error("Session list unavailable while resolving URL.");
     }
-    let pending = cache.get(shortId);
-    if (!pending) {
-      pending = querySessionPrefixPages(context, shortId);
-      cache.set(shortId, pending);
-    }
-    try {
-      const resolved = await pending;
-      if (resolved) {
-        return resolved;
-      }
-    } finally {
-      if (cache.get(shortId) === pending) {
-        cache.delete(shortId);
-      }
+    return resolved;
+  } finally {
+    if (cache.get(shortId) === pending) {
+      cache.delete(shortId);
     }
   }
-  throw abortError(signal);
 }
 
 async function querySessionPrefixPages(
@@ -194,13 +197,21 @@ function draftFromLocation(location: RouteLocation): string | undefined {
   return new URLSearchParams(location.search).get("draft") || undefined;
 }
 
-function targetFromLocation(location: RouteLocation, basePath: string) {
-  const direct = sessionRefFromPath(location.pathname, basePath);
+function configuredMainKey(context: ApplicationContext): string {
+  return resolveUiConfiguredMainKey({
+    agentsList: context.agents.state.agentsList,
+    hello: context.gateway.snapshot.hello,
+  });
+}
+
+function targetFromLocation(context: ApplicationContext, location: RouteLocation) {
+  const mainKey = configuredMainKey(context);
+  const direct = sessionRefFromPath(location.pathname, context.basePath, mainKey);
   if (direct) {
     return { target: direct, normalized: false };
   }
   const internalPath = new URLSearchParams(location.search).get(INTERNAL_SESSION_PATH_PARAM);
-  const target = internalPath ? sessionRefFromPath(internalPath, basePath) : null;
+  const target = internalPath ? sessionRefFromPath(internalPath, context.basePath, mainKey) : null;
   return target ? { target, normalized: true } : null;
 }
 
@@ -210,10 +221,7 @@ function mainSessionKey(
 ): string {
   return buildAgentMainSessionKey({
     agentId: target.agentId,
-    mainKey: resolveUiConfiguredMainKey({
-      agentsList: context.agents.state.agentsList,
-      hello: context.gateway.snapshot.hello,
-    }),
+    mainKey: configuredMainKey(context),
   });
 }
 
@@ -221,6 +229,7 @@ function candidatesForResolution(
   context: ApplicationContext,
   face: BoardFace,
   resolution: Extract<SessionPrefixResolution, { kind: "ambiguous" }>,
+  draft: string | undefined,
 ): SessionCandidate[] {
   const resolvedRows = resolution.sessions.flatMap((row) => {
     const uuid = controlUiSessionKeyUuid(row.key);
@@ -235,6 +244,7 @@ function candidatesForResolution(
     const agentId = resolveAgentIdFromSessionKey(row.key);
     const href = pathForSession(face, agentId, row.key, context.basePath, {
       displayName: row.displayName,
+      mainKey: configuredMainKey(context),
       shortIdLength: prefix.length,
     });
     return href
@@ -242,7 +252,7 @@ function candidatesForResolution(
           {
             agentId,
             displayName: row.displayName?.trim() || row.key,
-            href,
+            href: `${href}${draft ? `?${new URLSearchParams({ draft }).toString()}` : ""}`,
             idPrefix: prefix,
           },
         ]
@@ -256,11 +266,21 @@ export async function loadChatRoute(
   face: BoardFace,
   signal: AbortSignal,
 ): Promise<ChatRouteData | ReturnType<typeof notFound>> {
-  const resolvedTarget = targetFromLocation(location, context.basePath);
+  const resolvedTarget = targetFromLocation(context, location);
   if (!resolvedTarget || resolvedTarget.target.namespace !== face) {
     return notFound({ routeId: face });
   }
   const { target } = resolvedTarget;
+  const catalogKey = catalogSessionKeyFromSearch(location.search);
+  if (face === "chat" && target.kind === "main" && catalogKey) {
+    return {
+      kind: "session",
+      sessionKey: buildCatalogSessionKey(catalogKey),
+      agentId: target.agentId,
+      draft: draftFromLocation(location),
+      face,
+    };
+  }
   if (target.kind === "main") {
     return {
       kind: "session",
@@ -279,18 +299,13 @@ export async function loadChatRoute(
   }
   const resolution = await querySessionPrefix(context, target.shortId, signal);
   if (resolution.kind === "not-found") {
-    return {
-      kind: "session",
-      sessionKey: target.literalSessionKey,
-      draft: draftFromLocation(location),
-      face,
-    };
+    return notFound({ routeId: face });
   }
   if (resolution.kind === "ambiguous") {
     return {
       kind: "ambiguous",
       shortId: target.shortId,
-      candidates: candidatesForResolution(context, face, resolution),
+      candidates: candidatesForResolution(context, face, resolution, draftFromLocation(location)),
       truncated: resolution.truncated,
       face,
     };
@@ -299,6 +314,7 @@ export async function loadChatRoute(
   const agentId = resolveAgentIdFromSessionKey(row.key);
   const canonicalPath = pathForSession(face, agentId, row.key, context.basePath, {
     displayName: row.displayName,
+    mainKey: configuredMainKey(context),
     shortIdLength: target.shortId.length,
   });
   if (!canonicalPath) {
