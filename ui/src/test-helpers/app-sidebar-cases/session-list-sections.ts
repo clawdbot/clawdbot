@@ -70,7 +70,41 @@ describe("AppSidebar session section visibility", () => {
     expect(
       section?.querySelectorAll(".sidebar-recent-session:not(.sidebar-recent-session--draft)"),
     ).toHaveLength(10);
-    expect(draftSidebar.querySelector('[aria-label="Load more threads"]')).not.toBeNull();
+    expect(draftSidebar.querySelector('[aria-label="Show more"]')).not.toBeNull();
+  });
+
+  it("paginates each expanded section independently", async () => {
+    const threadKeys = Array.from({ length: 12 }, (_, index) => `agent:main:thread-${index}`);
+    const categoryKeys = Array.from({ length: 12 }, (_, index) => `agent:main:alpha-${index}`);
+    const sessions = createSessionsHarness("main", [...threadKeys, ...categoryKeys]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list fixture");
+    }
+    for (const row of result.sessions) {
+      if (categoryKeys.includes(row.key)) {
+        row.category = "Alpha";
+      }
+    }
+    sessions.publish({ groups: ["Alpha"] });
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    const category = sidebar.querySelector('[data-session-section="category:Alpha"]');
+    const threads = sidebar.querySelector('[data-session-section="ungrouped"]');
+
+    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
+    expect(threads?.querySelector('[aria-label="Show more"]')).not.toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-session-pagination")).toHaveLength(2);
+
+    threads?.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
+    await sidebar.updateComplete;
+
+    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(12);
+    expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
+    expect(threads?.querySelector('[aria-label="Show more"]')).toBeNull();
   });
 
   it("hides empty Threads at rest but keeps empty categories and the drag drop target", async () => {

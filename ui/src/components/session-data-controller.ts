@@ -26,7 +26,6 @@ import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
 import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
 import {
   SIDEBAR_AGENT_SESSION_LIST_LIMIT,
-  SIDEBAR_SESSION_PAGE_SIZE,
   resolveSidebarSessionsScrollState,
   type SidebarSessionMutationScope,
   type SidebarSessionStatusFilter,
@@ -47,7 +46,7 @@ import {
 export class SessionDataController implements ReactiveController, SessionCatalogDataOwner {
   sessionCatalogs: SessionCatalog[] = [];
   loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
-  visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+  visibleSessionLimits = new Map<string, number>();
   sessionsResult: SessionsListResult | null = null;
   sessionsAgentId: string | null = null;
   sessionsLoading = false;
@@ -482,7 +481,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       this.activeSessionLineageRetryTimer = null;
     }
     this.sessionCreatedOrder.clear();
-    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+    this.visibleSessionLimits.clear();
     this.notify();
   }
 
@@ -669,8 +668,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.activeSessionLineageLoaded = true;
   }
 
-  setVisibleSessionLimit(limit: number): void {
-    this.visibleSessionLimit = limit;
+  setVisibleSessionLimit(sectionId: string, limit: number): void {
+    this.visibleSessionLimits.set(sectionId, limit);
     this.notify();
   }
 
@@ -680,7 +679,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   resetForStatusFilter(statusFilter: SidebarSessionStatusFilter): void {
-    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+    this.visibleSessionLimits.clear();
     this.childSessionRowsByParent = {};
     this.loadedChildSessionKeys = new Set();
     this.failedChildSessionKeys = new Set();

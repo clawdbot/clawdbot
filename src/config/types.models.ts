@@ -33,6 +33,7 @@ type SupportedOpenAICompatFields = Pick<
   | "supportsReasoningEffort"
   | "supportsUsageInStreaming"
   | "supportsStrictMode"
+  | "supportsJsonSchemaResponseFormat"
   | "maxTokensField"
   | "requiresToolResultName"
   | "requiresAssistantAfterToolResult"

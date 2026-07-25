@@ -224,25 +224,35 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   ThreadHistoryBody?: string;
   IsFirstThreadTurn?: boolean;
   ThreadLabel?: string;
+  /** @deprecated Use `media?.[0]?.path`. */
   MediaPath?: string;
+  /** @deprecated Use `media?.[0]?.url`. */
   MediaUrl?: string;
+  /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
   MediaType?: string;
+  /** @deprecated Derive the directory from `media?.[0]?.path` at the consuming boundary. */
   MediaDir?: string;
+  /** @deprecated Use `media?.map((entry) => entry.path)`. */
   MediaPaths?: string[];
+  /** @deprecated Use `media?.map((entry) => entry.url)`. */
   MediaUrls?: string[];
+  /** @deprecated Use `media?.map((entry) => entry.contentType ?? entry.kind)`. */
   MediaTypes?: string[];
   /** Ordered current-turn media facts; array position is attachment identity. */
   media?: MediaFact[];
   /** Original message modality before transcription or other media normalization. */
   SourceModality?: InboundSourceModality;
+  /** @deprecated Use each media fact's `workspaceDir`. */
   MediaWorkspaceDir?: string;
   /** Attachment indexes whose audio was already transcribed before media understanding runs. */
+  /** @deprecated Use each media fact's `transcribed` field. */
   MediaTranscribedIndexes?: number[];
   /**
    * Marker: skip downstream stageSandboxMedia. chat.send RPC sets this so
    * staging runs synchronously before respond() and surfaces 5xx to the
    * client; any later failure only reaches the broadcast channel.
    */
+  /** @deprecated Use each media fact's `workspaceDir` or `staged` proof. */
   MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
@@ -437,10 +447,23 @@ export type TemplateContext = RuntimeMsgContext & {
   BodyStripped?: string;
   SessionId?: string;
   IsNewSession?: string;
-  /** Documented singular media variables projected only at template execution. */
+  /** Local path for the attachment currently being processed. */
+  AttachmentPath?: string;
+  /** Original URL/reference for the attachment currently being processed. */
+  AttachmentUrl?: string;
+  /** MIME content type for the attachment currently being processed. */
+  AttachmentContentType?: string;
+  /** Directory containing AttachmentPath. */
+  AttachmentDir?: string;
+  /** Stable zero-based source fact index for the attachment currently being processed. */
+  AttachmentIndex?: number;
+  /** @deprecated Use AttachmentPath. */
   MediaPath?: string;
+  /** @deprecated Use AttachmentUrl. */
   MediaUrl?: string;
+  /** @deprecated Use AttachmentContentType. */
   MediaType?: string;
+  /** @deprecated Use AttachmentDir. */
   MediaDir?: string;
 };
 

@@ -8,10 +8,14 @@ import {
   wizardStateFromResult,
 } from "./state.ts";
 
+export type ModelSetupWizardStartMethod =
+  | "openclaw.setup.auth.start"
+  | "openclaw.setup.prepare.start";
+
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   onChange: (state: ModelSetupWizardState) => void;
-  onDone: () => void;
+  onDone: (startMethod: ModelSetupWizardStartMethod) => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
@@ -22,6 +26,7 @@ export class ModelSetupWizardRunner {
   private sessionId: string | null = null;
   private abortController: AbortController | null = null;
   private generation = 0;
+  private startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start";
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
@@ -29,7 +34,10 @@ export class ModelSetupWizardRunner {
     return this.currentState;
   }
 
-  async start(authChoice: string): Promise<void> {
+  async start(
+    authChoice: string,
+    startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start",
+  ): Promise<void> {
     const client = this.options.getClient();
     if (!client || this.currentState.phase !== "idle") {
       return;
@@ -39,10 +47,11 @@ export class ModelSetupWizardRunner {
     const abortController = new AbortController();
     this.sessionId = sessionId;
     this.abortController = abortController;
+    this.startMethod = startMethod;
     this.setState({ phase: "starting", authChoice });
     try {
       const started = await client.request<SystemAgentSetupAuthStartResult>(
-        "openclaw.setup.auth.start",
+        startMethod,
         { sessionId, authChoice },
         { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS, signal: abortController.signal },
       );
@@ -144,7 +153,7 @@ export class ModelSetupWizardRunner {
     if (next.phase === "done") {
       this.sessionId = null;
       this.abortController = null;
-      this.options.onDone();
+      this.options.onDone(this.startMethod);
     }
   }
 

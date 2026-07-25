@@ -98,6 +98,19 @@ function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult
   };
 }
 
+function resolveDurableSuppression(
+  send: Extract<Awaited<ReturnType<typeof sendDurableMessageBatch>>, { status: "suppressed" }>,
+): NonNullable<ChannelDeliveryResult["suppression"]> {
+  const hookEffect = send.payloadOutcomes?.find(
+    (outcome) => outcome.status === "suppressed",
+  )?.hookEffect;
+  return {
+    reason: send.reason,
+    ...(hookEffect?.cancelReason ? { cancelReason: hookEffect.cancelReason } : {}),
+    ...(hookEffect?.metadata ? { metadata: hookEffect.metadata } : {}),
+  };
+}
+
 /** Narrows durable delivery results that handled the payload without caller fallback. */
 export function isDurableInboundReplyDeliveryHandled(
   result: DurableInboundReplyDeliveryResult,
@@ -222,13 +235,17 @@ export async function deliverInboundReplyWithMessageSendContext(
     };
   }
 
-  const delivery = createChannelDeliveryResultFromReceipt({
+  const receiptDelivery = createChannelDeliveryResultFromReceipt({
     receipt: send.receipt,
     threadId: stringifyThreadId(threadId),
     ...(replyToId ? { replyToId } : {}),
     visibleReplySent: send.status === "sent",
     ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
   });
+  const delivery: ChannelDeliveryResult =
+    send.status === "suppressed"
+      ? { ...receiptDelivery, suppression: resolveDurableSuppression(send) }
+      : receiptDelivery;
   if (send.status === "suppressed") {
     return { status: "handled_no_send", reason: "no_visible_result", delivery };
   }

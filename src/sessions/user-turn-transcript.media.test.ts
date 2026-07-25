@@ -1,10 +1,12 @@
 // User-turn media persistence tests cover fact normalization and legacy row projection.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
 } from "./user-turn-transcript.js";
+import { shouldPersistStructuredMediaEntries } from "./user-turn-transcript.media-normalize.js";
 
 describe("buildPersistedUserTurnMediaInputsFromFields", () => {
   it("builds media facts from persisted parallel fields", () => {
@@ -125,19 +127,30 @@ describe("buildPersistedUserTurnMediaInputsFromFields", () => {
 });
 
 describe("buildPersistedUserTurnMessage media projection", () => {
+  const legacyProjection = (message: Record<string, unknown>) => ({
+    ...(message.MediaPath === undefined ? {} : { MediaPath: message.MediaPath }),
+    ...(message.MediaPaths === undefined ? {} : { MediaPaths: message.MediaPaths }),
+    ...(message.MediaType === undefined ? {} : { MediaType: message.MediaType }),
+    ...(message.MediaTypes === undefined ? {} : { MediaTypes: message.MediaTypes }),
+  });
+
   it.each([
+    {
+      name: "zero attachments",
+      media: undefined,
+      expectedLegacy: {},
+      expectedMedia: undefined,
+    },
     {
       name: "one attachment",
       media: [{ path: "/tmp/a.png", contentType: "image/png" }],
-      expected: {
-        role: "user",
-        content: "inspect",
-        timestamp: 123,
+      expectedLegacy: {
         MediaPath: "/tmp/a.png",
         MediaPaths: ["/tmp/a.png"],
         MediaType: "image/png",
         MediaTypes: ["image/png"],
       },
+      expectedMedia: [{ path: "/tmp/a.png", contentType: "image/png" }],
     },
     {
       name: "many attachments",
@@ -145,34 +158,209 @@ describe("buildPersistedUserTurnMessage media projection", () => {
         { path: " /tmp/a.png ", contentType: " image/png " },
         { url: " https://example.test/report.pdf ", contentType: " application/pdf " },
       ],
-      expected: {
-        role: "user",
-        content: "inspect",
-        timestamp: 123,
+      expectedLegacy: {
         MediaPath: "/tmp/a.png",
         MediaPaths: ["/tmp/a.png", "https://example.test/report.pdf"],
         MediaType: "image/png",
         MediaTypes: ["image/png", "application/pdf"],
       },
+      expectedMedia: [
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { url: "https://example.test/report.pdf", contentType: "application/pdf" },
+      ],
     },
-  ])("keeps $name row bytes stable", ({ media, expected }) => {
-    const message = buildPersistedUserTurnMessage({ text: "inspect", timestamp: 123, media });
-    expect(message).toEqual(expected);
-    expect(JSON.stringify(message)).toBe(JSON.stringify(expected));
-  });
+    {
+      name: "sparse aligned attachments",
+      media: [{}, { path: "/tmp/b.png", contentType: "image/png" }],
+      expectedLegacy: {
+        MediaPaths: ["", "/tmp/b.png"],
+        MediaTypes: ["", "image/png"],
+      },
+      expectedMedia: [{}, { path: "/tmp/b.png", contentType: "image/png" }],
+    },
+    {
+      name: "path-only attachment",
+      media: [{ path: "/tmp/inferred.png" }],
+      expectedLegacy: {
+        MediaPath: "/tmp/inferred.png",
+        MediaPaths: ["/tmp/inferred.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+      expectedMedia: [{ path: "/tmp/inferred.png", contentType: "image/png" }],
+    },
+    {
+      name: "URL-only attachment",
+      media: [{ url: "https://example.test/remote.jpg", contentType: "image/jpeg" }],
+      expectedLegacy: {
+        MediaPath: "https://example.test/remote.jpg",
+        MediaPaths: ["https://example.test/remote.jpg"],
+        MediaType: "image/jpeg",
+        MediaTypes: ["image/jpeg"],
+      },
+      expectedMedia: [{ url: "https://example.test/remote.jpg", contentType: "image/jpeg" }],
+    },
+    {
+      name: "path plus distinct URL",
+      media: [
+        {
+          path: "/tmp/local.jpg",
+          url: "https://example.test/original.jpg",
+          contentType: "image/jpeg",
+        },
+      ],
+      expectedLegacy: {
+        MediaPath: "/tmp/local.jpg",
+        MediaPaths: ["/tmp/local.jpg"],
+        MediaType: "image/jpeg",
+        MediaTypes: ["image/jpeg"],
+      },
+      expectedMedia: [
+        {
+          path: "/tmp/local.jpg",
+          url: "https://example.test/original.jpg",
+          contentType: "image/jpeg",
+        },
+      ],
+    },
+    {
+      name: "explicit MIME",
+      media: [{ path: "/tmp/blob.bin", contentType: "application/x-openclaw" }],
+      expectedLegacy: {
+        MediaPath: "/tmp/blob.bin",
+        MediaPaths: ["/tmp/blob.bin"],
+        MediaType: "application/x-openclaw",
+        MediaTypes: ["application/x-openclaw"],
+      },
+      expectedMedia: [{ path: "/tmp/blob.bin", contentType: "application/x-openclaw" }],
+    },
+    {
+      name: "bare kind",
+      media: [{ kind: "image" }],
+      expectedLegacy: {},
+      expectedMedia: [{ kind: "image" }],
+    },
+    {
+      name: "provider MIME-like kind",
+      media: [{ path: "/tmp/provider.bin", kind: "provider/custom-media" }],
+      expectedLegacy: {
+        MediaPath: "/tmp/provider.bin",
+        MediaPaths: ["/tmp/provider.bin"],
+        MediaType: "provider/custom-media",
+        MediaTypes: ["provider/custom-media"],
+      },
+      expectedMedia: [{ path: "/tmp/provider.bin", contentType: "provider/custom-media" }],
+    },
+    {
+      name: "unknown non-MIME kind",
+      media: [{ path: "/tmp/photo.jpg", kind: "thumbnail" }],
+      expectedLegacy: {
+        MediaPath: "/tmp/photo.jpg",
+        MediaPaths: ["/tmp/photo.jpg"],
+        MediaType: "thumbnail",
+        MediaTypes: ["thumbnail"],
+      },
+      expectedMedia: [{ path: "/tmp/photo.jpg", contentType: "image/jpeg" }],
+    },
+    {
+      name: "transcribed attachment",
+      media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true }],
+      expectedLegacy: {
+        MediaPath: "/tmp/voice.ogg",
+        MediaPaths: ["/tmp/voice.ogg"],
+        MediaType: "audio/ogg",
+        MediaTypes: ["audio/ogg"],
+      },
+      expectedMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true }],
+    },
+    {
+      name: "workspace-relative attachment",
+      media: [
+        {
+          path: "media/inbound/a.png",
+          contentType: "image/png",
+          workspaceDir: "/tmp/workspace",
+        },
+      ],
+      expectedLegacy: {
+        MediaPath: path.join("/tmp/workspace", "media/inbound/a.png"),
+        MediaPaths: [path.join("/tmp/workspace", "media/inbound/a.png")],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+      expectedMedia: [
+        {
+          path: "media/inbound/a.png",
+          contentType: "image/png",
+          workspaceDir: "/tmp/workspace",
+        },
+      ],
+    },
+    {
+      name: "hydration-suppressed attachment",
+      media: [
+        {
+          path: "/tmp/described.png",
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        },
+      ],
+      expectedLegacy: {
+        MediaPath: "/tmp/described.png",
+        MediaPaths: ["/tmp/described.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+      expectedMedia: [
+        {
+          path: "/tmp/described.png",
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        },
+      ],
+    },
+  ])(
+    "keeps $name legacy bytes stable while persisting canonical facts",
+    ({ media, expectedLegacy, expectedMedia }) => {
+      const message = buildPersistedUserTurnMessage({ text: "inspect", timestamp: 123, media });
+      expect(message).toMatchObject({ role: "user", content: "inspect", timestamp: 123 });
+      expect(legacyProjection(message as unknown as Record<string, unknown>)).toEqual(
+        expectedLegacy,
+      );
+      expect(JSON.stringify(legacyProjection(message as unknown as Record<string, unknown>))).toBe(
+        JSON.stringify(expectedLegacy),
+      );
+      expect(
+        (message as unknown as { __openclaw?: { media?: unknown } })["__openclaw"]?.media,
+      ).toEqual(expectedMedia);
+      expect(shouldPersistStructuredMediaEntries(media)).toBe(Boolean(media?.length));
+    },
+  );
 
-  it("uses the aligned storage projection when an earlier fact has no path", () => {
-    const message = buildPersistedUserTurnMessage({
-      text: "inspect",
-      timestamp: 123,
-      media: [{ kind: "image" }, { path: "/tmp/b.png", contentType: "image/png" }],
-    });
-    expect(message).toEqual({
-      role: "user",
-      content: "inspect",
-      timestamp: 123,
-      MediaPaths: ["", "/tmp/b.png"],
-      MediaTypes: ["", "image/png"],
-    });
+  it("reads canonical persisted facts without merging disagreeing legacy fields", () => {
+    const message = {
+      MediaPath: "/legacy.png",
+      MediaType: "image/png",
+      __openclaw: {
+        media: [
+          {
+            path: "/canonical.ogg",
+            contentType: "audio/ogg",
+            transcribed: true,
+            messageId: "media-1",
+          },
+        ],
+      },
+    };
+
+    expect(readPersistedMediaFacts(message)).toEqual([
+      expect.objectContaining({
+        path: "/canonical.ogg",
+        contentType: "audio/ogg",
+        kind: "audio",
+        transcribed: true,
+        messageId: "media-1",
+      }),
+    ]);
   });
 });

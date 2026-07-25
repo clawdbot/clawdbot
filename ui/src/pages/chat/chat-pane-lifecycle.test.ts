@@ -10,8 +10,10 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
+import type { ChatPageHost } from "./chat-state.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
@@ -695,5 +697,54 @@ describe("chat pane presentation teardown", () => {
       dismissConfirmedActionPopovers(owner);
       owner.remove();
     }
+  });
+});
+
+describe("chat pane connection lifecycle", () => {
+  it("replays a pending exact-run stop when the gateway reconnects", async () => {
+    const request = vi.fn((method: string) =>
+      method === "chat.abort" ? Promise.resolve({ aborted: true }) : new Promise<never>(() => {}),
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const sessionKey = "agent:main";
+    pane.context = {
+      ...pane.context,
+      config: {
+        current: {
+          assistantIdentity: { name: "Assistant" },
+          terminalEnabled: false,
+        },
+      },
+    } as unknown as ApplicationContext;
+    state.loadAssistantIdentity = vi.fn(async () => {});
+    state.realtimeTalkInputLevel = {
+      set: vi.fn(),
+    } as unknown as ChatPageHost["realtimeTalkInputLevel"];
+    state.resetToolStream = vi.fn();
+    const snapshot = {
+      ...pane.context.gateway.snapshot,
+      client,
+      assistantAgentId: "main",
+    };
+
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+    state.pendingAbort = { sourceClient: client, runId: "run-main", sessionKey };
+
+    pane.applyGatewaySnapshot({
+      ...snapshot,
+      phase: "connected",
+    });
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("chat.abort", {
+        sessionKey,
+        runId: "run-main",
+      }),
+    );
+    expect(state.pendingAbort).toBeNull();
+
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+    expect(request.mock.calls.filter(([method]) => method === "chat.abort")).toHaveLength(1);
   });
 });

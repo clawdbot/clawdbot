@@ -31,6 +31,12 @@ const managedImageCacheProofDir = path.join(
   "control-ui-e2e",
   "managed-image-cache",
 );
+const channelStopProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "channel-stop",
+);
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -650,6 +656,87 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const sendRequest = await gateway.waitForRequest("chat.send");
       expect(requireRecord(sendRequest.params).message).toBe("wait");
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("sends /stop to the exact selected channel session and clears its working indicator", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const channelSessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
+    const gateway = await installMockGateway(page, {
+      sessionKey: channelSessionKey,
+      methodResponses: {
+        "sessions.abort": { abortedRunId: null, ok: true, status: "aborted" },
+        "sessions.list": chatSessionListResponse([
+          {
+            hasActiveRun: true,
+            key: channelSessionKey,
+            kind: "direct",
+            label: "WeChat user",
+            status: "running",
+            updatedAt: Date.now(),
+          },
+        ]),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await gateway.waitForRequest("sessions.list");
+      const workingIndicator = page.locator(".chat-working-indicator");
+      await workingIndicator.waitFor({ state: "visible", timeout: 10_000 });
+
+      await composer.fill("/stop");
+      await page.getByRole("option", { name: /\/stop/ }).waitFor();
+      await composer.press("Enter");
+
+      const abortRequest = await gateway.waitForRequest("sessions.abort");
+      expect(requireRecord(abortRequest.params)).toEqual({
+        key: channelSessionKey,
+        clearQueued: true,
+      });
+      await gateway.setMethodResponse(
+        "sessions.list",
+        chatSessionListResponse([
+          {
+            activeRunIds: [],
+            hasActiveRun: false,
+            key: channelSessionKey,
+            kind: "direct",
+            label: "WeChat user",
+            status: "running",
+            updatedAt: Date.now(),
+          },
+        ]),
+      );
+      await gateway.emitGatewayEvent("sessions.changed", {
+        activeRunIds: [],
+        hasActiveRun: false,
+        reason: "abort",
+        sessionKey: channelSessionKey,
+        status: "running",
+        updatedAt: Date.now(),
+      });
+      await workingIndicator.waitFor({ state: "detached", timeout: 10_000 });
+      await expectRequestCountStable(gateway, "chat.abort", 0);
+      await expectRequestCountStable(gateway, "chat.send", 0);
+      await expect.poll(() => page.getByRole("listbox").count()).toBe(0);
+      expect(await composer.inputValue()).toBe("");
+      if (captureUiProofEnabled) {
+        await mkdir(channelStopProofDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(channelStopProofDir, "stopped.png"),
+          fullPage: true,
+        });
+      }
     } finally {
       await closeBrowserContext(context);
     }

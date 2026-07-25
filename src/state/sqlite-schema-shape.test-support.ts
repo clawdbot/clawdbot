@@ -128,12 +128,12 @@ export function normalizeSqliteSchemaShapeSql(shape: SqliteSchemaShape): SqliteS
 }
 
 /**
- * Replace every explicit named UNIQUE index with a same-name ordinary index.
+ * Replace every explicit named index with a same-name noncanonical index.
  *
  * Startup repair tests use this to prove the repair registry covers the whole
  * canonical schema rather than only a hand-picked index.
  */
-export function replaceNamedUniqueIndexesWithOrdinaryIndexes(db: DatabaseSync): string[] {
+export function replaceNamedIndexesWithNoncanonicalIndexes(db: DatabaseSync): string[] {
   const indexes = db
     .prepare(
       `
@@ -145,15 +145,8 @@ export function replaceNamedUniqueIndexesWithOrdinaryIndexes(db: DatabaseSync): 
       `,
     )
     .all() as NamedIndexRow[];
-  const uniqueIndexes = indexes.filter((index) =>
-    (
-      db
-        .prepare(`PRAGMA index_list(${quoteSqliteIdentifier(index.tbl_name)})`)
-        .all() as IndexListRow[]
-    ).some((candidate) => candidate.name === index.name && candidate.unique === 1),
-  );
 
-  for (const index of uniqueIndexes) {
+  for (const index of indexes) {
     const firstColumn = (
       db
         .prepare(`PRAGMA table_info(${quoteSqliteIdentifier(index.tbl_name)})`)
@@ -165,11 +158,14 @@ export function replaceNamedUniqueIndexesWithOrdinaryIndexes(db: DatabaseSync): 
     db.exec(`
       DROP INDEX main.${quoteSqliteIdentifier(index.name)};
       CREATE INDEX main.${quoteSqliteIdentifier(index.name)}
-        ON ${quoteSqliteIdentifier(index.tbl_name)}(${quoteSqliteIdentifier(firstColumn.name)});
+        ON ${quoteSqliteIdentifier(index.tbl_name)}(
+          ${quoteSqliteIdentifier(firstColumn.name)},
+          ${quoteSqliteIdentifier(firstColumn.name)}
+        );
     `);
   }
 
-  return uniqueIndexes.map((index) => index.name);
+  return indexes.map((index) => index.name);
 }
 
 function collectStrictFlag(db: DatabaseSync, tableName: string): number {

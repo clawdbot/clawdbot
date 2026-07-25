@@ -61,6 +61,8 @@ export type {
   PluginHookInboundClaimEvent,
   PluginHookInboundDebounceEvent,
   PluginHookInboundDebounceResult,
+  PluginHookInboundMessageMetadata,
+  PluginHookMediaFact,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
