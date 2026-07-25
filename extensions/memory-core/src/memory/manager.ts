@@ -611,6 +611,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.provider?.close) {
       this.provider.close().catch(() => {});
     }
+    this.provider = null;
     this.providerInitialized = false;
     this.providerInitPromise = null;
     this.providerUnavailableReason = undefined;
