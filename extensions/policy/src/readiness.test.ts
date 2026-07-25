@@ -13,11 +13,16 @@ function policyConfig(enabled = true) {
   };
 }
 
+const subjects = {
+  declare: ({ kind, key }: { kind: string; key: string }) => `plugin.policy/${kind}/${key}`,
+};
+
 async function check(config = policyConfig()) {
   return createPolicyReadinessCriterion().check({
     config,
     pluginConfig: config.plugins.entries.policy.config,
     signal: new AbortController().signal,
+    subjects,
   });
 }
 
@@ -67,6 +72,7 @@ describe("policy readiness", () => {
         config: policyConfig(),
         pluginConfig: {},
         signal: controller.signal,
+        subjects,
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
   });
