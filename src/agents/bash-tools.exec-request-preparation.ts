@@ -46,7 +46,7 @@ type ResolvedExecEnvPreparedState = {
 type DeferredResolveExecEnvPreparedState = {
   hookContext?: HookContext;
 };
-export type ResolvedExecWorkdirPreparedState = {
+type ResolvedExecWorkdirPreparedState = {
   host: ExecHost;
   inputWorkdir?: string;
   resolution: ExecWorkdirResolution;
