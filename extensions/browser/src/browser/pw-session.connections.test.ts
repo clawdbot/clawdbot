@@ -21,6 +21,10 @@ type BrowserMockBundle = {
   browserClose: ReturnType<typeof vi.fn>;
 };
 
+type BrowserWithPagesMockBundle = BrowserMockBundle & {
+  newCdpSession: ReturnType<typeof vi.fn>;
+};
+
 function makeBrowserWithPages(
   entries: Array<{
     targetId: string;
@@ -30,32 +34,33 @@ function makeBrowserWithPages(
     targetRead?: () => Promise<unknown>;
     targetTitle?: string;
   }>,
-): BrowserMockBundle {
+): BrowserWithPagesMockBundle {
   const browserClose = vi.fn(async () => {});
   const pages: import("playwright-core").Page[] = [];
   const targetInfoByPage = new Map<
     import("playwright-core").Page,
     { targetId: string; title: string }
   >();
+  const newCdpSession = vi.fn(async (page: import("playwright-core").Page) => {
+    const entry = entries.find(
+      (candidate) => candidate.targetId === targetInfoByPage.get(page)?.targetId,
+    );
+    return {
+      send: vi.fn(async (method: string) => {
+        if (method !== "Target.getTargetInfo") {
+          return {};
+        }
+        return entry?.targetRead
+          ? await entry.targetRead()
+          : { targetInfo: targetInfoByPage.get(page) };
+      }),
+      detach: vi.fn(entry?.sessionDetach ?? (async () => {})),
+    };
+  });
   const context: import("playwright-core").BrowserContext = {
     pages: () => pages,
     on: vi.fn(),
-    newCDPSession: vi.fn(async (page: import("playwright-core").Page) => {
-      const entry = entries.find(
-        (candidate) => candidate.targetId === targetInfoByPage.get(page)?.targetId,
-      );
-      return {
-        send: vi.fn(async (method: string) => {
-          if (method !== "Target.getTargetInfo") {
-            return {};
-          }
-          return entry?.targetRead
-            ? await entry.targetRead()
-            : { targetInfo: targetInfoByPage.get(page) };
-        }),
-        detach: vi.fn(entry?.sessionDetach ?? (async () => {})),
-      };
-    }),
+    newCDPSession: newCdpSession,
   } as unknown as import("playwright-core").BrowserContext;
   for (const entry of entries) {
     const page = {
@@ -78,7 +83,7 @@ function makeBrowserWithPages(
     close: browserClose,
   } as unknown as import("playwright-core").Browser;
 
-  return { browser, browserClose };
+  return { browser, browserClose, newCdpSession };
 }
 
 function makeBrowser(targetId: string, url: string): BrowserMockBundle {
@@ -581,7 +586,7 @@ describe("pw-session connection scoping", () => {
       }),
     ).resolves.toEqual(pages);
     expect(stuckSessionDetach).toHaveBeenCalledOnce();
-    expect(browser.browser.contexts()[0]?.newCDPSession).toHaveBeenCalledTimes(3);
+    expect(browser.newCdpSession).toHaveBeenCalledTimes(3);
   });
 
   it("selects a healthy target after a page whose session detach stays stuck", async () => {
@@ -640,7 +645,7 @@ describe("pw-session connection scoping", () => {
 
     expect(targetRead).toHaveBeenCalledOnce();
     expect(sessionDetach).toHaveBeenCalledOnce();
-    expect(browser.browser.contexts()[0]?.newCDPSession).toHaveBeenCalledOnce();
+    expect(browser.newCdpSession).toHaveBeenCalledOnce();
   });
 
   it("times out stuck page enumeration and evicts the scoped connection", async () => {
