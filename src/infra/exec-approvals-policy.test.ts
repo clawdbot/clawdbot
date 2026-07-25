@@ -829,7 +829,7 @@ describe("exec approvals policy helpers", () => {
           },
         },
         agents: {
-          list: [{ id: "runner", default: true }],
+          entries: { runner: { default: true } },
         },
       } satisfies OpenClawConfig,
       approvals: {
@@ -869,7 +869,7 @@ describe("exec approvals policy helpers", () => {
             ask: "off",
           },
         },
-        agents: { list: [{ id: DEFAULT_AGENT_ID, default: true }] },
+        agents: { entries: { [DEFAULT_AGENT_ID]: { default: true } } },
       } satisfies OpenClawConfig,
       approvals: {
         version: 1,
@@ -903,9 +903,8 @@ describe("exec approvals policy helpers", () => {
           },
         },
         agents: {
-          list: [
-            {
-              id: DEFAULT_AGENT_ID,
+          entries: {
+            [DEFAULT_AGENT_ID]: {
               default: true,
               tools: {
                 exec: {
@@ -913,7 +912,7 @@ describe("exec approvals policy helpers", () => {
                 },
               },
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig,
       approvals: {
@@ -924,7 +923,7 @@ describe("exec approvals policy helpers", () => {
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec", "agent:main"]);
     expectFields(snapshots[1]?.ask, {
       requested: "always",
-      requestedSource: "agents.list.main.tools.exec.ask",
+      requestedSource: "agents.entries.main.tools.exec.ask",
     });
   });
 
@@ -947,7 +946,7 @@ describe("exec approvals policy helpers", () => {
     ]);
     expectFields(snapshots[1]?.ask, {
       requested: "always",
-      requestedSource: "agents.list.runner.tools.exec.ask",
+      requestedSource: "agents.entries.runner.tools.exec.ask",
     });
   });
 });

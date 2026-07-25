@@ -668,7 +668,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       severity: "warn",
       title: "Agent exec host uses sandbox while sandbox mode is off",
       detail:
-        `agents.list.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
+        `agents.entries.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
         "With sandbox mode off, exec fails closed for those agents.",
       remediation:
         'Enable sandbox mode for these agents (`agents.entries.*.sandbox.mode`) or set their tools.exec.host to "gateway".',
@@ -849,7 +849,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       continue;
     }
     collectRiskyTrustedDirHits(
-      `agents.list.${entry.id}.tools.exec`,
+      `agents.entries.${entry.id}.tools.exec`,
       entry.tools?.exec?.safeBinTrustedDirs,
     );
   }
@@ -886,17 +886,17 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     if (interpreters.length === 0) {
       for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
         riskySemanticSafeBinHits.push(
-          `- agents.list.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
+          `- agents.entries.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
         );
       }
       continue;
     }
     interpreterHits.push(
-      `- agents.list.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
+      `- agents.entries.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
     );
     for (const hit of listRiskyConfiguredSafeBins(agentSafeBins)) {
       riskySemanticSafeBinHits.push(
-        `- agents.list.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
+        `- agents.entries.${entry.id}.tools.exec.safeBins: ${hit.bin} (${hit.warning})`,
       );
     }
   }

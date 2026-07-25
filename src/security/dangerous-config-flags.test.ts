@@ -198,16 +198,15 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
               },
             },
           },
-          list: [
-            {
-              id: "worker",
+          entries: {
+            worker: {
               sandbox: {
                 docker: {
                   dangerouslyAllowExternalBindSources: true,
                 },
               },
             },
-          ],
+          },
         },
         hooks: {
           allowRequestSessionKey: true,
@@ -231,7 +230,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
       "tools.fs.workspaceOnly=false",
       "agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets=true",
       "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",
-      "agents.list.0.sandbox.docker.dangerouslyAllowExternalBindSources=true",
+      "agents.entries.worker.sandbox.docker.dangerouslyAllowExternalBindSources=true",
     ]);
   });
 
@@ -249,7 +248,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     ).toContain("security.audit.suppressions configured (1)");
   });
 
-  it("uses legacy list indices for list-shaped dangerous sandbox flags", () => {
+  it("uses canonical entry paths for id-bearing legacy list rows", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
@@ -263,25 +262,23 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
                   },
                 },
               },
-              {
-                id: "helper",
-              },
             ],
           },
         }),
       ),
-    ).toContain("agents.list.0.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
+    ).toContain("agents.entries.worker.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
+  });
 
+  it("keeps legacy list indices for id-less dangerous sandbox rows", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
           agents: {
             list: [
               {
-                id: "helper",
+                id: "worker",
               },
               {
-                id: "worker",
                 sandbox: {
                   docker: {
                     dangerouslyAllowContainerNamespaceJoin: true,

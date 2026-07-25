@@ -818,7 +818,6 @@ src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
 src/gateway/server-reload-handlers.test.ts
-src/gateway/server-reload-handlers.ts
 src/gateway/server-restart-sentinel.test.ts
 src/gateway/server-startup-config.secrets.test.ts
 src/gateway/server-startup-post-attach.test.ts

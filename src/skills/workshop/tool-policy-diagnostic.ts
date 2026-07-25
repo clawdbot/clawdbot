@@ -36,10 +36,15 @@ function findAgentTools(config: OpenClawConfig, agentId: string): AgentToolsLoca
   if (!listed?.entry.tools) {
     return undefined;
   }
+  // Report the canonical entries path; an id-less legacy list row (which
+  // normalizeAgentId maps to the default id) keeps its indexed path so the
+  // remediation never points at agents.entries.undefined.
   const path =
     listed.source.kind === "entries"
       ? `agents.entries.${listed.source.key}.tools`
-      : `agents.list[${listed.source.index}].tools`;
+      : typeof listed.entry.id === "string" && listed.entry.id.length > 0
+        ? `agents.entries.${listed.entry.id}.tools`
+        : `agents.list[${listed.source.index}].tools`;
   return { path, tools: listed.entry.tools };
 }
 
