@@ -357,6 +357,25 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("rejects leaked private QA Docker chunks that import an omitted QA runtime", () => {
+    withTarball(
+      ["dist/docker-runtime-BVdgRgxA.js"],
+      {
+        "dist/docker-runtime-BVdgRgxA.js":
+          'import { createQaDockerRuntime } from "./qa-runtime-Bi1S3plf.js";\n' +
+          "export { createQaDockerRuntime };\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "dist/docker-runtime-BVdgRgxA.js imports missing dist/qa-runtime-Bi1S3plf.js",
+        );
+      },
+    );
+  });
+
   it.each([
     {
       name: "named imports",
