@@ -691,6 +691,40 @@ describe("bundled plugin postinstall", () => {
     await expectPathMissing(staleFile);
   });
 
+  it("keeps named imported chunks without preserving template-literal pseudoimports", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-named-import-");
+    const entryFile = path.join(packageRoot, "dist", "cli", "run-main.js");
+    const importedChunk = path.join(packageRoot, "dist", "memory-state-current.js");
+    const phantomChunk = path.join(packageRoot, "dist", "memory-state-phantom.js");
+    await fs.mkdir(path.dirname(entryFile), { recursive: true });
+    await fs.writeFile(
+      entryFile,
+      [
+        "import {",
+        "  value,",
+        '} from "../memory-state-current.js";',
+        "const example = `",
+        'import "../memory-state-phantom.js"',
+        "`;",
+        "export { value, example };",
+        "",
+      ].join("\n"),
+    );
+    await writePackageDistInventory(packageRoot);
+    await fs.writeFile(importedChunk, "export const value = 42;\n");
+    await fs.writeFile(phantomChunk, "export const stale = true;\n");
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/memory-state-phantom.js"]);
+
+    await expectPathExists(importedChunk);
+    await expectPathMissing(phantomChunk);
+  });
+
   it("does not abort dist pruning when a listed chunk disappears before import expansion", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-missing-chunk-");
     const entryFile = path.join(packageRoot, "dist", "control-ui", "assets", "instances.js");
