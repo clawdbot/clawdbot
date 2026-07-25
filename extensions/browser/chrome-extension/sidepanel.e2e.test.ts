@@ -2,14 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  chromium,
-  type BrowserContext,
-  type CDPSession,
-  type Page,
-  type Worker,
-} from "playwright-core";
+import { chromium, type CDPSession, type Page, type Worker } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import {
@@ -18,6 +11,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
+import { copyCopilotSidepanelExtension } from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
   runtime: {
@@ -41,7 +35,6 @@ declare const chrome: {
 };
 
 const runE2E = process.env.OPENCLAW_BROWSER_COPILOT_E2E === "1";
-const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 
 type RequestFrame = {
   id: string;
@@ -367,35 +360,6 @@ async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Pr
   };
 }
 
-async function copyExtension(): Promise<string> {
-  const target = tempDirs.make("openclaw-copilot-extension-");
-  await fs.cp(extensionDir, target, {
-    recursive: true,
-    filter: (source) => !source.endsWith(".test.ts"),
-  });
-  await fs.writeFile(
-    path.join(target, "e2e-launcher.html"),
-    '<!doctype html><button id="open">Open tab panel</button><script type="module" src="e2e-launcher.js"></script>',
-  );
-  await fs.writeFile(
-    path.join(target, "e2e-launcher.js"),
-    `const tab = await chrome.tabs.getCurrent();
-    const panel = await chrome.runtime.sendMessage({ type: "prepareCopilotPanel", tabId: tab.id });
-    if (!panel?.ok) throw new Error(panel?.error ?? "panel prepare failed");
-    document.body.dataset.ready = "true";
-    document.querySelector("#open").addEventListener("click", async () => {
-      try {
-        await chrome.sidePanel.setOptions({ tabId: tab.id, path: panel.path, enabled: true });
-        await chrome.sidePanel.open({ tabId: tab.id });
-        document.body.dataset.opened = "true";
-      } catch (error) {
-        document.body.dataset.error = error instanceof Error ? error.message : String(error);
-      }
-    });\n`,
-  );
-  return target;
-}
-
 async function resolveChromiumExecutable(): Promise<string | undefined> {
   const override = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
   const candidates = [override, "/usr/bin/chromium-browser", "/usr/bin/chromium"].filter(
@@ -410,10 +374,6 @@ async function resolveChromiumExecutable(): Promise<string | undefined> {
     }
   }
   return undefined;
-}
-
-async function waitForServiceWorker(context: BrowserContext): Promise<Worker> {
-  return context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
 }
 
 async function restartServiceWorker(
@@ -613,6 +573,61 @@ async function unshareTab(worker: Worker, tabId: number): Promise<void> {
 }
 
 describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
+  it("returns one error response when a panel's tab disappears", async () => {
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const userDataDir = tempDirs.make("openclaw-copilot-missing-tab-profile-");
+    const executablePath = await resolveChromiumExecutable();
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      ...(executablePath ? { executablePath } : { channel: "chromium" }),
+      headless: true,
+      args: [
+        `--disable-extensions-except=${unpackedExtension}`,
+        `--load-extension=${unpackedExtension}`,
+      ],
+    });
+    cleanups.push(async () => await context.close());
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+    const extensionId = new URL(worker.url()).hostname;
+    const popup = context.pages()[0] ?? (await context.newPage());
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    const outcome = await popup.evaluate(async () => {
+      const currentTab = await chrome.tabs.getCurrent();
+      if (typeof currentTab?.id !== "number") {
+        throw new Error("Chrome did not expose the extension tab");
+      }
+      const valid = await chrome.runtime.sendMessage({
+        type: "prepareCopilotPanel",
+        tabId: currentTab.id,
+      });
+      const missing = await Promise.race([
+        chrome.runtime.sendMessage({ type: "prepareCopilotPanel", tabId: 2_147_483_000 }).then(
+          (response) => ({ kind: "response", response }),
+          (error: unknown) => ({
+            kind: "rejection",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ kind: "timeout" }), 1_200);
+        }),
+      ]);
+      return { valid, missing };
+    });
+
+    expect(outcome.valid).toEqual({
+      ok: true,
+      path: expect.stringMatching(/^sidepanel\.html\?binding=/),
+    });
+    expect(outcome.missing).toEqual({
+      kind: "response",
+      response: {
+        ok: false,
+        error: expect.stringMatching(/No tab with id: 2147483000/),
+      },
+    });
+  });
+
   it("isolates two tab sessions, enforces bindings, denies unshared use, and archives on close", async () => {
     const gateway = await createGatewayHarness();
     cleanups.push(gateway.close);
@@ -620,7 +635,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     cleanups.push(relay.close);
     const fixture = await createFixtureServer();
     cleanups.push(fixture.close);
-    const unpackedExtension = await copyExtension();
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
     const userDataDir = tempDirs.make("openclaw-copilot-profile-");
     const executablePath = await resolveChromiumExecutable();
     const context = await chromium.launchPersistentContext(userDataDir, {
@@ -637,7 +652,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       throw new Error("Chromium browser connection unavailable");
     }
     const browserCdp = await browser.newBrowserCDPSession();
-    const worker = await waitForServiceWorker(context);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
     const extensionId = new URL(worker.url()).hostname;
     const alphaTab = context.pages()[0] ?? (await context.newPage());
     await alphaTab.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
