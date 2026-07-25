@@ -665,15 +665,18 @@ function findChromeExecutableMac(): BrowserExecutable | null {
 }
 
 function findGoogleChromeExecutableMac(): BrowserExecutable | null {
-  return findFirstChromeExecutable([
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-    path.join(
-      os.homedir(),
-      "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-    ),
-  ], "darwin");
+  return findFirstChromeExecutable(
+    [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+      "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      path.join(
+        os.homedir(),
+        "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      ),
+    ],
+    "darwin",
+  );
 }
 
 /** Find the best Chromium-family executable on Linux. */
@@ -702,14 +705,17 @@ function findChromeExecutableLinux(): BrowserExecutable | null {
 }
 
 function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
-  return findFirstChromeExecutable([
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome-beta",
-    "/usr/bin/google-chrome-unstable",
-    "/opt/google/chrome/chrome",
-    "/snap/bin/google-chrome",
-  ], "linux");
+  return findFirstChromeExecutable(
+    [
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/google-chrome-beta",
+      "/usr/bin/google-chrome-unstable",
+      "/opt/google/chrome/chrome",
+      "/snap/bin/google-chrome",
+    ],
+    "linux",
+  );
 }
 
 /** Find the best Chromium-family executable on Windows. */
