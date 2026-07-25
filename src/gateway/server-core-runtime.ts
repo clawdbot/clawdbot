@@ -350,7 +350,7 @@ export async function startGatewayCoreRuntime(input: {
     readinessConfig = getRuntimeConfig(),
   ) => {
     pluginRuntime.registry = loaded.pluginRegistry;
-    pluginRuntime.readinessSnapshot = pluginRuntime.buildReadinessRuntimeSnapshot(
+    pluginRuntime.readinessSnapshot = pluginRuntime.makeState(
       readinessConfig,
       pluginRuntime.registry,
     );

@@ -11,10 +11,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import {
-  isReadinessCriterionSelected,
-  MODEL_ROUTE_READY_CRITERION_ID,
-} from "../readiness/activation.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
@@ -533,9 +529,7 @@ export async function finishGatewayStartup(params: {
           activeWorkInspectors: createGatewayServerActiveWorkInspectors(gatewayRequestContext),
           providerAuthPrewarm: {
             getConfig: getRuntimeConfig,
-            ...(isReadinessCriterionSelected(cfgAtStart, MODEL_ROUTE_READY_CRITERION_ID)
-              ? { enabled: true }
-              : {}),
+            ...pluginRuntime.modelRouteReadinessStartupOptions(cfgAtStart),
           },
         }),
     ),
@@ -625,15 +619,11 @@ export async function finishGatewayStartup(params: {
     },
     prepareTerminalConfig: (plan, nextConfig) =>
       terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway }),
-    reconcileTerminalSessions: () => {
-      terminalSessions.closeDisallowedAgents((agentId) => terminalLaunchPolicy.resolve(agentId).ok);
-    },
+    reconcileTerminalSessions: () =>
+      terminalSessions.closeDisallowedAgents((agentId) => terminalLaunchPolicy.resolve(agentId).ok),
     commitTerminalConfig: (nextConfig) => {
       terminalLaunchPolicy.commitConfig();
-      pluginRuntime.readinessSnapshot = pluginRuntime.buildReadinessRuntimeSnapshot(
-        nextConfig,
-        pluginRuntime.registry,
-      );
+      pluginRuntime.readinessSnapshot = pluginRuntime.makeState(nextConfig, pluginRuntime.registry);
       workerLiveEvents?.rebindAll(nextConfig);
     },
     acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,
