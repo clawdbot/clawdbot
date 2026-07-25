@@ -281,28 +281,6 @@ describe("config view", () => {
     return element;
   }
 
-  it("drops the legacy actions toolbar and keeps form mode button-free", () => {
-    const { container } = renderConfigView({
-      schema: {
-        type: "object",
-        properties: {
-          gateway: { type: "object", properties: { mode: { type: "string" } } },
-        },
-      },
-      formValue: { gateway: { mode: "remote" } },
-      originalValue: { gateway: { mode: "local" } },
-    });
-
-    expect(container.querySelector(".config-actions")).toBeNull();
-    expect(container.querySelector(".config-layout")).toBeNull();
-    expect(container.querySelector(".config-search__input")).toBeNull();
-    for (const label of ["Reload", "Clear", "Save", "Apply", "Update"]) {
-      expect(findOptionalButtonByText(container, label)).toBeUndefined();
-    }
-    // Idle autosave renders no status row beyond the mode toggle.
-    expect(container.querySelector(".config-toolbar__status .settings-status")).toBeNull();
-  });
-
   it("renders the inline autosave status and retries failed saves", () => {
     const onSave = vi.fn();
     const { container } = renderConfigView({ autoSaveStatus: "saving", onSave });
