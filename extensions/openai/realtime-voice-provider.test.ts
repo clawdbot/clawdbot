@@ -1,6 +1,10 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import type { RealtimeVoiceBridge, RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceTool,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -24,7 +28,7 @@ function readInternalRealtimeVoiceProviderApi(provider: object) {
     };
     cancelBrowserSession: (
       request: Record<string, unknown>,
-      session: { provider: string; transport: "webrtc"; clientSecret: string },
+      session: RealtimeVoiceBrowserSession,
     ) => Promise<void>;
   };
 }

@@ -10,7 +10,12 @@ const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-
 
 function attachInternalRealtimeVoiceProviderApi(
   provider: RealtimeVoiceProviderPlugin,
-  api: object,
+  api: {
+    isBrowserSessionConfigured: () => boolean;
+    resolveBrowserSessionCapabilities?: (ctx: {
+      providerConfig: Record<string, unknown>;
+    }) => object;
+  },
 ): void {
   Object.defineProperty(provider, INTERNAL_REALTIME_VOICE_PROVIDER, {
     configurable: true,
