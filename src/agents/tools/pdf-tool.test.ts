@@ -1030,7 +1030,8 @@ describe("createPdfTool", () => {
         markDownloadStarted = resolve;
       });
       loadSpy.mockImplementation(async (_url, options) => {
-        const downloadSignal = options?.requestInit?.signal;
+        const downloadSignal =
+          typeof options === "object" ? options.requestInit?.signal : undefined;
         expect(downloadSignal).toBe(controller.signal);
         markDownloadStarted?.();
         return await new Promise<never>((_, reject) => {
