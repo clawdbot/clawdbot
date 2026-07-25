@@ -510,6 +510,63 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps a browser-local prompt before a clock-skewed Gateway reply", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { historyMessages: [] });
+    const prompt = "verify clock-skewed chat order";
+    const reply = "The Gateway reply stayed below its prompt.";
+    const visibleOrder = () =>
+      page.locator(".chat-thread-inner").evaluate(
+        (thread: Element, texts: { prompt: string; reply: string }) =>
+          Array.from(thread.querySelectorAll(".chat-group")).flatMap((group: Element) => {
+            const text = group.textContent ?? "";
+            if (text.includes(texts.prompt)) {
+              return ["user"];
+            }
+            if (text.includes(texts.reply)) {
+              return ["assistant"];
+            }
+            return [];
+          }),
+        { prompt, reply },
+      );
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const browserTimestamp = await page.evaluate(() => Date.now());
+      const gatewayTimestamp = browserTimestamp - 60_000;
+      await gateway.emitGatewayEvent("chat", {
+        message: {
+          content: [{ text: reply, type: "text" }],
+          role: "assistant",
+          timestamp: gatewayTimestamp,
+        },
+        runId,
+        sessionKey: "main",
+        state: "final",
+      });
+      await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await visibleOrder()).toEqual(["user", "assistant"]);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("reconciles authoritative history before a trailing final by run identity", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

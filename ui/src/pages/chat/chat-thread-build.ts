@@ -186,7 +186,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   // the stable rows themselves, so optimistic user bubbles stay after the
   // preceding assistant reply even when client and Gateway clocks disagree.
   const toolStreamItems: ChatItem[] = [];
-  const toolStreamTimestampsByKey = new Map<string, number>();
   const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
@@ -311,7 +310,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           isStreaming: false,
         };
         toolStreamItems.push(streamItem);
-        toolStreamTimestampsByKey.set(streamItem.key, segment.ts);
         const toolCallId = segment.toolCallId?.trim();
         const toolKey = toolCallId ? toolKeysByCallId.get(toolCallId) : undefined;
         if (toolKey) {
@@ -329,10 +327,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         message: tool.message,
       };
       toolStreamItems.push(toolItem);
-      const toolTimestamp = chatItemTimestamp(toolItem);
-      if (toolTimestamp != null) {
-        toolStreamTimestampsByKey.set(toolItem.key, toolTimestamp);
-      }
     }
   }
   for (const segment of keyedSegments) {
@@ -348,18 +342,22 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       isStreaming: false,
     };
     toolStreamItems.push(commentaryItem);
-    toolStreamTimestampsByKey.set(commentaryItem.key, segment.ts);
   }
 
   // Merge collected live tool/stream rows into the stable transcript order.
-  // Stable rows keep their relative order; only tool cards and stream segments
-  // are repositioned by visible timestamp.
-  insertChatItemsByTimestamp(
-    items,
-    toolStreamItems,
-    toolStreamTimestampsByKey,
-    toolStreamPredecessors,
-  );
+  // The latest user row is a causal floor: current-run items must not jump
+  // above it under clock skew, then jump back when history materializes them.
+  const currentTurnStartIndex =
+    items.findLastIndex((item) => {
+      if (item.kind !== "message") {
+        return false;
+      }
+      const normalized = safeNormalizeMessage(item.message);
+      return normalized
+        ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user"
+        : false;
+    }) + 1;
+  insertChatItemsByTimestamp(items, toolStreamItems, currentTurnStartIndex, toolStreamPredecessors);
 
   // Working spark contract: whenever the agent works with nothing visibly
   // streaming (pre-first-token, or a queued send in flight), the thread shows

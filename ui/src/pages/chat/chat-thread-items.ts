@@ -625,39 +625,46 @@ export function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: 
 export function insertChatItemsByTimestamp(
   items: ChatItem[],
   inserts: ChatItem[],
-  timestampsByKey: ReadonlyMap<string, number>,
+  minimumInsertionIndex: number,
   toolStreamPredecessors: ReadonlyMap<string, string>,
 ): void {
+  const timestampsByKey = new Map<string, number>();
+  for (const item of inserts) {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp != null) {
+      timestampsByKey.set(item.key, timestamp);
+    }
+  }
   // Sort inserts among themselves by timestamp, preserving the original index
   // order for ties and honoring predecessor relationships so a stream segment
   // stays before the tool card it introduced.
   const sortedInserts = inserts
     .map((item, index) => {
-      const timestamp = chatItemTimestamp(item);
+      const rawTimestamp = chatItemTimestamp(item);
       const predecessorKey = toolStreamPredecessors.get(item.key);
       const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
       return {
         item,
         index,
         predecessorKey,
-        timestamp:
-          timestamp != null && predecessorTimestamp != null
-            ? Math.max(timestamp, predecessorTimestamp)
-            : timestamp,
+        effectiveTimestamp:
+          rawTimestamp != null && predecessorTimestamp != null
+            ? Math.max(rawTimestamp, predecessorTimestamp)
+            : rawTimestamp,
       };
     })
     .toSorted((a, b) => {
-      if (a.timestamp == null && b.timestamp == null) {
+      if (a.effectiveTimestamp == null && b.effectiveTimestamp == null) {
         return a.index - b.index;
       }
-      if (a.timestamp == null) {
+      if (a.effectiveTimestamp == null) {
         return 1;
       }
-      if (b.timestamp == null) {
+      if (b.effectiveTimestamp == null) {
         return -1;
       }
-      if (a.timestamp !== b.timestamp) {
-        return a.timestamp - b.timestamp;
+      if (a.effectiveTimestamp !== b.effectiveTimestamp) {
+        return a.effectiveTimestamp - b.effectiveTimestamp;
       }
       if (a.predecessorKey === b.item.key) {
         return 1;
@@ -666,24 +673,18 @@ export function insertChatItemsByTimestamp(
         return -1;
       }
       return a.index - b.index;
-    })
-    .map(({ item }) => item);
+    });
 
-  for (const item of sortedInserts) {
-    const timestamp = chatItemTimestamp(item);
-    const predecessorKey = toolStreamPredecessors.get(item.key);
-    const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
-    const effectiveTimestamp =
-      timestamp != null && predecessorTimestamp != null
-        ? Math.max(timestamp, predecessorTimestamp)
-        : timestamp;
-
+  for (const { item, effectiveTimestamp } of sortedInserts) {
     if (effectiveTimestamp == null) {
       items.push(item);
       continue;
     }
 
-    const insertionIndex = items.findIndex((existing) => {
+    const insertionIndex = items.findIndex((existing, index) => {
+      if (index < minimumInsertionIndex) {
+        return false;
+      }
       const existingTimestamp = chatItemTimestamp(existing);
       // Timestamped inserts render before stable items that lack a timestamp.
       if (existingTimestamp == null) {

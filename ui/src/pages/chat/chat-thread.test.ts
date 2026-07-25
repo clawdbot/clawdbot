@@ -127,6 +127,24 @@ describe("assistant commentary grouping", () => {
     expect(groups.map((group) => group.role)).toEqual(["user", "assistant"]);
   });
 
+  it("keeps a skewed live tool below its user boundary when it becomes stable", () => {
+    const paneId = "clock-skew-tool-transition";
+    const user = { role: "user", content: "User prompt", timestamp: 2_000 };
+    const tool = {
+      role: "toolResult",
+      toolCallId: "call-clock-skew",
+      toolName: "shell",
+      content: "Tool output",
+      timestamp: 1_000,
+    };
+    const liveGroups = messageGroups({ paneId, messages: [user], toolMessages: [tool] });
+    const stableGroups = messageGroups({ paneId, messages: [user, tool], toolMessages: [] });
+
+    expect(liveGroups.map((group) => group.role)).toEqual(["user", "tool"]);
+    expect(stableGroups.map((group) => group.role)).toEqual(["user", "tool"]);
+    resetChatThreadState(paneId);
+  });
+
   it("keeps keyed commentary separate from the terminal assistant reply", () => {
     const groups = messageGroups({
       messages: [
