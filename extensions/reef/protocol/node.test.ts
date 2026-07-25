@@ -8,10 +8,41 @@ import { generateIdentity } from "./identity.js";
 import { JsonlAuditStore, FileReplayStore } from "./node.js";
 import { signReceipt } from "./receipts.js";
 
+const durabilityTestState = vi.hoisted(() => ({
+  parentSyncOutcome: undefined as
+    | { status: "synced" }
+    | { status: "unsupported"; code?: string }
+    | undefined,
+  syncOutcome: undefined as
+    | { status: "synced" }
+    | { status: "unsupported"; code?: string }
+    | undefined,
+}));
+
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
+  return {
+    ...actual,
+    ensureDurableDirectory: async (...args: Parameters<typeof actual.ensureDurableDirectory>) => {
+      const receipt = await actual.ensureDurableDirectory(...args);
+      return durabilityTestState.parentSyncOutcome
+        ? { ...receipt, parentSync: durabilityTestState.parentSyncOutcome }
+        : receipt;
+    },
+    syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
+      durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
+  };
+});
+
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const replayBodyKey = Uint8Array.from({ length: 32 }, (_, index) => 255 - index);
 const receiptId = "01JZ0000000000000000000000";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  durabilityTestState.parentSyncOutcome = undefined;
+  durabilityTestState.syncOutcome = undefined;
+});
 
 describe("Node stores", () => {
   it("persists serialized audit JSONL", async () => {
@@ -69,6 +100,25 @@ describe("Node stores", () => {
       } finally {
         openSpy.mockRestore();
       }
+    },
+  );
+
+  it.each(["parent", "final"] as const)(
+    "rejects an append when %s journal directory synchronization is unsupported",
+    async (stage) => {
+      const directory = tempDirs.make(`reef-audit-${stage}-unsupported-`);
+      const path = join(directory, "nested", "audit.jsonl");
+      if (stage === "parent") {
+        durabilityTestState.parentSyncOutcome = { status: "unsupported", code: "ENOTSUP" };
+      } else {
+        durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
+      }
+
+      await expect(
+        new JsonlAuditStore(path, auditKey).appendEvent("one", { id: 1 }, 10),
+      ).rejects.toThrow(
+        /Reef journal directory does not support crash-durable synchronization \(ENOTSUP\)/u,
+      );
     },
   );
 

@@ -3,7 +3,11 @@ import { dirname } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
 import { canonicalPathFromExistingAncestor } from "@openclaw/fs-safe/advanced";
-import { ensureDurableDirectory, syncDirectory } from "@openclaw/fs-safe/durability";
+import {
+  ensureDurableDirectory,
+  syncDirectory,
+  type DirectorySyncOutcome,
+} from "@openclaw/fs-safe/durability";
 import { createAuditEntry, verifyChain, type AuditEntry, type AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, decodeUtf8, fromBase64 } from "./encoding.js";
@@ -275,10 +279,21 @@ function replayKey(peer: string, id: string): string {
   return `${peer}\n${id}`;
 }
 
+function requireJournalDirectorySync(
+  outcome: DirectorySyncOutcome | { status: "not-needed" },
+): void {
+  if (outcome.status !== "unsupported") {
+    return;
+  }
+  const code = outcome.code ? ` (${outcome.code})` : "";
+  throw new Error(`Reef journal directory does not support crash-durable synchronization${code}.`);
+}
+
 async function appendDurably(path: string, contents: string): Promise<void> {
   const parent = await ensureDurableDirectory({
     directoryPath: await canonicalPathFromExistingAncestor(dirname(path)),
   });
+  requireJournalDirectorySync(parent.parentSync);
   const handle = await openFile(path, "a", 0o600);
   try {
     await handle.writeFile(contents, "utf8");
@@ -286,7 +301,9 @@ async function appendDurably(path: string, contents: string): Promise<void> {
   } finally {
     await handle.close();
   }
-  await syncDirectory(parent, { label: "Reef replay journal directory" });
+  requireJournalDirectorySync(
+    await syncDirectory(parent, { label: "Reef replay journal directory" }),
+  );
 }
 
 function encryptReplayBody(
