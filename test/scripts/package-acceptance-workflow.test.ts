@@ -3526,6 +3526,51 @@ describe("package artifact reuse", () => {
     expect(manifestStep.run).toContain('--arg performanceRunId "$PERFORMANCE_RUN_ID"');
   });
 
+  it("wires evidence attempts into the acceptance gate", () => {
+    const releaseResolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const releaseRun = workflowStep(releaseResolveJob, "Resolve full release validation run");
+    const releaseManifest = workflowStep(
+      releaseResolveJob,
+      "Download full release validation manifest",
+    );
+    const npmPublishJob = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm");
+    const npmRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
+    const npmManifest = workflowStep(npmPublishJob, "Download full release validation manifest");
+
+    expect(releaseRun).toMatchObject({
+      id: "full_run",
+      env: {
+        FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+        FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
+      },
+    });
+    expect(releaseRun.run).toContain(
+      'run_endpoint+="/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"',
+    );
+    expect(releaseResolveJob.outputs?.full_release_validation_run_attempt).toBe(
+      "${{ steps.full_run.outputs.attempt }}",
+    );
+    expect(releaseManifest.with).toMatchObject({
+      name: "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+      "run-id": "${{ inputs.full_release_validation_run_id }}",
+    });
+
+    expect(npmRun).toMatchObject({
+      id: "full_run",
+      env: {
+        FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+        FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
+      },
+    });
+    expect(npmRun.run).toContain(
+      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
+    );
+    expect(npmManifest.with).toMatchObject({
+      name: "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+      "run-id": "${{ inputs.full_release_validation_run_id }}",
+    });
+  });
+
   it("keeps release publish artifacts and release-note ordering wired", () => {
     const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
@@ -3860,6 +3905,102 @@ describe("package artifact reuse", () => {
     expect(uploadAssetsIndex).toBeGreaterThan(rejectUnexpectedTargetAssetsIndex);
   });
 
+  it("publish requires the credentialed authorization path", () => {
+    for (const [workflowPath, authorizationJobName, gatedJobName, expectedBranch] of [
+      [
+        PLUGIN_NPM_RELEASE_WORKFLOW,
+        "validate_release_publish_approval",
+        "publish_plugins_npm",
+        "${{ github.ref_name }}",
+      ],
+      [
+        PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
+        "validate_release_publish_approval",
+        "pack_plugins_clawhub_artifacts",
+        "${{ inputs.release_publish_branch || github.ref_name }}",
+      ],
+      [
+        OPENCLAW_NPM_RELEASE_WORKFLOW,
+        "validate_publish_request",
+        "publish_openclaw_npm",
+        "${{ github.ref_name }}",
+      ],
+      [
+        ".github/workflows/plugin-clawhub-new.yml",
+        "validate_release_publish_approval",
+        "publish_bootstrap_plugins",
+        "${{ inputs.release_publish_branch }}",
+      ],
+    ] as const) {
+      const authorizationJob = workflowJob(workflowPath, authorizationJobName);
+      const authorization = workflowStep(authorizationJob, "Validate release publish approval run");
+      const gatedJob = workflowJob(workflowPath, gatedJobName);
+      const needs = Array.isArray(gatedJob.needs) ? gatedJob.needs : [gatedJob.needs];
+      expect(needs, workflowPath).toContain(authorizationJobName);
+      expect(authorization.env, workflowPath).toMatchObject({
+        EXPECTED_WORKFLOW_BRANCH: expectedBranch,
+        RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
+      });
+      expectTextToIncludeAll(authorization.run, [
+        '${GITHUB_ACTOR}" != "github-actions[bot]"',
+        "validate-release-publish-approval.mjs",
+      ]);
+    }
+
+    for (const [workflowPath, publishJobName, environment] of [
+      [PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm", "npm-release"],
+      [OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm", "npm-release"],
+      [
+        ".github/workflows/plugin-clawhub-new.yml",
+        "publish_bootstrap_plugins",
+        "clawhub-plugin-bootstrap",
+      ],
+    ] as const) {
+      expect(workflowJob(workflowPath, publishJobName).environment, workflowPath).toBe(environment);
+    }
+
+    const clawHubApproval = workflowJob(
+      PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
+      "approve_plugins_clawhub_release",
+    );
+    const clawHubPublish = workflowJob(PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "publish_plugins_clawhub");
+    expect(clawHubApproval.environment).toBe("clawhub-plugin-release");
+    expect(clawHubPublish.needs).toContain("approve_plugins_clawhub_release");
+
+    const bootstrapWorkflow = ".github/workflows/plugin-clawhub-new.yml";
+    const authorizationJob = workflowJob(bootstrapWorkflow, "validate_release_publish_approval");
+    const approvalDownload = workflowStep(
+      authorizationJob,
+      "Download parent ClawHub bootstrap approval",
+    );
+    const authorization = workflowStep(authorizationJob, "Validate release publish approval run");
+
+    expect(authorizationJob.permissions).toMatchObject({
+      actions: "read",
+      attestations: "read",
+      contents: "read",
+    });
+    expect(approvalDownload.with).toMatchObject({
+      name: "clawhub-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}",
+      "run-id": "${{ inputs.release_publish_run_id }}",
+    });
+    expect(authorization.env).toMatchObject({
+      APPROVAL_PATH: "${{ runner.temp }}/clawhub-bootstrap-approval/approval.json",
+      CHILD_WORKFLOW_SHA: "${{ github.sha }}",
+      EXPECTED_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
+      EXPECTED_WORKFLOW_BRANCH: "${{ inputs.release_publish_branch }}",
+      RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
+      RELEASE_TARGET_SHA: "${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}",
+    });
+    expectTextToIncludeAll(authorization.run, [
+      '${GITHUB_ACTOR}" != "github-actions[bot]"',
+      "actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}",
+      '--source-ref "${EXPECTED_WORKFLOW_REF}"',
+      '--source-digest "${EXPECTED_WORKFLOW_SHA}"',
+      "validate-release-publish-approval.mjs",
+    ]);
+  });
+
   it("keeps release publication ownership and artifact boundaries wired", () => {
     const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
       scripts?: Record<string, string>;
@@ -3914,18 +4055,6 @@ describe("package artifact reuse", () => {
     });
     expect(clawHubBootstrapValidation.environment).toBe("clawhub-plugin-bootstrap");
     expect(clawHubBootstrapPublish.environment).toBe("clawhub-plugin-bootstrap");
-
-    for (const [workflowPath, jobName] of [
-      [PLUGIN_NPM_RELEASE_WORKFLOW, "validate_release_publish_approval"],
-      [PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "validate_release_publish_approval"],
-      [OPENCLAW_NPM_RELEASE_WORKFLOW, "validate_publish_request"],
-      [".github/workflows/plugin-clawhub-new.yml", "validate_release_publish_approval"],
-    ] as const) {
-      const approvalJob = workflowJob(workflowPath, jobName);
-      const approvalStep = workflowStep(approvalJob, "Validate release publish approval run");
-      expect(approvalStep.run, workflowPath).toContain("validate-release-publish-approval.mjs");
-      expect(approvalStep.env?.RELEASE_PUBLISH_RUN_ID, workflowPath).toBeDefined();
-    }
 
     const bootstrapSteps = clawHubBootstrapPublish.steps ?? [];
     const bootstrapDownload = workflowStep(
