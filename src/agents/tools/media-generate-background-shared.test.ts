@@ -32,6 +32,11 @@ const cronContinuationCleanupMocks = vi.hoisted(() => ({
 const sessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<() => SessionEntry | undefined>(() => undefined),
 }));
+const cronStoreMocks = vi.hoisted(() => ({
+  loadCronStore: vi.fn(),
+  resolveCronJobsStorePath: vi.fn(),
+  saveCronStore: vi.fn(),
+}));
 
 vi.mock("../subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
 vi.mock("../../config/sessions/session-accessor.js", async () => ({
@@ -44,6 +49,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => ({
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
 vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
+vi.mock("../../cron/store.js", () => cronStoreMocks);
 
 import {
   createMediaGenerationTaskLifecycle,
@@ -63,6 +69,10 @@ beforeEach(() => {
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
   cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle.mockClear();
   sessionMocks.loadSessionEntry.mockReset().mockReturnValue(undefined);
+  cronStoreMocks.loadCronStore.mockReset();
+  cronStoreMocks.resolveCronJobsStorePath.mockReset();
+  cronStoreMocks.resolveCronJobsStorePath.mockReturnValue("/tmp/openclaw-cron.json");
+  cronStoreMocks.saveCronStore.mockReset();
 });
 
 function createImageMediaLifecycle() {
@@ -797,6 +807,86 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       }),
     );
     expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+  });
+
+  it("marks the originating cron job failed when detached generation fails", async () => {
+    const scheduled: Array<() => Promise<void>> = [];
+    const generationError = new Error("provider high-demand 503");
+    const cronJob = {
+      id: "hourly-music-track",
+      name: "Hourly music",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 100,
+      schedule: { kind: "every", everyMs: 3_600_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Generate music" },
+      delivery: { mode: "none" },
+      state: {
+        lastRunAtMs: 1_784_982_758_437,
+        lastRunStatus: "ok",
+        lastStatus: "ok",
+        consecutiveErrors: 0,
+      },
+    };
+    cronStoreMocks.loadCronStore.mockResolvedValueOnce({
+      version: 1,
+      jobs: [cronJob],
+    });
+    const lifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => true),
+    };
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle: {
+        taskId: "task-music-generation-error",
+        runId: "tool:music_generate:generation-error",
+        requesterSessionKey: "agent:main:cron:hourly-music-track:run:1784982758437",
+        taskLabel: "proof music",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+      progressSummary: "Generating music",
+      config: { cron: { store: "/tmp/custom-cron.json" } },
+      toolName: "Music generation",
+      onWakeFailure: vi.fn(),
+      run: async () => {
+        throw generationError;
+      },
+    });
+
+    await scheduled[0]?.();
+
+    expect(cronStoreMocks.resolveCronJobsStorePath).toHaveBeenCalledWith("/tmp/custom-cron.json");
+    expect(cronStoreMocks.saveCronStore).toHaveBeenCalledWith(
+      "/tmp/openclaw-cron.json",
+      expect.objectContaining({
+        jobs: [
+          expect.objectContaining({
+            state: expect.objectContaining({
+              lastRunStatus: "error",
+              lastStatus: "error",
+              lastError: "Detached Music generation failed: provider high-demand 503",
+              consecutiveErrors: 1,
+            }),
+          }),
+        ],
+      }),
+      { stateOnly: true },
+    );
+    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "error",
+        result: "provider high-demand 503",
+      }),
+    );
   });
 });
 

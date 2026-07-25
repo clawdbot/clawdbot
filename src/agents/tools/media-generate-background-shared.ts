@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../../cron/store.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -44,6 +45,8 @@ const log = createSubsystemLogger("agents/tools/media-generate-background-shared
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
+const CRON_RUN_SESSION_KEY_RE =
+  /^agent:(?<agentId>[^:]+):cron:(?<jobSegment>[^:]+):run:(?<runSegment>[^:]+)/;
 
 /** Handle for a detached media generation task registered in the task ledger. */
 export type MediaGenerationTaskHandle = {
@@ -377,6 +380,89 @@ function failMediaGenerationTaskRun(params: {
   }
 }
 
+function normalizeCronJobIdSegment(value: string | undefined, fallback: string): string {
+  const normalized = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return normalized || fallback;
+}
+
+function resolveOriginatingCronRun(params: { requesterSessionKey: string }) {
+  const match = CRON_RUN_SESSION_KEY_RE.exec(params.requesterSessionKey.trim());
+  const groups = match?.groups;
+  if (!groups?.jobSegment || !groups.runSegment) {
+    return null;
+  }
+  const runStartedAtMs = Number.parseInt(groups.runSegment, 10);
+  return {
+    jobSegment: groups.jobSegment,
+    runStartedAtMs: Number.isFinite(runStartedAtMs) ? runStartedAtMs : undefined,
+  };
+}
+
+async function markOriginatingCronRunFailedFromMediaGeneration(params: {
+  config?: OpenClawConfig;
+  handle: MediaGenerationTaskHandle | null;
+  error: unknown;
+  toolName: string;
+}) {
+  if (!params.handle) {
+    return;
+  }
+  const origin = resolveOriginatingCronRun({
+    requesterSessionKey: params.handle.requesterSessionKey,
+  });
+  if (!origin) {
+    return;
+  }
+  const storePath = resolveCronJobsStorePath(params.config?.cron?.store);
+  try {
+    const store = await loadCronStore(storePath);
+    const job = store.jobs.find(
+      (candidate) =>
+        candidate.id === origin.jobSegment ||
+        normalizeCronJobIdSegment(candidate.id, "job") === origin.jobSegment,
+    );
+    if (!job) {
+      return;
+    }
+    const existingLastRunAtMs = job.state.lastRunAtMs;
+    if (
+      origin.runStartedAtMs !== undefined &&
+      typeof existingLastRunAtMs === "number" &&
+      existingLastRunAtMs > origin.runStartedAtMs
+    ) {
+      return;
+    }
+    const endedAt = Date.now();
+    const errorText = `Detached ${params.toolName} failed: ${formatErrorMessage(params.error)}`;
+    job.state.runningAtMs = undefined;
+    job.state.lastRunAtMs = origin.runStartedAtMs ?? existingLastRunAtMs ?? endedAt;
+    job.state.lastRunStatus = "error";
+    job.state.lastStatus = "error";
+    job.state.lastError = errorText;
+    job.state.lastDurationMs = Math.max(0, endedAt - (job.state.lastRunAtMs ?? endedAt));
+    job.state.consecutiveErrors =
+      typeof job.state.consecutiveErrors === "number" &&
+      Number.isFinite(job.state.consecutiveErrors)
+        ? Math.max(0, Math.floor(job.state.consecutiveErrors)) + 1
+        : 1;
+    job.state.consecutiveSkipped = 0;
+    job.updatedAtMs = endedAt;
+    await saveCronStore(storePath, store, { stateOnly: true });
+  } catch (error) {
+    log.warn("Failed to mark originating cron run failed after detached media generation failure", {
+      requesterSessionKey: params.handle.requesterSessionKey,
+      taskId: params.handle.taskId,
+      runId: params.handle.runId,
+      error,
+    });
+  }
+}
+
 function buildMediaGenerationReplyInstruction(params: {
   status: "ok" | "error";
   completionLabel: string;
@@ -517,7 +603,16 @@ export function scheduleMediaGenerationTaskCompletion<
           error: wakeError,
         });
       }
-      params.lifecycle.failTaskRun({ handle: params.handle, error });
+      params.lifecycle.failTaskRun({
+        handle: params.handle,
+        error,
+      });
+      await markOriginatingCronRunFailedFromMediaGeneration({
+        config: params.config,
+        handle: params.handle,
+        error,
+        toolName: params.toolName,
+      });
       return;
     }
 
