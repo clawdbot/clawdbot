@@ -189,6 +189,7 @@ const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
 const TOOL_RESULT_MISSING_ERROR_CLASS = "tool-result-missing";
+const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|not found)\b/i;
@@ -1204,6 +1205,7 @@ function runtimeParitySessionEnv(stateDir: string): NodeJS.ProcessEnv {
 function readRuntimeParitySessionEntries(params: {
   stateDir: string;
   agentId: string;
+  preferredSessionKeys?: ReadonlySet<string>;
 }): RuntimeParitySessionCandidate[] {
   try {
     const entries = listSessionEntries({
@@ -1217,8 +1219,11 @@ function readRuntimeParitySessionEntries(params: {
         sessionKey,
       }))
       .filter(({ entry }) => !readNonEmptyString(entry.heartbeatIsolatedBaseSessionKey));
-    const rootEntries = entries.filter(({ entry }) => isRuntimeParityRootSession(entry));
-    const candidates = rootEntries.length > 0 ? rootEntries : entries;
+    const selectedEntries = params.preferredSessionKeys
+      ? entries.filter(({ sessionKey }) => params.preferredSessionKeys?.has(sessionKey))
+      : entries;
+    const rootEntries = selectedEntries.filter(({ entry }) => isRuntimeParityRootSession(entry));
+    const candidates = rootEntries.length > 0 ? rootEntries : selectedEntries;
     return candidates.toSorted((left, right) => {
       const leftCreatedAt = left.entry.createdAt ?? left.entry.updatedAt ?? 0;
       const rightCreatedAt = right.entry.createdAt ?? right.entry.updatedAt ?? 0;
@@ -1232,6 +1237,7 @@ function readRuntimeParitySessionEntries(params: {
 async function loadRuntimeParityCaptureSources(params: {
   gateway: QaGatewayLike;
   agentId: string;
+  preferredSessionKeys?: readonly string[];
 }): Promise<RuntimeParityCaptureSources> {
   const stateDir = `${params.gateway.tempRoot}/state`;
   const env = runtimeParitySessionEnv(stateDir);
@@ -1239,6 +1245,9 @@ async function loadRuntimeParityCaptureSources(params: {
   const sessionEntries = readRuntimeParitySessionEntries({
     stateDir,
     agentId: params.agentId,
+    ...(params.preferredSessionKeys?.length
+      ? { preferredSessionKeys: new Set(params.preferredSessionKeys) }
+      : {}),
   });
   const sessions: RuntimeParityCaptureSources["sessions"] = [];
   for (const { entry, sessionKey } of sessionEntries) {
@@ -1287,6 +1296,25 @@ async function loadRuntimeParityCaptureSources(params: {
       .filter(Boolean)
       .join("\n"),
   };
+}
+
+function runtimeParitySessionKeysFromScenarioResult(result: QaSuiteScenarioLike) {
+  const sessionKeys = new Set<string>();
+  const detailBlocks = [result.details, ...(result.steps ?? []).map((step) => step.details)];
+  for (const detailBlock of detailBlocks) {
+    for (const line of detailBlock?.split(/\r?\n/u) ?? []) {
+      if (!line.startsWith(RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX)) {
+        continue;
+      }
+      const sessionKey = readNonEmptyString(
+        line.slice(RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX.length),
+      );
+      if (sessionKey) {
+        sessionKeys.add(sessionKey);
+      }
+    }
+  }
+  return [...sessionKeys];
 }
 
 async function loadRuntimeParityMockToolCalls(
@@ -1341,6 +1369,7 @@ export async function captureRuntimeParityCell(
   const { sessions, transcriptBytes } = await loadRuntimeParityCaptureSources({
     gateway: params.gateway,
     agentId,
+    preferredSessionKeys: runtimeParitySessionKeysFromScenarioResult(params.scenarioResult),
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
   // Runtime-tool fixtures split happy and failure paths across root sessions.
