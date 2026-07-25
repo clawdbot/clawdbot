@@ -53,6 +53,9 @@ function printProofLines(report: ReliabilityReport): void {
     `SQLITE_RELIABILITY_COMPACT_RECLAIMED_BYTES=${report.maintenanceProof.compaction.reclaimedBytes}`,
   );
   console.log(
+    `SQLITE_RELIABILITY_VACUUM_INTERRUPTION=${report.maintenanceProof.vacuumInterruption.recoveryVerified ? "verified" : "missing"}`,
+  );
+  console.log(
     `SQLITE_RELIABILITY_POST_COMPACT_RESTORE=${report.maintenanceProof.postCompact.restoreVerified ? "verified" : "missing"}`,
   );
   console.log(`SQLITE_RELIABILITY_FINAL_ROWS=${report.maintenanceProof.postCompact.state.rows}`);

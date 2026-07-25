@@ -61,6 +61,29 @@ export type ReliabilityReport = {
         before: number;
       };
     };
+    vacuumInterruption: {
+      autoVacuumAfterRecovery: number;
+      autoVacuumBeforeKill: number;
+      exit: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      };
+      journalBytesObserved: number;
+      payloadAfterRecovery: {
+        bytes: number;
+        idSum: number;
+        rows: number;
+      };
+      payloadBeforeKill: {
+        bytes: number;
+        idSum: number;
+        rows: number;
+      };
+      recoveryVerified: true;
+      stateAfterRecovery: ReliabilityStateProof;
+      stateBeforeKill: ReliabilityStateProof;
+      walBytesObserved: number;
+    };
     postCompact: {
       restoreMs: number;
       restoreVerified: true;

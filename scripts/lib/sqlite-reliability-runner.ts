@@ -19,6 +19,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
+import { runVacuumInterruptionProof } from "./sqlite-reliability-compaction.js";
 import {
   COMMITTED_WAL_SENTINEL,
   PROFILES,
@@ -53,8 +54,8 @@ type IterationMetric = {
 
 type CompactionProof = ReliabilityReport["maintenanceProof"]["compaction"];
 
-const COMPACTION_BLOAT_ROWS = 512;
-const COMPACTION_BLOAT_PAYLOAD_BYTES = 16 * 1024;
+const COMPACTION_BLOAT_ROWS = 256;
+const COMPACTION_BLOAT_PAYLOAD_BYTES = 256 * 1024;
 
 function nowMs(): number {
   return Number(process.hrtime.bigint()) / 1e6;
@@ -205,11 +206,12 @@ function verifyRestoredDatabase(params: {
   expectedState?: ReliabilityStateProof;
   identity: SnapshotDatabaseIdentity;
   path: string;
+  readOnly?: boolean;
   rowsPerBatch: number;
   uncommittedBatch: number | null;
 }): ReliabilityStateProof {
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(params.path, { readOnly: true });
+  const database = new DatabaseSync(params.path, { readOnly: params.readOnly ?? true });
   try {
     database.exec("PRAGMA trusted_schema = OFF;");
     assertPragmaOk(database, "quick_check");
@@ -280,8 +282,48 @@ function createCompactionBloat(databasePath: string): number {
       database.exec("ROLLBACK;");
       throw error;
     }
-    database.exec("DELETE FROM openclaw_reliability_compaction_bloat;");
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
     return COMPACTION_BLOAT_ROWS * COMPACTION_BLOAT_PAYLOAD_BYTES;
+  } finally {
+    database.close();
+  }
+}
+
+function readCompactionPayload(databasePath: string): {
+  bytes: number;
+  idSum: number;
+  rows: number;
+} {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const row = database
+      .prepare(
+        `SELECT
+           COUNT(*) AS rows,
+           COALESCE(SUM(id), 0) AS id_sum,
+           COALESCE(SUM(length(payload)), 0) AS bytes
+         FROM openclaw_reliability_compaction_bloat`,
+      )
+      .get() as { bytes?: unknown; id_sum?: unknown; rows?: unknown };
+    return {
+      bytes: sqliteSafeInteger(row.bytes, "compaction payload bytes"),
+      idSum: sqliteSafeInteger(row.id_sum, "compaction payload id sum"),
+      rows: sqliteSafeInteger(row.rows, "compaction payload rows"),
+    };
+  } finally {
+    database.close();
+  }
+}
+
+function deleteCompactionBloat(databasePath: string): void {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      DELETE FROM openclaw_reliability_compaction_bloat;
+      PRAGMA wal_checkpoint(TRUNCATE);
+    `);
   } finally {
     database.close();
   }
@@ -301,6 +343,29 @@ function readAutoVacuum(databasePath: string): number {
   } finally {
     database.close();
   }
+}
+
+function prepareVacuumRollbackSentinel(databasePath: string): number {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      PRAGMA busy_timeout = 30000;
+      PRAGMA wal_checkpoint(TRUNCATE);
+      PRAGMA journal_mode = DELETE;
+      PRAGMA auto_vacuum = NONE;
+      VACUUM;
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_checkpoint(TRUNCATE);
+    `);
+  } finally {
+    database.close();
+  }
+  const autoVacuum = readAutoVacuum(databasePath);
+  if (autoVacuum !== 0) {
+    throw new Error(`failed to prepare VACUUM rollback sentinel: auto_vacuum=${autoVacuum}`);
+  }
+  return autoVacuum;
 }
 
 function assertCompactionProof(proof: {
@@ -405,6 +470,7 @@ async function runMaintenanceRoundTrip(params: {
   syncedRepository: string;
   target: TargetDatabase;
 }): Promise<ReliabilityReport["maintenanceProof"]> {
+  const autoVacuumBeforeKill = prepareVacuumRollbackSentinel(params.target.path);
   const bloatBytes = createCompactionBloat(params.target.path);
   const expectedState = verifyRestoredDatabase({
     identity: params.target.identity,
@@ -412,6 +478,31 @@ async function runMaintenanceRoundTrip(params: {
     rowsPerBatch: params.rowsPerBatch,
     uncommittedBatch: null,
   });
+  const expectedPayload = readCompactionPayload(params.target.path);
+  if (expectedPayload.rows !== COMPACTION_BLOAT_ROWS || expectedPayload.bytes !== bloatBytes) {
+    throw new Error(
+      `compaction payload setup failed: rows=${expectedPayload.rows} bytes=${expectedPayload.bytes}`,
+    );
+  }
+  const vacuumInterruption = await runVacuumInterruptionProof({
+    env: params.env,
+    expectedAutoVacuum: autoVacuumBeforeKill,
+    expectedPayload,
+    expectedState,
+    readAutoVacuum: () => readAutoVacuum(params.target.path),
+    readPayload: () => readCompactionPayload(params.target.path),
+    recoverAndVerifyDatabase: () =>
+      verifyRestoredDatabase({
+        expectedState,
+        identity: params.target.identity,
+        path: params.target.path,
+        readOnly: false,
+        rowsPerBatch: params.rowsPerBatch,
+        uncommittedBatch: null,
+      }),
+    target: params.target,
+  });
+  deleteCompactionBloat(params.target.path);
   const compaction = await compactTargetDatabase(params.target, params.env);
   verifyRestoredDatabase({
     expectedState,
@@ -451,6 +542,7 @@ async function runMaintenanceRoundTrip(params: {
       snapshotMs: Number(snapshotMs.toFixed(3)),
       state,
     },
+    vacuumInterruption,
   };
 }
 
