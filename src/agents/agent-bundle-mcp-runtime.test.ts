@@ -1043,7 +1043,7 @@ describe("session MCP runtime", () => {
   });
 
   it("retries a failed MCP catalog without stalling healthy siblings", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-catalog-retry-"));
+    const tempDir = makeTempDir(tempDirs, "bundle-mcp-catalog-retry-");
     const retryServerPath = path.join(tempDir, "retry-list-tools.mjs");
     const retryLogPath = path.join(tempDir, "retry-server.log");
     const healthyServerPath = path.join(tempDir, "healthy-list-tools.mjs");
@@ -1147,7 +1147,6 @@ describe("session MCP runtime", () => {
     } finally {
       nowSpy.mockRestore();
       await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
