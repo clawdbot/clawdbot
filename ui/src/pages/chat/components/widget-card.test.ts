@@ -58,6 +58,57 @@ describe("widget-card", () => {
     expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
   });
 
+  it("keeps a reported frame height across a capability rotation", () => {
+    const preview = {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "cv_surface_lease_height",
+      url: "/__openclaw__/canvas/documents/cv_surface_lease_height/index.html",
+      sandbox: "scripts",
+    } as const;
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(
+      renderToolPreview(preview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+      }),
+      host,
+    );
+    const frame = host.querySelector<HTMLIFrameElement>("iframe");
+    frame?.dispatchEvent(new Event("load"));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: "openclaw:widget-size", height: 640 },
+        source: frame?.contentWindow,
+      }),
+    );
+    expect(frame?.style.height).toBe("640px");
+
+    // Re-render at the same URL so the style binding itself carries the
+    // remembered height; only then can a later rotation clear it.
+    render(
+      renderToolPreview(preview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+      }),
+      host,
+    );
+    expect(frame?.getAttribute("style")).toContain("640px");
+
+    // The in-frame reporter only posts when its own height changes, so a
+    // rotation that lost the remembered height would strand the frame at its
+    // default until the widget content happened to resize.
+    render(
+      renderToolPreview(preview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
+      }),
+      host,
+    );
+    expect(host.querySelector("iframe")).toBe(frame);
+    expect(frame?.getAttribute("style")).toContain("640px");
+    host.remove();
+  });
+
   it("mounts a new document on the rotated surface URL within one connection", () => {
     const preview = {
       kind: "canvas",

@@ -141,25 +141,30 @@ const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
 // find them; frames register themselves on load and are dropped once detached.
 const widgetFrameRegistry = new Set<HTMLIFrameElement>();
-// Reported heights keyed by frame src: lit re-renders re-apply the style
-// binding, so the template must read the reported height back or it resets.
-const widgetFrameHeightsBySrc = new Map<string, number>();
+// Reported heights keyed by the frame's stable identity, NOT its src: lit
+// re-renders re-apply the style binding, so the template must read the reported
+// height back or it resets. A capability rotation changes the src while the
+// frame stays mounted, and the in-frame reporter only posts on height change —
+// keying by src would strand the frame at its default height until its content
+// happened to resize.
+const widgetFrameHeightsByKey = new Map<string, number>();
+const WIDGET_FRAME_HEIGHT_KEY_ATTRIBUTE = "data-frame-key";
 const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
 // Keyed by window, not a module boolean: non-isolated test workers swap the
 // global window between files while module state persists.
 const widgetSizeListenerWindows = new WeakSet<Window>();
 
-function rememberWidgetFrameHeight(src: string, height: number) {
+function rememberWidgetFrameHeight(key: string, height: number) {
   if (
-    !widgetFrameHeightsBySrc.has(src) &&
-    widgetFrameHeightsBySrc.size >= WIDGET_FRAME_HEIGHTS_MAX_ENTRIES
+    !widgetFrameHeightsByKey.has(key) &&
+    widgetFrameHeightsByKey.size >= WIDGET_FRAME_HEIGHTS_MAX_ENTRIES
   ) {
-    const oldest = widgetFrameHeightsBySrc.keys().next().value;
+    const oldest = widgetFrameHeightsByKey.keys().next().value;
     if (oldest !== undefined) {
-      widgetFrameHeightsBySrc.delete(oldest);
+      widgetFrameHeightsByKey.delete(oldest);
     }
   }
-  widgetFrameHeightsBySrc.set(src, height);
+  widgetFrameHeightsByKey.set(key, height);
 }
 
 function registerWidgetFrame(event: Event) {
@@ -282,9 +287,10 @@ function installWidgetSizeListener() {
         // must override both properties to fit short widgets.
         frame.style.height = `${height}px`;
         frame.style.minHeight = `${height}px`;
-        const src = frame.getAttribute("src");
-        if (src) {
-          rememberWidgetFrameHeight(src, height);
+        const key =
+          frame.getAttribute(WIDGET_FRAME_HEIGHT_KEY_ATTRIBUTE) ?? frame.getAttribute("src");
+        if (key) {
+          rememberWidgetFrameHeight(key, height);
         }
         return;
       }
@@ -305,7 +311,8 @@ function renderPreviewFrame(params: {
   installWidgetThemeObserver(() => widgetFrameRegistry);
   const sandbox = params.sandbox ?? "";
   const src = params.src ?? "";
-  const reportedHeight = src ? widgetFrameHeightsBySrc.get(src) : undefined;
+  const heightKey = params.frameKey || src;
+  const reportedHeight = heightKey ? widgetFrameHeightsByKey.get(heightKey) : undefined;
   const height = reportedHeight ?? params.height;
   if (params.promptCapable) {
     installWidgetPromptOfferListener();
@@ -325,7 +332,16 @@ function renderPreviewFrame(params: {
     html`
       <iframe
         ${ref((element) => {
-          if (src && element instanceof HTMLIFrameElement && !element.hasAttribute("src")) {
+          if (!(element instanceof HTMLIFrameElement)) {
+            return;
+          }
+          if (heightKey) {
+            element.setAttribute(WIDGET_FRAME_HEIGHT_KEY_ATTRIBUTE, heightKey);
+          }
+          // Assign the capability URL once per element: a rotation must not
+          // reload a mounted widget, while a fresh element always gets the
+          // current lease URL.
+          if (src && !element.hasAttribute("src")) {
             element.setAttribute("src", src);
           }
         })}
