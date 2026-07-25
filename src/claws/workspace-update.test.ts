@@ -91,6 +91,7 @@ describe("applyClawWorkspaceUpdate", () => {
       source: targetSource,
       context: { agentId: "worker", workspace },
     });
+    expect(JSON.stringify(updatePlan)).not.toContain("target soul");
 
     const execution = await applyClawWorkspaceUpdate(updatePlan, targetAddPlan, {
       env,
@@ -100,9 +101,9 @@ describe("applyClawWorkspaceUpdate", () => {
     await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe("target soul\n");
     await expect(readFile(join(workspace, "NEW.md"), "utf8")).resolves.toBe("new\n");
     await expect(access(join(workspace, "OLD.md"))).rejects.toThrow();
-    expect(readClawWorkspaceFiles("worker", { env }).map((record) => record.path)).toEqual([
-      "NEW.md",
-      "SOUL.md",
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual([
+      expect.objectContaining({ path: "NEW.md", sourcePath: "NEW.md" }),
+      expect.objectContaining({ path: "SOUL.md", sourcePath: "CLAW.md" }),
     ]);
 
     await execution.rollback();

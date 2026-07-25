@@ -161,7 +161,7 @@ export async function applyClawWorkspaceUpdate(
         agentId: updatePlan.agentId,
         workspace: workspace.rootReal,
         path,
-        sourcePath: resolve(target.source),
+        sourcePath: resolvedSource.sourceRelative.replaceAll(sep, "/"),
         contentDigest: target.digest,
         status: "complete",
         createdAtMs: previousRef?.createdAtMs ?? nowMs,

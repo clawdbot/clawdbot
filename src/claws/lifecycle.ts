@@ -9,6 +9,7 @@ import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 import { digestClawMcpServer } from "./mcp.js";
+import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
@@ -328,6 +329,46 @@ export async function buildClawAddPlan(params: {
     }
     if (result.blocker) {
       blockers.push(result.blocker);
+    }
+  }
+
+  if (params.clawMarkdownBody && params.clawMarkdownBody.toString("utf8").trim().length > 0) {
+    if (clawManifestWorkspaceConflictsWithPath(params.manifest, "SOUL.md")) {
+      const diagnostic = blocker(
+        "claw_body_soul_conflict",
+        "$.workspace",
+        "CLAW.md body content and an explicit SOUL.md workspace declaration cannot both be present.",
+      );
+      blockers.push(diagnostic);
+      actions.push({
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        action: "write",
+        target: resolve(workspace, "SOUL.md"),
+        source: source.manifestPath,
+        sourceKind: "clawMarkdownBody",
+        blocked: true,
+        reason: diagnostic.message,
+      });
+    } else {
+      const pending: PendingWorkspaceFileAction = {
+        sourcePath: source.manifestPath,
+        manifestPath: "$body",
+        byteLength: params.clawMarkdownBody.byteLength,
+        content: params.clawMarkdownBody,
+        action: {
+          kind: "workspaceFile",
+          id: "SOUL.md",
+          action: "write",
+          target: resolve(workspace, "SOUL.md"),
+          source: source.manifestPath,
+          sourceKind: "clawMarkdownBody",
+          details: { expectedState: "absent" },
+          blocked: false,
+        },
+      };
+      pendingWorkspaceFiles.push(pending);
+      actions.push(pending.action);
     }
   }
 

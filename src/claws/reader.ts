@@ -7,7 +7,7 @@ import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
-import { parseClawManifest } from "./schema.js";
+import { clawManifestWorkspaceConflictsWithPath, parseClawManifest } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import type {
   ClawDiagnostic,
@@ -36,7 +36,7 @@ const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
 async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> {
   const fileRoot = await fsSafeRoot(dirname(path));
   const read = await fileRoot.read(basename(path), {
-    hardlinks: "allow",
+    hardlinks: "reject",
     maxBytes,
     nonBlockingRead: true,
     symlinks: "reject",
@@ -523,6 +523,20 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   const parsed = parseClawManifest(manifestResult.value);
   if (!parsed.ok) {
     return parsed;
+  }
+  const hasMarkdownBody =
+    manifestResult.body !== undefined && manifestResult.body.toString("utf8").trim().length > 0;
+  if (hasMarkdownBody && clawManifestWorkspaceConflictsWithPath(parsed.manifest, "SOUL.md")) {
+    return {
+      ok: false,
+      diagnostics: [
+        fileDiagnostic(
+          "claw_body_soul_conflict",
+          "CLAW.md body content and an explicit SOUL.md workspace declaration cannot both be present.",
+          "$.workspace",
+        ),
+      ],
+    };
   }
   const profile = await readClawOpenClawProfile({
     packageRoot: sourceResult.source.packageRoot,
