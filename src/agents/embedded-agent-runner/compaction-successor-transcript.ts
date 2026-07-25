@@ -31,10 +31,7 @@ export type CompactionTranscriptRotation = {
 };
 
 export function shouldRotateCompactionTranscript(config?: OpenClawConfig): boolean {
-  // Default to rotating after compaction so a long-lived session cannot grow past the
-  // context window into an unrecoverable every-turn-compaction spiral (#112476). Only an
-  // explicit `truncateAfterCompaction: false` opts out of the successor-transcript rotation.
-  return config?.agents?.defaults?.compaction?.truncateAfterCompaction !== false;
+  return config?.agents?.defaults?.compaction?.truncateAfterCompaction === true;
 }
 
 export async function rotateTranscriptAfterCompaction(params: {

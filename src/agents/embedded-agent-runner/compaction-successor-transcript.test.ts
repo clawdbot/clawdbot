@@ -559,21 +559,13 @@ describe("rotateTranscriptAfterCompaction", () => {
 });
 
 describe("shouldRotateCompactionTranscript", () => {
-  it("rotates by default and supports an explicit opt-out", () => {
-    expect(shouldRotateCompactionTranscript()).toBe(true);
-    expect(shouldRotateCompactionTranscript({ agents: { defaults: { compaction: {} } } })).toBe(
-      true,
-    );
+  it("keeps transcript rotation opt-in behind the existing config key", () => {
+    expect(shouldRotateCompactionTranscript()).toBe(false);
     expect(
       shouldRotateCompactionTranscript({
         agents: { defaults: { compaction: { truncateAfterCompaction: true } } },
       }),
     ).toBe(true);
-    expect(
-      shouldRotateCompactionTranscript({
-        agents: { defaults: { compaction: { truncateAfterCompaction: false } } },
-      }),
-    ).toBe(false);
   });
 });
 
