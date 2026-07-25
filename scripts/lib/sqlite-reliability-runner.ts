@@ -29,11 +29,13 @@ import {
 } from "./sqlite-reliability-contract.js";
 import { monitorSqliteWalDuring } from "./sqlite-reliability-wal-monitor.js";
 import {
+  crashWriter,
   startWriter,
   stopWriter,
   terminateWriter,
   waitForWriterMessage,
   type WriterHandle,
+  type WriterExit,
 } from "./sqlite-reliability-writer.js";
 
 type TargetDatabase = {
@@ -526,6 +528,14 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
     const partial = await waitForWriterMessage(writer, "partial", () => {
       writer?.child.send?.({ kind: "hold-partial" });
     });
+    const stateBeforeKill = verifyRestoredDatabase({
+      identity: target.identity,
+      path: target.path,
+      rowsPerBatch: profile.rowsPerBatch,
+      uncommittedBatch: partial.batch,
+    });
+    let crashExit: WriterExit | undefined;
+    let stateAfterRecovery: ReliabilityStateProof | undefined;
     const metrics: IterationMetric[] = [];
     for (let iteration = 0; iteration < profile.iterations; iteration += 1) {
       const iterationProof = await monitorSqliteWalDuring({
@@ -554,10 +564,20 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       metrics.push(iterationProof.result);
       peakWalBytes = Math.max(peakWalBytes, iterationProof.peakWalBytes);
       if (iteration === 0) {
-        await waitForWriterMessage(writer, "released", () => {
-          writer?.child.send?.({ action: "rollback", kind: "release-partial" });
+        crashExit = await crashWriter(writer);
+        stateAfterRecovery = verifyRestoredDatabase({
+          expectedState: stateBeforeKill,
+          identity: target.identity,
+          path: target.path,
+          rowsPerBatch: profile.rowsPerBatch,
+          uncommittedBatch: partial.batch,
         });
+        writer = startWriter(target.path, profile);
+        await waitForWriterMessage(writer, "ready");
       }
+    }
+    if (!crashExit || !stateAfterRecovery) {
+      throw new Error("SQLite reliability stress did not execute its crash recovery proof.");
     }
     const writerResult = await stopWriter(writer);
     const maintenanceProof = await runMaintenanceRoundTrip({
@@ -573,6 +593,15 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
     return {
       arch: process.arch,
       concurrentRestoresVerified: metrics.length,
+      crashRecoveryProof: {
+        committedStatePreserved: true,
+        exit: crashExit,
+        partialVisibleAfterRecovery: false,
+        sourceRecovered: true,
+        stateAfterRecovery,
+        stateBeforeKill,
+        writerRestarted: true,
+      },
       iterations: profile.iterations,
       maintenanceProof,
       node: process.version,
@@ -624,8 +653,8 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
         peak: peakWalBytes,
       },
       writer: {
-        batchesCommitted: writerResult.batchesCommitted,
-        rowsCommitted: writerResult.rowsCommitted,
+        batchesCommitted: partial.batchesCommitted + writerResult.batchesCommitted,
+        rowsCommitted: partial.rowsCommitted + writerResult.rowsCommitted,
       },
     };
   } finally {

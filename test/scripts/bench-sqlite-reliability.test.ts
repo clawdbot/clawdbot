@@ -154,9 +154,30 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstResult.stderr).toBe("");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_TARGET=global");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=5");
+    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_CRASH_RECOVERY=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
     const firstReport = JSON.parse(fs.readFileSync(firstOutput, "utf8")) as {
       concurrentRestoresVerified: number;
+      crashRecoveryProof: {
+        committedStatePreserved: boolean;
+        exit: {
+          code: number | null;
+          signal: string | null;
+        };
+        partialVisibleAfterRecovery: boolean;
+        sourceRecovered: boolean;
+        stateAfterRecovery: {
+          batches: number;
+          rows: number;
+          sha256: string;
+        };
+        stateBeforeKill: {
+          batches: number;
+          rows: number;
+          sha256: string;
+        };
+        writerRestarted: boolean;
+      };
       maintenanceProof: {
         bloatBytes: number;
         compaction: {
@@ -194,6 +215,17 @@ describe("scripts/bench-sqlite-reliability", () => {
     };
     expect(firstReport.concurrentRestoresVerified).toBe(4);
     expect(firstReport.restoresVerified).toBe(5);
+    expect(firstReport.crashRecoveryProof.sourceRecovered).toBe(true);
+    expect(firstReport.crashRecoveryProof.committedStatePreserved).toBe(true);
+    expect(firstReport.crashRecoveryProof.partialVisibleAfterRecovery).toBe(false);
+    expect(firstReport.crashRecoveryProof.writerRestarted).toBe(true);
+    expect(
+      firstReport.crashRecoveryProof.exit.code !== null ||
+        firstReport.crashRecoveryProof.exit.signal !== null,
+    ).toBe(true);
+    expect(firstReport.crashRecoveryProof.stateAfterRecovery).toEqual(
+      firstReport.crashRecoveryProof.stateBeforeKill,
+    );
     expect(firstReport.transactionProof.committedWalSentinel).toBe(true);
     expect(firstReport.transactionProof.heldRows).toBeGreaterThan(0);
     expect(firstReport.transactionProof.visibleAfterRestore).toBe(false);

@@ -27,6 +27,18 @@ export type ReliabilityStateProof = {
 export type ReliabilityReport = {
   arch: string;
   concurrentRestoresVerified: number;
+  crashRecoveryProof: {
+    committedStatePreserved: true;
+    exit: {
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    };
+    partialVisibleAfterRecovery: false;
+    sourceRecovered: true;
+    stateAfterRecovery: ReliabilityStateProof;
+    stateBeforeKill: ReliabilityStateProof;
+    writerRestarted: true;
+  };
   iterations: number;
   maintenanceProof: {
     bloatBytes: number;

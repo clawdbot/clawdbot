@@ -34,6 +34,12 @@ function printProofLines(report: ReliabilityReport): void {
   console.log(`SQLITE_RELIABILITY_RESTORES_VERIFIED=${report.restoresVerified}`);
   console.log(`SQLITE_RELIABILITY_WRITER_ROWS=${report.writer.rowsCommitted}`);
   console.log(
+    `SQLITE_RELIABILITY_CRASH_RECOVERY=${report.crashRecoveryProof.sourceRecovered && report.crashRecoveryProof.committedStatePreserved && report.crashRecoveryProof.writerRestarted ? "verified" : "missing"}`,
+  );
+  console.log(
+    `SQLITE_RELIABILITY_CRASH_EXIT_SIGNAL=${report.crashRecoveryProof.exit.signal ?? "none"}`,
+  );
+  console.log(
     `SQLITE_RELIABILITY_WAL_SENTINEL=${report.transactionProof.committedWalSentinel ? "verified" : "missing"}`,
   );
   console.log(`SQLITE_RELIABILITY_HELD_BATCH=${report.transactionProof.heldBatch}`);
