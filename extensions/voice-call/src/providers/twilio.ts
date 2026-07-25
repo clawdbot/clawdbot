@@ -662,6 +662,14 @@ export class TwilioProvider implements VoiceCallProvider {
       throw new Error("Missing webhook URL for this call (provider state not initialized)");
     }
 
+    // A live bidirectional Media Stream can still have agent audio buffered at
+    // Twilio when a tool requests DTMF.  Updating the call's TwiML alone does
+    // not remove that buffer, so <Play digits> can be heard only after stale
+    // speech (including speech queued after this request).  Treat DTMF as a
+    // barge-in: clear the local queue and ask Twilio to discard buffered media
+    // before redirecting the call to the DTMF TwiML.
+    this.clearTtsQueue(input.providerCallId, "dtmf");
+
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play digits="${escapeXml(input.digits)}" />

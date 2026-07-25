@@ -556,6 +556,27 @@ describe("TwilioProvider", () => {
     expect(params.Twiml).toContain("https://example.ngrok.app/voice/twilio");
   });
 
+  it("clears buffered stream audio before redirecting a live call to DTMF", async () => {
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-dtmf-stream",
+      streamSid: "MZ-dtmf-stream",
+    });
+    const clearTtsQueue = vi.fn();
+    provider.setMediaStreamHandler({ clearTtsQueue } as never);
+
+    await provider.sendDtmf({
+      callId: "call-dtmf-stream",
+      providerCallId: "CA-dtmf-stream",
+      digits: "5",
+    });
+
+    expect(clearTtsQueue).toHaveBeenCalledWith("MZ-dtmf-stream", "dtmf");
+    expect(apiRequest).toHaveBeenCalledOnce();
+    expect(clearTtsQueue.mock.invocationCallOrder[0]).toBeLessThan(
+      apiRequest.mock.invocationCallOrder[0],
+    );
+  });
+
   it("retries startListening when Twilio briefly rejects a live-call update as not in progress", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
