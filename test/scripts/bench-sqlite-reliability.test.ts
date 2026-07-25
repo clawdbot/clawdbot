@@ -3,7 +3,6 @@ import { fork, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
 import type { ReliabilityReport } from "../../scripts/lib/sqlite-reliability-contract.js";
@@ -12,6 +11,7 @@ import {
   canonicalPathWithExistingParent,
   isPendingPathInRepository,
 } from "../../scripts/lib/sqlite-reliability-worker-paths.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 
 const tempDirs: string[] = [];
 // The real smoke proof runs twice and can exceed Vitest's 120s default on fork CI runners.
@@ -377,7 +377,7 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstReport.walBytes.peak).toBeGreaterThan(0);
     expect(firstReport.walBytes.peak).toBeLessThanOrEqual(firstReport.walBytes.limit);
 
-    const database = new DatabaseSync(firstReport.paths.sourceDatabase);
+    const database = openNodeSqliteDatabase(firstReport.paths.sourceDatabase);
     try {
       database
         .prepare(
