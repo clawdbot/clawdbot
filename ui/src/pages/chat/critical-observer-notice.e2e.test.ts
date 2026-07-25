@@ -171,6 +171,10 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
         .poll(() => new URL(page.url()).searchParams.get("session"))
         .toBe(backgroundSessionKey);
       expect(await toast.count()).toBe(0);
+      await page.screenshot({
+        fullPage: true,
+        path: path.join(artifactDir, "02-after-open-thread-navigation.png"),
+      });
 
       await page.locator("a.nav-item--home").click();
       await expect
