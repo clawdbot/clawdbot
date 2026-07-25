@@ -235,7 +235,7 @@ class LocalEmbeddingWorkerClient {
       if (timeout) {
         clearTimeout(timeout);
       }
-      this.shutdownChild();
+      await this.shutdownChild();
     }
   }
 
@@ -288,7 +288,7 @@ class LocalEmbeddingWorkerClient {
       if (options?.signal) {
         const abort = () => {
           this.pending.delete(id);
-          this.shutdownChild();
+          void this.shutdownChild();
           reject(
             toErrorObject(
               options.signal?.reason ?? new Error("Local embedding request aborted"),
@@ -342,12 +342,18 @@ class LocalEmbeddingWorkerClient {
   }
 
   /** Disconnect and kill the current child process if it is still alive. */
-  private shutdownChild(): void {
+  private async shutdownChild(): Promise<void> {
     const child = this.child;
     this.child = null;
     if (!child) {
       return;
     }
+    const exited =
+      child.exitCode !== null || child.signalCode !== null
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            child.once("exit", () => resolve());
+          });
     this.rejectPending(
       createLocalEmbeddingWorkerFailureError({
         message: "Local embedding worker exited unexpectedly (shutdown)",
@@ -361,6 +367,7 @@ class LocalEmbeddingWorkerClient {
     if (!child.killed) {
       child.kill();
     }
+    await exited;
   }
 
   /** Reject all pending requests after child process failure. */

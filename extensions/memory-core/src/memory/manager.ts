@@ -564,6 +564,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private async ensureProviderInitialized(): Promise<void> {
     if (this.providerInitialized) {
+      await this.getPendingFallbackProviderInitialization();
       return;
     }
     if (this.settings.provider === "none") {
@@ -578,6 +579,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     if (!this.providerInitPromise) {
       this.providerInitPromise = (async () => {
+        await this.getPendingFallbackProviderInitialization();
         await this.retireCurrentProvider();
         if (this.closed) {
           return;

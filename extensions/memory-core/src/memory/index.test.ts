@@ -2063,7 +2063,7 @@ describe("memory index", () => {
     });
   });
 
-  it("waits for degraded provider shutdown before replacement initialization", async () => {
+  it("waits for degraded provider shutdown before fallback initialization", async () => {
     const cfg = createCfg({ fallback: "fallback-provider" });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -2081,6 +2081,7 @@ describe("memory index", () => {
         close: () => Promise<void>;
       } | null;
       markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
@@ -2089,17 +2090,19 @@ describe("memory index", () => {
     fields.markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
     await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
 
-    const callsBeforeSearch = providerCalls.length;
-    const searchPromise = manager.search("alpha");
+    const callsBeforeFallback = providerCalls.length;
+    const fallbackPromise = fields.activateFallbackProvider("local worker exited");
     try {
       await Promise.resolve();
-      expect(providerCalls).toHaveLength(callsBeforeSearch);
+      expect(providerCalls).toHaveLength(callsBeforeFallback);
     } finally {
       releaseProviderClose();
       providerCloseGate = null;
-      await searchPromise;
+      await fallbackPromise;
     }
-    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toEqual(["openai"]);
+    expect(providerCalls.slice(callsBeforeFallback).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+    ]);
   });
 
   it("waits for provider shutdown before retry initialization", async () => {
@@ -2133,6 +2136,7 @@ describe("memory index", () => {
 
   it("waits for active provider shutdown before fallback initialization", async () => {
     const cfg = createCfg({
+      provider: "openai",
       fallback: "fallback-provider",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
@@ -2157,17 +2161,31 @@ describe("memory index", () => {
 
     const callsBeforeSearch = providerCalls.length;
     const searchPromise = manager.search("alpha");
+    let concurrentSearch: ReturnType<typeof manager.search> = Promise.resolve([]);
     try {
       await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+      concurrentSearch = manager.search("zebra");
+      let concurrentSettled = false;
+      void concurrentSearch.then(
+        () => {
+          concurrentSettled = true;
+        },
+        () => {
+          concurrentSettled = true;
+        },
+      );
+      await Promise.resolve();
+      expect(concurrentSettled).toBe(false);
       expect(providerCalls).toHaveLength(callsBeforeSearch);
     } finally {
       releaseProviderClose();
       providerCloseGate = null;
-      await searchPromise;
+      await Promise.allSettled([searchPromise, concurrentSearch]);
     }
     expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toEqual([
       "fallback-provider",
     ]);
+    await expect(concurrentSearch).resolves.toBeDefined();
   });
 
   it("does not activate fallback during search when index identity is already mismatched", async () => {
