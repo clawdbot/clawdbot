@@ -98,13 +98,13 @@ const OPENCODE_GO_MODELS = (
       reasoning: true,
       input: ["text", "image"],
       cost: {
-        input: 2.0,
-        output: 6.0,
+        input: 2,
+        output: 6,
         cacheRead: 0.3,
         cacheWrite: 0,
       },
       contextWindow: 500_000,
-      maxTokens: 128_000,
+      maxTokens: 500_000,
     },
     {
       id: "glm-5",
@@ -188,8 +188,8 @@ const OPENCODE_GO_MODELS = (
         cacheRead: 0.035,
         cacheWrite: 0,
       },
-      contextWindow: 262_144,
-      maxTokens: 131_072,
+      contextWindow: 256_000,
+      maxTokens: 64_000,
     },
     {
       id: "kimi-k2.5",
@@ -251,8 +251,8 @@ const OPENCODE_GO_MODELS = (
       reasoning: true,
       input: ["text", "image"],
       cost: {
-        input: 3.0,
-        output: 15.0,
+        input: 3,
+        output: 15,
         cacheRead: 0.3,
         cacheWrite: 0,
       },
