@@ -1,7 +1,6 @@
 // Browser tests cover pw role snapshot plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  annotateRoleSnapshotDelta,
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
   finalizeRoleSnapshot,
@@ -137,7 +136,7 @@ describe("pw-role-snapshot", () => {
     const snapshot = '- button "Save" [ref=e1]';
     const refs = { e1: { role: "button", name: "Save" } };
 
-    const result = annotateRoleSnapshotDelta({ snapshot, refs, mode: "role" });
+    const result = finalizeRoleSnapshot({ snapshot, refs, delta: { mode: "role" } });
 
     expect(result.snapshot).toBe(snapshot);
     expect(result.newElements).toBeUndefined();
@@ -152,39 +151,36 @@ describe("pw-role-snapshot", () => {
       e7: { role: "button", name: "Save" },
       e8: { role: "dialog", name: "Confirmation" },
     };
-    const annotated = annotateRoleSnapshotDelta({
+    const finalized = finalizeRoleSnapshot({
       snapshot: ['- button "Save" [ref=e7]', '- dialog "Confirmation" [ref=e8]'].join("\n"),
       refs,
-      mode: "role",
-      previousKeys,
+      delta: { mode: "role", previousKeys },
     });
-    const finalized = finalizeRoleSnapshot({ snapshot: annotated.snapshot, refs });
 
-    expect(annotated.snapshot).toBe(
+    expect(finalized.snapshot).toBe(
       [
         '- button "Save" [ref=e7]',
         '- dialog "Confirmation" [ref=e8] [new]',
         "1 new element(s) since last snapshot",
       ].join("\n"),
     );
-    expect(annotated.newElements).toBe(1);
+    expect(finalized.newElements).toBe(1);
     expect(finalized.refs).toEqual(refs);
   });
 
   it("uses preserved aria refs as AI snapshot identities", () => {
-    const annotated = annotateRoleSnapshotDelta({
+    const finalized = finalizeRoleSnapshot({
       snapshot: ['- button "Save" [ref=7]', '- dialog "Confirmation" [ref=8]'].join("\n"),
       refs: {
         "7": { role: "button", name: "Save" },
         "8": { role: "dialog", name: "Confirmation" },
       },
-      mode: "aria",
-      previousKeys: new Set(["7"]),
+      delta: { mode: "aria", previousKeys: new Set(["7"]) },
     });
 
-    expect(annotated.snapshot).toContain('- button "Save" [ref=7]\n');
-    expect(annotated.snapshot).toContain('- dialog "Confirmation" [ref=8] [new]');
-    expect(annotated.newElements).toBe(1);
+    expect(finalized.snapshot).toContain('- button "Save" [ref=7]\n');
+    expect(finalized.snapshot).toContain('- dialog "Confirmation" [ref=8] [new]');
+    expect(finalized.newElements).toBe(1);
   });
 
   it("annotates before truncation and keeps only complete annotated refs", () => {

@@ -75,7 +75,7 @@ export function getRoleSnapshotIdentityKeys<T extends RoleRef>(
 }
 
 /** Mark ref-bearing lines that were absent from the previous compatible snapshot. */
-export function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
+function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
   snapshot: string;
   refs: Record<string, T>;
   mode: RoleSnapshotIdentityMode;

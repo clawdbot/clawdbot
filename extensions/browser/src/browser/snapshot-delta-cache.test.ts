@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annotateRoleSnapshotDelta } from "./pw-role-snapshot.js";
+import { finalizeRoleSnapshot } from "./pw-role-snapshot.js";
 import type { BrowserRouteContext } from "./server-context.types.js";
 import {
   getPreviousSnapshotKeys,
@@ -26,11 +26,10 @@ describe("snapshot delta cache", () => {
     });
 
     const previousKeys = getPreviousSnapshotKeys(ctx, cacheScope("pw:document-2"));
-    const snapshot = annotateRoleSnapshotDelta({
+    const snapshot = finalizeRoleSnapshot({
       snapshot: '- button "Continue" [ref=e1]',
       refs: { e1: { role: "button", name: "Continue" } },
-      mode: "role",
-      previousKeys,
+      delta: { mode: "role", previousKeys },
     });
 
     expect(previousKeys).toBeUndefined();
@@ -46,14 +45,13 @@ describe("snapshot delta cache", () => {
       refs: { e1: { role: "button", name: "Save" } },
     });
 
-    const snapshot = annotateRoleSnapshotDelta({
+    const snapshot = finalizeRoleSnapshot({
       snapshot: ['- button "Save" [ref=e7]', '- alert "Required" [ref=e8]'].join("\n"),
       refs: {
         e7: { role: "button", name: "Save" },
         e8: { role: "alert", name: "Required" },
       },
-      mode: "role",
-      previousKeys: getPreviousSnapshotKeys(ctx, scope),
+      delta: { mode: "role", previousKeys: getPreviousSnapshotKeys(ctx, scope) },
     });
 
     expect(snapshot.snapshot).toContain('- alert "Required" [ref=e8] [new]');
