@@ -599,13 +599,14 @@ export class MatrixClient extends MatrixClientVerification {
   }
 
   protected registerBridge(): void {
-    if (this.bridgeRegistered || !this.decryptBridge) {
+    const decryptBridge = this.decryptBridge;
+    if (this.bridgeRegistered || !decryptBridge) {
       return;
     }
     this.bridgeRegistered = true;
     registerMatrixClientBridge({
       client: this.client,
-      decryptBridge: this.decryptBridge,
+      decryptBridge,
       emitter: this.emitter,
       emitMembershipForRoom: (room) => this.emitMembershipForRoom(room),
       getSelfUserId: () => this.client.getUserId() ?? this.selfUserId ?? "",
