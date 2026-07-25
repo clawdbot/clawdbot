@@ -1762,7 +1762,7 @@ export function buildOpenAICompletionsParams(
     shouldOmitOllamaCompatResponseFormat({
       provider: model.provider,
       baseUrl: model.baseUrl,
-      hasTools: Boolean(context.tools?.length),
+      hasTools: () => Boolean(context.tools?.length),
     })
       ? undefined
       : options?.responseFormat,

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type {
   ChatHistoryItem,
   ChatModelFunctions,
-  GbnfJsonSchema,
   Llama,
   LlamaContext,
   LlamaContextSequence,
@@ -36,6 +35,8 @@ type LoadedModel = {
   context: LlamaContext;
   sequence: LlamaContextSequence;
 };
+
+type LlamaJsonSchemaInput = Parameters<Llama["createGrammarForJsonSchema"]>[0];
 
 // Process-owned, single-slot cache. A model/context pair lives until another
 // model replaces it or the process exits, bounding resident model memory.
@@ -117,10 +118,10 @@ async function resolveLlamaCppResponseGrammar(params: {
     const envelope = normalizeArguments(responseFormat.json_schema);
     const schema = normalizeArguments(envelope.schema);
     return Object.keys(schema).length > 0
-      ? await params.llama.createGrammarForJsonSchema(schema as GbnfJsonSchema)
+      ? await params.llama.createGrammarForJsonSchema(schema as LlamaJsonSchemaInput)
       : await params.llama.getGrammarFor("json");
   }
-  return await params.llama.createGrammarForJsonSchema(responseFormat as GbnfJsonSchema);
+  return await params.llama.createGrammarForJsonSchema(responseFormat as LlamaJsonSchemaInput);
 }
 
 function mapContextToLlamaChatHistory(context: Context): ChatHistoryItem[] {

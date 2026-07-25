@@ -21,12 +21,12 @@ export function isKnownOpenAIJsonSchemaModelId(modelId: string | undefined): boo
 export function shouldOmitOllamaCompatResponseFormat(params: {
   provider: string;
   baseUrl: string;
-  hasTools: boolean;
+  hasTools: () => boolean;
 }): boolean {
   if (!params.provider.includes("ollama")) {
     return false;
   }
-  if (params.hasTools) {
+  if (params.hasTools()) {
     return true;
   }
   try {

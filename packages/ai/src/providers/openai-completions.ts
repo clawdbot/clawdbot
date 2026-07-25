@@ -789,16 +789,20 @@ function buildParams(
     params.stop = options.stop;
   }
 
-  const responseFormat = resolveOpenAICompletionsResponseFormat(
-    shouldOmitOllamaCompatResponseFormat({
-      provider: model.provider,
-      baseUrl: model.baseUrl,
-      hasTools: Boolean(context.tools?.length),
-    })
+  const requestedResponseFormat = options?.responseFormat;
+  const responseFormat =
+    requestedResponseFormat === undefined
       ? undefined
-      : options?.responseFormat,
-    compat.supportsJsonSchemaResponseFormat,
-  );
+      : resolveOpenAICompletionsResponseFormat(
+          shouldOmitOllamaCompatResponseFormat({
+            provider: model.provider,
+            baseUrl: model.baseUrl,
+            hasTools: () => Boolean(context.tools?.length),
+          })
+            ? undefined
+            : requestedResponseFormat,
+          compat.supportsJsonSchemaResponseFormat,
+        );
   if (responseFormat !== undefined) {
     params.response_format = responseFormat;
   }
