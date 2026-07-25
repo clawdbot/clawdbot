@@ -1037,7 +1037,7 @@ describe("createPdfTool", () => {
         return await new Promise<never>((_, reject) => {
           downloadSignal?.addEventListener(
             "abort",
-            () => reject(downloadSignal.reason ?? new Error("aborted")),
+            () => reject(new Error("aborted", { cause: downloadSignal.reason })),
             { once: true },
           );
         });
