@@ -37,6 +37,7 @@ import {
   extractToolPreview,
   isToolCardError,
 } from "../../lib/chat/tool-cards.ts";
+import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
@@ -956,12 +957,7 @@ function messageProjectionDigest(message: unknown): string {
     typeof record?.toolCallId === "string" ? record.toolCallId : "",
     record ? extractTextCached(message) : "",
   ].join("\u0000");
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  const digest = `p${(hash >>> 0).toString(36)}${source.length.toString(36)}`;
+  const digest = `p${fnv1aUtf16(source).toString(36)}${source.length.toString(36)}`;
   if (message && typeof message === "object") {
     messageProjectionDigests.set(message, digest);
   }
