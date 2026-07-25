@@ -12,6 +12,17 @@ describe("resolveTelegramIngressNonRetryableFailure", () => {
     expect(resolveTelegramIngressNonRetryableFailure(err)).toBeNull();
   });
 
+  it("keeps lookalike non-Telegram messages retryable", () => {
+    expect(resolveTelegramIngressNonRetryableFailure(new Error("chat not found"))).toBeNull();
+    expect(resolveTelegramIngressNonRetryableFailure(new Error("user not found"))).toBeNull();
+    expect(
+      resolveTelegramIngressNonRetryableFailure(new Error("bot was blocked by the user")),
+    ).toBeNull();
+    expect(
+      resolveTelegramIngressNonRetryableFailure(new Error("Forbidden: bot was kicked")),
+    ).toBeNull();
+  });
+
   it("classifies bot-blocked error as non-retryable", () => {
     const err = new Error("403: Forbidden: bot was blocked by the user");
     (err as unknown as Record<string, unknown>).error_code = 403;

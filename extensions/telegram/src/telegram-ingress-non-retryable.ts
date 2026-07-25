@@ -32,6 +32,19 @@ const PERMANENT_INGRESS_ERROR_PATTERNS: readonly RegExp[] = [
   /bot.*not.*member/i,
 ];
 
+/**
+ * Confirms the candidate carries a Telegram Bot API error_code. Ingress
+ * terminal classification must only fire for explicit API rejections, not for
+ * unrelated dispatch errors that happen to contain the same message text.
+ */
+function isConfirmedTelegramApiClientError(candidate: unknown): boolean {
+  if (!candidate || typeof candidate !== "object") {
+    return false;
+  }
+  const code = (candidate as { error_code?: unknown }).error_code;
+  return typeof code === "number" && (code === 400 || code === 403);
+}
+
 /** Channel-owned non-retryable predicate for the core ingress drain. */
 export function resolveTelegramIngressNonRetryableFailure(
   err: unknown,
@@ -55,7 +68,10 @@ export function resolveTelegramIngressNonRetryableFailure(
     ) {
       return { reason: "missing-agent-harness", message };
     }
-    if (PERMANENT_INGRESS_ERROR_PATTERNS.some((re) => re.test(message))) {
+    if (
+      isConfirmedTelegramApiClientError(candidate) &&
+      PERMANENT_INGRESS_ERROR_PATTERNS.some((re) => re.test(message))
+    ) {
       return { reason: "recipient-unreachable", message };
     }
   }

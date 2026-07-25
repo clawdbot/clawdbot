@@ -109,4 +109,51 @@ describe("createTelegramIngressMonitor", () => {
       await monitor.stop();
     });
   });
+
+  it("dead-letters a blocked-recipient Telegram API error instead of retrying", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      const eventId = "3".padStart(16, "0");
+      const payload = updatePayload(3);
+      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
+      await queue.enqueue(eventId, payload, { laneKey });
+
+      const blockedError = Object.assign(new Error("403: Forbidden: bot was blocked by the user"), {
+        error_code: 403,
+      });
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        cfg,
+        accountId: "default",
+        dispatch: async () => {
+          throw blockedError;
+        },
+      });
+
+      monitor.start();
+      await monitor.waitForIdle();
+
+      // Terminal ingress failures must tombstone the row as failed
+      // (dead-lettered), not leave it pending for retry.
+      const status = await queue.enqueue(eventId, payload, { laneKey });
+      expect(status.kind).toBe("failed");
+      if (status.kind === "failed") {
+        expect(status.record.reason).toBe("recipient-unreachable");
+      }
+
+      const pending = await queue.listPending({ limit: "all" });
+      expect(pending.some((row) => row.id === eventId)).toBe(false);
+
+      const failed = await queue.listFailed!({ limit: "all" });
+      expect(
+        failed.some((row) => row.id === eventId && row.reason === "recipient-unreachable"),
+      ).toBe(true);
+
+      await monitor.stop();
+    });
+  });
 });
