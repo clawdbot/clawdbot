@@ -1,8 +1,11 @@
 import fsSync, { type PathLike } from "node:fs";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { SnapshotDatabaseIdentity } from "../../src/snapshot/snapshot-provider.js";
+import {
+  canonicalPathWithExistingParent,
+  isPendingPathInRepository,
+} from "./sqlite-reliability-worker-paths.js";
 
 type RepositoryCrashPoint = "after-commit" | "before-pending" | "pending";
 
@@ -40,14 +43,6 @@ function holdAtCrashPoint(crashPoint: RepositoryCrashPoint): never {
   }
 }
 
-function isPendingPath(filePath: unknown, repositoryPath: string): boolean {
-  const resolvedPath = path.resolve(String(filePath));
-  return (
-    path.basename(resolvedPath) === ".pending" &&
-    path.dirname(path.dirname(resolvedPath)) === repositoryPath
-  );
-}
-
 function installCrashBarrier(crashPoint: RepositoryCrashPoint, repositoryPath: string): void {
   if (crashPoint === "before-pending") {
     const originalOpen = fs.open.bind(fs);
@@ -55,7 +50,7 @@ function installCrashBarrier(crashPoint: RepositoryCrashPoint, repositoryPath: s
       configurable: true,
       enumerable: true,
       value: (async (...args: unknown[]) => {
-        if (args[1] === "wx+" && isPendingPath(args[0], repositoryPath)) {
+        if (args[1] === "wx+" && isPendingPathInRepository(args[0], repositoryPath)) {
           holdAtCrashPoint(crashPoint);
         }
         return await (originalOpen as (...openArgs: unknown[]) => Promise<unknown>)(...args);
@@ -70,7 +65,7 @@ function installCrashBarrier(crashPoint: RepositoryCrashPoint, repositoryPath: s
     configurable: true,
     enumerable: true,
     value: ((filePath: PathLike) => {
-      if (!isPendingPath(filePath, repositoryPath)) {
+      if (!isPendingPathInRepository(filePath, repositoryPath)) {
         return originalUnlinkSync(filePath);
       }
       if (crashPoint === "after-commit") {
@@ -101,7 +96,7 @@ async function main(argv: string[]): Promise<void> {
     throw new Error("invalid SQLite repository interruption worker arguments");
   }
   const crashPoint = parseCrashPoint(crashPointValue);
-  const repositoryPath = path.resolve(repositoryPathValue);
+  const repositoryPath = canonicalPathWithExistingParent(repositoryPathValue);
   const identity = parseIdentity(identityValue);
   installCrashBarrier(crashPoint, repositoryPath);
 

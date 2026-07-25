@@ -8,6 +8,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
 import type { ReliabilityReport } from "../../scripts/lib/sqlite-reliability-contract.js";
 import { monitorSqliteWalDuring } from "../../scripts/lib/sqlite-reliability-wal-monitor.js";
+import {
+  canonicalPathWithExistingParent,
+  isPendingPathInRepository,
+} from "../../scripts/lib/sqlite-reliability-worker-paths.js";
 
 const tempDirs: string[] = [];
 // The real smoke proof runs twice and can exceed Vitest's 120s default on fork CI runners.
@@ -400,6 +404,32 @@ describe("scripts/bench-sqlite-reliability", () => {
     };
     expect(secondReport.restoresVerified).toBe(7);
     expect(secondReport.paths.syncedRepository).not.toBe(firstReport.paths.syncedRepository);
+  });
+
+  it("matches crash barriers across filesystem path aliases", () => {
+    const realRoot = makeTempDir();
+    const aliasRoot = path.join(makeTempDir(), "alias");
+    fs.symlinkSync(realRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    const repositoryPath = path.join(realRoot, "snapshots");
+    const snapshotPath = path.join(repositoryPath, "snapshot");
+    fs.mkdirSync(snapshotPath, { recursive: true });
+
+    const canonicalRepositoryPath = canonicalPathWithExistingParent(
+      path.join(aliasRoot, "snapshots"),
+    );
+    expect(canonicalRepositoryPath).toBe(path.join(fs.realpathSync.native(realRoot), "snapshots"));
+    expect(
+      isPendingPathInRepository(
+        path.join(aliasRoot, "snapshots", "snapshot", ".pending"),
+        canonicalRepositoryPath,
+      ),
+    ).toBe(true);
+
+    const finalAlias = path.join(realRoot, "final-alias");
+    fs.symlinkSync(snapshotPath, finalAlias, process.platform === "win32" ? "junction" : "dir");
+    expect(canonicalPathWithExistingParent(finalAlias)).toBe(
+      path.join(fs.realpathSync.native(realRoot), "final-alias"),
+    );
   });
 
   it("stops the writer when its parent IPC channel disconnects", async () => {
