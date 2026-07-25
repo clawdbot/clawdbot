@@ -139,7 +139,6 @@ extensions/line/src/bot-handlers.test.ts
 extensions/lmstudio/src/setup.test.ts
 extensions/lmstudio/src/setup.ts
 extensions/matrix/src/cli.test.ts
-extensions/matrix/src/cli.ts
 extensions/matrix/src/matrix/actions/verification.test.ts
 extensions/matrix/src/matrix/client/config.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
