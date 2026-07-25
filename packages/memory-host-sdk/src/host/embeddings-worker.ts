@@ -152,6 +152,55 @@ const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = [
 
 const WORKER_CLOSE_GRACE_MS = 250;
 
+type WorkerTerminationWaitResult = {
+  terminated: boolean;
+  error?: unknown;
+};
+
+/** Wait for a confirmed terminal child event while remembering process errors. */
+async function waitForWorkerTermination(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<WorkerTerminationWaitResult> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { terminated: true };
+  }
+  return await new Promise<WorkerTerminationWaitResult>((resolve) => {
+    let processError: unknown;
+    const cleanup = () => {
+      child.off("exit", onTerminated);
+      child.off("close", onTerminated);
+      child.off("error", onError);
+      clearTimeout(timeout);
+    };
+    const settle = (result: WorkerTerminationWaitResult) => {
+      cleanup();
+      resolve(result);
+    };
+    const onTerminated = () => settle({ terminated: true });
+    const onError = (err: unknown) => {
+      processError ??= err;
+    };
+    child.once("exit", onTerminated);
+    child.once("close", onTerminated);
+    child.on("error", onError);
+    const timeout = setTimeout(() => settle({ terminated: false, error: processError }), timeoutMs);
+    timeout.unref?.();
+  });
+}
+
+/** Send a worker signal without letting synchronous or reported failures hang shutdown. */
+function signalWorker(child: ChildProcess, signal: NodeJS.Signals): unknown {
+  try {
+    if (!child.kill(signal)) {
+      return new Error(`Failed to send ${signal} to local embedding worker`);
+    }
+  } catch (err) {
+    return err;
+  }
+  return undefined;
+}
+
 /** Drop execArgv flags that would make forked workers debug/eval stateful or unsafe. */
 function resolveWorkerExecArgv(): string[] {
   const args: string[] = [];
@@ -220,6 +269,9 @@ class LocalEmbeddingWorkerClient {
   async close(): Promise<void> {
     if (this.closed) {
       await this.shutdownPromise;
+      if (this.child) {
+        await this.shutdownChild();
+      }
       return;
     }
     this.closed = true;
@@ -256,7 +308,7 @@ class LocalEmbeddingWorkerClient {
     if (gracefulCloseError) {
       process.emitWarning(
         toErrorObject(gracefulCloseError, "Local embedding worker graceful close failed"),
-        { code: "OPENCLAW_EMBEDDING_WORKER_CLOSE" },
+        { code: "LOCAL_EMBEDDING_WORKER_CLOSE" },
       );
     }
   }
@@ -279,10 +331,16 @@ class LocalEmbeddingWorkerClient {
       }
       this.rejectPending(createWorkerExitError(code, signal));
     });
-    child.on("error", (err) => {
+    child.on("close", () => {
+      // Spawn failures can close without an exit event. Close is terminal, so
+      // the next request may safely create a replacement worker.
       if (this.child === child) {
         this.child = null;
       }
+    });
+    child.on("error", (err) => {
+      // An error does not guarantee that the process exited. Keep the handle so
+      // close can retry termination instead of spawning beside an unknown child.
       this.rejectPending(
         createLocalEmbeddingWorkerFailureError({
           message: `Local embedding worker process failed: ${err.message}`,
@@ -376,11 +434,22 @@ class LocalEmbeddingWorkerClient {
       return this.shutdownPromise;
     }
     const child = this.child;
-    this.child = null;
     if (!child) {
       return Promise.resolve();
     }
-    const shutdown = this.stopChild(child);
+    const shutdown = this.stopChild(child).then(
+      () => {
+        if (this.child === child) {
+          this.child = null;
+        }
+      },
+      (err: unknown) => {
+        // A failed termination leaves ownership with this client. Prevent any
+        // later request from starting a replacement until close succeeds.
+        this.closed = true;
+        throw err;
+      },
+    );
     this.shutdownPromise = shutdown;
     const clearShutdown = () => {
       if (this.shutdownPromise === shutdown) {
@@ -392,13 +461,6 @@ class LocalEmbeddingWorkerClient {
   }
 
   private async stopChild(child: ChildProcess): Promise<void> {
-    const exited = new Promise<void>((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        resolve();
-        return;
-      }
-      child.once("exit", () => resolve());
-    });
     this.rejectPending(
       createLocalEmbeddingWorkerFailureError({
         message: "Local embedding worker exited unexpectedly (shutdown)",
@@ -412,23 +474,24 @@ class LocalEmbeddingWorkerClient {
     if (child.exitCode !== null || child.signalCode !== null) {
       return;
     }
-    child.kill();
-    let timeout: NodeJS.Timeout | undefined;
-    const exitedGracefully = await Promise.race([
-      exited.then(() => true),
-      new Promise<false>((resolve) => {
-        timeout = setTimeout(() => resolve(false), WORKER_CLOSE_GRACE_MS);
-        timeout.unref?.();
-      }),
-    ]);
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    if (exitedGracefully) {
+    const gracefulWait = waitForWorkerTermination(child, WORKER_CLOSE_GRACE_MS);
+    const gracefulSignalError = signalWorker(child, "SIGTERM");
+    const gracefulResult = await gracefulWait;
+    if (gracefulResult.terminated) {
       return;
     }
-    child.kill("SIGKILL");
-    await exited;
+    const forcedWait = waitForWorkerTermination(child, WORKER_CLOSE_GRACE_MS);
+    const forcedSignalError = signalWorker(child, "SIGKILL");
+    const forcedResult = await forcedWait;
+    if (forcedResult.terminated) {
+      return;
+    }
+    throw createLocalEmbeddingWorkerFailureError({
+      message: "Local embedding worker did not exit after SIGKILL",
+      code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.processError,
+      reason: "process-error",
+      cause: forcedResult.error ?? forcedSignalError ?? gracefulResult.error ?? gracefulSignalError,
+    });
   }
 
   /** Reject all pending requests after child process failure. */
@@ -483,7 +546,15 @@ export async function createLocalEmbeddingWorkerProvider(
         closed = true;
         closePromise = client.close();
       }
-      await closePromise;
+      const pendingClose = closePromise;
+      try {
+        await pendingClose;
+      } catch (err) {
+        if (closePromise === pendingClose) {
+          closePromise = null;
+        }
+        throw err;
+      }
     },
   };
   attachLocalEmbeddingRuntimeFacts(provider, () => client.getRuntimeFacts());
