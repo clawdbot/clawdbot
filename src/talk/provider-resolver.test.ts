@@ -1,11 +1,22 @@
 // Talk provider resolver tests cover provider selection from config.
 import { describe, expect, it } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import { attachInternalRealtimeVoiceProviderApi } from "./provider-internal.js";
 import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
 } from "./provider-resolver.js";
+
+const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
+
+function attachInternalRealtimeVoiceProviderApi(
+  provider: RealtimeVoiceProviderPlugin,
+  api: object,
+): void {
+  Object.defineProperty(provider, INTERNAL_REALTIME_VOICE_PROVIDER, {
+    configurable: true,
+    value: api,
+  });
+}
 
 describe("realtime voice provider resolver", () => {
   const providers: RealtimeVoiceProviderPlugin[] = [

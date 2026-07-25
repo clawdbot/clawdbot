@@ -31,7 +31,7 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
     }>;
   };
 
-export type InternalRealtimeVoiceProviderApi = {
+type InternalRealtimeVoiceProviderApi = {
   isBrowserSessionConfigured: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
@@ -57,17 +57,6 @@ function readInternalRealtimeVoiceProviderApi(
   return typeof api.isBrowserSessionConfigured === "function"
     ? (api as InternalRealtimeVoiceProviderApi)
     : undefined;
-}
-
-/** Attach a non-enumerable process-private API to a provider runtime. */
-export function attachInternalRealtimeVoiceProviderApi(
-  provider: RealtimeVoiceProviderPlugin,
-  api: InternalRealtimeVoiceProviderApi,
-): void {
-  Object.defineProperty(provider, INTERNAL_REALTIME_VOICE_PROVIDER, {
-    configurable: true,
-    value: api,
-  });
 }
 
 export function isInternalRealtimeVoiceBrowserSessionConfigured(params: {
