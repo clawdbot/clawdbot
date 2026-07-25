@@ -12,7 +12,7 @@ type BoardStoredWidget = BoardWidget & {
   readOnly?: false | undefined;
 };
 type BoardBuiltinWidget = Omit<BoardWidget, "contentKind"> & {
-  builtin: "observer" | "swarm";
+  builtin: "observer";
   contentKind: "builtin";
   readOnly: true;
 };

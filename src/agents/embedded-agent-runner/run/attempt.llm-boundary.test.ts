@@ -112,7 +112,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        '{\n  "sender": {\n    "id": "alice-id",\n    "name": "Alice",\n    "username": "alice"\n  }\n}',
+        '{"sender":{"id":"alice-id","name":"Alice","username":"alice"}}',
         "```",
         "",
         "The launch is Friday",
@@ -122,7 +122,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        '{\n  "sender": {\n    "id": "bob-id",\n    "name": "Bob"\n  }\n}',
+        '{"sender":{"id":"bob-id","name":"Bob"}}',
         "```",
         "",
         "Who said the launch is Friday?",
@@ -648,8 +648,8 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const content = output[0]?.content ?? "";
 
     expect(content.match(/Conversation info \(untrusted metadata\):/g)).toHaveLength(1);
-    expect(content).toContain('"channel": "discord"');
-    expect(content).toContain('"name": "Alice"');
+    expect(content).toContain('"channel":"discord"');
+    expect(content).toContain('"name":"Alice"');
     expect(content).toContain("Current ask");
   });
 

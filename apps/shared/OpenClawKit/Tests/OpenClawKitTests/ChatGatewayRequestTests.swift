@@ -4,6 +4,28 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test func `session observation requests encode global subscription and actual visibility`() {
+        let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
+        let visible = OpenClawChatGatewayRequests.setSessionObserverVisibility(true)
+        let hidden = OpenClawChatGatewayRequests.setSessionObserverVisibility(false)
+        let longerSubscription = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
+        let longerVisibility = OpenClawChatGatewayRequests.setSessionObserverVisibility(
+            true,
+            timeoutMs: 12000)
+
+        #expect(subscribe.method == "sessions.subscribe")
+        #expect(subscribe.params.isEmpty)
+        #expect(subscribe.timeoutMs == 10000)
+        #expect(visible.method == "sessions.observer.visibility")
+        #expect(visible.params["visible"]?.value as? Bool == true)
+        #expect(visible.timeoutMs == 10000)
+        #expect(hidden.method == "sessions.observer.visibility")
+        #expect(hidden.params["visible"]?.value as? Bool == false)
+        #expect(hidden.timeoutMs == 10000)
+        #expect(longerSubscription.timeoutMs == 12000)
+        #expect(longerVisibility.timeoutMs == 12000)
+    }
+
     @Test func `session targets share normalization while preserving platform routing policy`() {
         #expect(OpenClawChatSessionTarget.resolve(
             " Matrix:Channel:Room ",

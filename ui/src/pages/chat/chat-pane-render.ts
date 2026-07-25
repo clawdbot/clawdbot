@@ -320,6 +320,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
             }
           : undefined,
       sessions: state.sessionsResult,
+      swarmSessions: this.swarmHydrator?.rows ?? [],
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
         agentsList: state.agentsList,
@@ -578,7 +579,6 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       board.hasBoard && board.face === "dashboard"
         ? renderBoardSessionSurface({
             snapshot: board.snapshot,
-            sessions: this.swarmHydrator?.rows ?? state.sessionsResult?.sessions ?? [],
             observer: {
               activeRunId: observerRunId,
               digests: this.observerDigestHistory.get(

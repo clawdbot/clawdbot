@@ -155,6 +155,11 @@ describe("vault CLI setup plan", () => {
       ],
       "Duplicate secret target path",
     ],
+    [
+      "non-canonical auth-profile agent ids",
+      ["--target", "auth-profiles:../main:profiles.openai.key=providers/openai/apiKey"],
+      "Invalid --target auth-profiles target for Vault",
+    ],
   ])("rejects %s", async (_label, args, message) => {
     await expect(createSetupPlan(args)).rejects.toThrow(message);
   });

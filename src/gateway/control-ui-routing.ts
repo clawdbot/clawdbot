@@ -65,6 +65,10 @@ export function classifyControlUiRequest(params: {
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       return { kind: "not-control-ui" };
     }
+    // Disabled OpenAI-compatible endpoints must return 404, not the SPA HTML.
+    if (pathname === "/v1" || pathname.startsWith("/v1/")) {
+      return { kind: "not-control-ui" };
+    }
     if (!isReadHttpMethod(method)) {
       return { kind: "not-control-ui" };
     }

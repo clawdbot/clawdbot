@@ -314,99 +314,6 @@ openclaw-board-widget-cell {
   width: 100%;
 }
 
-.swarm-widget {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-}
-
-.swarm-widget__empty {
-  color: var(--muted, #8a919e);
-  font-size: 12px;
-  margin: 0;
-  padding: 12px;
-}
-
-.swarm-widget__group {
-  background: color-mix(in srgb, var(--text, #d7dae0) 3%, transparent);
-  border: 1px solid var(--board-line);
-  border-radius: 8px;
-  display: grid;
-  gap: 7px;
-  padding: 8px;
-}
-
-.swarm-widget__group-header {
-  align-items: baseline;
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-}
-
-.swarm-widget__group-header strong {
-  color: var(--text, #d7dae0);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.swarm-widget__group-header span,
-.swarm-widget__narrator,
-.swarm-widget__phase {
-  color: var(--muted, #8a919e);
-  font-size: 10px;
-}
-
-.swarm-widget__narrator {
-  line-height: 1.35;
-}
-
-.swarm-widget__phase-row {
-  align-items: center;
-  display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(56px, auto) 1fr;
-}
-
-.swarm-widget__phase {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.swarm-widget__dots {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.swarm-widget__dot {
-  background: var(--muted, #8a919e);
-  border-radius: 50%;
-  height: 9px;
-  width: 9px;
-}
-
-.swarm-widget__more {
-  color: var(--muted, #8a919e);
-  font-size: 10px;
-  line-height: 9px;
-}
-
-.swarm-widget__dot--running {
-  animation: swarm-widget-pulse 1.25s ease-in-out infinite;
-  background: var(--accent, #ff5c5c);
-}
-
-.swarm-widget__dot--done {
-  background: var(--success, #45c486);
-}
-
-.swarm-widget__dot--failed {
-  background: var(--danger, #ff6b6b);
-}
-
 .observer-widget {
   box-sizing: border-box;
   display: grid;
@@ -770,13 +677,6 @@ openclaw-workboard-mini-widget {
   justify-content: flex-start;
 }
 
-@keyframes swarm-widget-pulse {
-  50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent, #ff5c5c) 25%, transparent);
-    opacity: 0.55;
-  }
-}
-
 .board-widget__mcp-app {
   display: grid;
   min-height: 100%;
@@ -1108,8 +1008,7 @@ openclaw-workboard-mini-widget {
   .board-widget,
   .board-widget__bar,
   .board-widget__resize-handle,
-  .board-tabs__tab,
-  .swarm-widget__dot--running {
+  .board-tabs__tab {
     animation: none;
     transition: none;
   }

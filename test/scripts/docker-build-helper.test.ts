@@ -3914,6 +3914,7 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       encoding: "utf8",
       env: {
         ...process.env,
+        OPENAI_API_KEY: "",
         OPENCLAW_OPENWEBUI_FETCH_TIMEOUT_MS: "09000",
         OPENCLAW_OPENWEBUI_GATEWAY_PORT: "018789",
         OPENCLAW_OPENWEBUI_PORT: "08080",
@@ -4046,16 +4047,18 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     const client = readFileSync("scripts/e2e/lib/openai-chat-tools/client.mjs", "utf8");
     const writer = readFileSync("scripts/e2e/lib/openai-chat-tools/write-config.mjs", "utf8");
     const consumed = new Set(
-      [...`${client}\n${writer}`.matchAll(/["`](OPENCLAW_OPENAI_CHAT_TOOLS_[A-Z0-9_]+)["`]/gu)].map(
-        (match) => match[1],
-      ),
+      [...`${client}\n${writer}`.matchAll(/["`](OPENCLAW_OPENAI_CHAT_TOOLS_[A-Z0-9_]+)["`]/gu)]
+        .map((match) => match[1])
+        .filter((envName): envName is string => envName !== undefined),
     );
     const forwarded = new Set(
-      [...runner.matchAll(/-e\s+"(OPENCLAW_OPENAI_CHAT_TOOLS_[A-Z0-9_]+)=/gu)].map(
-        (match) => match[1],
-      ),
+      [...runner.matchAll(/-e\s+"(OPENCLAW_OPENAI_CHAT_TOOLS_[A-Z0-9_]+)=/gu)]
+        .map((match) => match[1])
+        .filter((envName): envName is string => envName !== undefined),
     );
-    const missing = [...consumed].filter((envName) => !forwarded.has(envName)).toSorted();
+    const missing = [...consumed]
+      .filter((envName) => !forwarded.has(envName))
+      .toSorted((left, right) => left.localeCompare(right));
 
     expect(missing).toEqual([]);
   });
@@ -4064,14 +4067,18 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     const runner = readFileSync(KITCHEN_SINK_RPC_DOCKER_E2E_PATH, "utf8");
     const walk = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
     const consumed = new Set(
-      [...walk.matchAll(/\b(?:env|process\.env)\.(OPENCLAW_KITCHEN_SINK_[A-Z0-9_]+)/gu)].map(
-        (match) => match[1],
-      ),
+      [...walk.matchAll(/\b(?:env|process\.env)\.(OPENCLAW_KITCHEN_SINK_[A-Z0-9_]+)/gu)]
+        .map((match) => match[1])
+        .filter((envName): envName is string => envName !== undefined),
     );
     const forwarded = new Set(
-      [...runner.matchAll(/\b(OPENCLAW_KITCHEN_SINK_[A-Z0-9_]+)\b/gu)].map((match) => match[1]),
+      [...runner.matchAll(/\b(OPENCLAW_KITCHEN_SINK_[A-Z0-9_]+)\b/gu)]
+        .map((match) => match[1])
+        .filter((envName): envName is string => envName !== undefined),
     );
-    const missing = [...consumed].filter((envName) => !forwarded.has(envName)).toSorted();
+    const missing = [...consumed]
+      .filter((envName) => !forwarded.has(envName))
+      .toSorted((left, right) => left.localeCompare(right));
 
     expect(missing).toEqual([]);
   });
@@ -4878,13 +4885,17 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(sweep).toContain('OPENCLAW_PLUGINS_CLI_TIMEOUT="${OPENCLAW_PLUGINS_CLI_TIMEOUT:-180s}"');
     expect(runner).toContain('PLUGINS_CLI_TIMEOUT="${OPENCLAW_PLUGINS_CLI_TIMEOUT:-180s}"');
     expect(runner).toContain('-e "OPENCLAW_PLUGINS_CLI_TIMEOUT=$PLUGINS_CLI_TIMEOUT"');
-    expect(sweep).toContain(
-      'run_logged "$label" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"',
-    );
+    expect(runner).toContain("OPENCLAW_PLUGIN_LIFECYCLE_TRACE");
+    expect(sweep).toContain("plugins_lifecycle_trace_enabled()");
+    expect(sweep).toContain("print_plugins_stderr_log()");
     expect(sweep).toContain("run_plugins_openclaw_capture()");
     expect(sweep).toContain(
-      'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file"',
+      'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file" 2>"$error_file"',
     );
+    expect(sweep).toContain("Plugin sweep command timed out after %s: %s");
+    expect(sweep).toContain("Plugin sweep command failed with status %s: %s");
+    expect(sweep).toContain("Plugin sweep capture timed out after %s: %s");
+    expect(sweep).toContain("Plugin sweep capture failed with status %s: %s");
     expect(sweep).not.toContain('run_logged install-npm node "$OPENCLAW_ENTRY"');
     for (const [path, script] of [
       [PLUGINS_DOCKER_SWEEP_PATH, sweep],

@@ -28,6 +28,7 @@ import {
   type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
+import { runIndexRepairInterruptionProof } from "./sqlite-reliability-index-repair.js";
 import { runPublicationInterruptionProof } from "./sqlite-reliability-publication.js";
 import { runRepositoryInterruptionProof } from "./sqlite-reliability-repository.js";
 import { runRestoreInterruptionProof } from "./sqlite-reliability-restore.js";
@@ -740,6 +741,9 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
           uncommittedBatch: null,
         }),
     });
+    const indexRepairInterruptionProof = await runIndexRepairInterruptionProof(
+      path.join(runScratch, "index-repair-interruptions"),
+    );
     const maintenanceProof = await runMaintenanceRoundTrip({
       env,
       repositoryProvider,
@@ -763,6 +767,7 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
         stateBeforeKill,
         writerRestarted: true,
       },
+      indexRepairInterruptionProof,
       iterations: profile.iterations,
       maintenanceProof,
       node: process.version,

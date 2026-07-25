@@ -3159,9 +3159,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /gateway/1password
 - Headings:
   - H2: Requirements
-  - H2: Resolve config secrets with op
-  - H2: Service account setup for headless Gateways
+  - H2: Resolve config secrets with the plugin
   - H2: The 1password skill for agents
+  - H2: Official 1Password MCP server
   - H2: Browser sign-in with 1Password for Claude
   - H2: Security notes
   - H2: Troubleshooting
@@ -6146,9 +6146,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/onepassword
 - Headings:
-  - H1: 1Password secrets broker
+  - H1: 1Password
   - H2: Security model
   - H2: Before you begin
+  - H2: Configure SecretRefs
   - H2: Configure registered secrets
   - H2: Use the agent tool
   - H2: Policy tiers and approvals
@@ -7864,7 +7865,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Claude sessions across computers
   - H2: Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
-  - H2: Safety refusal fallback (Claude Fable 5)
+  - H2: Safety refusal fallback (Claude Opus 5 and Fable 5)
   - H3: Why this exists
   - H3: How it works
   - H3: Observability and billing
@@ -9056,7 +9057,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /reference/templates/HEARTBEAT
 - Headings:
-  - H1: HEARTBEAT.md template
+  - H1: HEARTBEAT.md is retired
   - H2: Related
 
 ## reference/templates/IDENTITY.dev.md

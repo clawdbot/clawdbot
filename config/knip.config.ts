@@ -365,6 +365,11 @@ const config = {
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
+    // The resolver's executable-path validation is covered through focused tests;
+    // production imports only the narrower op resolver.
+    "extensions/onepassword/onepassword-op-path.js": ["exports"],
+    // Focused CLI tests exercise plan construction through this explicit test seam.
+    "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
@@ -705,6 +710,10 @@ const config = {
       "realtime-provider-shared.ts!",
       "tts.ts!",
       "usage.ts!",
+    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/onepassword`]: bundledPluginWorkspace([
+      // Shipped resolver child process declared as a static plugin artifact.
+      "onepassword-secret-ref-resolver.js!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode`]: bundledPluginWorkspace([
       // Session catalog and provider helpers are plugin-owned runtime surfaces.

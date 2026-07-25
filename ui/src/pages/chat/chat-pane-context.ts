@@ -59,6 +59,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         this.observerDigestHistory.hydrate(sessionKey, row.observerDigest, row.sessionId);
       }
     }
+    this.refreshSwarmRoster();
     this.refreshBuiltinBoardSnapshot();
     const selectedSession = stateValue.result?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
@@ -257,6 +258,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.requestUpdate?.();
       return;
     }
+    this.refreshSwarmRoster();
     if (clientChanged && snapshot.client) {
       const startupClient = snapshot.client;
       const startupGeneration = this.connectionGeneration;
