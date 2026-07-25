@@ -543,7 +543,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
             "anthropic/claude-opus-5": {},
             "anthropic/claude-sonnet-5": {},
             "anthropic/claude-mythos-5": {},
-            "anthropic/claude-opus-4-6": {},
+            "anthropic/claude-opus-4-8": {},
           },
         },
       },
