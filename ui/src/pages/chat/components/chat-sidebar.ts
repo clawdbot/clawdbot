@@ -25,8 +25,6 @@ import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
 
-export const CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
-
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 export type DetailFullMessageResult = {
   ok?: boolean;

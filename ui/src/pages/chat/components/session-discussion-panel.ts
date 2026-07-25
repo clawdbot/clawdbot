@@ -7,9 +7,9 @@ import type {
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 
-export type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
-export type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
-export type SessionDiscussionStateListener = (
+type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
+type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
+type SessionDiscussionStateListener = (
   sessionKey: string,
   discussionState: SessionDiscussionState,
   openUrl: string | null,

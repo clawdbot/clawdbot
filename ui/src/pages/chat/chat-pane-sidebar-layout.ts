@@ -1,4 +1,9 @@
+import { html, type TemplateResult } from "lit";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import type {
+  SidebarPanelTemplates,
+  SidebarRegionCallbacks,
+} from "./components/chat-sidebar-region.ts";
 import {
   closeSlot,
   detachPanelToColumn,
@@ -6,6 +11,46 @@ import {
   openSlot,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
+
+let sidebarRegionLoad: Promise<boolean> | null = null;
+
+export function renderSidebarRegion(params: {
+  availableWidth: number;
+  callbacks: SidebarRegionCallbacks;
+  discussionOpenUrl: string | null;
+  focusPanelId: string;
+  focusVersion: number;
+  layout: SidebarLayout;
+  narrow: boolean;
+  panelTemplates: SidebarPanelTemplates;
+  primary: TemplateResult;
+  onDefined: () => void;
+  sessionKey: string;
+}): TemplateResult {
+  if (params.layout.columns.length === 0) {
+    return params.primary;
+  }
+  if (!customElements.get("openclaw-chat-sidebar-region")) {
+    sidebarRegionLoad ??= import("./components/chat-sidebar-region.ts").then(
+      () => true,
+      () => false,
+    );
+    void sidebarRegionLoad.then((loaded) => loaded && params.onDefined());
+    return params.primary;
+  }
+  return html`<openclaw-chat-sidebar-region
+    .layout=${params.layout}
+    .primary=${params.primary}
+    .panelTemplates=${params.panelTemplates}
+    .panelOpenUrls=${{ discussion: params.discussionOpenUrl }}
+    .callbacks=${params.callbacks}
+    .sessionKey=${params.sessionKey}
+    .focusPanelId=${params.focusPanelId}
+    .focusVersion=${params.focusVersion}
+    .narrow=${params.narrow}
+    .availableWidth=${params.availableWidth}
+  ></openclaw-chat-sidebar-region>`;
+}
 
 export function resolveSidebarLayoutForBoard(params: {
   board: ResolvedBoardView;
@@ -56,13 +101,14 @@ export function createSidebarFullMessageLoader(
       sessionKey: request.sessionKey,
       ...(request.agentId ? { agentId: request.agentId } : {}),
       messageId: request.messageId,
-      maxChars: CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
+      maxChars: DETAIL_FULL_MESSAGE_MAX_CHARS,
     });
   };
 }
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
-  CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
   type DetailFullMessageResult,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
+
+const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;

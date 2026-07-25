@@ -243,34 +243,44 @@ openclaw-chat-sidebar-region {
 }
 
 .sidebar-column__tabs {
-  display: flex;
+  --track-width: 0;
+  display: block;
   flex: 1 1 auto;
   align-self: stretch;
   min-width: 0;
   overflow-x: auto;
 }
 
+.sidebar-column__tabs::part(body) {
+  display: none;
+}
+
+.sidebar-column__tabs::part(nav) {
+  display: flex;
+  height: 100%;
+}
+
 .sidebar-column__tab {
-  position: relative;
   flex: 0 1 auto;
   min-width: 0;
-  padding: 0 12px;
-  border: 0;
-  color: var(--muted);
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   cursor: grab;
 }
 
-.sidebar-column__tab[aria-selected="true"] {
+.sidebar-column__tab::part(base) {
+  position: relative;
+  height: 100%;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sidebar-column__tab[active]::part(base) {
   color: var(--text);
 }
 
-.sidebar-column__tab[aria-selected="true"]::after {
+.sidebar-column__tab[active]::part(base)::after {
   position: absolute;
   right: 10px;
   bottom: 0;

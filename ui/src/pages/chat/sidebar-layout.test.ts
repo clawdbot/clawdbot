@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  SIDEBAR_CHAT_DEFAULT_WIDTH_PX,
-  SIDEBAR_DEFAULT_WIDTH_PX,
-  SIDEBAR_MAX_WIDTH_PX,
   SIDEBAR_MIN_WIDTH_PX,
   activatePanel,
   closeSlot,
@@ -12,7 +9,6 @@ import {
   normalizeSidebarLayout,
   openSlot,
   resizeColumn,
-  sidebarPrimaryWidth,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
 
@@ -30,8 +26,8 @@ describe("sidebar layout", () => {
     ]);
     expect(layout.columns.every((column) => column.panels.length === 1)).toBe(true);
     expect(layout.columns[2]?.panels[0]?.slot).toBe("discussion");
-    expect(layout.columns[0]?.width).toBe(SIDEBAR_CHAT_DEFAULT_WIDTH_PX);
-    expect(SIDEBAR_CHAT_DEFAULT_WIDTH_PX).toBeGreaterThan(SIDEBAR_DEFAULT_WIDTH_PX);
+    expect(layout.columns[0]?.width).toBe(480);
+    expect(layout.columns[1]?.width).toBe(360);
   });
 
   it("merges panels into a tabbed column and activates the moved panel", () => {
@@ -94,9 +90,7 @@ describe("sidebar layout", () => {
     const layout = openSlot({ columns: [] }, "detail");
     const columnId = layout.columns[0]!.id;
     expect(resizeColumn(layout, columnId, 1).columns[0]?.width).toBe(SIDEBAR_MIN_WIDTH_PX);
-    expect(resizeColumn(layout, columnId, Number.MAX_VALUE).columns[0]?.width).toBe(
-      SIDEBAR_MAX_WIDTH_PX,
-    );
+    expect(resizeColumn(layout, columnId, Number.MAX_VALUE).columns[0]?.width).toBe(1_200);
   });
 
   it("shrinks the widest columns before refusing a region that cannot fit minimums", () => {
@@ -106,13 +100,38 @@ describe("sidebar layout", () => {
     expect(fitSidebarLayout(openAll(), 1_000)).toBeNull();
   });
 
-  it("reports the fitted primary width left after sidebar columns", () => {
-    const layout = fitSidebarLayout(openSlot({ columns: [] }, "detail"), 1_000)!;
-    expect(sidebarPrimaryWidth(layout, 1_000)).toBe(636);
-  });
-
   it("removes a column when its last panel closes", () => {
     expect(closeSlot(openSlot({ columns: [] }, "detail"), "detail")).toEqual({ columns: [] });
+  });
+
+  it("allocates a unique panel id when persisted ids collide with a slot", () => {
+    const layout = normalizeSidebarLayout({
+      columns: [
+        {
+          id: "detail-column",
+          side: "right",
+          panels: [{ id: "chat", slot: "detail" }],
+          activePanelId: "chat",
+          width: 360,
+        },
+      ],
+    });
+    expect(openSlot(layout, "chat").columns[0]?.panels[0]?.id).toBe("chat-2");
+  });
+
+  it("preserves the active tab when a missing panel id uses its slot fallback", () => {
+    const layout = normalizeSidebarLayout({
+      columns: [
+        {
+          id: "tabs",
+          side: "right",
+          panels: [{ id: "detail", slot: "detail" }, { slot: "discussion" }],
+          activePanelId: "discussion",
+          width: 360,
+        },
+      ],
+    });
+    expect(layout.columns[0]?.activePanelId).toBe("discussion");
   });
 
   it("round-trips valid layouts and rejects or repairs untrusted values", () => {
@@ -159,7 +178,7 @@ describe("sidebar layout", () => {
           side: "right",
           panels: [{ id: "same-panel-2", slot: "discussion" }],
           activePanelId: "same-panel-2",
-          width: SIDEBAR_MAX_WIDTH_PX,
+          width: 1_200,
         },
       ],
     });

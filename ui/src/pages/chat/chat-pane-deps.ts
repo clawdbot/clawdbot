@@ -95,12 +95,9 @@ export {
   type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
 export {
-  normalizeSidebarSessionLayouts,
   updateBoardSessionView,
-  updateSidebarSessionLayout,
   type BoardFace,
   type BoardSessionView,
-  type SidebarSessionLayouts,
 } from "../../lib/board/settings.ts";
 export type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 export type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
@@ -220,10 +217,10 @@ export {
   fitSidebarLayout,
   isSidebarRegionCollapsed,
   mergePanelIntoColumn,
+  sidebarPrimaryWidth,
   normalizeSidebarLayout,
   openSlot,
   resizeColumn,
-  sidebarPrimaryWidth,
   type SidebarLayout,
   type SidebarSide,
   type SidebarSlotId,
@@ -265,12 +262,6 @@ export {
   toggleSessionWorkspace,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-export {
-  CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
-  type DetailFullMessageResult,
-  type SidebarContent,
-  type SidebarFullMessageRequest,
-} from "./components/chat-sidebar.ts";
 export type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 export {
   ChatTranscriptController,

@@ -1,4 +1,5 @@
-import { normalizeSidebarLayout, type SidebarLayout } from "../../pages/chat/sidebar-layout.ts";
+import { normalizeSidebarLayout } from "../../pages/chat/sidebar-layout-normalize.ts";
+import type { SidebarLayout } from "../../pages/chat/sidebar-layout.ts";
 
 export type BoardFace = "chat" | "dashboard";
 export type BoardVisibleChatDock = "bottom" | "left" | "right";

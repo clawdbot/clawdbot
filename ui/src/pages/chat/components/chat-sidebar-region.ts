@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/web-awesome-tabs.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import {
@@ -16,10 +17,12 @@ import {
 } from "../sidebar-layout.ts";
 import { resolveSplitDropZone } from "../split-drop-zone.ts";
 import { renderChatResizableDivider } from "./chat-resizable-divider.ts";
+import "./chat-sidebar.ts";
+import "./session-discussion-panel.ts";
 
 export type SidebarPanelTemplates = Partial<Record<SidebarSlotId, TemplateResult>>;
 
-type SidebarRegionCallbacks = {
+export type SidebarRegionCallbacks = {
   activatePanel: (panelId: string) => void;
   closeSlot: (slot: SidebarSlotId) => void;
   detachPanel: (panelId: string, side: SidebarSide, columnIndex: number) => void;
@@ -176,27 +179,31 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         @dragover=${(event: DragEvent) => (narrow ? undefined : this.allowPanelDrop(event))}
         @drop=${(event: DragEvent) => (narrow ? undefined : this.dropOnHeader(event, column))}
       >
-        <div class="sidebar-column__tabs" role="tablist">
+        <wa-tab-group
+          class="sidebar-column__tabs"
+          .active=${active.id}
+          activation="auto"
+          without-scroll-controls
+          @wa-tab-show=${(event: CustomEvent<{ name: string }>) =>
+            this.activate(event.detail.name, narrow)}
+        >
           ${column.panels.map(
             (panel) => html`
-              <button
+              <wa-tab
                 class="sidebar-column__tab"
-                type="button"
-                role="tab"
+                panel=${panel.id}
                 data-panel-id=${panel.id}
                 .draggable=${!narrow}
-                aria-selected=${String(panel.id === active.id)}
                 title=${t("chat.sidebarColumns.drag", { panel: panelTitle(panel.slot) })}
-                @click=${() => this.activate(panel.id, narrow)}
                 @dragstart=${(event: DragEvent) =>
                   narrow ? undefined : this.startDrag(event, panel.id)}
                 @dragend=${() => this.endDrag()}
               >
                 ${panelTitle(panel.slot)}
-              </button>
+              </wa-tab>
             `,
           )}
-        </div>
+        </wa-tab-group>
         <div class="sidebar-column__actions">
           ${openUrl
             ? html`<a

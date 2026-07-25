@@ -65,13 +65,10 @@ import {
 } from "./chat-pane-shared.ts";
 import {
   createSidebarFullMessageLoader,
+  renderSidebarRegion,
   resolveSidebarLayoutForBoard,
 } from "./chat-pane-sidebar-layout.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
-import type { SidebarPanelTemplates } from "./components/chat-sidebar-region.ts";
-import "./components/chat-sidebar-region.ts";
-import "./components/chat-sidebar.ts";
-import "./components/session-discussion-panel.ts";
 
 export class ChatPaneRender extends ChatPaneHeaderRender {
   override render() {
@@ -191,9 +188,10 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       column.panels.some((panel) => panel.slot === "chat"),
     );
     const sidebarRegionCollapsed = isSidebarRegionCollapsed(sidebarLayout, this.paneWidth);
+    const primaryWidth = sidebarPrimaryWidth(sidebarLayout, this.paneWidth);
     const chatLayoutWidth = sidebarRegionCollapsed
       ? this.paneWidth
-      : (sidebarChatColumn?.width ?? sidebarPrimaryWidth(sidebarLayout, this.paneWidth));
+      : (sidebarChatColumn?.width ?? primaryWidth);
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       draftScope: this.paneId,
       narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
@@ -587,7 +585,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
           })
         : chat;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
-    const panelTemplates: SidebarPanelTemplates = {
+    const panelTemplates = {
       chat,
       ...(state.sidebarContent
         ? {
@@ -660,18 +658,19 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
         this.commitSidebarColumnResize(sidebarLayout, columnId, width);
       },
     };
-    const content = html`<openclaw-chat-sidebar-region
-      .layout=${sidebarLayout}
-      .primary=${primary}
-      .panelTemplates=${panelTemplates}
-      .panelOpenUrls=${{ discussion: discussion?.openUrl ?? null }}
-      .callbacks=${sidebarCallbacks}
-      .sessionKey=${state.sessionKey}
-      .focusPanelId=${state.sidebarFocusPanelId}
-      .focusVersion=${state.sidebarFocusVersion}
-      .narrow=${this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX}
-      .availableWidth=${this.paneWidth}
-    ></openclaw-chat-sidebar-region>`;
+    const content = renderSidebarRegion({
+      availableWidth: this.paneWidth,
+      callbacks: sidebarCallbacks,
+      discussionOpenUrl: discussion?.openUrl ?? null,
+      focusPanelId: state.sidebarFocusPanelId,
+      focusVersion: state.sidebarFocusVersion,
+      layout: sidebarLayout,
+      narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
+      onDefined: () => this.requestUpdate(),
+      panelTemplates,
+      primary,
+      sessionKey: state.sessionKey,
+    });
     return html`${this.renderPaneHeader(
       sessionWorkspace,
       backgroundTasks,

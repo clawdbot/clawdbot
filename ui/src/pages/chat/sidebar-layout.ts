@@ -1,5 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core";
-
 export type SidebarSlotId = "chat" | "discussion" | "detail";
 export type SidebarSide = "left" | "right";
 export type SidebarPanel = { id: string; slot: SidebarSlotId };
@@ -12,13 +10,13 @@ export type SidebarColumn = {
 };
 export type SidebarLayout = { columns: SidebarColumn[] };
 
-export const SIDEBAR_DEFAULT_WIDTH_PX = 360;
-export const SIDEBAR_CHAT_DEFAULT_WIDTH_PX = 480;
+const SIDEBAR_DEFAULT_WIDTH_PX = 360;
+const SIDEBAR_CHAT_DEFAULT_WIDTH_PX = 480;
 export const SIDEBAR_MIN_WIDTH_PX = 260;
-export const SIDEBAR_MAX_WIDTH_PX = 1_200;
-export const SIDEBAR_MAIN_MIN_WIDTH_PX = 312;
+const SIDEBAR_MAX_WIDTH_PX = 1_200;
+const SIDEBAR_MAIN_MIN_WIDTH_PX = 312;
 export const SIDEBAR_NARROW_BREAKPOINT_PX = 680;
-export const SIDEBAR_DIVIDER_WIDTH_PX = 4;
+const SIDEBAR_DIVIDER_WIDTH_PX = 4;
 
 const SLOT_RANK: Record<SidebarSlotId, number> = {
   chat: 0,
@@ -27,16 +25,7 @@ const SLOT_RANK: Record<SidebarSlotId, number> = {
 };
 
 function cloneLayout(layout: SidebarLayout): SidebarLayout {
-  return {
-    columns: layout.columns.map((column) => ({
-      ...column,
-      panels: column.panels.map((panel) => ({ ...panel })),
-    })),
-  };
-}
-
-function isSlotId(value: unknown): value is SidebarSlotId {
-  return value === "chat" || value === "discussion" || value === "detail";
+  return structuredClone(layout);
 }
 
 function clampWidth(width: number): number {
@@ -51,23 +40,29 @@ function columnRank(column: SidebarColumn): number {
   return Math.min(...column.panels.map((panel) => SLOT_RANK[panel.slot]));
 }
 
-function uniqueId(base: string, used: Set<string>): string {
-  const normalized = base.trim() || "item";
-  if (!used.has(normalized)) {
-    used.add(normalized);
-    return normalized;
+function nextColumnId(layout: SidebarLayout, panelId: string): string {
+  const base = `${panelId}-column`;
+  const used = new Set(layout.columns.map((column) => column.id));
+  if (!used.has(base)) {
+    return base;
   }
   let suffix = 2;
-  while (used.has(`${normalized}-${suffix}`)) {
+  while (used.has(`${base}-${suffix}`)) {
     suffix += 1;
   }
-  const id = `${normalized}-${suffix}`;
-  used.add(id);
-  return id;
+  return `${base}-${suffix}`;
 }
 
-function nextColumnId(layout: SidebarLayout, panelId: string): string {
-  return uniqueId(`${panelId}-column`, new Set(layout.columns.map((column) => column.id)));
+function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
+  const used = new Set(layout.columns.flatMap((column) => column.panels.map((panel) => panel.id)));
+  if (!used.has(slot)) {
+    return slot;
+  }
+  let suffix = 2;
+  while (used.has(`${slot}-${suffix}`)) {
+    suffix += 1;
+  }
+  return `${slot}-${suffix}`;
 }
 
 function sideInsertIndex(layout: SidebarLayout, side: SidebarSide, sideIndex: number): number {
@@ -82,18 +77,12 @@ function sideInsertIndex(layout: SidebarLayout, side: SidebarSide, sideIndex: nu
 
 function removePanel(layout: SidebarLayout, panelId: string): SidebarPanel | null {
   for (let columnIndex = 0; columnIndex < layout.columns.length; columnIndex += 1) {
-    const column = layout.columns[columnIndex];
-    if (!column) {
-      continue;
-    }
+    const column = layout.columns[columnIndex]!;
     const panelIndex = column.panels.findIndex((panel) => panel.id === panelId);
     if (panelIndex < 0) {
       continue;
     }
-    const [panel] = column.panels.splice(panelIndex, 1);
-    if (!panel) {
-      return null;
-    }
+    const panel = column.panels.splice(panelIndex, 1)[0]!;
     if (column.panels.length === 0) {
       layout.columns.splice(columnIndex, 1);
     } else if (column.activePanelId === panelId) {
@@ -114,10 +103,7 @@ export function openSlot(
   if (next.columns.some((column) => column.panels.some((panel) => panel.slot === slot))) {
     return next;
   }
-  const usedPanelIds = new Set(
-    next.columns.flatMap((column) => column.panels.map((panel) => panel.id)),
-  );
-  const panel: SidebarPanel = { id: uniqueId(slot, usedPanelIds), slot };
+  const panel: SidebarPanel = { id: nextPanelId(next, slot), slot };
   const column: SidebarColumn = {
     id: nextColumnId(next, panel.id),
     side,
@@ -243,20 +229,16 @@ export function fitSidebarLayout(
     return null;
   }
   let excess = next.columns.reduce((sum, column) => sum + column.width, 0) - budget;
-  while (excess > 0) {
-    const shrinkable = next.columns
-      .filter((column) => column.width > SIDEBAR_MIN_WIDTH_PX)
-      .toSorted((left, right) => {
-        const leftIsNewest = left.id === newestColumnId ? 1 : 0;
-        const rightIsNewest = right.id === newestColumnId ? 1 : 0;
-        return leftIsNewest - rightIsNewest || right.width - left.width;
-      });
-    const widest = shrinkable[0];
-    if (!widest) {
+  const shrinkOrder = next.columns.toSorted((left, right) => {
+    const newestOrder = Number(left.id === newestColumnId) - Number(right.id === newestColumnId);
+    return newestOrder || right.width - left.width;
+  });
+  for (const column of shrinkOrder) {
+    if (excess <= 0) {
       break;
     }
-    const shrink = Math.min(excess, widest.width - SIDEBAR_MIN_WIDTH_PX);
-    widest.width -= shrink;
+    const shrink = Math.min(excess, column.width - SIDEBAR_MIN_WIDTH_PX);
+    column.width -= shrink;
     excess -= shrink;
   }
   return next;
@@ -272,9 +254,6 @@ export function isSidebarRegionCollapsed(layout: SidebarLayout, availableWidth: 
 }
 
 export function sidebarPrimaryWidth(layout: SidebarLayout, availableWidth: number): number {
-  if (!Number.isFinite(availableWidth) || isSidebarRegionCollapsed(layout, availableWidth)) {
-    return availableWidth;
-  }
   const sidebarWidth = layout.columns.reduce((sum, column) => sum + column.width, 0);
   return Math.max(
     SIDEBAR_MAIN_MIN_WIDTH_PX,
@@ -282,53 +261,4 @@ export function sidebarPrimaryWidth(layout: SidebarLayout, availableWidth: numbe
   );
 }
 
-export function normalizeSidebarLayout(value: unknown): SidebarLayout {
-  if (!isRecord(value) || !Array.isArray(value.columns)) {
-    return { columns: [] };
-  }
-  const usedColumnIds = new Set<string>();
-  const usedPanelIds = new Set<string>();
-  const usedSlots = new Set<SidebarSlotId>();
-  const columns: SidebarColumn[] = [];
-  for (const rawColumn of value.columns) {
-    if (
-      !isRecord(rawColumn) ||
-      (rawColumn.side !== "left" && rawColumn.side !== "right") ||
-      !Array.isArray(rawColumn.panels)
-    ) {
-      continue;
-    }
-    const panels: SidebarPanel[] = [];
-    for (const rawPanel of rawColumn.panels) {
-      if (!isRecord(rawPanel) || !isSlotId(rawPanel.slot) || usedSlots.has(rawPanel.slot)) {
-        continue;
-      }
-      usedSlots.add(rawPanel.slot);
-      const rawId = typeof rawPanel.id === "string" ? rawPanel.id : rawPanel.slot;
-      panels.push({ id: uniqueId(rawId, usedPanelIds), slot: rawPanel.slot });
-    }
-    if (panels.length === 0) {
-      continue;
-    }
-    const requestedActiveId =
-      typeof rawColumn.activePanelId === "string" ? rawColumn.activePanelId.trim() : "";
-    const activePanelId =
-      panels.find((panel) => panel.id === requestedActiveId)?.id ?? panels[0]?.id ?? "";
-    const fallbackWidth = panels.some((panel) => panel.slot === "chat")
-      ? SIDEBAR_CHAT_DEFAULT_WIDTH_PX
-      : SIDEBAR_DEFAULT_WIDTH_PX;
-    const width =
-      typeof rawColumn.width === "number" && Number.isFinite(rawColumn.width)
-        ? clampWidth(rawColumn.width)
-        : fallbackWidth;
-    const rawId = typeof rawColumn.id === "string" ? rawColumn.id : "column";
-    columns.push({
-      id: uniqueId(rawId, usedColumnIds),
-      side: rawColumn.side,
-      panels,
-      activePanelId,
-      width,
-    });
-  }
-  return { columns };
-}
+export { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";
