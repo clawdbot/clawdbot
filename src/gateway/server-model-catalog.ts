@@ -1,6 +1,6 @@
-import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog.js";
+import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
+import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
-import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type {
   GatewayModelCatalogOwnerSnapshot,
@@ -17,7 +17,7 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
   workspaceDir?: string;
-}) => Promise<PreparedModelRuntimeSnapshot>;
+}) => Promise<PublishedModelCatalogOwnerCandidate>;
 type LoadGatewayModelCatalogParams = {
   agentId?: string;
   agentDir?: string;

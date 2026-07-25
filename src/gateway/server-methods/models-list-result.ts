@@ -43,7 +43,7 @@ import {
   createOpenAIModelRoutesResolver,
   openAIModelCatalogRoutePolicy,
 } from "../../agents/openai-model-routes.js";
-import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog.js";
+import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
