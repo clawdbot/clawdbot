@@ -1,8 +1,8 @@
 import fsSync from "node:fs";
-import fs, { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import fs, { appendFile, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { appendAudit, verifyChain } from "./audit.js";
 import { generateIdentity } from "./identity.js";
 import { JsonlAuditStore, FileReplayStore } from "./node.js";
@@ -11,10 +11,11 @@ import { signReceipt } from "./receipts.js";
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const replayBodyKey = Uint8Array.from({ length: 32 }, (_, index) => 255 - index);
 const receiptId = "01JZ0000000000000000000000";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Node stores", () => {
   it("persists serialized audit JSONL", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-audit-"));
+    const directory = tempDirs.make("reef-audit-");
     const path = join(directory, "audit.jsonl");
     const store = new JsonlAuditStore(path, auditKey);
     await Promise.all(
@@ -28,7 +29,7 @@ describe("Node stores", () => {
   });
 
   it("drops a torn final JSONL record and permits a durable append", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-audit-torn-"));
+    const directory = tempDirs.make("reef-audit-torn-");
     const path = join(directory, "audit.jsonl");
     const store = new JsonlAuditStore(path, auditKey);
     await store.appendEvent("one", { id: 1 }, 10);
@@ -43,7 +44,7 @@ describe("Node stores", () => {
   it.runIf(process.platform !== "win32")(
     "rejects an append when the journal directory cannot be synchronized",
     async () => {
-      const directory = await mkdtemp(join(tmpdir(), "reef-audit-sync-failure-"));
+      const directory = tempDirs.make("reef-audit-sync-failure-");
       const path = join(directory, "nested", "audit.jsonl");
       const parentPath = dirname(path);
       const originalOpen = fs.open.bind(fs);
@@ -72,7 +73,7 @@ describe("Node stores", () => {
   );
 
   it("rejects a corrupt middle JSONL record", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-audit-corrupt-"));
+    const directory = tempDirs.make("reef-audit-corrupt-");
     const path = join(directory, "audit.jsonl");
     const store = new JsonlAuditStore(path, auditKey);
     await store.appendEvent("one", { id: 1 }, 10);
@@ -83,7 +84,7 @@ describe("Node stores", () => {
   });
 
   it("persists replay bindings and completed receipts", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-replay-"));
+    const directory = tempDirs.make("reef-replay-");
     const path = join(directory, "replay.jsonl");
     const identity = generateIdentity();
     const receipt = signReceipt(
@@ -109,7 +110,7 @@ describe("Node stores", () => {
   });
 
   it("persists consumed replay bindings without receipts", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "reef-replay-consumed-"));
+    const directory = tempDirs.make("reef-replay-consumed-");
     const path = join(directory, "replay.jsonl");
     const store = new FileReplayStore(path, replayBodyKey);
     expect(await store.claim("alice", receiptId, "c".repeat(64))).toBe("new");
