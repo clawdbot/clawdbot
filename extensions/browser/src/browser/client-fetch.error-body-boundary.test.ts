@@ -79,7 +79,7 @@ describe("fetchHttpJson error body boundary", () => {
     server = http.createServer((req, res) => {
       if (req.url === "/success-small") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end('{"payload":"control"}');
+        res.end('{"payload":"control 🦞"}');
         return;
       }
       if (req.url === "/success-malformed-utf8") {
@@ -224,34 +224,24 @@ describe("fetchHttpJson error body boundary", () => {
 
   it("preserves a normal successful JSON response", async () => {
     await expect(fetchBrowserJson(`${baseUrl}/success-small`)).resolves.toEqual({
-      payload: "control",
+      payload: "control 🦞",
     });
   });
 
-  it("rejects malformed UTF-8 JSON and releases the guarded fetch", async () => {
-    const error = await fetchBrowserJson(`${baseUrl}/success-malformed-utf8`).catch(
-      (err: unknown) => err,
-    );
+  it("rejects malformed UTF-8 success and error responses and releases each fetch", async () => {
+    for (const [path, status, connectionClosed] of [
+      ["/success-malformed-utf8", 200, malformedSuccessConnectionClosed],
+      ["/error-malformed-utf8", 500, malformedErrorConnectionClosed],
+    ] as const) {
+      const error = await fetchBrowserJson(`${baseUrl}${path}`).catch((err: unknown) => err);
 
-    expect(error).toMatchObject({
-      name: "BrowserServiceError",
-      message: "Browser control response was not valid UTF-8 (HTTP 200)",
-      status: 200,
-    });
-    await expect(malformedSuccessConnectionClosed).resolves.toBeUndefined();
-  });
-
-  it("rejects malformed UTF-8 error JSON and releases the guarded fetch", async () => {
-    const error = await fetchBrowserJson(`${baseUrl}/error-malformed-utf8`).catch(
-      (err: unknown) => err,
-    );
-
-    expect(error).toMatchObject({
-      name: "BrowserServiceError",
-      message: "Browser control response was not valid UTF-8 (HTTP 500)",
-      status: 500,
-    });
-    await expect(malformedErrorConnectionClosed).resolves.toBeUndefined();
+      expect(error).toMatchObject({
+        name: "BrowserServiceError",
+        message: `Browser control response was not valid UTF-8 (HTTP ${status})`,
+        status,
+      });
+      await expect(connectionClosed).resolves.toBeUndefined();
+    }
   });
 
   it("preserves a complete diagnostic body within the limit", async () => {
