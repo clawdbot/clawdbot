@@ -1116,7 +1116,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       model: "openclaw",
       input: "hi",
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     continueAgent.resolve();
 
     const events = parseSseEvents(await res.text());

@@ -2349,7 +2349,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       model: "openclaw",
       messages: [{ role: "user", content: "hi" }],
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     continueAgent.resolve();
 
     const streamed = parseSseDataLines(await res.text()).join("\n");
