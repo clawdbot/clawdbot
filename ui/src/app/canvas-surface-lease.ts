@@ -4,8 +4,9 @@ const MIN_RENEWAL_DELAY_MS = 1_000;
 // is safe because it asks the server to rotate rather than extending authority.
 const MISSING_EXPIRY_RENEWAL_DELAY_MS = 60_000;
 const RETRY_START_MS = 1_000;
-const RETRY_MAX_MS = 30_000;
-const MAX_CONSECUTIVE_FAILURES = 3;
+// Stay well below the server capability lifetime while limiting unsupported
+// gateways to one cheap refresh request per five minutes per tab.
+const RETRY_MAX_MS = 5 * 60_000;
 
 type CanvasSurfaceRefresh = {
   surface: "canvas";
@@ -66,9 +67,6 @@ export function createCanvasSurfaceLease<
       return;
     }
     consecutiveFailures += 1;
-    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      return;
-    }
     const retryDelayMs = Math.min(RETRY_START_MS * 2 ** (consecutiveFailures - 1), RETRY_MAX_MS);
     schedule(retryDelayMs, expectedGeneration);
   };

@@ -8,7 +8,7 @@ import {
   type GatewayHelloOk,
 } from "../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
-import { resetCanvasWidgetFrameSrcCache } from "../lib/chat/canvas-widget-frame-src-cache.ts";
+import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -144,7 +144,7 @@ export function createApplicationGateway(
       }
       setSnapshot({ ...snapshot, canvasPluginSurfaceUrl });
     },
-    onConnectionChange: resetCanvasWidgetFrameSrcCache,
+    onConnectionChange: bumpCanvasWidgetFrameConnectionGeneration,
   });
   const publishEventLog = () => {
     for (const listener of eventLogListeners) {

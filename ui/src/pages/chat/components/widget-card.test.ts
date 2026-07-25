@@ -1,16 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCanvasSurfaceLease } from "../../../app/canvas-surface-lease.ts";
+import { nothing, render } from "lit";
+import { describe, expect, it, vi } from "vitest";
 import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/board/provider.ts";
-import { resetCanvasWidgetFrameSrcCache } from "../../../lib/chat/canvas-widget-frame-src-cache.ts";
+import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 describe("widget-card", () => {
-  beforeEach(() => resetCanvasWidgetFrameSrcCache());
-
-  it("keeps rotations stable but resolves the same document anew after lease start", async () => {
+  it("keeps mounted frames stable but refreshes remounts and new connection generations", () => {
     const firstPreview = {
       kind: "canvas",
       surface: "assistant_message",
@@ -19,31 +16,10 @@ describe("widget-card", () => {
       url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
       sandbox: "scripts",
     } as const;
-    let surfaceUrl: string | null = null;
-    const nextRequest = Promise.resolve<unknown>({});
-    const request = vi
-      .fn<(method: string, params: unknown) => Promise<unknown>>()
-      .mockResolvedValueOnce({
-        surface: "canvas",
-        pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/two" },
-        expiresAtMs: Date.now() + 60_000,
-      })
-      .mockReturnValue(nextRequest);
-    const lease = createCanvasSurfaceLease<number>({
-      request,
-      onChange: (url) => {
-        surfaceUrl = url;
-      },
-      onConnectionChange: resetCanvasWidgetFrameSrcCache,
-      setTimer: () => 1,
-      clearTimer: () => undefined,
-    });
-    lease.start("https://canvas.test/__openclaw__/cap/one");
-
     const host = document.createElement("div");
     render(
       renderToolPreview(firstPreview, "chat_message", {
-        canvasPluginSurfaceUrl: surfaceUrl,
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
       }),
       host,
     );
@@ -51,26 +27,35 @@ describe("widget-card", () => {
     const originalSrc = originalFrame?.getAttribute("src");
     expect(originalSrc).toContain("/__openclaw__/cap/one/");
 
-    await vi.waitFor(() => expect(surfaceUrl).toBe("https://canvas.test/__openclaw__/cap/two"));
     render(
       renderToolPreview(firstPreview, "chat_message", {
-        canvasPluginSurfaceUrl: surfaceUrl,
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
       }),
       host,
     );
     expect(host.querySelector("iframe")).toBe(originalFrame);
     expect(host.querySelector("iframe")?.getAttribute("src")).toBe(originalSrc);
 
-    lease.start("https://canvas.test/__openclaw__/cap/three");
-    const nextHost = document.createElement("div");
+    render(nothing, host);
     render(
-      renderToolPreview(firstPreview, "chat_message", { canvasPluginSurfaceUrl: surfaceUrl }),
-      nextHost,
+      renderToolPreview(firstPreview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
+      }),
+      host,
     );
-    expect(nextHost.querySelector("iframe")?.getAttribute("src")).toContain(
-      "/__openclaw__/cap/three/",
+    const remountedFrame = host.querySelector("iframe");
+    expect(remountedFrame).not.toBe(originalFrame);
+    expect(remountedFrame?.getAttribute("src")).toContain("/__openclaw__/cap/two/");
+
+    bumpCanvasWidgetFrameConnectionGeneration();
+    render(
+      renderToolPreview(firstPreview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/three",
+      }),
+      host,
     );
-    lease.stop();
+    expect(host.querySelector("iframe")).not.toBe(remountedFrame);
+    expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
   });
 
   it("mounts a new document on the rotated surface URL within one connection", () => {
@@ -112,6 +97,25 @@ describe("widget-card", () => {
     expect(rotatedHost.querySelector("iframe")?.getAttribute("src")).toContain(
       "/__openclaw__/cap/two/",
     );
+  });
+
+  it("unloads an external frame when external embeds become disallowed", () => {
+    const preview = {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "external-policy",
+      url: "https://example.test/widget",
+      sandbox: "scripts",
+    } as const;
+    const host = document.createElement("div");
+    render(renderToolPreview(preview, "chat_message", { allowExternalEmbedUrls: true }), host);
+    const allowedFrame = host.querySelector("iframe");
+    expect(allowedFrame?.getAttribute("src")).toBe("https://example.test/widget");
+
+    render(renderToolPreview(preview, "chat_message", { allowExternalEmbedUrls: false }), host);
+    expect(host.querySelector("iframe")).not.toBe(allowedFrame);
+    expect(host.querySelector("iframe")?.hasAttribute("src")).toBe(false);
   });
 
   it("dispatches canvas HTML and MCP App content and ignores unknown kinds", () => {

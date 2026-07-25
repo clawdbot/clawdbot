@@ -155,34 +155,34 @@ describe("createCanvasSurfaceLease", () => {
     expect(clock.pendingCount).toBe(1);
   });
 
-  it("backs off and stops after three consecutive failures until a later start", async () => {
-    const request = vi
-      .fn<(method: string, params: unknown) => Promise<unknown>>()
-      .mockRejectedValueOnce(new Error("first"))
-      .mockRejectedValueOnce(new Error("second"))
-      .mockRejectedValueOnce(new Error("third"))
-      .mockResolvedValueOnce({
+  it("keeps retrying past three failures, caps its backoff, and recovers", async () => {
+    let failuresRemaining = 10;
+    const request = vi.fn<(method: string, params: unknown) => Promise<unknown>>(async () => {
+      if (failuresRemaining > 0) {
+        failuresRemaining -= 1;
+        throw new Error("refresh failed");
+      }
+      return {
         surface: "canvas",
         pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/fresh" },
-      });
+      };
+    });
     const { changes, clock, lease } = createLeaseHarness(request);
     const originalUrl = "https://canvas.test/__openclaw__/cap/one";
     lease.start(originalUrl);
 
     await flushPromises();
-    expect(clock.nextDelayMs).toBe(1_000);
-    await clock.advanceBy(1_000);
-    expect(clock.nextDelayMs).toBe(2_000);
-    await clock.advanceBy(2_000);
+    const backoffs = [
+      1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000, 256_000, 300_000,
+    ];
+    for (const delayMs of backoffs) {
+      expect(clock.nextDelayMs).toBe(delayMs);
+      await clock.advanceBy(delayMs);
+    }
 
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(clock.pendingCount).toBe(0);
-    expect(changes).toEqual([originalUrl]);
-
-    lease.start("https://canvas.test/__openclaw__/cap/reconnected");
-    await flushPromises();
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(11);
     expect(changes.at(-1)).toBe("https://canvas.test/__openclaw__/cap/fresh");
+    expect(clock.nextDelayMs).toBe(60_000);
   });
 
   it("stop clears timers, ignores an in-flight result, and publishes null once", async () => {
