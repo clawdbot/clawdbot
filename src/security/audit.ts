@@ -671,7 +671,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         `agents.list.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
         "With sandbox mode off, exec fails closed for those agents.",
       remediation:
-        'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+        'Enable sandbox mode for these agents (`agents.entries.*.sandbox.mode`) or set their tools.exec.host to "gateway".',
     });
   }
 
