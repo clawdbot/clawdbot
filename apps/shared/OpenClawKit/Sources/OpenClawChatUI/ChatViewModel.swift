@@ -131,6 +131,7 @@ public final class OpenClawChatViewModel {
     }
 
     public internal(set) var swarmSessions: [OpenClawChatSessionEntry] = []
+    var activeSwarmGroups: [OpenClawChatSwarmGroup] = []
     var swarmActivityState = OpenClawChatSwarmActivityState()
     @ObservationIgnored
     var swarmRefreshGeneration: UInt64 = 0

@@ -286,8 +286,8 @@ enum SelfContainedSwarmHelpers {
 }
 
 extension OpenClawChatViewModel {
-    var activeSwarmGroups: [OpenClawChatSwarmGroup] {
-        buildOpenClawChatSwarmGroups(sessions: swarmSessions) { candidate in
+    private func updateSwarmProjection() {
+        self.activeSwarmGroups = buildOpenClawChatSwarmGroups(sessions: self.swarmSessions) { candidate in
             self.matchesCurrentSessionKey(incoming: candidate, current: self.sessionKey)
         }
     }
@@ -302,6 +302,7 @@ extension OpenClawChatViewModel {
         guard nextActivity.observe(event) else { return false }
         swarmActivityState = nextActivity
         swarmSessions = nextActivity.decorate(swarmSessions)
+        self.updateSwarmProjection()
         if event.kind != "phase", event.kind != "log" {
             self.scheduleSwarmRefresh()
         }
@@ -430,6 +431,7 @@ extension OpenClawChatViewModel {
             swarmSessionKey = sessionKey
             swarmActivityState.clear()
             swarmSessions = []
+            self.updateSwarmProjection()
         }
         swarmRefreshGeneration &+= 1
         let generation = swarmRefreshGeneration
@@ -440,6 +442,7 @@ extension OpenClawChatViewModel {
                   matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
             else { return }
             swarmSessions = swarmActivityState.decorate(rows)
+            self.updateSwarmProjection()
         } catch {
             guard generation == swarmRefreshGeneration,
                   swarmEnabled,
@@ -481,6 +484,7 @@ extension OpenClawChatViewModel {
         swarmSessionKey = sessionKey
         swarmActivityState.clear()
         swarmSessions = []
+        self.updateSwarmProjection()
     }
 }
 
