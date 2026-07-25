@@ -119,4 +119,47 @@ describe("force-clear terminal state persistence", () => {
     const entry = loadSessionEntry({ sessionKey, storePath });
     expect(entry?.status).toBe("running");
   });
+
+  it("does not overwrite a newer session entry under the same key", async () => {
+    const sessionKey = "agent:main:shared-key";
+    const oldSessionId = "session-old";
+    const newSessionId = "session-new";
+
+    // Seed the store with the original session entry.
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: oldSessionId,
+        updatedAt: Date.now(),
+        status: "running",
+      },
+    );
+
+    setActiveEmbeddedRun(oldSessionId, createRunHandle(), sessionKey);
+
+    // Simulate the session key advancing to a replacement session before the
+    // stale force-clear persistence fires.
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: newSessionId,
+        updatedAt: Date.now(),
+        status: "running",
+      },
+    );
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId: oldSessionId,
+      sessionKey,
+      forceClear: true,
+      reason: "stuck_recovery",
+      settleMs: 0,
+    });
+
+    expect(result.forceCleared).toBe(true);
+
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.sessionId).toBe(newSessionId);
+    expect(entry?.status).toBe("running");
+  });
 });

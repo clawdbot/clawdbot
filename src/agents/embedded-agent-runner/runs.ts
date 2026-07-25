@@ -19,7 +19,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
@@ -794,7 +794,10 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
       ? forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)
       : false;
   if (forceCleared && params.sessionKey) {
-    await persistForceClearedEmbeddedRunTerminalState({ sessionKey: params.sessionKey });
+    await persistForceClearedEmbeddedRunTerminalState({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    });
   }
   return { aborted, drained, forceCleared };
 }
@@ -806,10 +809,24 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
  * recognize the session as recoverable without waiting for the next heartbeat.
  */
 async function persistForceClearedEmbeddedRunTerminalState(params: {
+  sessionId: string;
   sessionKey: string;
 }): Promise<void> {
   try {
     const cfg = getRuntimeConfig();
+    // Guard: skip the write when this session key now maps to a different session.
+    // A replacement session could have claimed the key before a stale force-clear
+    // recovery completes; writing "killed" would corrupt the replacement.
+    const current = loadSessionEntry({
+      sessionKey: params.sessionKey,
+      storePath: resolveStorePath(cfg.session?.store, {
+        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      }),
+    });
+    if (current && current.sessionId !== params.sessionId) {
+      return;
+    }
+
     const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     await updateSessionEntry(
