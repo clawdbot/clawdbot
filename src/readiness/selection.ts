@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { createActivationReadinessResolver } from "./activation.js";
+import {
+  createActivationReadinessResolver,
+  listActivationReadinessSubjects,
+} from "./activation.js";
 import {
   WORKSPACE_WRITABLE_CRITERION_ID,
   type ReadinessCondition,
@@ -9,19 +12,22 @@ import {
 } from "./conditions.js";
 import {
   createExecutionCapabilityReadinessResolver,
+  listExecutionCapabilityReadinessSubjects,
   type ExecutionCapabilityReadinessSnapshot,
 } from "./execution-capabilities.js";
 import { createPluginReadinessResolver } from "./plugin-readiness.js";
-import { CORE_READINESS_SUBJECT_REFS } from "./subjects.js";
 import {
   buildSessionStorageReadinessCondition,
   createSessionStorageReadinessEvidenceResolver,
+  listSessionStorageReadinessSubjects,
   SESSION_STORAGE_READY_CRITERION_ID,
 } from "./session-storage.js";
 import {
   createStateServiceReadinessResolver,
+  listStateServiceReadinessSubjects,
   type StateServiceReadinessSnapshot,
 } from "./state-services.js";
+import { CORE_READINESS_SUBJECT_REFS } from "./subjects.js";
 import {
   buildWorkspaceReadinessCondition,
   createWorkspaceReadinessEvidenceResolver,
@@ -76,6 +82,10 @@ export function applySelectedCanonicalRequirements(
     }
     projected.push({
       type,
+      subjectRef:
+        type === "PluginsLoaded"
+          ? CORE_READINESS_SUBJECT_REFS.plugins
+          : CORE_READINESS_SUBJECT_REFS.gateway,
       status: "Unknown",
       requirement,
       reason: "CriterionEvaluationUnavailable",
@@ -212,7 +222,13 @@ export function createSelectedReadinessResolver() {
           ? withRequirement(condition, requirement)
           : unavailableCondition(id, requirement);
       }),
-      subjects: pluginContribution.subjects,
+      subjects: [
+        ...listActivationReadinessSubjects(),
+        ...listExecutionCapabilityReadinessSubjects(),
+        ...listStateServiceReadinessSubjects(),
+        ...listSessionStorageReadinessSubjects(),
+        ...pluginContribution.subjects,
+      ],
     };
   };
 }

@@ -23,6 +23,7 @@ import {
   type DegradedSecretOwner,
 } from "../secrets/runtime-degraded-state.js";
 import type { ReadinessCondition } from "./conditions.js";
+import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "./subjects.js";
 
 export const CONFIG_CURRENT_CRITERION_ID = "openclaw.config-current";
 export const MODEL_ROUTE_READY_CRITERION_ID = "openclaw.model-route-ready";
@@ -53,7 +54,40 @@ type ModelRouteReadinessSources = {
 };
 
 function unknownCondition(type: string, reason: string, message: string): ReadinessCondition {
-  return { type, status: "Unknown", requirement: "advisory", reason, message };
+  return {
+    type,
+    subjectRef: activationSubjectRef(type),
+    status: "Unknown",
+    requirement: "advisory",
+    reason,
+    message,
+  };
+}
+
+function activationSubjectRef(type: string): string {
+  switch (type) {
+    case "ConfigCurrent":
+      return CORE_READINESS_SUBJECT_REFS.config;
+    case "ModelRouteReady":
+      return CORE_READINESS_SUBJECT_REFS.modelRoute;
+    case "SecretsReady":
+      return CORE_READINESS_SUBJECT_REFS.secrets;
+    default:
+      throw new Error(`unknown activation readiness condition: ${type}`);
+  }
+}
+
+export function listActivationReadinessSubjects(): ReadinessSubject[] {
+  const configGeneration = getRuntimeConfigAppliedHash();
+  return [
+    {
+      ref: CORE_READINESS_SUBJECT_REFS.config,
+      kind: "openclaw.config",
+      ...(configGeneration ? { generation: configGeneration } : {}),
+    },
+    { ref: CORE_READINESS_SUBJECT_REFS.modelRoute, kind: "openclaw.model-route" },
+    { ref: CORE_READINESS_SUBJECT_REFS.secrets, kind: "openclaw.secrets" },
+  ];
 }
 
 export function buildConfigCurrentCondition(
@@ -70,6 +104,7 @@ export function buildConfigCurrentCondition(
   const current = metadata.sourceFingerprint === appliedHash;
   return {
     type: "ConfigCurrent",
+    subjectRef: CORE_READINESS_SUBJECT_REFS.config,
     status: current ? "True" : "False",
     requirement: "advisory",
     reason: current ? "ConfigCurrent" : "ConfigRestartRequired",
@@ -85,6 +120,7 @@ export function buildSecretsReadyCondition(
   if (owners.length === 0) {
     return {
       type: "SecretsReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.secrets,
       status: "True",
       requirement: "advisory",
       reason: "SecretsReady",
@@ -94,6 +130,7 @@ export function buildSecretsReadyCondition(
   const kinds = [...new Set(owners.map((owner) => owner.ownerKind))].toSorted();
   return {
     type: "SecretsReady",
+    subjectRef: CORE_READINESS_SUBJECT_REFS.secrets,
     status: "False",
     requirement: "advisory",
     reason: "SecretOwnersUnavailable",
@@ -149,6 +186,7 @@ export function buildModelRouteReadyCondition(
   if (!entry) {
     return {
       type: "ModelRouteReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.modelRoute,
       status: "False",
       requirement: "advisory",
       reason: "ModelRouteUnavailable",
@@ -177,6 +215,7 @@ export function buildModelRouteReadyCondition(
   }
   return {
     type: "ModelRouteReady",
+    subjectRef: CORE_READINESS_SUBJECT_REFS.modelRoute,
     status: route.available ? "True" : "False",
     requirement: "advisory",
     reason: route.available ? "ModelRouteReady" : "ModelAuthUnavailable",

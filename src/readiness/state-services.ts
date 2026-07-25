@@ -3,6 +3,7 @@ import { getSessionDeliveryRuntimeReadiness } from "../infra/session-delivery-ru
 import { getOpenClawStateDatabaseReadiness } from "../state/openclaw-state-db-readiness.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { ReadinessCondition } from "./conditions.js";
+import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "./subjects.js";
 
 export const STATE_READY_CRITERION_ID = "openclaw.state-ready";
 export const DELIVERY_RUNTIME_READY_CRITERION_ID = "openclaw.delivery-runtime-ready";
@@ -28,7 +29,24 @@ function condition(
   reason: string,
   message: string,
 ): ReadinessCondition {
-  return { type, status, requirement: "advisory", reason, message };
+  const refs: Record<string, string> = {
+    StateReady: CORE_READINESS_SUBJECT_REFS.stateDatabase,
+    DeliveryRuntimeReady: CORE_READINESS_SUBJECT_REFS.deliveryRuntime,
+    SchedulerReady: CORE_READINESS_SUBJECT_REFS.scheduler,
+  };
+  const subjectRef = refs[type];
+  if (!subjectRef) {
+    throw new Error(`unknown state readiness condition: ${type}`);
+  }
+  return { type, subjectRef, status, requirement: "advisory", reason, message };
+}
+
+export function listStateServiceReadinessSubjects(): ReadinessSubject[] {
+  return [
+    { ref: CORE_READINESS_SUBJECT_REFS.stateDatabase, kind: "openclaw.state-database" },
+    { ref: CORE_READINESS_SUBJECT_REFS.deliveryRuntime, kind: "openclaw.delivery-runtime" },
+    { ref: CORE_READINESS_SUBJECT_REFS.scheduler, kind: "openclaw.scheduler" },
+  ];
 }
 
 function unknown(type: string): ReadinessCondition {
