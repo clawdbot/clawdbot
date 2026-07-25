@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { WorkboardCard } from "@openclaw/workboard-contract";
+import type { WorkboardCard, WorkboardCompletionSource } from "@openclaw/workboard-contract";
 import { assertCanMutateClaimedCard } from "./store-card-helpers.js";
 import { MAX_CARD_COMMENTS } from "./store-constants.js";
 import { WorkboardEnrichmentStore } from "./store-enrichment.js";
@@ -25,6 +25,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
     status: unknown,
     position: unknown,
     scope?: WorkboardMutationScope,
+    reason?: unknown,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const existing = await this.get(id);
@@ -34,12 +35,21 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
       // Operator surfaces omit scope and may override claims. Agent tools pass scope so a
       // worker cannot move another worker's claimed card between the preflight and this write.
       assertCanMutateClaimedCard(existing, scope);
+      const operatorCompletion = status === "done" && scope == null;
+      const completionSource: WorkboardCompletionSource | undefined =
+        status === "done" ? (operatorCompletion ? "operator" : "automated") : undefined;
+      const completionReason = operatorCompletion
+        ? normalizeBoundedString(reason, undefined, 2000, "completion reason") ??
+          "Operator accepted completion via direct status move."
+        : undefined;
       return await this.updateCard(
         id,
         { status, position },
         {
           allowMetadataDependencyLinks: false,
           enforceStatusHolds: true,
+          ...(completionSource ? { completionSource } : {}),
+          ...(completionReason ? { completionReason } : {}),
         },
       );
     });

@@ -3590,7 +3590,7 @@ describe("WorkboardStore", () => {
     );
   });
 
-  it("requires strong proof before any card can become done", async () => {
+  it("gates automated completion while preserving audited operator acceptance", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Proof gate" });
 
@@ -3598,11 +3598,28 @@ describe("WorkboardStore", () => {
     await expect(
       store.complete(card.id, { proof: { status: "passed", note: "done" } }),
     ).rejects.toThrow(/structured proof/);
+
+    const operatorAccepted = await store.move(card.id, "done", undefined);
+    expect(operatorAccepted).toMatchObject({
+      status: "done",
+      metadata: {
+        completionSource: "operator",
+        completionReason: "Operator accepted completion via direct status move.",
+      },
+    });
+
+    const automatedCard = await store.create({ title: "Automated proof gate" });
     await expect(
-      store.complete(card.id, {
+      store.move(automatedCard.id, "done", undefined, { ownerId: "agent-worker" }),
+    ).rejects.toThrow(/structured proof/);
+    await expect(
+      store.complete(automatedCard.id, {
         proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
       }),
-    ).resolves.toMatchObject({ status: "done" });
+    ).resolves.toMatchObject({
+      status: "done",
+      metadata: { completionSource: "automated" },
+    });
   });
 
   it("rejects completion while required children or blockers remain", async () => {

@@ -3,6 +3,7 @@ import type {
   WorkboardBoardMetadata,
   WorkboardChange,
   WorkboardCard,
+  WorkboardCompletionSource,
   WorkboardLink,
   WorkboardMetadata,
   WorkboardStatus,
@@ -66,6 +67,7 @@ import {
   normalizeTemplateId,
   normalizeTimestamp,
   normalizeTitle,
+  removeUndefinedMetadataFields,
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
@@ -472,6 +474,8 @@ export class WorkboardCoreStore {
       allowMetadataDependencyLinks?: boolean;
       enforceStatusHolds?: boolean;
       preserveProofId?: string;
+      completionSource?: WorkboardCompletionSource;
+      completionReason?: string;
     } = {},
   ): Promise<WorkboardCard> {
     const existing = await this.get(id);
@@ -532,6 +536,19 @@ export class WorkboardCoreStore {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
       preserveProofId: options.preserveProofId,
     });
+    if (status === "done" && options.completionSource) {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        completionSource: options.completionSource,
+        completionReason: options.completionReason,
+      });
+    } else if (status !== "done") {
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        completionSource: undefined,
+        completionReason: undefined,
+      });
+    }
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
       // Status patches often spread existing metadata. Only a newly supplied
       // lifecycle source is provenance; copied markers must not survive a manual transition.
@@ -614,7 +631,7 @@ export class WorkboardCoreStore {
     );
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
-      await this.assertActiveStatusAllowed(existing, next, now);
+      await this.assertActiveStatusAllowed(existing, next, now, options.completionSource);
     }
     if (status !== "done") {
       delete next.completedAt;
@@ -637,6 +654,7 @@ export class WorkboardCoreStore {
     existing: WorkboardCard,
     next: WorkboardCard,
     now: number,
+    completionSource: WorkboardCompletionSource = "automated",
   ): Promise<void> {
     if (
       next.status !== "ready" &&
@@ -656,6 +674,11 @@ export class WorkboardCoreStore {
       throw new Error("card dependencies are not done.");
     }
     if (next.status === "done") {
+      // The direct operator move path preserves the documented manual acceptance
+      // workflow. Automated/agent completion still uses the fail-closed gate below.
+      if (completionSource === "operator") {
+        return;
+      }
       await this.assertDoneTransitionAllowed(existing, next);
       return;
     }

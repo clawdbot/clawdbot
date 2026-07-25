@@ -632,6 +632,14 @@ describe("workboard tools", () => {
     );
     expect(unclaimed.card).toMatchObject({ status: "ready" });
 
+    const automatedDone = await store.create({ title: "Automated move card", status: "todo" });
+    await expect(
+      tools.get("workboard_move")?.execute("move-automated-done", {
+        id: automatedDone.id,
+        status: "done",
+      }),
+    ).rejects.toThrow(/structured proof/);
+
     await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
     await expect(
       tools.get("workboard_move")?.execute("move-denied", {

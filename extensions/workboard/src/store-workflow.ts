@@ -319,6 +319,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       },
       {
         enforceStatusHolds: true,
+        completionSource: "automated",
         ...(proof ? { preserveProofId: proofId ?? proof.id } : {}),
       },
     );

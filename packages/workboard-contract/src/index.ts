@@ -89,6 +89,7 @@ export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
 export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number];
 export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
 export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
+export type WorkboardCompletionSource = "operator" | "automated";
 export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
 export type WorkboardDiagnosticKind = (typeof WORKBOARD_DIAGNOSTIC_KINDS)[number];
 export type WorkboardDiagnosticSeverity = (typeof WORKBOARD_DIAGNOSTIC_SEVERITIES)[number];
@@ -338,6 +339,10 @@ export type WorkboardMetadata = {
   failureCount?: number;
   /** Explicit, documented reason why required child work remains open. */
   completionWaiver?: string;
+  /** Authority that performed the terminal completion transition. */
+  completionSource?: WorkboardCompletionSource;
+  /** Audit reason for a manual operator completion, when supplied. */
+  completionReason?: string;
   /** Planning/decomposition is not execution completion. */
   workflowState?: "planned" | "decomposed";
 };

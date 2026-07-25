@@ -1039,6 +1039,8 @@ export function normalizeMetadata(
   const hasLifecycleStatusSourceUpdatedAt = Object.hasOwn(record, "lifecycleStatusSourceUpdatedAt");
   const hasWorkflowState = Object.hasOwn(record, "workflowState");
   const hasCompletionWaiver = Object.hasOwn(record, "completionWaiver");
+  const hasCompletionSource = Object.hasOwn(record, "completionSource");
+  const hasCompletionReason = Object.hasOwn(record, "completionReason");
   const links = Array.isArray(record.links)
     ? record.links.map(normalizeLink).filter((link): link is WorkboardLink => link !== null)
     : undefined;
@@ -1150,6 +1152,14 @@ export function normalizeMetadata(
     completionWaiver: hasCompletionWaiver
       ? normalizeBoundedString(record.completionWaiver, undefined, 2000, "completion waiver")
       : fallback.completionWaiver,
+    completionSource: hasCompletionSource
+      ? record.completionSource === "operator" || record.completionSource === "automated"
+        ? record.completionSource
+        : undefined
+      : fallback.completionSource,
+    completionReason: hasCompletionReason
+      ? normalizeBoundedString(record.completionReason, undefined, 2000, "completion reason")
+      : fallback.completionReason,
   };
   return trimMetadataToBudget(normalized, options);
 }
@@ -1269,6 +1279,8 @@ export function removeUndefinedMetadataFields(metadata: WorkboardMetadata): Work
     "failureCount",
     "workflowState",
     "completionWaiver",
+    "completionSource",
+    "completionReason",
   ] as const) {
     const value = next[key];
     if (
