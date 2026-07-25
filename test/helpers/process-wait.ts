@@ -10,7 +10,7 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
-export async function sleep(ms: number): Promise<void> {
+async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 

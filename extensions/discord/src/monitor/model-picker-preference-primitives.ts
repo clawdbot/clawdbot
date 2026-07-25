@@ -35,7 +35,7 @@ export function sanitizeRecentModels(models: unknown, limit: number): string[] {
   return deduped;
 }
 
-export function hashSegment(value: string, length: number): string {
+function hashSegment(value: string, length: number): string {
   return createHash("sha256").update(value, "utf8").digest("hex").slice(0, length);
 }
 

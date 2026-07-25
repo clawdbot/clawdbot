@@ -93,7 +93,6 @@ export type {
   ForkSessionEntryFromParentTargetResult,
   ForkSessionFromParentTranscriptParams,
   ForkSessionFromParentTranscriptResult,
-  ParentForkedSessionTranscript,
   SessionParentForkDecision,
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
