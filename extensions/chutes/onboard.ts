@@ -4,7 +4,7 @@ import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { CHUTES_BASE_URL, CHUTES_MODEL_CATALOG, buildChutesModelDefinition } from "./models.js";
+import { CHUTES_BASE_URL, CHUTES_MODEL_CATALOG } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const CHUTES_DEFAULT_MODEL_ID = manifest.modelCatalog.providers.chutes.defaultModel;
@@ -16,7 +16,7 @@ const chutesPresetAppliers = createModelCatalogPresetAppliers({
     providerId: "chutes",
     api: "openai-completions",
     baseUrl: CHUTES_BASE_URL,
-    catalogModels: CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
+    catalogModels: structuredClone(CHUTES_MODEL_CATALOG),
     aliases: [
       ...CHUTES_MODEL_CATALOG.map((model) => `chutes/${model.id}`),
       {

@@ -5,7 +5,10 @@ import {
   getCachedLiveProviderModelRows,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  buildManifestModelDefinition,
+  readManifestProviderDefaultModelRef,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelCompatConfig,
   ModelDefinitionConfig,
@@ -49,9 +52,9 @@ const BASE_COMPAT: ModelCompatConfig = {
 /** Base URL for Baseten's OpenAI-compatible Model APIs. */
 export const BASETEN_BASE_URL = BASETEN_MANIFEST_CATALOG.baseUrl;
 /** Default Baseten model id used for onboarding. */
-export const BASETEN_DEFAULT_MODEL_ID = "thinkingmachines/inkling";
+export const BASETEN_DEFAULT_MODEL_ID = BASETEN_MANIFEST_CATALOG.defaultModel;
 /** Default Baseten model ref used for onboarding. */
-export const BASETEN_DEFAULT_MODEL_REF = `baseten/${BASETEN_DEFAULT_MODEL_ID}`;
+export const BASETEN_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "baseten")!;
 /** Bundled fallback rows for all Baseten Model APIs available at release time. */
 export const BASETEN_MODEL_CATALOG = BASETEN_MANIFEST_CATALOG.models;
 
@@ -110,27 +113,18 @@ export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   };
 }
 
-/** Builds one normalized Baseten model definition from a manifest entry. */
-export function buildBasetenModelDefinition(
-  model: (typeof BASETEN_MODEL_CATALOG)[number],
-): ModelDefinitionConfig {
-  const provider = buildManifestModelProviderConfig({
-    providerId: "baseten",
-    catalog: { ...BASETEN_MANIFEST_CATALOG, models: [model] },
-  });
-  const normalized = provider.models[0];
-  if (!normalized) {
-    throw new Error(`Missing normalized Baseten model ${model.id}`);
-  }
-  return {
-    ...normalized,
-    compat: buildBasetenModelCompat(normalized.id),
-  };
-}
-
 /** Builds the network-free fallback catalog. */
 export function buildStaticBasetenModels(): ModelDefinitionConfig[] {
-  return BASETEN_MODEL_CATALOG.map(buildBasetenModelDefinition);
+  return BASETEN_MODEL_CATALOG.map(
+    buildManifestModelDefinition({
+      providerId: "baseten",
+      catalog: BASETEN_MANIFEST_CATALOG,
+      decorate: (normalized) => ({
+        ...normalized,
+        compat: buildBasetenModelCompat(normalized.id),
+      }),
+    }),
+  );
 }
 
 type BasetenLiveModelRow = {

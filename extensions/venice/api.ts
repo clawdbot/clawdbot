@@ -1,6 +1,5 @@
 // Venice API module exposes the plugin public contract.
 export {
-  buildVeniceModelDefinition,
   discoverVeniceModels,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
