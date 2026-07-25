@@ -1,0 +1,1 @@
+﻿{"domain":"sovereign_perimeter","name":"Sovereign Perimeter Network Guard","codeowners":["@LadbotOneLad"],"documentation":"https://robdoe.com","integration_type":"internal","iot_class":"local_push","requirements":["httpx>=0.24.0","numpy>=1.22.0"],"version":"1.0.0"}
