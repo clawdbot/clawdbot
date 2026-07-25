@@ -153,7 +153,12 @@ function waitForRealtimeSdpAnswer(
       }
     };
     const onAbort = () =>
-      finish({ error: new Error("Codex realtime session stopped during startup") });
+      finish({
+        error:
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error("Codex realtime session stopped during startup"),
+      });
     const timeout = setTimeout(
       () => finish({ error: new Error("Codex realtime SDP answer timed out") }),
       CODEX_REALTIME_START_TIMEOUT_MS,
@@ -228,8 +233,9 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
       supportsToolCalls: false,
       supportsVideoFrames: false,
     },
-    // Native ChatGPT login state belongs to Codex and is verified by app-server;
-    // OpenClaw never reads or copies its OAuth token.
+    // Native ChatGPT login state belongs to Codex and is verified by app-server.
+    // Synchronous provider discovery must not start app-server; the subscription
+    // auth requirement below gates thread creation without exposing its OAuth token.
     isConfigured: () => true,
     createBrowserSession: async (request: RealtimeVoiceBrowserSessionCreateRequest) => {
       if (cleanedUp || shutdownController.signal.aborted) {
@@ -352,6 +358,14 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
         resolveSdp = resolve;
         rejectSdp = reject;
       });
+      const startupController = new AbortController();
+      const startupSignal = AbortSignal.any([lifecycleSignal, startupController.signal]);
+      let startupComplete = false;
+      const stopStartup = (error: Error) => {
+        if (!startupController.signal.aborted) {
+          startupController.abort(error);
+        }
+      };
       const disposeNotificationHandler = client.addNotificationHandler((notification) => {
         const notificationParams = readNotificationParams(notification.params);
         if (notificationParams.threadId !== threadId) {
@@ -366,18 +380,24 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
           return;
         }
         if (notification.method === "thread/realtime/error") {
-          rejectSdp(
-            new Error(
-              typeof notificationParams.message === "string"
-                ? notificationParams.message
-                : "Codex realtime session failed",
-            ),
+          const error = new Error(
+            typeof notificationParams.message === "string"
+              ? notificationParams.message
+              : "Codex realtime session failed",
           );
+          rejectSdp(error);
+          stopStartup(error);
           return;
         }
-        if (notification.method === "thread/realtime/closed" && session) {
-          rejectSdp(new Error("Codex realtime session closed before returning an SDP answer"));
-          void closeSession(session);
+        if (notification.method === "thread/realtime/closed") {
+          const error = new Error("Codex realtime session closed before returning an SDP answer");
+          rejectSdp(error);
+          stopStartup(error);
+          // During startup the request handler owns ordered cleanup. Once the SDP
+          // response is ready, terminal notifications must release the live session.
+          if (startupComplete && session) {
+            void closeSession(session);
+          }
         }
       });
       const timer = setTimeout(() => {
@@ -396,24 +416,58 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
       reservationTransferred = true;
       activeSessions.add(session);
 
-      await client.request(
-        "thread/realtime/start",
-        buildCodexRealtimeStartParams({
-          threadId,
-          sdp,
-          developerInstructions: offer.request.instructions?.trim() || undefined,
-          voice: offer.request.voice?.trim() || undefined,
-          initialItems: offer.request.initialItems,
+      // Observe the answer before starting the request: Codex may emit a terminal
+      // notification before the matching JSON-RPC response reaches this process.
+      const answerResultPromise = waitForRealtimeSdpAnswer(answerPromise, startupSignal).then(
+        (answer) => ({ ok: true as const, answer }),
+        (error: unknown) => ({
+          ok: false as const,
+          error: error instanceof Error ? error : new Error("Codex realtime session failed"),
         }),
-        { timeoutMs: CODEX_REALTIME_START_TIMEOUT_MS, signal: lifecycleSignal },
       );
-      const answer = await waitForRealtimeSdpAnswer(answerPromise, lifecycleSignal);
+      try {
+        await client.request(
+          "thread/realtime/start",
+          buildCodexRealtimeStartParams({
+            threadId,
+            sdp,
+            developerInstructions: offer.request.instructions?.trim() || undefined,
+            voice: offer.request.voice?.trim() || undefined,
+            initialItems: offer.request.initialItems,
+          }),
+          { timeoutMs: CODEX_REALTIME_START_TIMEOUT_MS, signal: startupSignal },
+        );
+      } catch (error) {
+        if (startupController.signal.aborted) {
+          const answerResult = await answerResultPromise;
+          if (!answerResult.ok) {
+            throw answerResult.error;
+          }
+          throw startupController.signal.reason instanceof Error
+            ? startupController.signal.reason
+            : new Error("Codex realtime session stopped during startup");
+        }
+        stopStartup(
+          error instanceof Error ? error : new Error("Codex realtime session failed to start"),
+        );
+        throw error;
+      }
+      const answerResult = await answerResultPromise;
+      if (!answerResult.ok) {
+        throw answerResult.error;
+      }
+      if (startupSignal.aborted) {
+        throw startupSignal.reason instanceof Error
+          ? startupSignal.reason
+          : new Error("Codex realtime session stopped during startup");
+      }
+      startupComplete = true;
       responseDeliveryWaiter = createResponseDeliveryWaiter(res, detachBrowserAbort);
       res.statusCode = 200;
       res.setHeader("cache-control", "no-store");
       res.setHeader("content-type", "application/sdp");
       res.setHeader("x-content-type-options", "nosniff");
-      res.end(answer);
+      res.end(answerResult.answer);
       const delivered = await responseDeliveryWaiter.result;
       responseDeliveryWaiter = undefined;
       if (!delivered || lifecycleSignal.aborted) {

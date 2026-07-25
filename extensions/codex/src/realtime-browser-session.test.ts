@@ -58,7 +58,13 @@ function createResponseHarness(options: { autoFinish?: boolean } = {}): {
   };
 }
 
-function createFakeClient(options: { stallRealtimeStart?: boolean } = {}): {
+function createFakeClient(
+  options: {
+    stallRealtimeStart?: boolean;
+    genericRealtimeStartAbortError?: boolean;
+    realtimeStartNotifications?: CodexServerNotification[];
+  } = {},
+): {
   client: CodexAppServerClient;
   methods: string[];
   readRealtimeStartSignal: () => AbortSignal | undefined;
@@ -96,14 +102,27 @@ function createFakeClient(options: { stallRealtimeStart?: boolean } = {}): {
         }
         if (method === "thread/realtime/start") {
           realtimeStartSignal = requestOptions?.signal;
+          const notifications = options.realtimeStartNotifications ?? [
+            {
+              method: "thread/realtime/sdp",
+              params: { threadId: "thread-1", sdp: "v=answer\r\n" },
+            },
+          ];
+          queueMicrotask(() => {
+            for (const notification of notifications) {
+              notificationHandler?.(notification);
+            }
+          });
           if (options.stallRealtimeStart) {
             return await new Promise((_, reject) => {
               const signal = requestOptions?.signal;
               const rejectAbort = () =>
                 reject(
-                  signal?.reason instanceof Error
-                    ? signal.reason
-                    : new Error("realtime start aborted"),
+                  options.genericRealtimeStartAbortError
+                    ? new Error("request cancelled")
+                    : signal?.reason instanceof Error
+                      ? signal.reason
+                      : new Error("realtime start aborted"),
                 );
               signal?.addEventListener("abort", rejectAbort, { once: true });
               if (signal?.aborted) {
@@ -111,12 +130,6 @@ function createFakeClient(options: { stallRealtimeStart?: boolean } = {}): {
               }
             });
           }
-          queueMicrotask(() => {
-            notificationHandler?.({
-              method: "thread/realtime/sdp",
-              params: { threadId: "thread-1", sdp: "v=answer\r\n" },
-            });
-          });
           return {};
         }
         if (method === "thread/realtime/stop" || method === "thread/unsubscribe") {
@@ -284,6 +297,85 @@ describe("Codex OAuth realtime browser session", () => {
       expect(fake.methods).toContain("thread/unsubscribe");
       expect(sharedClientMocks.releaseClient).toHaveBeenCalledWith(fake.client);
       expect(response.end).not.toHaveBeenCalled();
+    } finally {
+      unregister();
+      await realtime.cleanup();
+    }
+  });
+
+  it("returns the Codex startup error when it arrives before the start response", async () => {
+    const fake = createFakeClient({
+      stallRealtimeStart: true,
+      genericRealtimeStartAbortError: true,
+      realtimeStartNotifications: [
+        {
+          method: "thread/realtime/error",
+          params: { threadId: "thread-1", message: "subscription unavailable" },
+        },
+      ],
+    });
+    sharedClientMocks.getClient.mockResolvedValue(fake.client);
+    const realtime = createCodexRealtimeBrowserSessionBroker({
+      getPluginConfig: () => ({}),
+    });
+    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
+    const reservation = await realtime.broker.createBrowserSession({ providerConfig: {} });
+    if (reservation.transport !== "webrtc") {
+      throw new Error("Expected Codex browser session to use WebRTC");
+    }
+    const response = createResponseHarness();
+
+    try {
+      await expect(
+        realtime.handler(createSdpRequest(reservation.clientSecret), response.res),
+      ).resolves.toBe(true);
+      expect(response.res.statusCode).toBe(502);
+      expect(response.readBody()).toBe("subscription unavailable");
+      expect(fake.methods).toContain("thread/realtime/stop");
+      expect(fake.methods).toContain("thread/unsubscribe");
+    } finally {
+      unregister();
+      await realtime.cleanup();
+    }
+  });
+
+  it("does not return an SDP answer after Codex closes during startup", async () => {
+    const fake = createFakeClient({
+      stallRealtimeStart: true,
+      genericRealtimeStartAbortError: true,
+      realtimeStartNotifications: [
+        {
+          method: "thread/realtime/sdp",
+          params: { threadId: "thread-1", sdp: "v=stale-answer\r\n" },
+        },
+        {
+          method: "thread/realtime/closed",
+          params: { threadId: "thread-1", reason: "backend closed" },
+        },
+      ],
+    });
+    sharedClientMocks.getClient.mockResolvedValue(fake.client);
+    const realtime = createCodexRealtimeBrowserSessionBroker({
+      getPluginConfig: () => ({}),
+    });
+    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
+    const reservation = await realtime.broker.createBrowserSession({ providerConfig: {} });
+    if (reservation.transport !== "webrtc") {
+      throw new Error("Expected Codex browser session to use WebRTC");
+    }
+    const response = createResponseHarness();
+
+    try {
+      await expect(
+        realtime.handler(createSdpRequest(reservation.clientSecret), response.res),
+      ).resolves.toBe(true);
+      expect(response.res.statusCode).toBe(502);
+      expect(response.readBody()).toBe(
+        "Codex realtime session closed before returning an SDP answer",
+      );
+      expect(response.readBody()).not.toContain("stale-answer");
+      expect(fake.methods).toContain("thread/realtime/stop");
+      expect(fake.methods).toContain("thread/unsubscribe");
     } finally {
       unregister();
       await realtime.cleanup();
