@@ -1,6 +1,13 @@
 // Gateway restart sentinel recovery.
 // Resumes pending restart continuations and outbound delivery after process restart.
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import {
+  markDelegateArtifactDeliveryUnavailable,
+  prepareDelegateArtifactDelivery,
+  recordDelegateArtifactDeliveryBinding,
+} from "../agents/delegate-artifacts.js";
+import { replaceManagedDelegateReturnInPrompt } from "../agents/internal-events.js";
+import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { deliverQueuedPostCompactionDelegate } from "../auto-reply/reply/post-compaction-delegate-delivery.js";
@@ -32,6 +39,7 @@ import {
   markSessionDeliverySettlement,
   recoverPendingSessionDeliveries,
   SessionDeliveryDeadLetteredError,
+  SessionDeliveryDeferredError,
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
@@ -101,13 +109,20 @@ function enqueueRestartSentinelWake(
   traceparent?: string,
   sessionDeliveryAckId?: string,
   sessionDeliveryAckStateDir?: string,
+  expectedSessionId?: string,
+  delegateArtifactReceipt?: NonNullable<
+    Extract<QueuedSessionDelivery, { kind: "systemEvent" }>["managedDelegateArtifactDelivery"]
+  >["receipt"],
 ) {
   enqueueSystemEvent(message, {
     sessionKey,
+    trusted: true,
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(traceparent ? { traceparent } : {}),
     ...(sessionDeliveryAckId ? { sessionDeliveryAckId } : {}),
     ...(sessionDeliveryAckStateDir ? { sessionDeliveryAckStateDir } : {}),
+    ...(expectedSessionId ? { expectedSessionId } : {}),
+    ...(delegateArtifactReceipt ? { delegateArtifactReceipt } : {}),
   });
   requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
@@ -197,13 +212,133 @@ export async function deliverQueuedSessionDelivery(params: {
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
+    if (
+      params.entry.expectedSessionId &&
+      (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
+    ) {
+      const receipt = params.entry.managedDelegateArtifactDelivery?.receipt;
+      if (receipt) {
+        markDelegateArtifactDeliveryUnavailable({
+          dispatchId: receipt.dispatchId,
+          recipientSessionKey: receipt.recipientSessionKey,
+          recipientSessionId: receipt.recipientSessionId,
+          reason: "recipient-incarnation-changed",
+          ...(params.stateDir
+            ? {
+                options: {
+                  env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+                },
+              }
+            : {}),
+        });
+      }
+      log.warn("session event delivery skipped: session changed", {
+        sessionKey: canonicalKey,
+        queueId: params.entry.id,
+      });
+      return;
+    }
+    let deliveryText = params.entry.text;
+    const managedDelivery = params.entry.managedDelegateArtifactDelivery;
+    if (managedDelivery) {
+      const { projection, receipt } = managedDelivery;
+      if (
+        projection.arrivalContext.dispatchId !== receipt.dispatchId ||
+        projection.arrivalContext.binding.recipientSessionKey !== receipt.recipientSessionKey ||
+        projection.arrivalContext.binding.recipientSessionId !== receipt.recipientSessionId
+      ) {
+        markDelegateArtifactDeliveryUnavailable({
+          dispatchId: receipt.dispatchId,
+          recipientSessionKey: receipt.recipientSessionKey,
+          recipientSessionId: receipt.recipientSessionId,
+          reason: "delivery-state-unavailable",
+          ...(params.stateDir
+            ? {
+                options: {
+                  env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+                },
+              }
+            : {}),
+        });
+        return;
+      }
+      const runtime = resolveContinuationRuntimeConfig(cfg);
+      const prepared = prepareDelegateArtifactDelivery({
+        projection,
+        runtimeEnabled: runtime.enabled,
+        crossSessionEnabled: runtime.crossSessionTargeting === "enabled",
+        currentRecipientSessionId: entry?.sessionId,
+        ...(params.stateDir
+          ? {
+              options: {
+                env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+              },
+            }
+          : {}),
+      });
+      if (prepared.status === "deferred") {
+        throw new SessionDeliveryDeferredError("managed delegate return delivery is disabled");
+      }
+      if (prepared.status === "acknowledged") {
+        return;
+      }
+      if (prepared.status === "unavailable") {
+        markDelegateArtifactDeliveryUnavailable({
+          dispatchId: receipt.dispatchId,
+          recipientSessionKey: receipt.recipientSessionKey,
+          recipientSessionId: receipt.recipientSessionId,
+          reason: "delivery-state-unavailable",
+          ...(params.stateDir
+            ? {
+                options: {
+                  env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+                },
+              }
+            : {}),
+        });
+        return;
+      }
+      const artifactOptions = params.stateDir
+        ? {
+            options: {
+              env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+            },
+          }
+        : {};
+      recordDelegateArtifactDeliveryBinding({
+        dispatchId: receipt.dispatchId,
+        recipientSessionKey: receipt.recipientSessionKey,
+        recipientSessionId: receipt.recipientSessionId,
+        phase: "replay",
+        availability: prepared.projection.arrivalContext.availability,
+        ...artifactOptions,
+      });
+      const refreshed = prepareDelegateArtifactDelivery({
+        projection,
+        runtimeEnabled: runtime.enabled,
+        crossSessionEnabled: runtime.crossSessionTargeting === "enabled",
+        currentRecipientSessionId: entry?.sessionId,
+        ...artifactOptions,
+      });
+      if (refreshed.status === "acknowledged") {
+        return;
+      }
+      if (refreshed.status !== "ready") {
+        throw new SessionDeliverySafeRetryError(
+          "managed delegate return changed during replay preparation",
+        );
+      }
+      deliveryText = replaceManagedDelegateReturnInPrompt(params.entry.text, refreshed.projection);
+    }
     enqueueRestartSentinelWake(
-      params.entry.text,
+      deliveryText,
       canonicalKey,
       queuedDeliveryContext,
       params.entry.traceparent,
       params.entry.id,
       params.stateDir,
+      params.entry.expectedSessionId,
+      params.entry.managedDelegateArtifactDelivery?.receipt,
     );
     return;
   }

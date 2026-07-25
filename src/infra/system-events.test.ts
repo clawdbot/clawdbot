@@ -277,6 +277,34 @@ describe("system events (session routing)", () => {
     ]);
   });
 
+  it("replaces a durable delivery retry instead of queuing a second prompt event", () => {
+    const sessionKey = "agent:main:durable-retry";
+    expect(
+      enqueueSystemEvent("Original managed return", {
+        sessionKey,
+        trusted: true,
+        sessionDeliveryAckId: "delivery-1",
+        sessionDeliveryAckStateDir: "/tmp/state",
+      }),
+    ).toBe(true);
+
+    expect(
+      enqueueSystemEvent("Refreshed managed return", {
+        sessionKey,
+        trusted: true,
+        sessionDeliveryAckId: "delivery-1",
+        sessionDeliveryAckStateDir: "/tmp/state",
+      }),
+    ).toBe(true);
+
+    expect(peekSystemEventEntries(sessionKey)).toMatchObject([
+      {
+        text: "Refreshed managed return",
+        sessionDeliveryAckId: "delivery-1",
+      },
+    ]);
+  });
+
   it("normalizes context keys when checking for context changes", () => {
     const key = "agent:main:test-context";
     expect(isSystemEventContextChanged(key, " build:123 ")).toBe(true);

@@ -21,6 +21,7 @@ import {
   stagePostCompactionDelegate,
 } from "../continuation/delegate-store.js";
 import type { ContinuationSignal } from "../continuation/signal.js";
+import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import {
@@ -259,10 +260,25 @@ export async function dispatchPostCompactionDelegates(
     }
     return normalized;
   });
+  const runtimeConfig = deps.resolveContinuationRuntimeConfig(params.cfg);
+  const gateEligibleCompactionDelegates: SessionPostCompactionDelegate[] = [];
+  for (const delegate of allCompactionDelegates) {
+    const managedArtifacts =
+      delegate.returnOptions?.artifacts === "optional" ||
+      delegate.returnOptions?.artifacts === "required";
+    const crossSessionDisabled =
+      runtimeConfig.crossSessionTargeting === "disabled" &&
+      hasCrossSessionDelegateTargeting(delegate, params.sessionKey);
+    if (managedArtifacts && (!runtimeConfig.enabled || crossSessionDisabled)) {
+      params.postCompactionDelegatesToPreserve.push(delegate);
+      continue;
+    }
+    gateEligibleCompactionDelegates.push(delegate);
+  }
   const now = deps.now();
   const freshCompactionDelegates: SessionPostCompactionDelegate[] = [];
   let staleDroppedDelegates = 0;
-  for (const delegate of allCompactionDelegates) {
+  for (const delegate of gateEligibleCompactionDelegates) {
     const ageMs = now - (delegate.firstArmedAt ?? delegate.createdAt);
     if (ageMs > POST_COMPACTION_DELEGATE_TTL_MS) {
       staleDroppedDelegates += 1;
@@ -278,9 +294,7 @@ export async function dispatchPostCompactionDelegates(
   // already spawned this turn so the combined per-turn count cannot exceed
   // the configured cap. Mirrors the pre-extraction behavior at
   // src/auto-reply/reply/agent-runner.ts (pre-cdc9b6ecd54).
-  const { maxDelegatesPerTurn: maxCompactionDelegates } = deps.resolveContinuationRuntimeConfig(
-    params.cfg,
-  );
+  const { maxDelegatesPerTurn: maxCompactionDelegates } = runtimeConfig;
   const bracketDelegateOffset = params.continuationSignalKind === "delegate" ? 1 : 0;
   const compactionBudget = Math.max(0, maxCompactionDelegates - bracketDelegateOffset);
   const releasedCompactionDelegates = freshCompactionDelegates.slice(0, compactionBudget);

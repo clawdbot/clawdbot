@@ -230,6 +230,12 @@ export type SessionPostCompactionDelegate = {
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";
+  returnOptions?: {
+    artifacts?: "forbidden" | "optional" | "required";
+  };
+  recipientContext?: {
+    purpose: string;
+  };
   traceparent?: string;
   /** Persisted proof that traceparent came from a runtime-owned capture boundary. */
   traceparentProvenance?: "internal";

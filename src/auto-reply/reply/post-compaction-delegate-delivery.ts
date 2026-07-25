@@ -1,4 +1,9 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { formatDelegateArtifactTaskInstruction } from "../../agents/delegate-artifact-policy.js";
+import {
+  assertDelegateArtifactPolicyPrepared,
+  removeUnacceptedDelegateArtifactPolicy,
+} from "../../agents/delegate-artifacts.js";
 import { deriveContinuationDelegateChildSessionKey } from "../../agents/subagent-continuation-ids.js";
 import {
   getSubagentRunByChildSessionKey,
@@ -138,6 +143,8 @@ export function normalizePostCompactionDelegate(
       ? { targetSessionKeys: delegate.targetSessionKeys }
       : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+    ...(delegate.returnOptions ? { returnOptions: delegate.returnOptions } : {}),
+    ...(delegate.recipientContext ? { recipientContext: delegate.recipientContext } : {}),
     ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
     ...(delegate.attachAs ? { attachAs: delegate.attachAs } : {}),
     ...(internalTraceparent
@@ -456,6 +463,12 @@ export async function deliverQueuedPostCompactionDelegate(
     return;
   }
   const runtimeConfig = deps.resolveContinuationRuntimeConfig(cfg);
+  const artifactMode = params.entry.returnOptions?.artifacts;
+  const removeRejectedArtifactPolicy = (): void => {
+    if (params.entry.sourceFlowId && (artifactMode === "optional" || artifactMode === "required")) {
+      removeUnacceptedDelegateArtifactPolicy(params.entry.sourceFlowId);
+    }
+  };
   if (!runtimeConfig.enabled) {
     throw new SessionDeliveryDeferredError(
       "post-compaction delegate delivery deferred while continuation is disabled",
@@ -490,6 +503,7 @@ export async function deliverQueuedPostCompactionDelegate(
       params.entry,
       `Post-compaction delegate rejected: chain length ${maxCompactionChainLength} reached.`,
     );
+    removeRejectedArtifactPolicy();
     return;
   }
 
@@ -509,6 +523,7 @@ export async function deliverQueuedPostCompactionDelegate(
       params.entry,
       `Post-compaction delegate rejected: cost cap exceeded (${compactionChainTokens} > ${compactionCostCapTokens}).`,
     );
+    removeRejectedArtifactPolicy();
     return;
   }
 
@@ -516,6 +531,11 @@ export async function deliverQueuedPostCompactionDelegate(
     crossSessionTargeting === "disabled" &&
     hasCrossSessionDelegateTargeting(params.entry, params.entry.sessionKey)
   ) {
+    if (artifactMode === "optional" || artifactMode === "required") {
+      throw new SessionDeliveryDeferredError(
+        "post-compaction delegate delivery deferred while cross-session targeting is disabled",
+      );
+    }
     deps.log(
       `Post-compaction delegate rejected: crossSessionTargeting=disabled at delivery time for session ${params.entry.sessionKey}`,
     );
@@ -569,12 +589,18 @@ export async function deliverQueuedPostCompactionDelegate(
     tokens: compactionChainTokens,
   });
 
+  const artifactFlowId = params.entry.sourceFlowId ?? params.entry.id;
+  if (artifactMode === "optional" || artifactMode === "required") {
+    assertDelegateArtifactPolicyPrepared(artifactFlowId);
+  }
+
   const spawnResult = await deps.spawnSubagentDirect(
     {
       task:
         `[continuation:post-compaction] ` +
         `[continuation:chain-hop:${nextCompactionChainCount}] ` +
-        `Compaction just completed. Carry this working state to the post-compaction session: ${params.entry.task}`,
+        `Compaction just completed. Carry this working state to the post-compaction session: ${params.entry.task}` +
+        formatDelegateArtifactTaskInstruction(params.entry),
       ...(delegateSilentAnnounce ? { silentAnnounce: true } : {}),
       ...(delegateWakeOnReturn ? { silentAnnounce: true, wakeOnReturn: true } : {}),
       ...(params.entry.targetSessionKey
@@ -618,6 +644,7 @@ export async function deliverQueuedPostCompactionDelegate(
         params.entry,
         `Post-compaction delegate spawn forbidden: ${spawnResult.error ?? "delegation was not accepted"}.`,
       );
+      removeRejectedArtifactPolicy();
       return;
     }
     throw new Error(`post-compaction delegate spawn ${spawnResult.status}`);

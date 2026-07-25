@@ -31,6 +31,10 @@ const mocks = vi.hoisted(() => {
 
   return {
     resolveSessionAgentId: vi.fn(() => "agent-from-key"),
+    markDelegateArtifactDeliveryUnavailable: vi.fn(),
+    prepareDelegateArtifactDelivery: vi.fn(),
+    recordDelegateArtifactDeliveryBinding: vi.fn(),
+    replaceManagedDelegateReturnInPrompt: vi.fn(),
     get queuedSessionDelivery() {
       return state.queuedSessionDeliveries.values().next().value ?? null;
     },
@@ -241,6 +245,24 @@ vi.mock("../agents/agent-scope.js", async () => {
     resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
     resolveDefaultAgentId: mocks.resolveDefaultAgentId,
     resolveSessionAgentId: mocks.resolveSessionAgentId,
+  };
+});
+
+vi.mock("../agents/delegate-artifacts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/delegate-artifacts.js")>();
+  return {
+    ...actual,
+    markDelegateArtifactDeliveryUnavailable: mocks.markDelegateArtifactDeliveryUnavailable,
+    prepareDelegateArtifactDelivery: mocks.prepareDelegateArtifactDelivery,
+    recordDelegateArtifactDeliveryBinding: mocks.recordDelegateArtifactDeliveryBinding,
+  };
+});
+
+vi.mock("../agents/internal-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/internal-events.js")>();
+  return {
+    ...actual,
+    replaceManagedDelegateReturnInPrompt: mocks.replaceManagedDelegateReturnInPrompt,
   };
 });
 
@@ -483,6 +505,9 @@ describe("scheduleRestartSentinelWake", () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     mocks.queuedSessionDelivery = null;
+    mocks.prepareDelegateArtifactDelivery.mockReset();
+    mocks.recordDelegateArtifactDeliveryBinding.mockReset();
+    mocks.replaceManagedDelegateReturnInPrompt.mockReset();
     mocks.dispatchGatewayMethodInProcess.mockReset();
     mocks.dispatchGatewayMethodInProcess.mockResolvedValue({
       status: "ok",
@@ -553,6 +578,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.markSessionDeliveryAttemptStarted.mockClear();
     mocks.moveSessionDeliveryToFailed.mockClear();
     mocks.markSessionDeliverySettlement.mockClear();
+    mocks.markDelegateArtifactDeliveryUnavailable.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     mocks.removeCronRunContinuationSessionIfIdle.mockClear();
     mocks.loadPendingSessionDelivery.mockClear();
@@ -626,6 +652,207 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueDeliveryOnce.mock.invocationCallOrder[0]).toBeLessThan(clearOrder);
     expect(clearOrder).toBeLessThan(mocks.enqueueSystemEvent.mock.invocationCallOrder[0] ?? 0);
     expect(clearOrder).toBeLessThan(mocks.deliverOutboundPayloads.mock.invocationCallOrder[0] ?? 0);
+  });
+
+  it("terminalizes a managed system-event receipt when recovery finds a replacement session", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: { sessionId: "replacement-session", updatedAt: 0 },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      stateDir: "/tmp/custom-session-delivery-state",
+      entry: {
+        id: "session-delivery-managed",
+        kind: "systemEvent",
+        sessionKey: "agent:main:main",
+        text: "managed return",
+        enqueuedAt: 1,
+        retryCount: 0,
+        expectedSessionId: "original-session",
+        managedDelegateArtifactDelivery: {
+          receipt: {
+            kind: "delegate-artifact",
+            dispatchId: "dispatch-1",
+            recipientSessionKey: "agent:main:main",
+            recipientSessionId: "original-session",
+          },
+          projection: {
+            artifacts: [],
+            arrivalContext: {
+              deliveryClass: "delegate result",
+              deliveryMode: "announced",
+              dispatchId: "dispatch-1",
+              producer: { sessionKey: "agent:main:child", runId: "run-1" },
+              completionId: "completion-1",
+              binding: {
+                recipientSessionKey: "agent:main:main",
+                recipientSessionId: "original-session",
+              },
+              dispatchAcceptedAt: 1,
+              completedAt: 2,
+              deliveredAt: 3,
+              policyVersion: 1,
+              availability: "available",
+            },
+          },
+        },
+      },
+    });
+
+    expect(mocks.markDelegateArtifactDeliveryUnavailable).toHaveBeenCalledWith({
+      dispatchId: "dispatch-1",
+      recipientSessionKey: "agent:main:main",
+      recipientSessionId: "original-session",
+      reason: "recipient-incarnation-changed",
+      options: {
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: "/tmp/custom-session-delivery-state",
+        }),
+      },
+    });
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("revalidates and refreshes managed arrival context before replay", async () => {
+    const projection = {
+      artifacts: [],
+      arrivalContext: {
+        deliveryClass: "delegate result" as const,
+        deliveryMode: "announced" as const,
+        dispatchId: "dispatch-1",
+        producer: { sessionKey: "agent:main:child", runId: "run-1" },
+        completionId: "completion-1",
+        binding: {
+          recipientSessionKey: "agent:main:main",
+          recipientSessionId: "session-1",
+        },
+        dispatchAcceptedAt: 1,
+        completedAt: 2,
+        deliveredAt: 3,
+        policyVersion: 1 as const,
+        availability: "available" as const,
+      },
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: { sessionId: "session-1", updatedAt: 0 },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+    mocks.prepareDelegateArtifactDelivery.mockReturnValue({
+      status: "ready",
+      projection: {
+        ...projection,
+        arrivalContext: { ...projection.arrivalContext, replayedAt: 10 },
+      },
+    });
+    mocks.replaceManagedDelegateReturnInPrompt.mockReturnValue("refreshed managed return");
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: {
+        id: "session-delivery-managed",
+        kind: "systemEvent",
+        sessionKey: "agent:main:main",
+        text: "stored managed return",
+        enqueuedAt: 1,
+        retryCount: 0,
+        expectedSessionId: "session-1",
+        managedDelegateArtifactDelivery: {
+          receipt: {
+            kind: "delegate-artifact",
+            dispatchId: "dispatch-1",
+            recipientSessionKey: "agent:main:main",
+            recipientSessionId: "session-1",
+          },
+          projection,
+        },
+      },
+    });
+
+    expect(mocks.prepareDelegateArtifactDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projection,
+        currentRecipientSessionId: "session-1",
+      }),
+    );
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "refreshed managed return",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("rejects a managed replay whose persisted projection does not match its receipt", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: { sessionId: "session-1", updatedAt: 0 },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: {
+        id: "session-delivery-managed-mismatch",
+        kind: "systemEvent",
+        sessionKey: "agent:main:main",
+        text: "stored managed return",
+        enqueuedAt: 1,
+        retryCount: 0,
+        expectedSessionId: "session-1",
+        managedDelegateArtifactDelivery: {
+          receipt: {
+            kind: "delegate-artifact",
+            dispatchId: "dispatch-1",
+            recipientSessionKey: "agent:main:main",
+            recipientSessionId: "session-1",
+          },
+          projection: {
+            artifacts: [],
+            arrivalContext: {
+              deliveryClass: "delegate result",
+              deliveryMode: "announced",
+              dispatchId: "dispatch-other",
+              producer: { sessionKey: "agent:main:child", runId: "run-other" },
+              completionId: "completion-other",
+              binding: {
+                recipientSessionKey: "agent:main:main",
+                recipientSessionId: "session-1",
+              },
+              dispatchAcceptedAt: 1,
+              completedAt: 2,
+              deliveredAt: 3,
+              policyVersion: 1,
+              availability: "available",
+            },
+          },
+        },
+      },
+    });
+
+    expect(mocks.prepareDelegateArtifactDelivery).not.toHaveBeenCalled();
+    expect(mocks.markDelegateArtifactDeliveryUnavailable).toHaveBeenCalledWith({
+      dispatchId: "dispatch-1",
+      recipientSessionKey: "agent:main:main",
+      recipientSessionId: "session-1",
+      reason: "delivery-state-unavailable",
+    });
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("stops delivery when guarded sentinel consumption fails", async () => {
@@ -925,6 +1152,7 @@ describe("scheduleRestartSentinelWake", () => {
         threadId: "fresh-thread",
       },
       sessionDeliveryAckId: "session-delivery-1",
+      trusted: true,
     });
   });
 
@@ -2552,6 +2780,7 @@ describe("scheduleRestartSentinelWake", () => {
         threadId: "thread-42",
       },
       sessionDeliveryAckId: "session-delivery-1",
+      trusted: true,
     });
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "restart-sentinel",
@@ -2610,6 +2839,7 @@ describe("scheduleRestartSentinelWake", () => {
         threadId: "thread-42",
       },
       sessionDeliveryAckId: "session-delivery-2",
+      trusted: true,
     });
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn).not.toHaveBeenCalledWith(
@@ -2644,11 +2874,13 @@ describe("scheduleRestartSentinelWake", () => {
       sessionKey: "agent:main:main",
       sessionDeliveryAckId: "session-delivery-a",
       sessionDeliveryAckStateDir: "/tmp/restart-delivery-state",
+      trusted: true,
     });
     expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(2, "continue after restart", {
       sessionKey: "agent:main:main",
       sessionDeliveryAckId: "session-delivery-b",
       sessionDeliveryAckStateDir: "/tmp/restart-delivery-state",
+      trusted: true,
     });
   });
 
@@ -2894,6 +3126,7 @@ describe("scheduleRestartSentinelWake", () => {
         threadId: "thread-42",
       },
       sessionDeliveryAckId: "session-delivery-2",
+      trusted: true,
     });
     expect(mocks.requestHeartbeat).toHaveBeenNthCalledWith(1, {
       source: "restart-sentinel",
@@ -2942,6 +3175,7 @@ describe("scheduleRestartSentinelWake", () => {
         threadId: "thread-42",
       },
       sessionDeliveryAckId: "session-delivery-2",
+      trusted: true,
     });
   });
 
@@ -3233,6 +3467,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
       sessionKey: "agent:main:main",
       sessionDeliveryAckId: "session-delivery-1",
+      trusted: true,
     });
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "restart-sentinel",
@@ -3259,6 +3494,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
       sessionKey: "agent:main:main",
       sessionDeliveryAckId: "session-delivery-1",
+      trusted: true,
     });
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn.mock.calls).toEqual([

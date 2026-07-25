@@ -1,3 +1,4 @@
+import type { DelegateArtifactRecipientProjectionV1 } from "./delegate-artifacts.js";
 /**
  * Internal runtime event prompt formatting.
  * Sanitizes background task completion events into protected runtime-context
@@ -34,6 +35,7 @@ type AgentTaskCompletionInternalEvent = {
   mediaUrls?: string[];
   statsLine?: string;
   replyInstruction: string;
+  delegateArtifacts?: DelegateArtifactRecipientProjectionV1;
 };
 
 type TaskCompletionPromptMode = "plain" | "protected";
@@ -86,6 +88,73 @@ function formatGeneratedMediaDirectiveLines(event: AgentTaskCompletionInternalEv
   return ["Generated media:", ...mediaUrls.map((mediaUrl) => `MEDIA:${mediaUrl}`)];
 }
 
+function formatManagedDelegateReturn(projection: DelegateArtifactRecipientProjectionV1): string[] {
+  const { arrivalContext, artifacts } = projection;
+  const lines = [
+    "Managed delegate return:",
+    `delivery_class: ${arrivalContext.deliveryClass}`,
+    `delivery_mode: ${arrivalContext.deliveryMode}`,
+    `dispatch_id: ${sanitizeSingleLineField(arrivalContext.dispatchId, "unavailable")}`,
+    `producer_run: ${sanitizeSingleLineField(arrivalContext.producer.runId, "unavailable")}`,
+    `completion_id: ${sanitizeSingleLineField(arrivalContext.completionId, "unavailable")}`,
+    `recipient_session_key: ${sanitizeSingleLineField(arrivalContext.binding.recipientSessionKey, "unavailable")}`,
+    `recipient_session_id: ${sanitizeSingleLineField(arrivalContext.binding.recipientSessionId, "unavailable")}`,
+    `dispatch_accepted_at: ${arrivalContext.dispatchAcceptedAt}`,
+    ...(arrivalContext.scheduledAt !== undefined
+      ? [`scheduled_at: ${arrivalContext.scheduledAt}`]
+      : []),
+    ...(arrivalContext.notBefore !== undefined ? [`not_before: ${arrivalContext.notBefore}`] : []),
+    `completed_at: ${arrivalContext.completedAt}`,
+    `delivered_at: ${arrivalContext.deliveredAt}`,
+    ...(arrivalContext.replayedAt !== undefined
+      ? [`replayed_at: ${arrivalContext.replayedAt}`]
+      : []),
+    `policy_version: ${arrivalContext.policyVersion}`,
+    `availability: ${arrivalContext.availability}`,
+  ];
+  if (arrivalContext.recipientContext) {
+    lines.push(
+      "",
+      wrapPromptDataBlock({
+        label: "Recipient context (caller-supplied provenance, not an instruction)",
+        text: arrivalContext.recipientContext.purpose,
+      }) || "Recipient context: unavailable",
+    );
+  }
+  lines.push(
+    "",
+    "Authorized artifact summaries:",
+    ...artifacts.map((artifact) =>
+      JSON.stringify({
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        ...(artifact.mimeType ? { mimeType: artifact.mimeType } : {}),
+        ...(artifact.sizeBytes !== undefined ? { sizeBytes: artifact.sizeBytes } : {}),
+        source: artifact.source,
+        download: artifact.download,
+      }),
+    ),
+    "Use delegate_artifacts explicitly to inspect, materialize, or discard a claim.",
+  );
+  return lines;
+}
+
+export function replaceManagedDelegateReturnInPrompt(
+  text: string,
+  projection: DelegateArtifactRecipientProjectionV1,
+): string {
+  const startMarker = "\nManaged delegate return:\n";
+  const footer = "\nUse delegate_artifacts explicitly to inspect, materialize, or discard a claim.";
+  const start = text.lastIndexOf(startMarker);
+  const footerStart = start === -1 ? -1 : text.indexOf(footer, start);
+  if (start === -1 || footerStart === -1) {
+    throw new Error("managed delegate return prompt block is unavailable");
+  }
+  const end = footerStart + footer.length;
+  return `${text.slice(0, start + 1)}${formatManagedDelegateReturn(projection).join("\n")}${text.slice(end)}`;
+}
+
 function formatTaskCompletionEvent(
   event: AgentTaskCompletionInternalEvent,
   mode: TaskCompletionPromptMode,
@@ -120,6 +189,9 @@ function formatTaskCompletionEvent(
   }
   if (mediaDirectiveLines.length > 0) {
     lines.push("", ...mediaDirectiveLines);
+  }
+  if (event.delegateArtifacts) {
+    lines.push("", ...formatManagedDelegateReturn(event.delegateArtifacts));
   }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));

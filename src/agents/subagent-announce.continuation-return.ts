@@ -13,6 +13,8 @@ import {
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
+import { markDelegateArtifactDeliveryUnavailable } from "./delegate-artifacts.js";
+import type { DelegateArtifactRecipientProjectionV1 } from "./delegate-artifacts.js";
 import { parseContinuationChainHop } from "./subagent-announce.continuation.accounting.js";
 
 const continuationLog = createSubsystemLogger("continuation/announce");
@@ -64,6 +66,9 @@ export async function routeSubagentContinuationReturn(params: {
   task: string;
   taskLabel: string;
   triggerMessage: string;
+  triggerMessagesBySessionKey?: ReadonlyMap<string, string>;
+  managedArtifactProjections?: ReadonlyMap<string, DelegateArtifactRecipientProjectionV1>;
+  managedArtifactReturn?: boolean;
   announceId: string;
   childSessionKey: string;
   childRunId: string;
@@ -77,6 +82,7 @@ export async function routeSubagentContinuationReturn(params: {
   registryRuntime?: RegistryReturnRuntime;
 }): Promise<{
   handled: boolean;
+  deferred?: boolean;
   continuationTriggerOverride?: ContinuationTrigger;
   traceparent?: string;
 }> {
@@ -85,7 +91,11 @@ export async function routeSubagentContinuationReturn(params: {
     task: params.task,
     maxChainLength: params.maxChainLength,
   });
+  if (params.managedArtifactReturn && !params.continuationEnabled) {
+    return { handled: true, deferred: true };
+  }
   const hasTargeting = Boolean(
+    params.managedArtifactReturn ||
     params.continuationTargetSessionKey ||
     (params.continuationTargetSessionKeys && params.continuationTargetSessionKeys.length > 0) ||
     params.continuationFanoutMode,
@@ -96,43 +106,96 @@ export async function routeSubagentContinuationReturn(params: {
     // tree look empty and causes targeting.ts to fall back to the cleaned
     // requester.  The same guard must apply to explicit and `all` targets.
     const treeSessionKeys =
-      params.continuationFanoutMode === "tree"
+      !params.managedArtifactReturn && params.continuationFanoutMode === "tree"
         ? params.registryRuntime?.listAncestorSessionKeys(params.targetRequesterSessionKey)
         : undefined;
     const allSessionKeys =
-      params.continuationFanoutMode === "all"
+      !params.managedArtifactReturn && params.continuationFanoutMode === "all"
         ? await listKnownSessionKeysOnHost(params.cfg)
         : undefined;
-    const resolvedTargetSessionKeys = resolveContinuationReturnTargetSessionKeys({
-      defaultSessionKey: params.targetRequesterSessionKey,
-      targetSessionKey: params.continuationTargetSessionKey,
-      targetSessionKeys: params.continuationTargetSessionKeys,
-      fanoutMode: params.continuationFanoutMode,
-      treeSessionKeys,
-      allSessionKeys,
-      childSessionKey: params.childSessionKey,
-    });
+    const resolvedTargetSessionKeys = params.managedArtifactReturn
+      ? [...(params.triggerMessagesBySessionKey?.keys() ?? [])]
+      : resolveContinuationReturnTargetSessionKeys({
+          defaultSessionKey: params.targetRequesterSessionKey,
+          targetSessionKey: params.continuationTargetSessionKey,
+          targetSessionKeys: params.continuationTargetSessionKeys,
+          fanoutMode: params.continuationFanoutMode,
+          treeSessionKeys,
+          allSessionKeys,
+          childSessionKey: params.childSessionKey,
+        });
     const targetSessionKeys = resolvedTargetSessionKeys.filter(
       (sessionKey) =>
         !params.registryRuntime?.shouldIgnorePostCompletionAnnounceForSession(sessionKey),
     );
-    await enqueueContinuationReturnDeliveries({
-      targetSessionKeys,
-      text:
-        params.triggerMessage ||
-        `[continuation:enrichment-return] Delegate completed: ${params.taskLabel}`,
-      idempotencyKeyBase: `continuation-return:${params.announceId}`,
-      wakeRecipients: params.wakeOnReturn === true || params.silentAnnounce !== true,
-      childRunId: params.childRunId,
-      ...(params.continuationFanoutMode ? { fanoutMode: params.continuationFanoutMode } : {}),
-      ...(completionTrace.chainStepRemaining !== undefined
-        ? { chainStepRemaining: completionTrace.chainStepRemaining }
-        : {}),
-      ...(completionTrace.traceparent ? { traceparent: completionTrace.traceparent } : {}),
-    });
+    if (params.managedArtifactReturn) {
+      const deliverable = new Set(targetSessionKeys);
+      for (const sessionKey of resolvedTargetSessionKeys) {
+        if (deliverable.has(sessionKey)) {
+          continue;
+        }
+        const projection = params.managedArtifactProjections?.get(sessionKey);
+        if (projection) {
+          markDelegateArtifactDeliveryUnavailable({
+            dispatchId: projection.arrivalContext.dispatchId,
+            recipientSessionKey: sessionKey,
+            recipientSessionId: projection.arrivalContext.binding.recipientSessionId,
+            reason: "recipient-no-longer-active",
+          });
+        }
+      }
+    }
+    for (const targetSessionKey of targetSessionKeys) {
+      const projection = params.managedArtifactProjections?.get(targetSessionKey);
+      const expectedSessionIds = projection
+        ? new Map([
+            [targetSessionKey, projection.arrivalContext.binding.recipientSessionId] as const,
+          ])
+        : undefined;
+      const delegateArtifactReceipts = projection
+        ? new Map([
+            [
+              targetSessionKey,
+              {
+                kind: "delegate-artifact" as const,
+                dispatchId: projection.arrivalContext.dispatchId,
+                recipientSessionKey: targetSessionKey,
+                recipientSessionId: projection.arrivalContext.binding.recipientSessionId,
+              },
+            ] as const,
+          ])
+        : undefined;
+      await enqueueContinuationReturnDeliveries({
+        targetSessionKeys: [targetSessionKey],
+        text:
+          params.triggerMessagesBySessionKey?.get(targetSessionKey) ||
+          params.triggerMessage ||
+          `[continuation:enrichment-return] Delegate completed: ${params.taskLabel}`,
+        idempotencyKeyBase: `continuation-return:${params.announceId}`,
+        wakeRecipients: params.wakeOnReturn === true || params.silentAnnounce !== true,
+        childRunId: params.childRunId,
+        ...(expectedSessionIds ? { expectedSessionIds } : {}),
+        ...(delegateArtifactReceipts ? { delegateArtifactReceipts } : {}),
+        ...(projection
+          ? { delegateArtifactProjections: new Map([[targetSessionKey, projection]]) }
+          : {}),
+        ...(params.continuationFanoutMode ? { fanoutMode: params.continuationFanoutMode } : {}),
+        ...(completionTrace.chainStepRemaining !== undefined
+          ? { chainStepRemaining: completionTrace.chainStepRemaining }
+          : {}),
+        ...(completionTrace.traceparent ? { traceparent: completionTrace.traceparent } : {}),
+      });
+    }
     defaultRuntime.log(
       `[continuation:targeted-return] Delivered to ${targetSessionKeys.join(",")} from ${params.childSessionKey}`,
     );
+    return { handled: true };
+  }
+
+  if (
+    params.managedArtifactReturn &&
+    !params.triggerMessagesBySessionKey?.has(params.targetRequesterSessionKey)
+  ) {
     return { handled: true };
   }
 
@@ -157,7 +220,8 @@ export async function routeSubagentContinuationReturn(params: {
       );
     }
     enqueueSystemEvent(
-      params.triggerMessage ||
+      params.triggerMessagesBySessionKey?.get(params.targetRequesterSessionKey) ||
+        params.triggerMessage ||
         `[continuation:enrichment-return] Delegate completed: ${params.taskLabel}`,
       {
         sessionKey: params.targetRequesterSessionKey,

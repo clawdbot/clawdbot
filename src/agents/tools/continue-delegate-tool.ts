@@ -6,6 +6,7 @@ import {
 import { getContinuationDelegateQueueDepths } from "../../auto-reply/continuation/delegate-flow-store.js";
 import {
   enqueuePendingDelegate,
+  removeUnacceptedContinuationDelegate,
   stagePostCompactionTaskFlowDelegate,
 } from "../../auto-reply/continuation/delegate-store.js";
 import {
@@ -17,6 +18,7 @@ import {
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKeys,
 } from "../../auto-reply/continuation/targeting.js";
+import type { PendingContinuationDelegate } from "../../auto-reply/continuation/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -28,6 +30,8 @@ import {
   type InlineAttachment,
   type InlineAttachmentMount,
 } from "../../shared/inline-attachments.js";
+import { prepareDelegateArtifactPolicy } from "../delegate-artifact-policy.js";
+import { removeUnacceptedDelegateArtifactPolicy } from "../delegate-artifacts.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { validateSubagentAttachments } from "../subagent-attachments.js";
 import type { AnyAgentTool } from "./common.js";
@@ -85,6 +89,31 @@ const ContinueDelegateToolSchema = Type.Object({
       'Broadcast return targeting. "tree" returns to every ancestor in the current continuation/subagent chain; ' +
       '"all" returns to every known session on this host. Do not combine with targetSessionKey/targetSessionKeys.',
   }),
+  returnOptions: Type.Optional(
+    Type.Object(
+      {
+        artifacts: Type.Optional(
+          optionalStringEnum(["forbidden", "optional", "required"] as const),
+        ),
+      },
+      {
+        additionalProperties: false,
+        description:
+          "Managed return policy. Omitted or forbidden preserves ordinary text-only return.",
+      },
+    ),
+  ),
+  recipientContext: Type.Optional(
+    Type.Object(
+      {
+        purpose: Type.String({ minLength: 1, maxLength: 1024 }),
+      },
+      {
+        additionalProperties: false,
+        description: "Contextual provenance for an artifact-capable inter-session recipient.",
+      },
+    ),
+  ),
   model: Type.Optional(
     Type.String({
       description:
@@ -200,6 +229,7 @@ function readAttachAsParam(params: Record<string, unknown>): InlineAttachmentMou
   if (raw === undefined) {
     return undefined;
   }
+
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new ToolInputError("attachAs must be an object.");
   }
@@ -222,6 +252,105 @@ function readAttachAsParam(params: Record<string, unknown>): InlineAttachmentMou
   return parsed.status === "valid" ? { mountPath: parsed.mountPath } : undefined;
 }
 
+function readArtifactReturnFields(params: Record<string, unknown>): {
+  returnOptions?: { artifacts?: "forbidden" | "optional" | "required" };
+  recipientContext?: { purpose: string };
+} {
+  const rawReturnOptions = readSnakeCaseParamRaw(params, "returnOptions");
+  let artifacts: "forbidden" | "optional" | "required" | undefined;
+  if (rawReturnOptions !== undefined) {
+    if (
+      !rawReturnOptions ||
+      typeof rawReturnOptions !== "object" ||
+      Array.isArray(rawReturnOptions)
+    ) {
+      throw new ToolInputError("returnOptions must be an object.");
+    }
+
+    const record = rawReturnOptions as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== "artifacts")) {
+      throw new ToolInputError("returnOptions contains unsupported fields.");
+    }
+    const rawArtifacts = record.artifacts;
+    if (
+      rawArtifacts !== undefined &&
+      rawArtifacts !== "forbidden" &&
+      rawArtifacts !== "optional" &&
+      rawArtifacts !== "required"
+    ) {
+      throw new ToolInputError(
+        'returnOptions.artifacts must be "forbidden", "optional", or "required".',
+      );
+    }
+    artifacts = rawArtifacts;
+  }
+
+  const rawRecipientContext = readSnakeCaseParamRaw(params, "recipientContext");
+  let purpose: string | undefined;
+  if (rawRecipientContext !== undefined) {
+    if (
+      !rawRecipientContext ||
+      typeof rawRecipientContext !== "object" ||
+      Array.isArray(rawRecipientContext)
+    ) {
+      throw new ToolInputError("recipientContext must be an object.");
+    }
+    const record = rawRecipientContext as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== "purpose")) {
+      throw new ToolInputError("recipientContext contains unsupported fields.");
+    }
+    if (typeof record.purpose !== "string" || !record.purpose.trim()) {
+      throw new ToolInputError("recipientContext.purpose must be a non-empty string.");
+    }
+    purpose = record.purpose.trim();
+    if (/[\u0000-\u001f\u007f]/.test(purpose)) {
+      throw new ToolInputError("recipientContext.purpose must not contain control characters.");
+    }
+    if (Buffer.byteLength(purpose, "utf8") > 1024) {
+      throw new ToolInputError("recipientContext.purpose must be at most 1024 UTF-8 bytes.");
+    }
+  }
+  return {
+    ...(rawReturnOptions !== undefined ? { returnOptions: { artifacts } } : {}),
+    ...(purpose ? { recipientContext: { purpose } } : {}),
+  };
+}
+
+function prepareAcceptedDelegateArtifactPolicy(params: {
+  flow: { flowId: string; revision: number } | null;
+  cfg: ReturnType<typeof getRuntimeConfig>;
+  config: ReturnType<typeof resolveContinuationRuntimeConfig>;
+  dispatchingSessionKey: string;
+  delegate: PendingContinuationDelegate;
+  acceptedAt: number;
+  prepareArtifactPolicy?: typeof prepareDelegateArtifactPolicy;
+}): void {
+  if (
+    params.delegate.returnOptions?.artifacts !== "optional" &&
+    params.delegate.returnOptions?.artifacts !== "required"
+  ) {
+    return;
+  }
+  if (!params.flow) {
+    throw new ToolInputError("artifact-capable continuation dispatch could not be persisted.");
+  }
+  try {
+    (params.prepareArtifactPolicy ?? prepareDelegateArtifactPolicy)({
+      cfg: params.cfg,
+      config: params.config,
+      dispatchingSessionKey: params.dispatchingSessionKey,
+      delegate: params.delegate,
+      flowId: params.flow.flowId,
+      dispatchRevision: params.flow.revision,
+      acceptedAt: params.acceptedAt,
+    });
+  } catch {
+    removeUnacceptedDelegateArtifactPolicy(params.flow.flowId);
+    removeUnacceptedContinuationDelegate(params.flow.flowId);
+    throw new ToolInputError("artifact-capable continuation dispatch could not be authorized.");
+  }
+}
+
 /**
  * Creates the `continue_delegate` tool.
  *
@@ -242,7 +371,10 @@ function readAttachAsParam(params: Record<string, unknown>): InlineAttachmentMou
  * No generation guard — per docs/design/continue-work-signal-v2.md,
  * unrelated inbound traffic does not cancel scheduled work.
  */
-export function createContinueDelegateTool(opts: { agentSessionKey?: string }): AnyAgentTool {
+export function createContinueDelegateTool(opts: {
+  agentSessionKey?: string;
+  prepareArtifactPolicy?: typeof prepareDelegateArtifactPolicy;
+}): AnyAgentTool {
   return {
     label: "Continuation",
     name: "continue_delegate",
@@ -320,6 +452,13 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
         ...(fanoutMode ? { fanoutMode: fanoutMode as (typeof FANOUT_MODES)[number] } : {}),
       };
+      const artifactReturnFields = readArtifactReturnFields(params);
+      const artifactMode = artifactReturnFields.returnOptions?.artifacts ?? "forbidden";
+      if (artifactMode === "forbidden" && artifactReturnFields.recipientContext) {
+        throw new ToolInputError(
+          "recipientContext is only valid when managed artifact returns are optional or required.",
+        );
+      }
       // Trace context is runtime-owned. Ignore hidden/raw `traceparent` input
       // just like the public schema does, and capture only the active context.
       const traceparent = formatActiveContinuationTraceparent();
@@ -341,6 +480,15 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         throw new ToolInputError(
           "cross-session continuation targeting is disabled by agents.defaults.continuation.crossSessionTargeting. " +
             'Use the default return target, targetSessionKey set to this session, or fanoutMode="tree".',
+        );
+      }
+      if (
+        artifactMode !== "forbidden" &&
+        hasCrossSessionTargeting &&
+        !artifactReturnFields.recipientContext
+      ) {
+        throw new ToolInputError(
+          "recipientContext.purpose is required for artifact-capable inter-session returns.",
         );
       }
 
@@ -368,13 +516,29 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       }
 
       if (isPostCompaction) {
-        stagePostCompactionTaskFlowDelegate(sessionKey, {
+        const acceptedAt = Date.now();
+        const delegate: PendingContinuationDelegate = {
           task,
-          stagedAt: Date.now(),
+          mode: "post-compaction",
+          firstArmedAt: acceptedAt,
           ...attachmentFields,
           ...targetingFields,
+          ...artifactReturnFields,
           ...traceContextFields,
           ...modelField,
+        };
+        const flow = stagePostCompactionTaskFlowDelegate(sessionKey, {
+          ...delegate,
+          stagedAt: acceptedAt,
+        });
+        prepareAcceptedDelegateArtifactPolicy({
+          flow,
+          cfg: runtimeConfig,
+          config: continuationConfig,
+          dispatchingSessionKey: sessionKey,
+          delegate,
+          acceptedAt,
+          prepareArtifactPolicy: opts.prepareArtifactPolicy,
         });
         const scheduledThisTurn = recordContinueDelegateScheduledThisTurn(sessionKey);
 
@@ -397,14 +561,27 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       log.debug(
         `[continue_delegate:enqueue] session=${sessionKey} mode=${mode} delayMs=${delayMs} fanoutMode=${fanoutMode ?? "none"} targets=${targetSessionKeys?.length ?? (targetSessionKey ? 1 : 0)} task=${task.slice(0, 80)}`,
       );
-      enqueuePendingDelegate(sessionKey, {
+      const acceptedAt = Date.now();
+      const delegate: PendingContinuationDelegate = {
         task,
         delayMs,
+        ...(artifactMode !== "forbidden" ? { firstArmedAt: acceptedAt } : {}),
         ...(mode !== "normal" ? { mode } : {}),
         ...attachmentFields,
         ...targetingFields,
+        ...artifactReturnFields,
         ...traceContextFields,
         ...modelField,
+      };
+      const flow = enqueuePendingDelegate(sessionKey, delegate);
+      prepareAcceptedDelegateArtifactPolicy({
+        flow,
+        cfg: runtimeConfig,
+        config: continuationConfig,
+        dispatchingSessionKey: sessionKey,
+        delegate,
+        acceptedAt,
+        prepareArtifactPolicy: opts.prepareArtifactPolicy,
       });
 
       const dispatchIndex = recordContinueDelegateScheduledThisTurn(sessionKey);

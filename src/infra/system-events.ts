@@ -17,6 +17,7 @@ import {
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
+import type { DelegateArtifactDeliveryReceipt } from "./session-delivery-queue-storage.js";
 
 export type SystemEvent = {
   text: string;
@@ -25,6 +26,8 @@ export type SystemEvent = {
   deliveryContext?: DeliveryContext;
   sessionDeliveryAckId?: string;
   sessionDeliveryAckStateDir?: string;
+  expectedSessionId?: string;
+  delegateArtifactReceipt?: DelegateArtifactDeliveryReceipt;
   /**
    * W3C `traceparent` captured at enqueue-time so the substrate-queue drain can
    * reconstruct the producer trace at announce/deliver time. Per RFC §6.7 the
@@ -54,6 +57,8 @@ type SystemEventOptions = {
   deliveryContext?: DeliveryContext;
   sessionDeliveryAckId?: string;
   sessionDeliveryAckStateDir?: string;
+  expectedSessionId?: string;
+  delegateArtifactReceipt?: DelegateArtifactDeliveryReceipt;
   /**
    * @deprecated Legacy untrusted-producer downgrade flag, re-exported via the
    * the `plugin-sdk/system-event-runtime` subpath.
@@ -120,6 +125,9 @@ function cloneSystemEvent(event: SystemEvent): SystemEvent {
   return {
     ...event,
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
+    ...(event.delegateArtifactReceipt
+      ? { delegateArtifactReceipt: { ...event.delegateArtifactReceipt } }
+      : {}),
   };
 }
 
@@ -139,6 +147,8 @@ function findDuplicateInQueue(
   deliveryContext: DeliveryContext | undefined,
   sessionDeliveryAckId: string | undefined,
   sessionDeliveryAckStateDir: string | undefined,
+  expectedSessionId: string | undefined,
+  delegateArtifactReceipt: DelegateArtifactDeliveryReceipt | undefined,
 ): boolean {
   const incoming = {
     text,
@@ -146,6 +156,8 @@ function findDuplicateInQueue(
     deliveryContext,
     sessionDeliveryAckId,
     sessionDeliveryAckStateDir,
+    expectedSessionId,
+    delegateArtifactReceipt,
   };
   if (contextKey === null) {
     const last = queue[queue.length - 1];
@@ -180,18 +192,6 @@ export function enqueueSystemEventEntry(
   }
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
-  if (
-    findDuplicateInQueue(
-      entry.queue,
-      cleaned,
-      normalizedContextKey,
-      normalizedDeliveryContext,
-      options.sessionDeliveryAckId,
-      options.sessionDeliveryAckStateDir,
-    )
-  ) {
-    return null;
-  } // skip consecutive duplicates
   const normalizedTraceparent = normalizeTraceparent(options?.traceparent);
   applyContextKeyPolicy(entry, normalizedContextKey);
   const event: SystemEvent = {
@@ -203,8 +203,43 @@ export function enqueueSystemEventEntry(
     ...(options.sessionDeliveryAckStateDir
       ? { sessionDeliveryAckStateDir: options.sessionDeliveryAckStateDir }
       : {}),
+    ...(options.trusted === true && options.expectedSessionId
+      ? { expectedSessionId: options.expectedSessionId }
+      : {}),
+    ...(options.trusted === true && options.delegateArtifactReceipt
+      ? { delegateArtifactReceipt: { ...options.delegateArtifactReceipt } }
+      : {}),
     ...(normalizedTraceparent ? { traceparent: normalizedTraceparent } : {}),
   };
+  if (event.sessionDeliveryAckId) {
+    const durableIndex = entry.queue.findIndex(
+      (queued) =>
+        queued.sessionDeliveryAckId === event.sessionDeliveryAckId &&
+        queued.sessionDeliveryAckStateDir === event.sessionDeliveryAckStateDir,
+    );
+    if (durableIndex >= 0) {
+      const existing = entry.queue[durableIndex];
+      if (existing && isDuplicateSystemEvent(existing, event)) {
+        return null;
+      }
+      entry.queue[durableIndex] = event;
+      return cloneSystemEvent(event);
+    }
+  }
+  if (
+    findDuplicateInQueue(
+      entry.queue,
+      cleaned,
+      normalizedContextKey,
+      normalizedDeliveryContext,
+      event.sessionDeliveryAckId,
+      event.sessionDeliveryAckStateDir,
+      event.expectedSessionId,
+      event.delegateArtifactReceipt,
+    )
+  ) {
+    return null;
+  }
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -239,6 +274,18 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
+function areDelegateArtifactReceiptsEqual(
+  left?: DelegateArtifactDeliveryReceipt,
+  right?: DelegateArtifactDeliveryReceipt,
+): boolean {
+  return (
+    left?.kind === right?.kind &&
+    left?.dispatchId === right?.dispatchId &&
+    left?.recipientSessionKey === right?.recipientSessionKey &&
+    left?.recipientSessionId === right?.recipientSessionId
+  );
+}
+
 function replaceSystemEventEntry(text: string, options: SystemEventOptions): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
@@ -261,6 +308,12 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     ...(options.sessionDeliveryAckStateDir
       ? { sessionDeliveryAckStateDir: options.sessionDeliveryAckStateDir }
       : {}),
+    ...(options.trusted === true && options.expectedSessionId
+      ? { expectedSessionId: options.expectedSessionId }
+      : {}),
+    ...(options.trusted === true && options.delegateArtifactReceipt
+      ? { delegateArtifactReceipt: { ...options.delegateArtifactReceipt } }
+      : {}),
     ...(normalizedTraceparent ? { traceparent: normalizedTraceparent } : {}),
   };
   const matching = entry.queue.filter(
@@ -273,6 +326,11 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     matching[0]?.text === replacement.text &&
     matching[0]?.sessionDeliveryAckId === replacement.sessionDeliveryAckId &&
     matching[0]?.sessionDeliveryAckStateDir === replacement.sessionDeliveryAckStateDir &&
+    matching[0]?.expectedSessionId === replacement.expectedSessionId &&
+    areDelegateArtifactReceiptsEqual(
+      matching[0]?.delegateArtifactReceipt,
+      replacement.delegateArtifactReceipt,
+    ) &&
     matching[0]?.traceparent === replacement.traceparent
   ) {
     return null;
@@ -302,6 +360,8 @@ function isDuplicateSystemEvent(
     | "deliveryContext"
     | "sessionDeliveryAckId"
     | "sessionDeliveryAckStateDir"
+    | "expectedSessionId"
+    | "delegateArtifactReceipt"
   >,
 ): boolean {
   return (
@@ -309,6 +369,11 @@ function isDuplicateSystemEvent(
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
     existing.sessionDeliveryAckId === incoming.sessionDeliveryAckId &&
     existing.sessionDeliveryAckStateDir === incoming.sessionDeliveryAckStateDir &&
+    existing.expectedSessionId === incoming.expectedSessionId &&
+    areDelegateArtifactReceiptsEqual(
+      existing.delegateArtifactReceipt,
+      incoming.delegateArtifactReceipt,
+    ) &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
@@ -320,6 +385,8 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
     left.sessionDeliveryAckId === right.sessionDeliveryAckId &&
     left.sessionDeliveryAckStateDir === right.sessionDeliveryAckStateDir &&
+    left.expectedSessionId === right.expectedSessionId &&
+    areDelegateArtifactReceiptsEqual(left.delegateArtifactReceipt, right.delegateArtifactReceipt) &&
     (left.traceparent ?? undefined) === (right.traceparent ?? undefined) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );

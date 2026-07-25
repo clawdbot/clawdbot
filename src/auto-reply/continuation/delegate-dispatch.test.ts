@@ -12,12 +12,18 @@ const loggerRecords: Array<{ level: string; message: string }> = [];
 // Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
+const { assertDelegateArtifactPolicyPreparedMock, removeUnacceptedDelegateArtifactPolicyMock } =
+  vi.hoisted(() => ({
+    assertDelegateArtifactPolicyPreparedMock: vi.fn(),
+    removeUnacceptedDelegateArtifactPolicyMock: vi.fn(),
+  }));
 let flowIdCounter = 0;
 let listTaskFlowsShouldThrow = false;
 const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
 let finishFlowShouldPersistFail = false;
+let failFlowShouldPersistFail = false;
 // recovery derives the chain cost basis from the PERSISTED session entry
 // (no explicit chainState survives a restart), so tests inject the persisted
 // store here to prove the cost cap is enforced against the post-run child total.
@@ -32,6 +38,12 @@ let updateSessionStoreForRecoveryThrowOnRequiredWriteCall: number | undefined;
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
+}));
+
+vi.mock("../../agents/delegate-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/delegate-artifacts.js")>()),
+  assertDelegateArtifactPolicyPrepared: assertDelegateArtifactPolicyPreparedMock,
+  removeUnacceptedDelegateArtifactPolicy: removeUnacceptedDelegateArtifactPolicyMock,
 }));
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
@@ -187,6 +199,9 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
   ),
   failFlow: vi.fn((params: { flowId: string }) => {
     const flow = mockFlows.get(params.flowId);
+    if (failFlowShouldPersistFail) {
+      return { applied: false, reason: "persist_failed", current: flow ? { ...flow } : undefined };
+    }
     if (flow) {
       flow.status = "failed";
     }
@@ -298,6 +313,8 @@ beforeEach(() => {
   enqueueSystemEventMock.mockClear();
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
+  assertDelegateArtifactPolicyPreparedMock.mockClear();
+  removeUnacceptedDelegateArtifactPolicyMock.mockClear();
   loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
   listTaskFlowsShouldThrow = false;
@@ -309,17 +326,19 @@ beforeEach(() => {
   updateSessionStoreForRecoveryOptions.length = 0;
   updateSessionStoreForRecoveryShouldThrow = false;
   finishFlowShouldPersistFail = false;
+  failFlowShouldPersistFail = false;
   updateSessionStoreForRecoveryRequiredWriteCalls = 0;
   updateSessionStoreForRecoveryThrowOnRequiredWriteCall = undefined;
   resetGatewayWorkAdmission();
   vi.useFakeTimers();
+  clearRuntimeConfigSnapshot();
 });
 
 afterEach(() => {
   resetDelegateDispatchHedgesForTests();
   resetContinuationStateForTests();
-  resetContinuationTracer();
   clearRuntimeConfigSnapshot();
+  resetContinuationTracer();
   mockFlows.clear();
   listTaskFlowsShouldThrow = false;
   activeRegistryChildSessionKeys.clear();
@@ -329,6 +348,7 @@ afterEach(() => {
   updateSessionStoreForRecoveryOptions.length = 0;
   updateSessionStoreForRecoveryShouldThrow = false;
   finishFlowShouldPersistFail = false;
+  failFlowShouldPersistFail = false;
   updateSessionStoreForRecoveryRequiredWriteCalls = 0;
   updateSessionStoreForRecoveryThrowOnRequiredWriteCall = undefined;
   resetGatewayWorkAdmission();
@@ -357,6 +377,154 @@ const splitLintUse = [
   findPersistedRecoveryEntry,
 ];
 void splitLintUse;
+
+describe("managed artifact pre-spawn lifecycle", () => {
+  it("requeues accepted managed work when continuation is disabled before spawn", async () => {
+    const sessionKey = "agent:main:managed-disabled";
+    enqueuePendingDelegate(sessionKey, {
+      task: "produce report",
+      returnOptions: { artifacts: "required" },
+    });
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: false } } },
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 8,
+      config: continuationConfig({ enabled: true, crossSessionTargeting: "enabled" }),
+    });
+
+    expect(result).toMatchObject({ dispatched: 0, rejected: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(assertDelegateArtifactPolicyPreparedMock).not.toHaveBeenCalled();
+    expect([...mockFlows.values()]).toContainEqual(expect.objectContaining({ status: "queued" }));
+  });
+
+  it("removes claimless policies when admission rejects before spawn", async () => {
+    const sessionKey = "agent:main:managed-limit";
+    enqueuePendingDelegate(sessionKey, {
+      task: "first report",
+      returnOptions: { artifacts: "optional" },
+    });
+    const dropped = enqueuePendingDelegate(sessionKey, {
+      task: "second report",
+      returnOptions: { artifacts: "optional" },
+    });
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: true } } },
+    });
+    removeUnacceptedDelegateArtifactPolicyMock.mockImplementation((flowId: string) => {
+      expect(mockFlows.get(flowId)).toMatchObject({ status: "failed" });
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 8,
+      config: continuationConfig({
+        enabled: true,
+        maxDelegatesPerTurn: 1,
+        crossSessionTargeting: "enabled",
+      }),
+    });
+
+    expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(dropped?.flowId);
+  });
+
+  it("preserves the policy when terminal rejection cannot be persisted", async () => {
+    const sessionKey = "agent:main:managed-terminal-persist-failure";
+    const delegate = enqueuePendingDelegate(sessionKey, {
+      task: "report that cannot be terminalized",
+      returnOptions: { artifacts: "required" },
+    });
+    failFlowShouldPersistFail = true;
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: true } } },
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 8,
+      config: continuationConfig({
+        enabled: true,
+        maxDelegatesPerTurn: 0,
+        crossSessionTargeting: "enabled",
+      }),
+    });
+
+    expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "running" });
+    expect(removeUnacceptedDelegateArtifactPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "error result",
+      arrangeSpawn: () =>
+        spawnSubagentDirectMock.mockResolvedValueOnce({
+          status: "error",
+          error: "gateway temporarily unavailable",
+        }),
+    },
+    {
+      name: "thrown error",
+      arrangeSpawn: () =>
+        spawnSubagentDirectMock.mockRejectedValueOnce(new Error("gateway temporarily unavailable")),
+    },
+  ])("requeues managed work after a transient spawn $name", async ({ arrangeSpawn }) => {
+    const sessionKey = "agent:main:managed-transient";
+    const delegate = enqueuePendingDelegate(sessionKey, {
+      task: "retry managed report",
+      returnOptions: { artifacts: "required" },
+    });
+    arrangeSpawn();
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: true } } },
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 8,
+      config: continuationConfig({
+        enabled: true,
+        crossSessionTargeting: "enabled",
+      }),
+    });
+
+    expect(result).toMatchObject({ dispatched: 0, rejected: 0 });
+    expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "queued" });
+    expect(removeUnacceptedDelegateArtifactPolicyMock).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(mockFlows.get(delegate?.flowId ?? "")).toMatchObject({ status: "succeeded" });
+  });
+});
 
 describe("trusted delegate task echoes", () => {
   const trustedEchoCases = [
@@ -606,7 +774,7 @@ describe("trusted delegate task echoes", () => {
       }
     }
 
-    expect(taskReferences).toHaveLength(11);
+    expect(taskReferences).toHaveLength(13);
     expect(
       taskReferences.every((taskReference) => {
         const parent = taskReference.parent;

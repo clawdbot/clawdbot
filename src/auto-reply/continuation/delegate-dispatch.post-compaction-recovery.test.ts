@@ -12,6 +12,11 @@ const loggerRecords: Array<{ level: string; message: string }> = [];
 // Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
+const { assertDelegateArtifactPolicyPreparedMock, removeUnacceptedDelegateArtifactPolicyMock } =
+  vi.hoisted(() => ({
+    assertDelegateArtifactPolicyPreparedMock: vi.fn(),
+    removeUnacceptedDelegateArtifactPolicyMock: vi.fn(),
+  }));
 let flowIdCounter = 0;
 let listTaskFlowsShouldThrow = false;
 const activeRegistryChildSessionKeys = new Set<string>();
@@ -32,6 +37,12 @@ let updateSessionStoreForRecoveryThrowOnRequiredWriteCall: number | undefined;
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
+}));
+
+vi.mock("../../agents/delegate-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/delegate-artifacts.js")>()),
+  assertDelegateArtifactPolicyPrepared: assertDelegateArtifactPolicyPreparedMock,
+  removeUnacceptedDelegateArtifactPolicy: removeUnacceptedDelegateArtifactPolicyMock,
 }));
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
@@ -299,6 +310,8 @@ beforeEach(() => {
   enqueueSystemEventMock.mockClear();
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
+  assertDelegateArtifactPolicyPreparedMock.mockClear();
+  removeUnacceptedDelegateArtifactPolicyMock.mockClear();
   loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
   listTaskFlowsShouldThrow = false;
@@ -386,7 +399,11 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
   it("partitions accepted, forbidden, error, and thrown staged outcomes without advancing transient hops", async () => {
     const sessionKey = "agent:main:subagent:pc-direct-partitions";
     for (const task of ["accepted", "forbidden", "error", "thrown"]) {
-      stagePostCompactionTaskFlowDelegate(sessionKey, { task, stagedAt: Date.now() });
+      stagePostCompactionTaskFlowDelegate(sessionKey, {
+        task,
+        stagedAt: Date.now(),
+        returnOptions: { artifacts: "optional" },
+      });
     }
     const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
     expect(claimed).toHaveLength(4);
@@ -416,6 +433,8 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     expect(mockFlows.get(forbidden?.flowId as string)).toMatchObject({ status: "failed" });
     expect(mockFlows.get(transient?.flowId as string)).toMatchObject({ status: "running" });
     expect(mockFlows.get(thrown?.flowId as string)).toMatchObject({ status: "running" });
+    expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledTimes(1);
+    expect(removeUnacceptedDelegateArtifactPolicyMock).toHaveBeenCalledWith(forbidden?.flowId);
   });
 
   it("requeues awaiting-next-compaction running rows on startup recovery", async () => {

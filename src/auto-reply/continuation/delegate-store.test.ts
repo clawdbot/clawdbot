@@ -118,8 +118,21 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
     },
   ),
   failFlow: vi.fn(
-    (params: { flowId: string; stateJson?: unknown; updatedAt?: number; endedAt?: number }) => {
+    (params: {
+      flowId: string;
+      expectedRevision: number;
+      stateJson?: unknown;
+      updatedAt?: number;
+      endedAt?: number;
+    }) => {
       const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return {
+          applied: false,
+          reason: flow ? "revision_conflict" : "not_found",
+          current: flow ? { ...flow } : undefined,
+        };
+      }
       if (flow) {
         flow.status = "failed";
         if (params.stateJson !== undefined) {
@@ -551,6 +564,24 @@ describe("delegate store — TaskFlow-backed", () => {
     markPendingDelegateFailed(failed, "spawn rejected");
     expect(mockFlows.get(failed.flowId!)?.stateJson).not.toHaveProperty("attachments");
     expect(mockFlows.get(failed.flowId!)?.stateJson).not.toHaveProperty("attachAs");
+  });
+
+  it("confirms only a failed terminal row when failure races another terminal outcome", () => {
+    enqueuePendingDelegate("session-terminal-race-success", { task: "accepted elsewhere" });
+    const accepted = expectDefined(
+      consumePendingDelegates("session-terminal-race-success").at(0),
+      "accepted race delegate",
+    );
+    expect(markPendingDelegateSpawnAccepted(accepted, "agent:main:subagent:child")).toBe(true);
+    expect(markPendingDelegateFailed(accepted, "stale rejection")).toBe(false);
+
+    enqueuePendingDelegate("session-terminal-race-failed", { task: "rejected elsewhere" });
+    const failed = expectDefined(
+      consumePendingDelegates("session-terminal-race-failed").at(0),
+      "failed race delegate",
+    );
+    expect(markPendingDelegateFailed(failed, "first rejection")).toBe(true);
+    expect(markPendingDelegateFailed(failed, "replayed rejection")).toBe(true);
   });
 
   it("preserves cross-session target metadata through TaskFlow round-trip", () => {

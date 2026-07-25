@@ -13,7 +13,6 @@ import {
   isRecoverablePendingFlow,
   isRecoverablePendingFlowWithinCutoffs,
   isSucceededDelegateFlow,
-  isTerminalDelegateFlow,
   listQueuedPendingFlows,
   listQueuedPostCompactionFlows,
   listRecoverablePendingFlows,
@@ -31,12 +30,9 @@ const log = createSubsystemLogger("continuation/delegate-store");
 type DelegateFlowRecord = ReturnType<typeof delegateFlowRecords.listAll>[number];
 
 /** Enqueue a delegate from the `continue_delegate` tool. */
-export function enqueuePendingDelegate(
-  sessionKey: string,
-  delegate: PendingContinuationDelegate,
-): void {
+export function enqueuePendingDelegate(sessionKey: string, delegate: PendingContinuationDelegate) {
   const isPostCompaction = delegate.mode === "post-compaction";
-  delegateFlowRecords.create({
+  return delegateFlowRecords.create({
     ownerKey: sessionKey,
     controller: isPostCompaction ? "post-compaction" : "pending",
     delegate,
@@ -181,6 +177,7 @@ export function markPendingDelegateFailed(
     );
     return false;
   }
+
   const failed = delegateFlowRecords.fail({
     flowId: delegate.flowId,
     expectedRevision: delegate.expectedRevision,
@@ -191,7 +188,34 @@ export function markPendingDelegateFailed(
   if (failed.applied) {
     return true;
   }
-  return Boolean(failed.current && isTerminalDelegateFlow(failed.current));
+  return failed.current?.status === "failed";
+}
+
+export function requeuePendingDelegate(
+  delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
+  currentStep = "Deferred until continuation is re-enabled",
+): boolean {
+  if (!delegate.flowId || delegate.expectedRevision === undefined) {
+    return false;
+  }
+  const current = delegateFlowRecords.get(delegate.flowId);
+  const currentDelegate = (current && decodeDelegateFlow(current)) ?? { task: delegate.task };
+  const requeued = delegateFlowRecords.update({
+    flowId: delegate.flowId,
+    expectedRevision: delegate.expectedRevision,
+    fallbackDelegate: currentDelegate,
+    changes: { releasedAt: null },
+    patch: {
+      status: "queued",
+      currentStep,
+      waitJson: null,
+      blockedTaskId: null,
+      blockedSummary: null,
+      endedAt: null,
+      updatedAt: Date.now(),
+    },
+  });
+  return requeued.applied;
 }
 
 export function markPendingDelegateChainStatePersistPlanned(
@@ -371,7 +395,7 @@ export function cancelPendingDelegates(sessionKey: string): void {
 export function stagePostCompactionTaskFlowDelegate(
   sessionKey: string,
   delegate: StagedPostCompactionDelegate,
-): void {
+) {
   const pendingDelegate: PendingContinuationDelegate = {
     task: delegate.task,
     mode: "post-compaction",
@@ -381,15 +405,21 @@ export function stagePostCompactionTaskFlowDelegate(
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+    ...(delegate.returnOptions ? { returnOptions: delegate.returnOptions } : {}),
+    ...(delegate.recipientContext ? { recipientContext: delegate.recipientContext } : {}),
     ...(delegate.traceparent ? { traceparent: delegate.traceparent } : {}),
     ...(delegate.model ? { model: delegate.model } : {}),
   };
-  delegateFlowRecords.create({
+  return delegateFlowRecords.create({
     ownerKey: sessionKey,
     controller: "post-compaction",
     delegate: pendingDelegate,
     currentStep: "Staged for release after compaction",
   });
+}
+
+export function removeUnacceptedContinuationDelegate(flowId: string): void {
+  delegateFlowRecords.delete(flowId);
 }
 
 export function requeueReleasedPostCompactionTaskFlowDelegate(
@@ -663,6 +693,12 @@ export function consumeStagedPostCompactionDelegates(
     }
     if (claimed.fanoutMode) {
       delegate.fanoutMode = claimed.fanoutMode;
+    }
+    if (claimed.returnOptions) {
+      delegate.returnOptions = claimed.returnOptions;
+    }
+    if (claimed.recipientContext) {
+      delegate.recipientContext = claimed.recipientContext;
     }
     if (claimed.traceparent) {
       delegate.traceparent = claimed.traceparent;

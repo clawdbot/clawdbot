@@ -458,6 +458,24 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Sub-agent",
       detailKeys: ["label", "task", "agentId", "model", "thinking", "runTimeoutSeconds", "cleanup"],
     },
+    delegate_artifacts_publish: {
+      emoji: "📦",
+      title: "Publish Delegate Artifacts",
+      detailKeys: ["paths"],
+    },
+    delegate_artifacts: {
+      emoji: "📦",
+      title: "Delegate Artifacts",
+      actions: {
+        list: { label: "list" },
+        inspect: { label: "inspect", detailKeys: ["claimId"] },
+        materialize: {
+          label: "materialize",
+          detailKeys: ["claimId", "destination"],
+        },
+        discard: { label: "discard", detailKeys: ["claimId"] },
+      },
+    },
     agents_wait: { emoji: "⏳", title: "Wait for Agents", detailKeys: ["ids", "timeoutSeconds"] },
     structured_output: { emoji: "🧾", title: "Structured Output", detailKeys: ["result"] },
     subagents: {

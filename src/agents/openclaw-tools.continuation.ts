@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createContinueDelegateTool } from "./tools/continue-delegate-tool.js";
 import { createContinueWorkTool, type ContinueWorkRequest } from "./tools/continue-work-tool.js";
+import { createDelegateArtifactTools } from "./tools/delegate-artifacts-tool.js";
 import {
   createRequestCompactionTool,
   type RequestCompactionToolOpts,
@@ -34,6 +36,9 @@ export function createOpenClawContinuationTools(
     runSessionKey?: string;
     sessionId?: string;
     runId?: string;
+    workspaceDir?: string;
+    sandboxRoot?: string;
+    sandboxFsBridge?: SandboxFsBridge;
   },
 ): AnyAgentTool[] {
   const enabled =
@@ -44,6 +49,17 @@ export function createOpenClawContinuationTools(
   }
 
   const tools: AnyAgentTool[] = [];
+  tools.push(
+    ...createDelegateArtifactTools({
+      config: options.config,
+      agentSessionKey: options.agentSessionKey,
+      sessionId: options.sessionId,
+      runId: options.runId,
+      workspaceDir: options.workspaceDir,
+      sandboxRoot: options.sandboxRoot,
+      sandboxFsBridge: options.sandboxFsBridge,
+    }),
+  );
   if (options.continueWorkOpts) {
     tools.push(
       createContinueWorkTool({

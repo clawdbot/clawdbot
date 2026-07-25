@@ -40,6 +40,7 @@ import {
   prependAgentSteeringPrompt,
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "./agent-steering-queue.js";
+import { purgeExpiredDelegateArtifacts } from "./delegate-artifacts.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
@@ -1066,6 +1067,7 @@ function restoreSubagentRunsOnce() {
   }
   restoreAttempted = true;
   try {
+    purgeExpiredDelegateArtifacts();
     const restoredCount = subagentRegistryDeps.restoreSubagentRunsFromDisk({
       runs: subagentRuns,
       mergeOnly: true,
@@ -1301,6 +1303,7 @@ function startSweeper() {
 async function runSubagentSweep() {
   try {
     await runWithGatewayIndependentRootWorkAdmission(async () => {
+      purgeExpiredDelegateArtifacts();
       await sweepSubagentRuns();
     });
   } catch (err) {

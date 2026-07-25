@@ -1,6 +1,10 @@
 // Persists queued session deliveries for retry and recovery.
 import { z } from "zod";
 import {
+  DelegateArtifactRecipientProjectionSchema,
+  type DelegateArtifactRecipientProjectionV1,
+} from "../agents/delegate-artifacts.js";
+import {
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
 } from "../auto-reply/continuation/targeting-pure.js";
@@ -102,6 +106,18 @@ export type SessionDeliveryContext = {
   threadId?: string | number;
 };
 
+export type DelegateArtifactDeliveryReceipt = {
+  kind: "delegate-artifact";
+  dispatchId: string;
+  recipientSessionKey: string;
+  recipientSessionId: string;
+};
+
+export type ManagedDelegateArtifactDelivery = {
+  receipt: DelegateArtifactDeliveryReceipt;
+  projection: DelegateArtifactRecipientProjectionV1;
+};
+
 type SessionDeliveryRetryPolicy = {
   maxRetries?: number;
   /** Retain terminal ownership when the durable producer can replay forever. */
@@ -129,6 +145,8 @@ type QueuedSessionDeliveryGenericPayload =
       kind: "systemEvent";
       sessionKey: string;
       text: string;
+      expectedSessionId?: string;
+      managedDelegateArtifactDelivery?: ManagedDelegateArtifactDelivery;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
     } & QueuedSessionDeliveryPayloadMetadata)
@@ -163,6 +181,12 @@ type QueuedPostCompactionDelegatePayload = {
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";
+  returnOptions?: {
+    artifacts?: "forbidden" | "optional" | "required";
+  };
+  recipientContext?: {
+    purpose: string;
+  };
   model?: string;
   attachments?: InlineAttachment[];
   attachAs?: InlineAttachmentMount;
@@ -281,16 +305,53 @@ const QueuedGenericCommonSchema = {
   availableAt: z.number().optional(),
 };
 
+const DelegateArtifactDeliveryReceiptSchema = z
+  .object({
+    kind: z.literal("delegate-artifact"),
+    dispatchId: z.string().min(1),
+    recipientSessionKey: z.string().min(1),
+    recipientSessionId: z.string().min(1),
+  })
+  .strict();
+
 const QueuedSystemEventSchema = z
   .object({
     ...QueuedGenericCommonSchema,
     kind: z.literal("systemEvent"),
     sessionKey: z.string(),
     text: z.string(),
+    expectedSessionId: z.string().optional(),
+    managedDelegateArtifactDelivery: z
+      .object({
+        receipt: DelegateArtifactDeliveryReceiptSchema,
+        projection: DelegateArtifactRecipientProjectionSchema,
+      })
+      .strict()
+      .optional(),
     deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
     idempotencyKey: z.string().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((entry, ctx) => {
+    const managed = entry.managedDelegateArtifactDelivery;
+    if (!managed) {
+      return;
+    }
+    if (
+      entry.expectedSessionId !== managed.receipt.recipientSessionId ||
+      entry.sessionKey !== managed.receipt.recipientSessionKey ||
+      managed.projection.arrivalContext.dispatchId !== managed.receipt.dispatchId ||
+      managed.projection.arrivalContext.binding.recipientSessionKey !==
+        managed.receipt.recipientSessionKey ||
+      managed.projection.arrivalContext.binding.recipientSessionId !==
+        managed.receipt.recipientSessionId
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "managed delegate artifact delivery binding mismatch",
+      });
+    }
+  });
 
 const QueuedAgentTurnSchema = z
   .object({
@@ -327,6 +388,18 @@ const QueuedPostCompactionDelegateSchema = z
     targetSessionKey: QueuedContinuationTargetKeySchema.optional(),
     targetSessionKeys: QueuedContinuationTargetKeysSchema.optional(),
     fanoutMode: z.enum(["tree", "all"]).optional(),
+    returnOptions: z
+      .object({
+        artifacts: z.enum(["forbidden", "optional", "required"]).optional(),
+      })
+      .strict()
+      .optional(),
+    recipientContext: z
+      .object({
+        purpose: z.string().trim().min(1).max(1024),
+      })
+      .strict()
+      .optional(),
     model: z.string().trim().min(1).optional(),
     attachments: z
       .array(QueuedInlineAttachmentSchema)
@@ -595,6 +668,10 @@ export function buildPostCompactionDelegateDeliveryPayload(params: {
       ? { targetSessionKeys: params.delegate.targetSessionKeys }
       : {}),
     ...(params.delegate.fanoutMode ? { fanoutMode: params.delegate.fanoutMode } : {}),
+    ...(params.delegate.returnOptions ? { returnOptions: params.delegate.returnOptions } : {}),
+    ...(params.delegate.recipientContext
+      ? { recipientContext: params.delegate.recipientContext }
+      : {}),
     ...(params.delegate.model ? { model: params.delegate.model } : {}),
     ...(params.delegate.attachments && params.delegate.attachments.length > 0
       ? { attachments: params.delegate.attachments }

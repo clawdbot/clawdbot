@@ -246,6 +246,49 @@ describe("session-delivery queue storage", () => {
     });
   });
 
+  it("fails a managed delegate return whose durable receipt and projection disagree", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await expect(
+        enqueueSessionDelivery(
+          {
+            kind: "systemEvent",
+            sessionKey: "agent:main:main",
+            text: "managed return",
+            expectedSessionId: "session-1",
+            managedDelegateArtifactDelivery: {
+              receipt: {
+                kind: "delegate-artifact",
+                dispatchId: "dispatch-1",
+                recipientSessionKey: "agent:main:main",
+                recipientSessionId: "session-1",
+              },
+              projection: {
+                artifacts: [],
+                arrivalContext: {
+                  deliveryClass: "delegate result",
+                  deliveryMode: "announced",
+                  dispatchId: "dispatch-other",
+                  producer: { sessionKey: "agent:main:child", runId: "run-1" },
+                  completionId: "completion-1",
+                  binding: {
+                    recipientSessionKey: "agent:main:main",
+                    recipientSessionId: "session-1",
+                  },
+                  dispatchAcceptedAt: 1,
+                  completedAt: 2,
+                  deliveredAt: 3,
+                  policyVersion: 1,
+                  availability: "available",
+                },
+              },
+            },
+          },
+          tempDir,
+        ),
+      ).rejects.toThrow("invalid generic session delivery payload: invalid shape");
+    });
+  });
+
   it("grants one initial-attempt lease and releases it for recovery", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {

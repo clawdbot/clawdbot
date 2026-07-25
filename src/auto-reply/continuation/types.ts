@@ -77,6 +77,12 @@ export type PendingContinuationDelegate = {
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: ContinuationDelegateFanoutMode;
+  returnOptions?: {
+    artifacts?: "forbidden" | "optional" | "required";
+  };
+  recipientContext?: {
+    purpose: string;
+  };
   traceparent?: string;
   /**
    * Optional provider/model override forwarded to the spawned delegate.
@@ -194,6 +200,12 @@ export type StagedPostCompactionDelegate = {
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: ContinuationDelegateFanoutMode;
+  returnOptions?: {
+    artifacts?: "forbidden" | "optional" | "required";
+  };
+  recipientContext?: {
+    purpose: string;
+  };
   traceparent?: string;
   /** Optional provider/model override; omitted => inherit parent. */
   model?: string;

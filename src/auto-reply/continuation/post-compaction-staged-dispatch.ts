@@ -1,5 +1,10 @@
 /** Stateless staged post-compaction spawn transaction shared by live release and recovery. */
 
+import { formatDelegateArtifactTaskInstruction } from "../../agents/delegate-artifact-policy.js";
+import {
+  assertDelegateArtifactPolicyPrepared,
+  removeUnacceptedDelegateArtifactPolicy,
+} from "../../agents/delegate-artifacts.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
 import {
   getSubagentRunByChildSessionKey,
@@ -17,7 +22,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
-import { markPendingDelegateFailed } from "./delegate-store.js";
+import {
+  markPendingDelegateFailed,
+  requeueReleasedPostCompactionTaskFlowDelegate,
+} from "./delegate-store.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
 import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
 
@@ -58,6 +66,12 @@ export async function dispatchStagedPostCompactionDelegates(
     targetSessionKey?: string;
     targetSessionKeys?: string[];
     fanoutMode?: "tree" | "all";
+    returnOptions?: {
+      artifacts?: "forbidden" | "optional" | "required";
+    };
+    recipientContext?: {
+      purpose: string;
+    };
     traceparent?: string;
     model?: string;
     /**
@@ -91,20 +105,50 @@ export async function dispatchStagedPostCompactionDelegates(
   const accumulatedChainTokens = options?.chainState?.accumulatedChainTokens ?? 0;
   let currentChainCount = options?.chainState?.currentChainCount ?? 0;
   let currentChainId = options?.chainState?.chainId;
-  const delegatesWithinLimit = delegates.slice(0, config.maxDelegatesPerTurn);
-  const delegatesOverLimit = delegates.slice(config.maxDelegatesPerTurn);
+  const dispatchableDelegates = delegates.filter((delegate) => {
+    const managedArtifacts =
+      delegate.returnOptions?.artifacts === "optional" ||
+      delegate.returnOptions?.artifacts === "required";
+    if (managedArtifacts && !config.enabled) {
+      requeueReleasedPostCompactionTaskFlowDelegate(delegate);
+      return false;
+    }
+    if (
+      managedArtifacts &&
+      config.crossSessionTargeting === "disabled" &&
+      hasCrossSessionDelegateTargeting(delegate, sessionKey)
+    ) {
+      requeueReleasedPostCompactionTaskFlowDelegate(delegate);
+      return false;
+    }
+    return true;
+  });
+  const delegatesWithinLimit = dispatchableDelegates.slice(0, config.maxDelegatesPerTurn);
+  const delegatesOverLimit = dispatchableDelegates.slice(config.maxDelegatesPerTurn);
 
   postCompactionLog.info(
     `[continuation:compaction-delegate] Consuming ${delegates.length} compaction delegate(s) for session ${sessionKey}`,
   );
 
   const markTerminalRejected = (
-    delegate: { flowId?: string; expectedRevision?: number; task: string },
+    delegate: {
+      flowId?: string;
+      expectedRevision?: number;
+      task: string;
+      returnOptions?: { artifacts?: "forbidden" | "optional" | "required" };
+    },
     summary: string,
   ): void => {
     failed++;
     if (markPendingDelegateFailed(delegate, summary, "Post-compaction delegate rejected")) {
       terminalRejectedFlowIds.push(delegate.flowId!);
+      if (
+        delegate.flowId &&
+        (delegate.returnOptions?.artifacts === "optional" ||
+          delegate.returnOptions?.artifacts === "required")
+      ) {
+        removeUnacceptedDelegateArtifactPolicy(delegate.flowId);
+      }
     }
   };
 
@@ -138,10 +182,21 @@ export async function dispatchStagedPostCompactionDelegates(
   }
 
   for (const delegate of delegatesWithinLimit) {
+    const managedArtifacts =
+      delegate.returnOptions?.artifacts === "optional" ||
+      delegate.returnOptions?.artifacts === "required";
+    if (managedArtifacts && !config.enabled) {
+      requeueReleasedPostCompactionTaskFlowDelegate(delegate);
+      continue;
+    }
     if (
       config.crossSessionTargeting === "disabled" &&
       hasCrossSessionDelegateTargeting(delegate, sessionKey)
     ) {
+      if (managedArtifacts) {
+        requeueReleasedPostCompactionTaskFlowDelegate(delegate);
+        continue;
+      }
       postCompactionLog.warn(
         `[continuation:post-compaction-policy-rejected] policy.cross_session_targeting session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
       );
@@ -220,12 +275,20 @@ export async function dispatchStagedPostCompactionDelegates(
         dispatchedFlowIds.push(delegate.flowId!);
         continue;
       }
+      if (
+        delegate.flowId &&
+        (delegate.returnOptions?.artifacts === "optional" ||
+          delegate.returnOptions?.artifacts === "required")
+      ) {
+        assertDelegateArtifactPolicyPrepared(delegate.flowId);
+      }
       const spawnResult = await spawnSubagentDirect(
         {
           task:
             `[continuation:post-compaction] ` +
             `[continuation:chain-hop:${nextHop}] ` +
-            `Compaction just completed. Carry this working state to the post-compaction session: ${delegate.task}`,
+            `Compaction just completed. Carry this working state to the post-compaction session: ${delegate.task}` +
+            formatDelegateArtifactTaskInstruction(delegate),
           silentAnnounce: true,
           wakeOnReturn: true,
           drainsContinuationDelegateQueue: true,

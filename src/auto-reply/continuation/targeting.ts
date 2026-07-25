@@ -1,3 +1,7 @@
+import {
+  recordDelegateArtifactDeliveryBinding,
+  type DelegateArtifactRecipientProjectionV1,
+} from "../../agents/delegate-artifacts.js";
 import { emitContinuationFanoutSpan } from "../../infra/continuation-tracer.js";
 import {
   markTrustedContinuationHeartbeatWake,
@@ -8,6 +12,7 @@ import {
   enqueueSessionDelivery,
 } from "../../infra/session-delivery-queue-storage.js";
 import type { SessionDeliveryContext } from "../../infra/session-delivery-queue-storage.js";
+import type { DelegateArtifactDeliveryReceipt } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
@@ -69,6 +74,7 @@ type ContinuationReturnDeliveryDeps = {
   ackSessionDelivery: typeof ackSessionDelivery;
   enqueueSystemEvent: typeof enqueueSystemEvent;
   requestHeartbeatNow: typeof requestHeartbeatNow;
+  recordDelegateArtifactDeliveryBinding?: typeof recordDelegateArtifactDeliveryBinding;
 };
 
 const defaultContinuationReturnDeliveryDeps: ContinuationReturnDeliveryDeps = {
@@ -76,6 +82,7 @@ const defaultContinuationReturnDeliveryDeps: ContinuationReturnDeliveryDeps = {
   ackSessionDelivery,
   enqueueSystemEvent,
   requestHeartbeatNow,
+  recordDelegateArtifactDeliveryBinding,
 };
 
 export async function enqueueContinuationReturnDeliveries(
@@ -83,6 +90,9 @@ export async function enqueueContinuationReturnDeliveries(
     targetSessionKeys: readonly string[];
     text: string;
     idempotencyKeyBase: string;
+    expectedSessionIds?: ReadonlyMap<string, string>;
+    delegateArtifactReceipts?: ReadonlyMap<string, DelegateArtifactDeliveryReceipt>;
+    delegateArtifactProjections?: ReadonlyMap<string, DelegateArtifactRecipientProjectionV1>;
     deliveryContext?: SessionDeliveryContext;
     wakeRecipients?: boolean;
     childRunId?: string;
@@ -98,11 +108,34 @@ export async function enqueueContinuationReturnDeliveries(
   let delivered = 0;
 
   for (const sessionKey of targetSessionKeys) {
+    const expectedSessionId = params.expectedSessionIds?.get(sessionKey);
+    const delegateArtifactReceipt = params.delegateArtifactReceipts?.get(sessionKey);
+    const delegateArtifactProjection = params.delegateArtifactProjections?.get(sessionKey);
+    const hasManagedArtifactDelivery =
+      delegateArtifactReceipt !== undefined || delegateArtifactProjection !== undefined;
+    if (
+      hasManagedArtifactDelivery &&
+      (!delegateArtifactReceipt ||
+        !delegateArtifactProjection ||
+        expectedSessionId !== delegateArtifactReceipt.recipientSessionId ||
+        sessionKey !== delegateArtifactReceipt.recipientSessionKey)
+    ) {
+      throw new Error("managed delegate artifact delivery binding mismatch");
+    }
     const deliveryId = await deps.enqueueSessionDelivery(
       {
         kind: "systemEvent",
         sessionKey,
         text: params.text,
+        ...(expectedSessionId ? { expectedSessionId } : {}),
+        ...(delegateArtifactReceipt && delegateArtifactProjection
+          ? {
+              managedDelegateArtifactDelivery: {
+                receipt: delegateArtifactReceipt,
+                projection: delegateArtifactProjection,
+              },
+            }
+          : {}),
         ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
         ...(params.traceparent ? { traceparent: params.traceparent } : {}),
         // Recipient position is not stable when a cleaned intermediate is
@@ -121,7 +154,22 @@ export async function enqueueContinuationReturnDeliveries(
       ...(params.traceparent ? { traceparent: params.traceparent } : {}),
       sessionDeliveryAckId: deliveryId,
       ...(params.stateDir ? { sessionDeliveryAckStateDir: params.stateDir } : {}),
+      ...(expectedSessionId ? { expectedSessionId } : {}),
+      ...(delegateArtifactReceipt ? { delegateArtifactReceipt } : {}),
     });
+    if (enqueued && delegateArtifactProjection && delegateArtifactReceipt) {
+      deps.recordDelegateArtifactDeliveryBinding?.({
+        dispatchId: delegateArtifactReceipt.dispatchId,
+        recipientSessionKey: delegateArtifactReceipt.recipientSessionKey,
+        recipientSessionId: delegateArtifactReceipt.recipientSessionId,
+        phase: "attempt",
+        now: Date.now(),
+        availability: delegateArtifactProjection.arrivalContext.availability,
+        ...(params.stateDir
+          ? { options: { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } } }
+          : {}),
+      });
+    }
     if (!enqueued) {
       // Idempotent delivery enqueue can return the existing durable row id for
       // the already-queued in-memory event. Do not ack here: that would delete

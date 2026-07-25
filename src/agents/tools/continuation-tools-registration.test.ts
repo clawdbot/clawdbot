@@ -177,6 +177,8 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
       "targetSessionKeys",
       "fanoutMode",
       "model",
+      "returnOptions",
+      "recipientContext",
     ].toSorted();
     const actualKeys = Object.keys(properties).toSorted();
     expect(

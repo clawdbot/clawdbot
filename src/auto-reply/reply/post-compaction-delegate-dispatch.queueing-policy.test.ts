@@ -535,6 +535,75 @@ describe("post-compaction delegate dispatch extraction", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining(`firstArmedAt=${staleFirstArmedAt}`));
   });
 
+  it.each([
+    {
+      name: "continuation",
+      runtimeConfig: {
+        ...defaultRuntimeConfig,
+        enabled: false,
+        maxDelegatesPerTurn: 0,
+        crossSessionTargeting: "enabled" as const,
+      },
+      targetSessionKey: undefined,
+    },
+    {
+      name: "cross-session targeting",
+      runtimeConfig: {
+        ...defaultRuntimeConfig,
+        enabled: true,
+        maxDelegatesPerTurn: 0,
+        crossSessionTargeting: "disabled" as const,
+      },
+      targetSessionKey: "agent:main:other",
+    },
+  ])(
+    "requeues managed TaskFlow rows before stale and cap handling when $name is disabled",
+    async ({ runtimeConfig, targetSessionKey }) => {
+      const now = 1_700_000_000_000;
+      const managedDelegate: SessionPostCompactionDelegate = {
+        task: "defer managed post-compaction work",
+        createdAt: 1,
+        firstArmedAt: 1,
+        flowId: "flow-managed-disabled",
+        expectedRevision: 4,
+        returnOptions: { artifacts: "required" },
+        ...(targetSessionKey ? { targetSessionKey } : {}),
+      };
+      const preserve: SessionPostCompactionDelegate[] = [];
+      const {
+        deps,
+        enqueuePostCompactionDelegateDelivery,
+        finalizeStagedPostCompactionDelegates,
+        requeueReleasedPostCompactionDelegate,
+      } = createDispatchDeps({
+        staged: [managedDelegate],
+        runtimeConfig,
+        now,
+      });
+      requeueReleasedPostCompactionDelegate.mockReturnValue(true);
+
+      const result = await dispatchPostCompactionDelegates(
+        {
+          cfg,
+          compactionCount: 1,
+          followupRun: createFollowupRun(),
+          postCompactionDelegatesToPreserve: preserve,
+          sessionEntry: { sessionId: "session", updatedAt: 1 },
+          sessionKey: "main",
+        },
+        deps,
+      );
+
+      expect(result).toEqual({ queuedDelegates: 0, droppedDelegates: 0 });
+      expect(requeueReleasedPostCompactionDelegate).toHaveBeenCalledWith(
+        expect.objectContaining(managedDelegate),
+      );
+      expect(enqueuePostCompactionDelegateDelivery).not.toHaveBeenCalled();
+      expect(finalizeStagedPostCompactionDelegates).toHaveBeenCalledWith([]);
+      expect(preserve).toEqual([]);
+    },
+  );
+
   it("reduces compaction budget by one when a bracket delegate was already spawned this turn", async () => {
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: 1 };
     const preserve: SessionPostCompactionDelegate[] = [];

@@ -96,6 +96,18 @@ const PendingDelegateStateSchema = z
     targetSessionKey: z.string().min(1).optional(),
     targetSessionKeys: z.array(z.string().min(1)).optional(),
     fanoutMode: z.enum(CONTINUATION_DELEGATE_FANOUT_MODES).optional(),
+    returnOptions: z
+      .object({
+        artifacts: z.enum(["forbidden", "optional", "required"]).optional(),
+      })
+      .strict()
+      .optional(),
+    recipientContext: z
+      .object({
+        purpose: z.string().trim().min(1).max(1024),
+      })
+      .strict()
+      .optional(),
     traceparent: TraceparentStateSchema,
     traceparentProvenance: z.literal("internal").optional(),
     model: z.string().min(1).optional(),
@@ -221,6 +233,8 @@ function encodeDelegateState(delegate: PendingContinuationDelegate): PendingDele
     ...(targetSessionKey ? { targetSessionKey } : {}),
     ...(targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+    ...(delegate.returnOptions ? { returnOptions: delegate.returnOptions } : {}),
+    ...(delegate.recipientContext ? { recipientContext: delegate.recipientContext } : {}),
     ...(traceparent ? { traceparent, traceparentProvenance: "internal" as const } : {}),
     ...(delegate.model ? { model: delegate.model } : {}),
     ...(delegate.chainTokensFold !== undefined
@@ -330,6 +344,8 @@ export function decodeDelegateFlow(flow: TaskFlowRecord): PendingContinuationDel
       ? { targetSessionKeys: state.targetSessionKeys }
       : {}),
     ...(state.fanoutMode ? { fanoutMode: state.fanoutMode } : {}),
+    ...(state.returnOptions ? { returnOptions: state.returnOptions } : {}),
+    ...(state.recipientContext ? { recipientContext: state.recipientContext } : {}),
     ...(state.traceparent && state.traceparentProvenance === "internal"
       ? { traceparent: state.traceparent }
       : {}),

@@ -21,6 +21,12 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
+import {
+  finalizeDelegateArtifacts,
+  isDelegateArtifactReturnConfigured,
+  prepareDelegateArtifactDelivery,
+  type DelegateArtifactRecipientProjectionV1,
+} from "./delegate-artifacts.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
   deliverSubagentAnnouncement,
@@ -342,6 +348,9 @@ export async function runSubagentAnnounceFlow(params: {
     if (failedTerminalOutcome) {
       reply = undefined;
     }
+    const managedArtifactReturn =
+      params.childRunId.startsWith("continuation-delegate-") &&
+      isDelegateArtifactReturnConfigured(params.childRunId);
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
@@ -369,6 +378,7 @@ export async function runSubagentAnnounceFlow(params: {
           // targeted-return router can deliver to the root.
           if (
             !hasTargeting &&
+            !managedArtifactReturn &&
             subagentRegistryRuntime.shouldIgnorePostCompletionAnnounceForSession(
               targetRequesterSessionKey,
             )
@@ -509,9 +519,13 @@ export async function runSubagentAnnounceFlow(params: {
                   `the agent replied with the skip sentinel instead of delivering a result`,
               );
             }
-            return true;
+            if (!managedArtifactReturn) {
+              return true;
+            }
+            reply = "(no output)";
+          } else {
+            reply = cleaned;
           }
-          reply = cleaned;
         } else {
           if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
             logWarn(
@@ -520,7 +534,11 @@ export async function runSubagentAnnounceFlow(params: {
                 `the agent replied with the skip sentinel instead of delivering a result`,
             );
           }
-          skipAnnounceDelivery = true;
+          if (managedArtifactReturn) {
+            reply = "(no output)";
+          } else {
+            skipAnnounceDelivery = true;
+          }
         }
       } else if (reply) {
         const cleaned = stripAndClassifyReply(reply);
@@ -528,11 +546,18 @@ export async function runSubagentAnnounceFlow(params: {
           if (fallbackReply && !fallbackIsSilent) {
             const cleanedFallback = stripAndClassifyReply(fallbackReply);
             if (cleanedFallback === null) {
+              if (!managedArtifactReturn) {
+                return true;
+              }
+              reply = "(no output)";
+            } else {
+              reply = cleanedFallback;
+            }
+          } else {
+            if (!managedArtifactReturn) {
               return true;
             }
-            reply = cleanedFallback;
-          } else {
-            return true;
+            reply = "(no output)";
           }
         } else {
           reply = cleaned;
@@ -542,6 +567,32 @@ export async function runSubagentAnnounceFlow(params: {
 
     if (!outcome) {
       outcome = { status: "unknown" };
+    }
+
+    const cfg = subagentAnnounceDeps.getRuntimeConfig();
+    const artifactConfig = subagentAnnounceDeps.resolveContinuationRuntimeConfig(cfg);
+    const announceSessionId = childSessionId || "unknown";
+    const artifactFinalization = finalizeDelegateArtifacts({
+      producerSessionKey: params.childSessionKey,
+      producerSessionId: announceSessionId,
+      producerRunId: params.childRunId,
+      completionId: announceId,
+      finalizationKey: `delegate-artifact-finalization:${announceId}`,
+      completionStatus: outcome.status,
+      completedAt: params.endedAt ?? Date.now(),
+      silent: params.silentAnnounce === true,
+      runtimeEnabled: artifactConfig.enabled,
+      crossSessionEnabled: artifactConfig.crossSessionTargeting === "enabled",
+      resolveSessionId: (sessionKey) => loadSessionEntryByKey(sessionKey)?.sessionId,
+    });
+    if (artifactFinalization.status === "deferred") {
+      return false;
+    }
+    if (artifactFinalization.status === "failed") {
+      outcome = {
+        status: "error",
+        error: `managed artifact return failed (${artifactFinalization.disposition})`,
+      };
     }
 
     // Build status label
@@ -555,7 +606,6 @@ export async function runSubagentAnnounceFlow(params: {
             : "finished with unknown status";
 
     const taskLabel = params.label || params.task || "task";
-    const announceSessionId = childSessionId || "unknown";
     let findings = childCompletionFindings || reply || "(no output)";
     if (
       childCompletionFindings?.trim() &&
@@ -564,7 +614,6 @@ export async function runSubagentAnnounceFlow(params: {
     ) {
       findings = `${findings}\n\n[Descendant completions]\n${childCompletionFindings}`;
     }
-    const cfg = subagentAnnounceDeps.getRuntimeConfig();
     const continuationRuntime = await subagentContinuationRuntimeLoader.load();
     const continuation = await continuationRuntime.coordinateSubagentContinuation({
       cfg,
@@ -582,7 +631,7 @@ export async function runSubagentAnnounceFlow(params: {
       invalidateSessionEntry,
     });
     findings = continuation.findings;
-    if (continuation.skipAnnounceDelivery) {
+    if (continuation.skipAnnounceDelivery && !managedArtifactReturn) {
       return true;
     }
     const requesterIsSubagent = requesterIsInternalSession();
@@ -597,22 +646,57 @@ export async function runSubagentAnnounceFlow(params: {
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
+    const baseInternalEvent: AgentInternalEvent = {
+      type: "task_completion",
+      source: announceType === "cron job" ? "cron" : "subagent",
+      childSessionKey: params.childSessionKey,
+      childSessionId: announceSessionId,
+      announceType,
+      taskLabel,
+      status: outcome.status,
+      statusLabel,
+      result: findings,
+      statsLine,
+      replyInstruction,
+    };
+    const finalizedArtifactProjections =
+      "projections" in artifactFinalization ? artifactFinalization.projections : undefined;
+    let artifactProjections: Map<string, DelegateArtifactRecipientProjectionV1> | undefined;
+    if (finalizedArtifactProjections) {
+      const deliveryConfig = subagentAnnounceDeps.resolveContinuationRuntimeConfig(
+        subagentAnnounceDeps.getRuntimeConfig(),
+      );
+      artifactProjections = new Map();
+      for (const [sessionKey, projection] of finalizedArtifactProjections) {
+        const delivery = prepareDelegateArtifactDelivery({
+          projection,
+          runtimeEnabled: deliveryConfig.enabled,
+          crossSessionEnabled: deliveryConfig.crossSessionTargeting === "enabled",
+          currentRecipientSessionId: loadSessionEntryByKey(sessionKey)?.sessionId,
+        });
+        if (delivery.status === "deferred") {
+          return false;
+        }
+        if (delivery.status === "ready") {
+          artifactProjections.set(sessionKey, delivery.projection);
+        }
+      }
+    }
+    const requesterProjection = artifactProjections?.get(targetRequesterSessionKey);
     const internalEvents: AgentInternalEvent[] = [
-      {
-        type: "task_completion",
-        source: announceType === "cron job" ? "cron" : "subagent",
-        childSessionKey: params.childSessionKey,
-        childSessionId: announceSessionId,
-        announceType,
-        taskLabel,
-        status: outcome.status,
-        statusLabel,
-        result: findings,
-        statsLine,
-        replyInstruction,
-      },
+      requesterProjection
+        ? { ...baseInternalEvent, delegateArtifacts: requesterProjection }
+        : baseInternalEvent,
     ];
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
+    const artifactTriggerMessages = artifactProjections
+      ? new Map(
+          [...artifactProjections].map(([sessionKey, projection]) => [
+            sessionKey,
+            buildAnnounceSteerMessage([{ ...baseInternalEvent, delegateArtifacts: projection }]),
+          ]),
+        )
+      : undefined;
     const returnRoute = await continuationRuntime.routeSubagentContinuationReturn({
       cfg,
       continuationEnabled: continuation.continuationEnabled,
@@ -621,6 +705,9 @@ export async function runSubagentAnnounceFlow(params: {
       task: params.task ?? "",
       taskLabel,
       triggerMessage,
+      ...(artifactFinalization.status !== "not-configured" ? { managedArtifactReturn: true } : {}),
+      ...(artifactTriggerMessages ? { triggerMessagesBySessionKey: artifactTriggerMessages } : {}),
+      ...(artifactProjections ? { managedArtifactProjections: artifactProjections } : {}),
       announceId,
       childSessionKey: params.childSessionKey,
       childRunId: params.childRunId,
@@ -633,6 +720,9 @@ export async function runSubagentAnnounceFlow(params: {
       traceparent: params.traceparent,
       registryRuntime: subagentRegistryRuntime,
     });
+    if (returnRoute.deferred) {
+      return false;
+    }
     if (returnRoute.handled) {
       didAnnounce = true;
       return true;

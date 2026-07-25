@@ -506,6 +506,97 @@ export interface CurrentConversationBindings {
   updated_at: number;
 }
 
+export interface DelegateArtifactAudit {
+  action: string;
+  claim_id: string | null;
+  destination: string | null;
+  flow_id: string | null;
+  occurred_at: number;
+  outcome: string;
+  recipient_session_id: string;
+  recipient_session_key: string;
+  sequence: Generated<number>;
+}
+
+export interface DelegateArtifactBindings {
+  arrived_at: number | null;
+  claim_id: string;
+  delivery_acknowledged_at: number | null;
+  discarded_at: number | null;
+  last_delivery_attempt_at: number | null;
+  materialized_at: number | null;
+  purpose: string | null;
+  recipient_relation: string;
+  recipient_session_id: string;
+  recipient_session_key: string;
+  replayed_at: number | null;
+  status: string;
+  unavailable_reason: string | null;
+}
+
+export interface DelegateArtifactClaims {
+  artifact_type: string;
+  backing: Uint8Array | null;
+  claim_id: string;
+  created_at: number;
+  finalized_at: number | null;
+  flow_id: string;
+  mime_type: string | null;
+  ordinal: number;
+  publication_index: number;
+  publication_key: string;
+  sha256: string;
+  size_bytes: number;
+  status: string;
+  title: string;
+}
+
+export interface DelegateArtifactPolicies {
+  allowed_mimes_json: string;
+  artifact_mode: string;
+  completed_at: number | null;
+  completion_delivery_mode: string | null;
+  completion_disposition: string | null;
+  completion_finalization_key: string | null;
+  completion_id: string | null;
+  completion_status: string | null;
+  dispatch_accepted_at: number;
+  dispatch_revision: number;
+  flow_id: string;
+  max_artifact_bytes: number;
+  max_artifact_count: number;
+  max_total_bytes: number;
+  not_before: number | null;
+  origin_parent_session_id: string;
+  origin_parent_session_key: string;
+  output_root: string;
+  policy_version: number;
+  producer_run_id: string;
+  producer_session_id: string | null;
+  producer_session_key: string;
+  recipient_context: string | null;
+  recipients_json: string;
+  retention_deadline: number;
+  route_json: string;
+  scheduled_at: number | null;
+  status: string;
+}
+
+export interface DelegateArtifactRecipientOutcomes {
+  decided_at: number;
+  delivery_acknowledged_at: number | null;
+  delivery_terminal_reason: string | null;
+  first_delivery_at: number | null;
+  flow_id: string;
+  outcome: string;
+  purpose: string | null;
+  recipient_relation: string;
+  recipient_session_id: string;
+  recipient_session_key: string;
+  replayed_at: number | null;
+  unavailable_reason: string | null;
+}
+
 export interface DeliveryQueueEntries {
   account_id: string | null;
   channel: string | null;
@@ -1462,6 +1553,11 @@ export interface DB {
   config_machine_state: ConfigMachineState;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
+  delegate_artifact_audit: DelegateArtifactAudit;
+  delegate_artifact_bindings: DelegateArtifactBindings;
+  delegate_artifact_claims: DelegateArtifactClaims;
+  delegate_artifact_policies: DelegateArtifactPolicies;
+  delegate_artifact_recipient_outcomes: DelegateArtifactRecipientOutcomes;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;
