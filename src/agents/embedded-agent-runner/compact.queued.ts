@@ -240,12 +240,21 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (params.trigger !== "manual") {
-    return await compactEmbeddedAgentSessionImpl(params);
+  const runtimeTarget = await resolveAgentRunSessionTarget(params);
+  const resolvedParams = {
+    ...params,
+    agentId: runtimeTarget.agentId,
+    sessionId: runtimeTarget.sessionId,
+    sessionKey: runtimeTarget.sessionKey,
+    sessionTarget: runtimeTarget,
+    sessionFile: runtimeTarget.sessionKey,
+  };
+  if (resolvedParams.trigger !== "manual") {
+    return await compactEmbeddedAgentSessionImpl(resolvedParams);
   }
   // Reply operations and embedded handles are separate lifecycle owners. A
   // /compact reply may coexist with this handle, but another embedded writer may not.
-  if (resolveManualCompactionActiveRunSessionId(params)) {
+  if (resolveManualCompactionActiveRunSessionId(resolvedParams)) {
     return {
       ok: false,
       compacted: false,
@@ -255,8 +264,8 @@ export async function compactEmbeddedAgentSession(
   }
 
   const controller = new AbortController();
-  const abortSignal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, controller.signal])
+  const abortSignal = resolvedParams.abortSignal
+    ? AbortSignal.any([resolvedParams.abortSignal, controller.signal])
     : controller.signal;
   const handle: EmbeddedAgentQueueHandle = {
     kind: "embedded",
@@ -267,14 +276,24 @@ export async function compactEmbeddedAgentSession(
     abort: (reason) => controller.abort(reason ?? "user_abort"),
     cancel: (reason) => controller.abort(reason ?? "user_abort"),
   };
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  setActiveEmbeddedRun(
+    resolvedParams.sessionId,
+    handle,
+    resolvedParams.sessionKey,
+    resolvedParams.sessionFile,
+  );
   try {
     return await compactEmbeddedAgentSessionImpl({
-      ...params,
+      ...resolvedParams,
       abortSignal,
     });
   } finally {
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    clearActiveEmbeddedRun(
+      resolvedParams.sessionId,
+      handle,
+      resolvedParams.sessionKey,
+      resolvedParams.sessionFile,
+    );
   }
 }
 
@@ -666,6 +685,9 @@ async function compactResolvedContextEngine(
             sessionKey: delegatedSessionTarget.sessionKey ?? params.sessionKey,
             sessionTarget: delegatedSessionTarget,
           });
+          if (resolvedDelegatedTarget.agentId !== runtimeTarget.agentId) {
+            throw new Error("Context-engine successor target changed agent ownership");
+          }
           postCompactionSessionId = resolvedDelegatedTarget.sessionId;
           postCompactionSessionFile = resolvedDelegatedTarget.sessionKey;
           postCompactionSessionTarget = resolvedDelegatedTarget;

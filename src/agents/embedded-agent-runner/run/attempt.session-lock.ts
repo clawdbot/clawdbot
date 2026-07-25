@@ -13,6 +13,7 @@ type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
 type LockOptions = Parameters<AcquireSessionWriteLock>[0];
 type SessionFileWriteAppendValidator<T> = (result: T) => boolean;
+const PROMPT_DISPOSE_SETTLE_TIMEOUT_MS = 5_000;
 
 export type EmbeddedAttemptSessionFileOwner = {
   sessionFileKey: string;
@@ -147,7 +148,22 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     dispose: async () => {
       disposed = true;
       if (promptReleased) {
-        await promptSettled;
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          promptSettled,
+          new Promise<void>((resolve) => {
+            timeout = setTimeout(resolve, PROMPT_DISPOSE_SETTLE_TIMEOUT_MS);
+          }),
+        ]);
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        if (promptReleased) {
+          promptAborted = true;
+          promptReleased = false;
+          settlePrompt?.();
+          settlePrompt = undefined;
+        }
       }
       await serializeLifecycle(() => {});
     },

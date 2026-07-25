@@ -1,6 +1,8 @@
 /**
  * Manages active embedded-agent run handles, queues, aborts, and waiters.
  */
+import fs from "node:fs";
+import path from "node:path";
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
@@ -153,11 +155,33 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   }
 }
 
+function normalizeSessionFileRegistryKey(sessionFile: string | undefined): string | undefined {
+  const normalized = sessionFile?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized.startsWith("agent:") ||
+    normalized.startsWith("sqlite:") ||
+    normalized.startsWith("in-memory:")
+  ) {
+    return normalized;
+  }
+  const resolved = path.resolve(normalized);
+  const parent = path.dirname(resolved);
+  try {
+    return path.join(fs.realpathSync(parent), path.basename(resolved));
+  } catch {
+    return resolved;
+  }
+}
+
 function setActiveRunSessionFile(sessionFile: string | undefined, sessionId: string): void {
-  if (!sessionFile?.trim()) {
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
+  if (!normalizedSessionFile) {
     return;
   }
-  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(sessionFile, sessionId);
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(normalizedSessionFile, sessionId);
 }
 
 function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
@@ -173,7 +197,7 @@ function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
   ) {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(normalizedSessionKey);
   }
-  const normalizedSessionFile = abandonedRun.sessionFile?.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(abandonedRun.sessionFile);
   if (normalizedSessionFile) {
     const sessionFileKey = normalizedSessionFile;
     if (ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
@@ -194,7 +218,7 @@ function clearEmbeddedRunAbandonmentBySessionKey(sessionKey: string | undefined)
 }
 
 function clearEmbeddedRunAbandonmentBySessionFile(sessionFile: string | undefined): void {
-  const normalizedSessionFile = sessionFile?.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
   if (!normalizedSessionFile) {
     return;
   }
@@ -233,12 +257,13 @@ function markEmbeddedRunAbandoned(params: {
     sessionKey: params.sessionKey,
     sessionFile: params.sessionFile,
   });
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
   const abandonedRun: AbandonedEmbeddedRun = {
     sessionId,
     abandonedAtMs: Date.now(),
     reason: params.reason,
     ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
-    ...(params.sessionFile?.trim() ? { sessionFile: params.sessionFile.trim() } : {}),
+    ...(normalizedSessionFile ? { sessionFile: normalizedSessionFile } : {}),
   };
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set(sessionId, abandonedRun);
   if (abandonedRun.sessionKey) {
@@ -277,7 +302,7 @@ export function isEmbeddedRunAbandoned(params: {
   if (normalizedSessionKey && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(normalizedSessionKey)) {
     return true;
   }
-  const normalizedSessionFile = params.sessionFile?.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
   return Boolean(
     normalizedSessionFile && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(normalizedSessionFile),
   );
@@ -697,7 +722,7 @@ export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): str
 export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   sessionFile: string,
 ): string | undefined {
-  const normalizedSessionFile = sessionFile.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
   if (!normalizedSessionFile) {
     return undefined;
   }

@@ -1,11 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
 /** Identifies a run transcript target without naming the current storage artifact. */
 export type AgentRunSessionTarget = {
@@ -24,16 +25,44 @@ export async function resolveAgentRunSessionTarget(params: {
   agentId?: string;
   config?: OpenClawConfig;
   sessionId: string;
+  sessionFile?: string;
   sessionKey?: string;
   sessionTarget?: AgentRunSessionTarget;
 }): Promise<ResolvedAgentRunSessionTarget> {
   const sessionTarget = params.sessionTarget;
-  const agentId = normalizeOptionalString(sessionTarget?.agentId) ?? params.agentId;
-  const sessionId = normalizeOptionalString(sessionTarget?.sessionId) ?? params.sessionId;
+  const legacySessionFile = normalizeOptionalString(params.sessionFile);
+  const legacyMarker = parseSqliteSessionFileMarker(legacySessionFile);
+  if (
+    !sessionTarget &&
+    legacySessionFile &&
+    !legacyMarker &&
+    !legacySessionFile.startsWith("agent:") &&
+    !legacySessionFile.startsWith("in-memory:") &&
+    legacySessionFile !== params.sessionKey
+  ) {
+    throw new Error(
+      "File-backed transcript targets are unsupported; migrate the session to SQLite first",
+    );
+  }
+  const agentId =
+    normalizeOptionalString(sessionTarget?.agentId) ?? legacyMarker?.agentId ?? params.agentId;
+  const sessionId =
+    normalizeOptionalString(sessionTarget?.sessionId) ??
+    legacyMarker?.sessionId ??
+    params.sessionId;
   const sessionKey =
     normalizeOptionalString(sessionTarget?.sessionKey) ??
     normalizeOptionalString(params.sessionKey) ??
     normalizeOptionalString(sessionId);
+  const suppliedKeyAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  if (
+    legacyMarker &&
+    ((params.agentId && params.agentId !== legacyMarker.agentId) ||
+      (suppliedKeyAgentId && suppliedKeyAgentId !== legacyMarker.agentId) ||
+      params.sessionId !== legacyMarker.sessionId)
+  ) {
+    throw new Error("Legacy SQLite transcript marker conflicts with the supplied session identity");
+  }
   const effectiveAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
   if (sessionTarget && sessionKey) {
     const storePath =
@@ -45,6 +74,15 @@ export async function resolveAgentRunSessionTarget(params: {
       sessionKey,
       storePath,
       ...(sessionTarget.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
+    });
+  }
+
+  if (legacyMarker && sessionKey) {
+    return await resolveSessionTranscriptRuntimeTarget({
+      agentId: legacyMarker.agentId,
+      sessionId,
+      sessionKey,
+      storePath: legacyMarker.storePath,
     });
   }
 

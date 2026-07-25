@@ -221,7 +221,13 @@ function wrappedCompactionArgs(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: TEST_SESSION_ID,
     sessionKey: TEST_SESSION_KEY,
-    sessionFile: TEST_SESSION_FILE,
+    sessionFile: TEST_SESSION_KEY,
+    sessionTarget: {
+      agentId: "main",
+      sessionId: TEST_SESSION_ID,
+      sessionKey: TEST_SESSION_KEY,
+      storePath: "/tmp/sessions.json",
+    },
     workspaceDir: TEST_WORKSPACE_DIR,
     customInstructions: TEST_CUSTOM_INSTRUCTIONS,
     enqueue: async <T>(task: () => Promise<T> | T) => await task(),
@@ -373,7 +379,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("fails closed before generic compaction for a model-locked native session", async () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
@@ -706,7 +712,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
     });
 
@@ -728,7 +734,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
@@ -747,7 +753,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:main",
       sandboxSessionKey: "agent:main:telegram:default:direct:12345",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
     });
 
@@ -764,7 +770,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: "agent:main:subagent:worker",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
     });
 
@@ -784,7 +790,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: "agent:codex:acp:worker",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
     });
 
@@ -809,7 +815,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: "agent:marketing-agent:session-1",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
     });
 
@@ -829,7 +835,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
     });
 
@@ -976,7 +982,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       senderId: "sender-1",
       senderName: "Alice",
@@ -1003,7 +1009,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       await compactEmbeddedAgentSessionDirect({
         sessionId: "session-1",
         sessionKey: TEST_SESSION_KEY,
-        sessionFile: "/tmp/session.jsonl",
+        sessionFile: TEST_SESSION_KEY,
         workspaceDir: "/tmp/workspace",
       });
 
@@ -1015,7 +1021,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       cwd: "/tmp/task-repo",
     });
@@ -1035,7 +1041,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       contextTokenBudget: 64_000,
     });
@@ -1060,7 +1066,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
     });
 
@@ -1098,7 +1104,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       runId: "run-tool-schema-quarantine",
     });
@@ -1116,7 +1122,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       contextTokenBudget: 64_000,
     });
@@ -1144,7 +1150,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-primary",
@@ -1190,7 +1196,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-primary",
@@ -1234,7 +1240,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const params = {
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.6-sol",
@@ -1301,7 +1307,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
@@ -1411,7 +1417,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
@@ -1470,7 +1476,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       config: {
         models: {
@@ -1508,7 +1514,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
@@ -1541,7 +1547,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
@@ -1623,7 +1629,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
@@ -1699,7 +1705,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-primary",
@@ -1735,7 +1741,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-primary",
@@ -1775,7 +1781,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-primary",
@@ -1845,7 +1851,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         messageCount: 1,
         tokenCount: 10,
         compactedCount: 1,
-        sessionFile: "/tmp/session.jsonl",
+        sessionFile: TEST_SESSION_FILE,
       },
       expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
         sessionKey: "agent:main:session-1",
@@ -1930,7 +1936,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       messageCountAfter: 1,
       tokensAfter: 10,
       compactedCount: 1,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_KEY,
       onHookMessages,
     });
 
@@ -4080,7 +4086,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     {
       identity: "session file",
       activeSessionKey: "agent:main:other-session",
-      activeSessionFile: TEST_SESSION_FILE,
+      activeSessionFile: TEST_SESSION_KEY,
     },
   ])("rejects manual compaction matching an active $identity", async (active) => {
     const activeSessionId = "other-session";

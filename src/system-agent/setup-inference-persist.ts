@@ -552,6 +552,7 @@ export async function runSetupInferenceTest(params: {
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",
+        disableTrajectory: true,
         // The 32-token probe cap is sized for the "reply OK" verification
         // prompt only. Custom completions pass no explicit cap: the stream
         // layer then applies the resolved model's own required maxTokens
