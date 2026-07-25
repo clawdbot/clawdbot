@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
@@ -1053,7 +1054,7 @@ describe("session MCP runtime", () => {
       inputSchema: { type: "array", items: { type: "number" } },
     });
 
-    const runtime = await getOrCreateSessionMcpRuntime({
+    const failedRuntime = await getOrCreateSessionMcpRuntime({
       sessionId: "session-catalog-retry",
       sessionKey: "agent:test:session-catalog-retry",
       workspaceDir: "/workspace",
@@ -1068,21 +1069,38 @@ describe("session MCP runtime", () => {
         },
       },
     });
+    const healthyRuntime = makeRuntime(
+      [{ toolName: "healthy_tool", description: "Always available" }],
+      "healthyServer",
+    );
+    const healthyCatalog = await healthyRuntime.getCatalog();
+    healthyRuntime.getCatalog = async () => healthyCatalog;
+    healthyRuntime.peekCatalog = () => healthyCatalog;
+    const runtime = createCombinedSessionMcpRuntime({
+      sessionId: "session-catalog-retry",
+      workspaceDir: "/workspace",
+      parts: [failedRuntime, healthyRuntime],
+    });
 
     try {
       const failedCatalog = await runtime.getCatalog();
-      expect(failedCatalog.servers).toEqual({});
+      expect(Object.keys(failedCatalog.servers)).toEqual(["healthyServer"]);
+      expect(failedCatalog.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool"]);
       expect(failedCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
 
       await writeListToolsMcpServer({ filePath: serverPath, logPath });
       await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
 
       nowMs += 5_001;
+      expect(runtime.peekCatalog()).toBeNull();
       const recoveredCatalog = await runtime.getCatalog();
 
       expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
       expect(recoveredCatalog.servers.retryServer).toBeDefined();
-      expect(recoveredCatalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+      expect(recoveredCatalog.tools.map((tool) => tool.toolName)).toEqual([
+        "healthy_tool",
+        "slow_tool",
+      ]);
     } finally {
       nowSpy.mockRestore();
       await runtime.dispose();

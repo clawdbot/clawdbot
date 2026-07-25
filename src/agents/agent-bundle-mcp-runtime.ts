@@ -420,6 +420,15 @@ export function createSessionMcpRuntime(params: {
   let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   let catalogInvalidationGeneration = 0;
+  const readCachedCatalog = (): McpToolCatalog | null => {
+    if (catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs) {
+      // Combined runtimes compare part snapshots through peekCatalog(). Expiry
+      // must invalidate that snapshot too, or their merged cache hides the retry.
+      catalog = null;
+      catalogRetryAfterMs = undefined;
+    }
+    return catalog;
+  };
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
   const recordServerToolFailure = (serverName: string, nowMs: number) => {
@@ -512,12 +521,9 @@ export function createSessionMcpRuntime(params: {
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
     failIfDisposed();
-    if (catalog) {
-      if (catalogRetryAfterMs === undefined || Date.now() < catalogRetryAfterMs) {
-        return catalog;
-      }
-      catalog = null;
-      catalogRetryAfterMs = undefined;
+    const cachedCatalog = readCachedCatalog();
+    if (cachedCatalog) {
+      return cachedCatalog;
     }
     if (catalogInFlight) {
       return catalogInFlight;
@@ -889,7 +895,7 @@ export function createSessionMcpRuntime(params: {
     getCatalog,
     /** Synchronous catalog snapshot only; must not connect transports or issue tools/list. */
     peekCatalog() {
-      return catalog;
+      return readCachedCatalog();
     },
     markUsed() {
       lastUsedAt = Date.now();
