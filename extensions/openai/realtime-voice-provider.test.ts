@@ -806,7 +806,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const isConfigured = vi.fn(() => true);
     const broker = {
       capabilities: {
-        transports: ["webrtc"] as const,
+        transports: ["webrtc" as const],
         handlesAgentConsult: true,
         supportsToolCalls: false,
         supportsVideoFrames: false,
