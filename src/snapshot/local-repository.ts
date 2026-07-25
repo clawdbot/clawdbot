@@ -5,16 +5,17 @@ import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   ensureDurableDirectory,
   pinDirectory,
+  requireDirectorySync,
   syncDirectory,
+  syncDirectoryIfSupported,
   type DurableDirectoryReceipt,
   type PinnedDirectory,
-} from "@openclaw/fs-safe/durability";
-import { z } from "zod";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
-import { requireDirectorySync, syncDirectoryIfSupported } from "../infra/directory-durability.js";
+} from "../infra/directory-durability.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import {
   canonicalPathFromExistingAncestor,

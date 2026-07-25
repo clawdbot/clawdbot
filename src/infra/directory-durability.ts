@@ -1,5 +1,19 @@
 import { syncDirectory, type DirectorySyncOutcome } from "@openclaw/fs-safe/durability";
 
+export {
+  ensureDurableDirectory,
+  pinDirectory,
+  syncDirectory,
+  syncDirectoryBestEffort,
+  syncDirectoryBestEffortSync,
+  syncDirectorySync,
+  type DirectoryReceipt,
+  type DirectorySyncOutcome,
+  type DurableDirectoryReceipt,
+  type EnsureDurableDirectoryOptions,
+  type PinnedDirectory,
+} from "@openclaw/fs-safe/durability";
+
 type DirectoryDurabilityOutcome = DirectorySyncOutcome | { status: "not-needed" };
 
 function isUnsupportedDirectorySyncError(error: unknown): boolean {
@@ -14,7 +28,7 @@ function isUnsupportedDirectorySyncError(error: unknown): boolean {
 
 /** Require a real directory sync at product commit boundaries. */
 export function requireDirectorySync(outcome: DirectoryDurabilityOutcome, label: string): void {
-  if (outcome.status !== "unsupported") {
+  if (outcome.status !== "unsupported" || process.platform === "win32") {
     return;
   }
   const code = outcome.code ? ` (${outcome.code})` : "";

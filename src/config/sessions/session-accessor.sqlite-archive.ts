@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { syncDirectoryBestEffortSync } from "@openclaw/fs-safe/durability";
+import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
 import {
   encodeSessionArchiveContent,
   readSessionArchiveContentSync,

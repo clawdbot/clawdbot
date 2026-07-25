@@ -16,11 +16,19 @@ describe("directory durability compatibility", () => {
   });
 
   it("rejects unsupported strict sync outcomes with their platform code", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     expect(() =>
       requireDirectorySync({ status: "unsupported", code: "ENOTSUP" }, "test directory"),
     ).toThrow(
       /test directory does not support crash-durable directory synchronization \(ENOTSUP\)/u,
     );
+  });
+
+  it("accepts unsupported strict sync outcomes on Windows", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    expect(() =>
+      requireDirectorySync({ status: "unsupported", code: "EPERM" }, "test directory"),
+    ).not.toThrow();
   });
 
   it.runIf(process.platform !== "win32")("reports a completed directory sync", async () => {

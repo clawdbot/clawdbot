@@ -2,11 +2,11 @@ import fsSync from "node:fs";
 import fs, { appendFile, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { appendAudit, verifyChain } from "./audit.js";
 import { generateIdentity } from "./identity.js";
 import { JsonlAuditStore, FileReplayStore } from "./node.js";
 import { signReceipt } from "./receipts.js";
+import { useReefTempDirs } from "./test-support.js";
 
 const durabilityTestState = vi.hoisted(() => ({
   parentSyncOutcome: undefined as
@@ -37,7 +37,7 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const replayBodyKey = Uint8Array.from({ length: 32 }, (_, index) => 255 - index);
 const receiptId = "01JZ0000000000000000000000";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useReefTempDirs(afterEach);
 
 afterEach(() => {
   durabilityTestState.parentSyncOutcome = undefined;

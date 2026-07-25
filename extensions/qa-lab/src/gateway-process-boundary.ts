@@ -4,7 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 
 const PROCESS_BOUNDARY_VERSION = 1;
 const PROCESS_BOUNDARY_START_TIMEOUT_MS = 30_000;

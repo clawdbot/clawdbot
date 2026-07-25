@@ -1536,9 +1536,6 @@ importers:
       '@openclaw/crabline':
         specifier: 0.1.11
         version: 0.1.11
-      '@openclaw/fs-safe':
-        specifier: 0.4.7
-        version: 0.4.7
       '@openclaw/matrix':
         specifier: workspace:*
         version: link:../matrix
@@ -1653,9 +1650,6 @@ importers:
       '@noble/hashes':
         specifier: 2.2.0
         version: 2.2.0
-      '@openclaw/fs-safe':
-        specifier: 0.4.7
-        version: 0.4.7
       ws:
         specifier: 8.21.1
         version: 8.21.1

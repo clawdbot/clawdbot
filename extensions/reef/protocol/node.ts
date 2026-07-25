@@ -2,12 +2,12 @@ import { open as openFile, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
-import { canonicalPathFromExistingAncestor } from "@openclaw/fs-safe/advanced";
 import {
+  canonicalPathFromExistingAncestor,
   ensureDurableDirectory,
   syncDirectory,
   type DirectorySyncOutcome,
-} from "@openclaw/fs-safe/durability";
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { createAuditEntry, verifyChain, type AuditEntry, type AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, decodeUtf8, fromBase64 } from "./encoding.js";

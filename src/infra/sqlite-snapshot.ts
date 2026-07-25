@@ -5,9 +5,8 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pinDirectory, syncDirectory } from "@openclaw/fs-safe/durability";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
-import { requireDirectorySync } from "./directory-durability.js";
+import { pinDirectory, requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
