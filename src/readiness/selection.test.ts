@@ -231,18 +231,18 @@ describe("createSelectedReadinessResolver", () => {
   it("adds profile advisories without demoting required operator criteria", async () => {
     const resolve = createSelectedReadinessResolver();
 
-    await expect(
-      resolve({
-        config: {
-          gateway: { readiness: { requiredCriteria: ["openclaw.scheduler-ready"] } },
-        },
-        registry: { readinessCriteria: [] },
-        stateServices: {
-          scheduler: { enabled: false, phase: "disabled", recoveryPending: false },
-        },
-        additionalAdvisoryCriteria: ["openclaw.scheduler-ready", "openclaw.state-ready"],
-      }),
-    ).resolves.toEqual([
+    const contribution = await resolve({
+      config: {
+        gateway: { readiness: { requiredCriteria: ["openclaw.scheduler-ready"] } },
+      },
+      registry: { readinessCriteria: [] },
+      stateServices: {
+        scheduler: { enabled: false, phase: "disabled", recoveryPending: false },
+      },
+      additionalAdvisoryCriteria: ["openclaw.scheduler-ready", "openclaw.state-ready"],
+    });
+
+    expect(contribution.conditions).toEqual([
       expect.objectContaining({ type: "SchedulerReady", requirement: "required" }),
       expect.objectContaining({ type: "StateReady", requirement: "advisory" }),
     ]);
