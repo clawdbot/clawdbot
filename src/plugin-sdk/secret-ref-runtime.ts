@@ -10,6 +10,10 @@ import {
 } from "../secrets/plugin-setup-plan.js";
 import { createPrivateWindowsPlanFile } from "../secrets/private-plan-file.js";
 import { resolveSecretPlanTargetByPath as resolveSecretPlanTargetByPathInternal } from "../secrets/target-registry-query.js";
+import {
+  resolveTrustedExecutablePath,
+  resolveTrustedPlanDirectoryPath,
+} from "../secrets/trusted-plan-path.js";
 
 type PlanFileIdentity = { dev: bigint; ino: bigint };
 
@@ -89,6 +93,8 @@ export const pluginSecretRefSetup = {
   assertValidProviderAlias: assertValidPluginSecretProviderAlias,
   buildPlan: buildPluginSecretRefSetupPlan,
   parseTargetSpecifier: parsePluginSecretTargetSpecifier,
+  resolveTrustedDirectoryPath: resolveTrustedPlanDirectoryPath,
+  resolveTrustedExecutablePath,
   writePlanFile: writeSecretPlanFile,
 };
 

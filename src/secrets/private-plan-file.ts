@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
+import {
+  resolveTrustedPlanDirectoryPath,
+  resolveTrustedWindowsSystemExecutablePath,
+} from "./trusted-plan-path.js";
 
 type WindowsPrivatePlanFileDependencies = {
   resolveCompilerTempDir?: (env: NodeJS.ProcessEnv) => Promise<string>;
@@ -220,8 +223,14 @@ function readWindowsEnv(env: NodeJS.ProcessEnv, name: string): string | undefine
   return Object.entries(env).find(([key]) => key.toLowerCase() === lower)?.[1];
 }
 
-async function resolvePrivateWindowsCompilerTempDir(_env: NodeJS.ProcessEnv): Promise<string> {
-  return path.resolve(resolvePreferredOpenClawTmpDir({ platform: "win32" }));
+async function resolvePrivateWindowsCompilerTempDir(env: NodeJS.ProcessEnv): Promise<string> {
+  const candidate = readWindowsEnv(env, "TEMP") ?? readWindowsEnv(env, "TMP");
+  if (!candidate || !path.win32.isAbsolute(candidate)) {
+    throw new Error(
+      "Unable to resolve an absolute Windows temp directory for private plan creation.",
+    );
+  }
+  return await resolveTrustedPlanDirectoryPath(candidate);
 }
 
 async function resolveTrustedPowerShell(targetPath: string): Promise<string> {
@@ -229,7 +238,7 @@ async function resolveTrustedPowerShell(targetPath: string): Promise<string> {
   if (!powershell || powershell.toLowerCase() !== targetPath.toLowerCase()) {
     throw new Error("Unable to resolve trusted Windows PowerShell for private plan creation.");
   }
-  return powershell;
+  return await resolveTrustedWindowsSystemExecutablePath(targetPath);
 }
 
 export async function createPrivateWindowsPlanFile(
