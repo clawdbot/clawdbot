@@ -14,6 +14,12 @@ import {
   type DeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import {
+  nativeHookRelayParamsWereRewritten,
+  nativeHookRelayProviderDisplayName,
+  readOptionalString,
+  truncateText,
+} from "./native-hook-relay-provider.js";
 import type {
   JsonValue,
   NativeHookRelayDeferredApprovalOutcome,
@@ -23,13 +29,7 @@ import type {
   NativeHookRelayPermissionApprovalResult,
   NativeHookRelayPreToolUseApproval,
   NativeHookRelayRegistration,
-} from "./native-hook-relay-contracts.js";
-import {
-  nativeHookRelayParamsWereRewritten,
-  nativeHookRelayProviderDisplayName,
-  readOptionalString,
-  truncateText,
-} from "./native-hook-relay-provider.js";
+} from "./native-hook-relay.js";
 
 const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;

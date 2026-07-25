@@ -4,7 +4,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { stableStringify } from "../stable-stringify.js";
 import { normalizeToolName } from "../tool-policy.js";
-import { NATIVE_HOOK_RELAY_EVENTS } from "./native-hook-relay-contracts.js";
 import type {
   JsonValue,
   NativeHookRelayEvent,
@@ -13,7 +12,14 @@ import type {
   NativeHookRelayProvider,
   NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
-} from "./native-hook-relay-contracts.js";
+} from "./native-hook-relay.js";
+
+const NATIVE_HOOK_RELAY_EVENTS = [
+  "pre_tool_use",
+  "post_tool_use",
+  "permission_request",
+  "before_agent_finalize",
+] as const;
 
 const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
 const MAX_NATIVE_HOOK_RELAY_JSON_NODES = 20_000;

@@ -7,19 +7,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { hasBeforeToolCallPolicy } from "../agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR } from "./native-hook-relay-bridge.js";
-import type {
-  ActiveNativeHookRelayRegistration,
-  ActiveNativeHookRelayRegistrationHandle,
-  InvokeNativeHookRelayParams,
-  NativeHookRelayBridgeRegistration,
-  NativeHookRelayEvent,
-  NativeHookRelayInvocation,
-  NativeHookRelayProcessResponse,
-  NativeHookRelayProvider,
-  NativeHookRelayProviderAdapter,
-  NativeHookRelayRegistration,
-  RegisterNativeHookRelayParams,
-} from "./native-hook-relay-contracts.js";
 import {
   getNativeHookRelayProviderAdapter,
   isJsonValue,
@@ -37,6 +24,19 @@ import {
   snapshotNativeHookRelayPayload,
 } from "./native-hook-relay-provider.js";
 import { renewOrRestoreNativeHookRelayBridgeRecord } from "./native-hook-relay-store.js";
+import type {
+  ActiveNativeHookRelayRegistration,
+  ActiveNativeHookRelayRegistrationHandle,
+  InvokeNativeHookRelayParams,
+  NativeHookRelayBridgeRegistration,
+  NativeHookRelayEvent,
+  NativeHookRelayInvocation,
+  NativeHookRelayProcessResponse,
+  NativeHookRelayProvider,
+  NativeHookRelayProviderAdapter,
+  NativeHookRelayRegistration,
+  RegisterNativeHookRelayParams,
+} from "./native-hook-relay.js";
 
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
