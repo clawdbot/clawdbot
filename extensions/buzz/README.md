@@ -78,11 +78,25 @@ openclaw channels add --channel buzz
 
 The guided flow asks for your Buzz relay URL and creates a dedicated bot
 identity by default. Give the displayed **public key only** to a Buzz admin, who
-must approve the bot for the relay and each room it should use.
+must add the identity to each room with the **Bot** role.
 
-If approval is not ready, OpenClaw saves the identity with Buzz disabled. Rerun
-the same setup command after approval to discover rooms, choose access controls,
-and send an optional test message.
+OpenClaw immediately attempts authenticated room discovery. If room access is
+not ready, add the bot in Buzz and retry without leaving setup. You can also
+finish later: OpenClaw saves the identity with Buzz disabled, and the next setup
+run offers to reuse it instead of generating another key.
+
+For local Buzz development, `just dev` does not require separate relay
+membership by default. Add the bot directly to the room:
+
+```bash
+buzz channels add-member \
+  --channel <ROOM_UUID> \
+  --pubkey <BOT_PUBLIC_KEY> \
+  --role bot
+```
+
+Run the command as an existing human owner or admin. Hosted or closed relays may
+also require community membership before room membership can be granted.
 
 ### Security notes
 

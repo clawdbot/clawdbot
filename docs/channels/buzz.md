@@ -71,36 +71,27 @@ The setup flow walks through the following steps:
 
 1. Enter the Buzz relay URL.
 2. Generate a dedicated bot identity, or choose an existing bot identity.
-3. Give the displayed public key to a Buzz admin.
-4. Ask the admin to approve the bot for the relay and add it to each room with
-   the **Bot** role.
-5. Rerun setup after approval if the first run paused.
-6. Select discovered rooms, or enter a room UUID manually.
+3. Open or create the target Buzz room.
+4. Add the displayed public key to the room with the **Bot** role.
+5. Retry authenticated discovery in the same setup session, or save and resume
+   later with the same bot identity.
+6. Select the rooms returned by Buzz.
 7. Choose who can activate the agent and whether a mention is required.
 8. Choose a default room and optionally send a test message.
 
-If admin approval is not ready, OpenClaw saves the relay and bot identity with
-Buzz disabled. The next setup run offers to reuse that identity, so you do not
-need to create another bot.
+OpenClaw attempts authenticated room discovery immediately after creating or
+loading the identity. If room access is not ready, it can retry without rotating
+the key. If you finish later, OpenClaw saves the relay and bot identity with Buzz
+disabled; the next setup run offers to reuse that identity.
 
 ### Bot approval
 
-Buzz has two approval steps:
+Every target room must contain the bot identity with the **Bot** role. An
+existing human member or ordinary room member role is not sufficient.
 
-- The bot must be allowed to connect to the workspace relay when the workspace
-  restricts relay membership.
-- The bot must be added to every target room with the **Bot** role.
-
-OpenClaw cannot grant either permission. It gives the admin only the bot's public
-key and never asks for the admin's private key.
-
-For self-hosted Buzz, an operator can add relay membership from the relay host:
-
-```bash
-buzz-admin add-member --pubkey <BOT_PUBLIC_KEY> --role member
-```
-
-An authorized room member can then add the bot to a room:
+In Buzz desktop, open the room, open **Members**, choose **Add members**, search
+for the bot public key, and select the **Bot** role when the identity appears.
+An authorized human owner or admin can always use the Buzz CLI:
 
 ```bash
 buzz channels add-member \
@@ -109,8 +100,19 @@ buzz channels add-member \
   --role bot
 ```
 
-Hosted Buzz workspaces may provide their own invitation or approval flow. Ask
-the workspace operator which path to use.
+Run that command as the existing human owner or admin. Never give OpenClaw that
+human private key.
+
+The local Buzz `just dev` relay does not require separate relay membership by
+default. A hosted or closed relay may require the bot public key to be added to
+the workspace community first:
+
+```bash
+buzz-admin add-member --pubkey <BOT_PUBLIC_KEY> --role member
+```
+
+OpenClaw cannot grant room or relay access. It displays only the bot public key
+needed by the authorized human.
 
 ## Agent tools and messaging
 
@@ -251,8 +253,7 @@ openclaw channels status --channel buzz --probe
 ```
 
 A successful probe confirms that the bot can authenticate and that Buzz reports
-the selected room membership. It does not replace the admin's confirmation that
-the identity has the **Bot** role.
+the selected room with the **Bot** role.
 
 Then send a real message:
 
@@ -292,14 +293,14 @@ These follow-up areas are planned but are not part of the current plugin:
 
 ## Troubleshooting
 
-| Symptom                                      | What to check                                                                                                           |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| No rooms are discovered                      | Confirm the admin approved this exact bot public key. Enter a room UUID manually if needed.                             |
-| Authentication fails                         | Check the relay URL, bot private key, relay membership, and any authorization value supplied by the workspace operator. |
-| A message cannot be sent                     | Confirm the bot is a room member with the **Bot** role and that the UUID is configured.                                 |
-| The bot receives messages but does not reply | Check the sender allowlist and whether the room requires a mention.                                                     |
-| Setup says the Gateway is not running        | Start it with `openclaw gateway`, then run the probe and test message again.                                            |
-| Setup was paused                             | Finish admin approval, then rerun `openclaw channels add --channel buzz`; choose the saved identity.                    |
+| Symptom                                      | What to check                                                                                                        |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| No rooms are discovered                      | Confirm this exact bot public key is in the room with the **Bot** role, then retry authenticated discovery.          |
+| Authentication fails                         | Check the relay URL, bot private key, closed-relay membership, and any authorization value supplied by the operator. |
+| A message cannot be sent                     | Confirm the bot is a room member with the **Bot** role and that the UUID is configured.                              |
+| The bot receives messages but does not reply | Check the sender allowlist and whether the room requires a mention.                                                  |
+| Setup says the Gateway is not running        | Start it with `openclaw gateway`, then run the probe and test message again.                                         |
+| Setup was paused                             | Rerun `openclaw channels add --channel buzz`, reuse the saved identity, and retry room discovery.                    |
 
 ## Related
 

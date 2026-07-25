@@ -97,7 +97,7 @@ export async function discoverBuzzRooms(params: {
     relay.onauth = signAuth;
 
     // Buzz's relay publishes authenticated kind-39002 membership lists for room
-    // discovery. This proves Buzz membership only; it does not prove the Bot role.
+    // discovery. Require the explicit Bot role before setup or probes accept a room.
     const membershipEvents = await queryRelay({
       relay,
       filter: { kinds: [MEMBERSHIP_KIND], "#p": [publicKey], limit: 1000 },
@@ -110,7 +110,10 @@ export async function discoverBuzzRooms(params: {
           .filter(
             (event) =>
               event.kind === MEMBERSHIP_KIND &&
-              event.tags.some((tag) => tag[0] === "p" && tag[1] === publicKey),
+              event.tags.some(
+                (tag) =>
+                  tag[0] === "p" && tag[1] === publicKey && tag[3]?.trim().toLowerCase() === "bot",
+              ),
           )
           .map((event) => tagValue(event, "d")?.toLowerCase())
           .filter((roomId): roomId is string => Boolean(roomId?.match(BUZZ_CHANNEL_ID_PATTERN))),

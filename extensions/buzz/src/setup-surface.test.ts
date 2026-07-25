@@ -44,9 +44,6 @@ function createPrompter(): WizardPrompter {
       if (message.includes("mentions")) {
         return true;
       }
-      if (message.includes("membership")) {
-        return true;
-      }
       if (message.includes("test message")) {
         return true;
       }
@@ -119,11 +116,6 @@ describe("Buzz guided setup", () => {
     expect(
       vi.mocked(prompter.note).mock.calls.some(([message]) => message.includes(expectedPrivateKey)),
     ).toBe(false);
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("buzz-admin add-member"),
-      "Send this to your Buzz admin",
-    );
-
     expect(hooks).toHaveLength(1);
     await hooks[0]!.run({ cfg: result.cfg, runtime });
     expect(verifyAfterWrite).toHaveBeenCalledWith({
@@ -181,21 +173,22 @@ describe("Buzz guided setup", () => {
     expect(result.cfg.channels?.buzz?.privateKey).toEqual(secretRef);
   });
 
-  it("disables Buzz when setup pauses for external membership approval", async () => {
-    const wizard = createBuzzSetupWizard({ generateSecretKey: () => GENERATED_KEY });
+  it("persists the identity and disables Buzz when room access is not ready", async () => {
+    const discoverRooms = vi.fn(async () => []);
+    const wizard = createBuzzSetupWizard({
+      discoverRooms,
+      generateSecretKey: () => GENERATED_KEY,
+    });
     const prompter = createPrompter();
     vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
       if (message.includes("identity")) {
         return "reuse";
       }
+      if (message.includes("after granting")) {
+        return "pause";
+      }
       throw new Error(`Unexpected select prompt: ${message}`);
     }) as WizardPrompter["select"]);
-    vi.mocked(prompter.confirm).mockImplementation(async ({ message }) => {
-      if (message.includes("membership")) {
-        return false;
-      }
-      throw new Error(`Unexpected confirm prompt: ${message}`);
-    });
 
     const result = await wizard.configure({
       cfg: {
@@ -220,6 +213,14 @@ describe("Buzz guided setup", () => {
     expect(result.cfg.channels?.buzz?.privateKey).toBe("11".repeat(32));
     expect(result.completion).toBe("paused");
     expect(result.accountId).toBeUndefined();
+    expect(discoverRooms).toHaveBeenCalledOnce();
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("Local `just dev`: relay membership is off by default"),
+      "Buzz room access required",
+    );
+    expect(prompter.text).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("room UUID") }),
+    );
     expect(
       vi
         .mocked(prompter.select)
@@ -252,16 +253,25 @@ describe("Buzz guided setup", () => {
   });
 
   it("warns before using an unencrypted remote relay", async () => {
-    const wizard = createBuzzSetupWizard({ generateSecretKey: () => GENERATED_KEY });
+    const wizard = createBuzzSetupWizard({
+      discoverRooms: vi.fn(async () => []),
+      generateSecretKey: () => GENERATED_KEY,
+    });
     const prompter = createPrompter();
     vi.mocked(prompter.text)
       .mockResolvedValueOnce("ws://127.attacker.example")
       .mockResolvedValueOnce("wss://buzz.example.com");
+    vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
+      if (message.includes("identity")) {
+        return "generate";
+      }
+      if (message.includes("after granting")) {
+        return "pause";
+      }
+      throw new Error(`Unexpected select prompt: ${message}`);
+    }) as WizardPrompter["select"]);
     vi.mocked(prompter.confirm).mockImplementation(async ({ message }) => {
       if (message.includes("unencrypted")) {
-        return false;
-      }
-      if (message.includes("membership")) {
         return false;
       }
       throw new Error(`Unexpected confirm prompt: ${message}`);
@@ -285,15 +295,20 @@ describe("Buzz guided setup", () => {
 
   it("reuses an existing identity without a second credential prompt", async () => {
     const runSecretStep = vi.fn();
-    const wizard = createBuzzSetupWizard({ runSecretStep });
+    const wizard = createBuzzSetupWizard({
+      discoverRooms: vi.fn(async () => []),
+      runSecretStep,
+    });
     const prompter = createPrompter();
     vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
       if (message.includes("identity")) {
         return "reuse";
       }
+      if (message.includes("after granting")) {
+        return "pause";
+      }
       throw new Error(`Unexpected select prompt: ${message}`);
     }) as WizardPrompter["select"]);
-    vi.mocked(prompter.confirm).mockResolvedValue(false);
 
     const result = await wizard.configure({
       cfg: {
@@ -325,31 +340,13 @@ describe("Buzz guided setup", () => {
       if (message.includes("identity")) {
         return "reuse";
       }
-      if (message.includes("access")) {
-        return "open";
-      }
-      if (message.includes("default")) {
-        return ROOM_A;
-      }
       throw new Error(`Unexpected select prompt: ${message}`);
     }) as WizardPrompter["select"]);
     vi.mocked(prompter.text).mockImplementation(async ({ message }) => {
       if (message.includes("relay")) {
         return "wss://buzz.example.com";
       }
-      if (message.includes("room UUID")) {
-        return ROOM_A;
-      }
       throw new Error(`Unexpected text prompt: ${message}`);
-    });
-    vi.mocked(prompter.confirm).mockImplementation(async ({ message }) => {
-      if (message.includes("membership")) {
-        return true;
-      }
-      if (message.includes("mentions") || message.includes("test message")) {
-        return false;
-      }
-      throw new Error(`Unexpected confirm prompt: ${message}`);
     });
 
     const result = await wizard.configure({
@@ -367,6 +364,8 @@ describe("Buzz guided setup", () => {
 
     expect(discoverRooms).not.toHaveBeenCalled();
     expect(result.cfg.channels?.buzz?.privateKey).toEqual(secretRef);
+    expect(result.cfg.channels?.buzz?.enabled).toBe(false);
+    expect(result.completion).toBe("paused");
   });
 
   it("does not use the old key after switching to an unresolved SecretRef", async () => {
@@ -384,20 +383,11 @@ describe("Buzz guided setup", () => {
       if (message.includes("identity")) {
         return "existing";
       }
-      if (message.includes("access")) {
-        return "open";
-      }
-      if (message.includes("default")) {
-        return ROOM_A;
-      }
       throw new Error(`Unexpected select prompt: ${message}`);
     }) as WizardPrompter["select"]);
     vi.mocked(prompter.text).mockImplementation(async ({ message }) => {
       if (message.includes("relay")) {
         return "wss://buzz.example.com";
-      }
-      if (message.includes("room UUID")) {
-        return ROOM_A;
       }
       throw new Error(`Unexpected text prompt: ${message}`);
     });
@@ -420,5 +410,58 @@ describe("Buzz guided setup", () => {
 
     expect(discoverRooms).not.toHaveBeenCalled();
     expect(result.cfg.channels?.buzz?.privateKey).toEqual(newSecretRef);
+    expect(result.cfg.channels?.buzz?.enabled).toBe(false);
+    expect(result.completion).toBe("paused");
+  });
+
+  it("retries authenticated discovery without rotating the generated identity", async () => {
+    const discoverRooms = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: ROOM_A, name: "General" }]);
+    const wizard = createBuzzSetupWizard({
+      discoverRooms,
+      generateSecretKey: () => GENERATED_KEY,
+      verifyAfterWrite: vi.fn(async () => {}),
+    });
+    const prompter = createPrompter();
+    vi.mocked(prompter.select).mockImplementation((async ({ message }) => {
+      if (message.includes("identity")) {
+        return "generate";
+      }
+      if (message.includes("after granting")) {
+        return "retry";
+      }
+      if (message.includes("access")) {
+        return "open";
+      }
+      if (message.includes("default")) {
+        return ROOM_A;
+      }
+      throw new Error(`Unexpected select prompt: ${message}`);
+    }) as WizardPrompter["select"]);
+    vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
+    vi.mocked(prompter.confirm).mockImplementation(async ({ message }) => {
+      if (message.includes("mentions") || message.includes("test message")) {
+        return false;
+      }
+      throw new Error(`Unexpected confirm prompt: ${message}`);
+    });
+
+    const result = await wizard.configure({
+      cfg: {} as OpenClawConfig,
+      runtime: createRuntime(),
+      prompter,
+      accountOverrides: {},
+      shouldPromptAccountIds: false,
+      forceAllowFrom: false,
+    });
+
+    expect(discoverRooms).toHaveBeenCalledTimes(2);
+    expect(discoverRooms.mock.calls[0]?.[0].privateKey).toBe(
+      discoverRooms.mock.calls[1]?.[0].privateKey,
+    );
+    expect(result.cfg.channels?.buzz?.enabled).toBe(true);
+    expect(result.cfg.channels?.buzz?.defaultTo).toBe(ROOM_A);
   });
 });

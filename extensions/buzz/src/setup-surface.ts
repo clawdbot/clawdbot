@@ -13,10 +13,10 @@ import {
 import { discoverBuzzRooms, type BuzzDiscoveredRoom } from "./room-discovery.js";
 import { isSameBuzzIdentity } from "./setup-core.js";
 import { verifyBuzzAfterSetup } from "./setup-verify.js";
-import { parseBuzzTarget } from "./target.js";
 import { decodeBuzzPrivateKey, resolveBuzzAccount, resolveBuzzPublicKey } from "./types.js";
 
 const channel = "buzz" as const;
+type BuzzSetupResult = Awaited<ReturnType<ChannelSetupWizardAdapter["configure"]>>;
 
 type BuzzSetupDependencies = {
   discoverRooms?: typeof discoverBuzzRooms;
@@ -108,10 +108,6 @@ function normalizePublicKey(value: string): string {
   return decoded.data;
 }
 
-function parseRoomIds(value: string): string[] {
-  return [...new Set(splitSetupEntries(value).map((entry) => parseBuzzTarget(entry)))];
-}
-
 function resolvedConfiguredKey(cfg: OpenClawConfig): string | undefined {
   const value = cfg.channels?.buzz?.privateKey;
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -129,7 +125,7 @@ async function promptPrivateKey(params: {
   secretInputMode?: "plaintext" | "ref";
   generate: typeof generateSecretKey;
   runSecretStep: typeof runSingleChannelSecretStep;
-}): Promise<{ cfg: OpenClawConfig; resolvedPrivateKey?: string; generated: boolean }> {
+}): Promise<{ cfg: OpenClawConfig; resolvedPrivateKey?: string }> {
   const hasExistingIdentity =
     hasConfiguredSecretInput(params.cfg.channels?.buzz?.privateKey, params.cfg.secrets?.defaults) ||
     Boolean(process.env.BUZZ_PRIVATE_KEY?.trim());
@@ -169,14 +165,13 @@ async function promptPrivateKey(params: {
     if (resolvedPrivateKey) {
       decodeBuzzPrivateKey(resolvedPrivateKey);
     }
-    return { cfg: params.cfg, resolvedPrivateKey, generated: false };
+    return { cfg: params.cfg, resolvedPrivateKey };
   }
   if (identityMode === "generate") {
     const privateKey = nip19.nsecEncode(params.generate());
     return {
       cfg: patchBuzzConfig(params.cfg, { enabled: true, privateKey, authTag: undefined }),
       resolvedPrivateKey: privateKey,
-      generated: true,
     };
   }
 
@@ -225,39 +220,57 @@ async function promptPrivateKey(params: {
   if (resolvedPrivateKey) {
     decodeBuzzPrivateKey(resolvedPrivateKey);
   }
-  return { cfg: secretStep.cfg, resolvedPrivateKey, generated: false };
+  return { cfg: secretStep.cfg, resolvedPrivateKey };
 }
 
 async function promptRooms(params: {
   rooms: BuzzDiscoveredRoom[];
   prompter: Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];
 }): Promise<string[]> {
-  if (params.rooms.length > 0) {
-    const selected = await params.prompter.multiselect({
-      message: "Select authorized Buzz rooms",
-      options: params.rooms.map((room) => ({
-        value: room.id,
-        label: room.name,
-        hint: room.about ?? room.id,
-      })),
-      initialValues: params.rooms.map((room) => room.id),
-    });
-    if (selected.length > 0) {
-      return selected;
-    }
-  }
-  const roomInput = await params.prompter.text({
-    message: "Buzz room UUID(s), comma-separated",
-    placeholder: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
-    validate: (value) => {
-      try {
-        return parseRoomIds(value).length > 0 ? undefined : "Enter at least one room UUID";
-      } catch (error) {
-        return error instanceof Error ? error.message : "Invalid room UUID";
-      }
-    },
+  return await params.prompter.multiselect({
+    message: "Select authorized Buzz rooms",
+    options: params.rooms.map((room) => ({
+      value: room.id,
+      label: room.name,
+      hint: room.about ?? room.id,
+    })),
+    initialValues: params.rooms.map((room) => room.id),
   });
-  return parseRoomIds(roomInput);
+}
+
+function pauseBuzzSetup(cfg: OpenClawConfig): BuzzSetupResult {
+  return {
+    cfg: patchBuzzConfig(cfg, { enabled: false }),
+    completion: "paused",
+  };
+}
+
+async function noteBuzzAccessInstructions(params: {
+  relayUrl: string;
+  publicKey?: string;
+  prompter: Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];
+  discoveryError?: string;
+}) {
+  const npub = params.publicKey ? nip19.npubEncode(params.publicKey) : "<BOT_PUBLIC_KEY>";
+  const hex = params.publicKey ?? "<64_CHAR_BOT_PUBLIC_KEY>";
+  await params.prompter.note(
+    [
+      ...(params.discoveryError ? [`Discovery result: ${params.discoveryError}`, ""] : []),
+      `Relay: ${params.relayUrl}`,
+      "1. Create or open the target room in Buzz.",
+      "2. Add this identity to the room with role Bot:",
+      `   Bot npub: ${npub}`,
+      `   Bot hex public key: ${hex}`,
+      "",
+      "Buzz desktop: open the room -> Members -> Add members -> search the public key -> choose Bot.",
+      `Buzz CLI: buzz channels add-member --channel <ROOM_UUID> --pubkey ${hex} --role bot`,
+      "",
+      "Local `just dev`: relay membership is off by default, so no community-member step is required.",
+      `Closed relay only: add the key under Community Settings -> Members, or run buzz-admin add-member --pubkey ${hex} --role member.`,
+      "Run Buzz CLI commands as the existing human owner/admin; never paste that human private key into OpenClaw.",
+    ].join("\n"),
+    "Buzz room access required",
+  );
 }
 
 export function createBuzzSetupWizard(
@@ -315,44 +328,17 @@ export function createBuzzSetupWizard(
       if (identity.resolvedPrivateKey) {
         publicKey = resolveBuzzPublicKey(identity.resolvedPrivateKey);
       }
-      const publicKeyForApproval = publicKey ? nip19.npubEncode(publicKey) : "<BOT_PUBLIC_KEY>";
-      await prompter.note(
-        [
-          `Relay: ${relayUrl}`,
-          ...(publicKey
-            ? [`Bot npub: ${publicKeyForApproval}`, `Bot hex public key: ${publicKey}`]
-            : [
-                "Bot public key: retrieve the public key for the configured external private-key reference.",
-              ]),
-          identity.generated
-            ? "The dedicated private key is stored in channels.buzz.privateKey and is not shown here."
-            : "Only the bot public key is needed for approval.",
-          "",
-          `Self-hosted relay: buzz-admin add-member --pubkey ${publicKeyForApproval} --role member`,
-          `Each room: buzz channels add-member --channel <ROOM_UUID> --pubkey ${publicKeyForApproval} --role bot`,
-          "Hosted workspace: ask the operator to approve this public key for the relay and each room.",
-          "OpenClaw cannot perform either approval and never needs the human owner's private key.",
-          "Room discovery below proves membership only; it does not verify the bot role.",
-        ].join("\n"),
-        "Send this to your Buzz admin",
-      );
-      const membershipReady = await prompter.confirm({
-        message: "Are relay membership and room Bot-role approval complete?",
-        initialValue: false,
-      });
-      if (!membershipReady) {
+      if (!identity.resolvedPrivateKey) {
         await prompter.note(
-          "Relay URL and bot identity will be saved with Buzz disabled. Rerun setup after the owner/admin approvals are complete.",
+          "OpenClaw cannot resolve the configured private-key reference during setup, so room access cannot be verified. The relay URL and identity reference will be saved with Buzz disabled. Make the secret available and rerun setup.",
           "Buzz setup paused",
         );
-        return {
-          cfg: patchBuzzConfig(next, { enabled: false }),
-          completion: "paused",
-        };
+        return pauseBuzzSetup(next);
       }
 
       let discoveredRooms: BuzzDiscoveredRoom[] = [];
-      if (identity.resolvedPrivateKey) {
+      while (discoveredRooms.length === 0) {
+        let discoveryError: string | undefined;
         try {
           const authTag = resolveBuzzAccount({ cfg: next }).authTag;
           discoveredRooms = await discoverRooms({
@@ -361,19 +347,52 @@ export function createBuzzSetupWizard(
             ...(authTag ? { authTag } : {}),
           });
           if (discoveredRooms.length === 0) {
-            await prompter.note(
-              "No authorized rooms were returned for this bot. Enter a room UUID manually.",
-              "Buzz room discovery",
-            );
+            discoveryError = "No authorized rooms were returned for this bot.";
           }
         } catch (error) {
+          discoveryError = `Authenticated room discovery failed: ${error instanceof Error ? error.message : String(error)}.`;
+        }
+        if (discoveredRooms.length > 0) {
+          break;
+        }
+        await noteBuzzAccessInstructions({
+          relayUrl,
+          publicKey,
+          prompter,
+          discoveryError,
+        });
+        const action = await prompter.select({
+          message: "What do you want to do after granting Buzz room access?",
+          options: [
+            {
+              value: "retry",
+              label: "Retry authenticated room discovery",
+              hint: "Use after the bot has been added to the room",
+            },
+            {
+              value: "pause",
+              label: "Save identity and finish later",
+              hint: "Keeps Buzz disabled until setup is resumed",
+            },
+          ],
+          initialValue: "retry",
+        });
+        if (action === "pause") {
           await prompter.note(
-            `Authenticated room discovery failed: ${error instanceof Error ? error.message : String(error)}. Enter a room UUID manually.`,
-            "Buzz room discovery",
+            "Relay URL and bot identity will be saved with Buzz disabled. Rerun setup after the bot has room access.",
+            "Buzz setup paused",
           );
+          return pauseBuzzSetup(next);
         }
       }
       const roomIds = await promptRooms({ rooms: discoveredRooms, prompter });
+      if (roomIds.length === 0) {
+        await prompter.note(
+          "No rooms were selected. Relay URL and bot identity will be saved with Buzz disabled.",
+          "Buzz setup paused",
+        );
+        return pauseBuzzSetup(next);
+      }
       const requireMention = await prompter.confirm({
         message: "Require mentions in configured Buzz rooms?",
         initialValue: true,

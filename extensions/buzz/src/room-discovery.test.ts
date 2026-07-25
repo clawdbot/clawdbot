@@ -70,11 +70,11 @@ describe("discoverBuzzRooms", () => {
             sig: "sig",
             tags: [
               ["d", ROOM_A],
-              ["p", publicKey],
+              ["p", publicKey, "", "bot"],
             ],
           });
           handlers.onevent({
-            id: "member-b-other",
+            id: "member-b-wrong-role",
             kind: 39002,
             pubkey: "relay",
             created_at: 1,
@@ -82,7 +82,7 @@ describe("discoverBuzzRooms", () => {
             sig: "sig",
             tags: [
               ["d", ROOM_B],
-              ["p", "22".repeat(32)],
+              ["p", publicKey, "", "member"],
             ],
           });
           handlers.oneose();
