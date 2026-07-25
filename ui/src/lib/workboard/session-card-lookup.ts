@@ -191,7 +191,7 @@ class WorkboardSessionCardLookup {
   }
 
   private async loadMatches(): Promise<WorkboardLookupSnapshot> {
-    const payload = await this.client.request("workboard.cards.list", {});
+    const payload = await this.client.request("workboard.cards.list", { proofView: "bounded" });
     const cards = normalizeCardsPayload(payload).cards.filter(isActiveWorkboardCard);
     const matches = indexCards(cards);
     const runCandidates = cards

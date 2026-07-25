@@ -4,6 +4,7 @@ import type {
   WorkboardProof,
   WorkboardProofPage,
 } from "@openclaw/workboard-contract";
+import { redactClaimToken } from "./card-redaction.js";
 
 const WORKBOARD_PROOF_VIEW_LIMIT = 40;
 const WORKBOARD_EMBEDDED_PROOF_BYTES = 24 * 1024;
@@ -95,20 +96,6 @@ export function paginateWorkboardProof(
   });
 }
 
-export function redactCanonicalWorkboardCard(card: WorkboardCard): WorkboardCard {
-  const claim = card.metadata?.claim;
-  if (!claim) {
-    return card;
-  }
-  return {
-    ...card,
-    metadata: {
-      ...card.metadata,
-      claim: { ...claim, token: "[redacted]" },
-    },
-  };
-}
-
 export function toBoundedWorkboardCard(card: WorkboardCard): WorkboardCardView {
   const canonicalProof = card.metadata?.proof ?? [];
   let proof = canonicalProof.slice(-WORKBOARD_PROOF_VIEW_LIMIT);
@@ -116,7 +103,7 @@ export function toBoundedWorkboardCard(card: WorkboardCard): WorkboardCardView {
     proof = proof.slice(1);
   }
   const hasMore = proof.length < canonicalProof.length;
-  const redacted = redactCanonicalWorkboardCard(card);
+  const redacted = redactClaimToken(card);
   const projected = {
     ...redacted,
     ...(redacted.metadata

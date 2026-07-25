@@ -108,7 +108,7 @@ async function loadWorkboardInternal(
           }
         }
       }
-      const payload = await client.request("workboard.cards.list", {});
+      const payload = await client.request("workboard.cards.list", { proofView: "bounded" });
       const normalized = normalizeCardsPayload(payload);
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;

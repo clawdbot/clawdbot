@@ -103,7 +103,9 @@ async function mount<T extends HTMLElement>(
   const provider = createApplicationContextProvider(context);
   provider.append(element);
   document.body.append(provider);
-  await vi.waitFor(() => expect(request).toHaveBeenCalledWith("workboard.cards.list", {}));
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("workboard.cards.list", { proofView: "bounded" }),
+  );
   await (element as T & { updateComplete: Promise<boolean> }).updateComplete;
   await vi.waitFor(() => expect(element.textContent).not.toContain("Loading Workboard"));
   return element;

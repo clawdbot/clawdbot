@@ -6,6 +6,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
 import { toBoundedWorkboardCard } from "./card-output.js";
+import { redactClaimToken } from "./card-redaction.js";
 import { WorkboardStore } from "./store.js";
 import { cardIdField, claimTokenField, createWorkboardMoveTool } from "./tools-card-mutations.js";
 
@@ -145,11 +146,11 @@ function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolC
 }
 
 function redactedCardResult(card: WorkboardCard) {
-  return jsonResult({ card: toBoundedWorkboardCard(card) });
+  return jsonResult({ card: redactClaimToken(card) });
 }
 
 function redactedRawCardResult(card: WorkboardCard) {
-  return jsonResult(toBoundedWorkboardCard(card));
+  return jsonResult(redactClaimToken(card));
 }
 
 function redactedProofResult(card: WorkboardCard) {
@@ -158,7 +159,7 @@ function redactedProofResult(card: WorkboardCard) {
     throw new Error("proof was not retained in card metadata.");
   }
   return jsonResult({
-    card: toBoundedWorkboardCard(card),
+    card: redactClaimToken(card),
     proofId,
   });
 }
@@ -167,6 +168,19 @@ const CardIdSchema = Type.Object(
   {
     id: cardIdField(),
     token: claimTokenField(),
+  },
+  { additionalProperties: false },
+);
+
+const ReadCardSchema = Type.Object(
+  {
+    id: cardIdField(),
+    token: claimTokenField(),
+    proofView: Type.Optional(
+      Type.Literal("bounded", {
+        description: "Return only the newest proof window with proofPage metadata.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -293,7 +307,7 @@ export function createWorkboardTools(params: {
         const record = rawParams as Record<string, unknown>;
         readParentIds(record.parents);
         return jsonResult({
-          card: toBoundedWorkboardCard(
+          card: redactClaimToken(
             await store.create(record, { ownerId, token: record.token as string | undefined }),
           ),
         });
@@ -320,9 +334,7 @@ export function createWorkboardTools(params: {
         const childId = readStringParam(record, "childId", { required: true });
         const token = record.token as string | undefined;
         return jsonResult({
-          card: toBoundedWorkboardCard(
-            await store.linkCards(parentId, childId, { ownerId, token }),
-          ),
+          card: redactClaimToken(await store.linkCards(parentId, childId, { ownerId, token })),
         });
       },
     },
@@ -330,8 +342,8 @@ export function createWorkboardTools(params: {
       name: "workboard_read",
       label: "Workboard Read",
       description:
-        "Read one Workboard card and return bounded worker context with notes, attempts, comments, proof, links, and diagnostics.",
-      parameters: CardIdSchema,
+        "Read one Workboard card with complete proof history by default. Set proofView to bounded for the newest proof window. Worker context remains bounded.",
+      parameters: ReadCardSchema,
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
@@ -340,7 +352,8 @@ export function createWorkboardTools(params: {
           throw new Error(`card not found: ${id}`);
         }
         return jsonResult({
-          card: toBoundedWorkboardCard(card),
+          card:
+            record.proofView === "bounded" ? toBoundedWorkboardCard(card) : redactClaimToken(card),
           workerContext: await store.buildWorkerContext(id),
         });
       },
@@ -364,7 +377,7 @@ export function createWorkboardTools(params: {
           ownerId,
           ttlSeconds: record.ttlSeconds,
         });
-        return jsonResult({ ...claimed, card: toBoundedWorkboardCard(claimed.card) });
+        return jsonResult({ ...claimed, card: redactClaimToken(claimed.card) });
       },
     },
     {
@@ -747,7 +760,7 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const id = readStringParam(rawParams as Record<string, unknown>, "id", { required: true });
         const result = await store.runs(id);
-        return jsonResult({ ...result, card: toBoundedWorkboardCard(result.card) });
+        return jsonResult({ ...result, card: redactClaimToken(result.card) });
       },
     },
     {
@@ -790,9 +803,7 @@ export function createWorkboardTools(params: {
         const id = readStringParam(record, "id", { required: true });
         await requireScopedCard(store, id, ownerId, record.token as string | undefined);
         return jsonResult({
-          card: toBoundedWorkboardCard(
-            await store.specify(id, record, { ownerId, token: record.token }),
-          ),
+          card: redactClaimToken(await store.specify(id, record, { ownerId, token: record.token })),
         });
       },
     },
@@ -852,8 +863,8 @@ export function createWorkboardTools(params: {
         await requireScopedCard(store, id, ownerId, record.token as string | undefined);
         const result = await store.decompose(id, record, { ownerId, token: record.token });
         return jsonResult({
-          parent: toBoundedWorkboardCard(result.parent),
-          children: result.children.map(toBoundedWorkboardCard),
+          parent: redactClaimToken(result.parent),
+          children: result.children.map(redactClaimToken),
         });
       },
     },
@@ -1018,10 +1029,10 @@ export function createWorkboardTools(params: {
         const result = await store.dispatch({ boardId: record.boardId });
         return jsonResult({
           ...result,
-          promoted: result.promoted.map(toBoundedWorkboardCard),
-          reclaimed: result.reclaimed.map(toBoundedWorkboardCard),
-          blocked: result.blocked.map(toBoundedWorkboardCard),
-          orchestrated: result.orchestrated.map(toBoundedWorkboardCard),
+          promoted: result.promoted.map(redactClaimToken),
+          reclaimed: result.reclaimed.map(redactClaimToken),
+          blocked: result.blocked.map(redactClaimToken),
+          orchestrated: result.orchestrated.map(redactClaimToken),
         });
       },
     },

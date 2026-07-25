@@ -296,7 +296,9 @@ export async function dispatchWorkboard(params: {
       "workboard.cards.dispatch",
       selectedWorkboardBoardParams(state),
     );
-    const payload = await params.client.request("workboard.cards.list", {});
+    const payload = await params.client.request("workboard.cards.list", {
+      proofView: "bounded",
+    });
     const normalized = normalizeCardsPayload(payload);
     state.cards = normalized.cards;
     state.statuses = normalized.statuses;

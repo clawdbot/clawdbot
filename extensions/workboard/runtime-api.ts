@@ -6,6 +6,7 @@ export type {
   WorkboardClaim,
   WorkboardDiagnostic,
   WorkboardListResult,
+  WorkboardListViewResult,
   WorkboardPriority,
   WorkboardProofPage,
   WorkboardProofPageInfo,

@@ -54,7 +54,7 @@ describe("Workboard card chip", () => {
     expect(link?.getAttribute("href")).toBe("/control/workboard?board=platform");
     expect(link?.textContent).toContain("Ship dashboard stitch");
     expect(link?.textContent).toContain("Review");
-    expect(request).toHaveBeenCalledWith("workboard.cards.list", {});
+    expect(request).toHaveBeenCalledWith("workboard.cards.list", { proofView: "bounded" });
 
     element.remove();
     await element.updateComplete;

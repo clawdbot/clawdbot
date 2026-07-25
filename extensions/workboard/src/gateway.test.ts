@@ -129,8 +129,8 @@ describe("workboard gateway methods", () => {
     expect(createRespond.mock.calls[0]?.[0]).toBe(true);
     expect(createRespond.mock.calls[0]?.[1]?.card).toMatchObject({
       metadata: { automation: { workspaceAccess: { unrestricted: true } } },
-      proofPage: { total: 0, hasMore: false },
     });
+    expect(createRespond.mock.calls[0]?.[1]?.card).not.toHaveProperty("proofPage");
 
     const listRespond = vi.fn();
     await listHandler?.({ params: {}, respond: listRespond } as never);
@@ -138,11 +138,19 @@ describe("workboard gateway methods", () => {
       cards: [
         expect.objectContaining({
           title: "Investigate queue drift",
-          proofPage: { total: 0, hasMore: false },
         }),
       ],
       boards: [expect.objectContaining({ id: "default", total: 1, active: 1 })],
     });
+    expect(listRespond.mock.calls[0]?.[1]?.cards[0]).not.toHaveProperty("proofPage");
+
+    const invalidViewRespond = vi.fn();
+    await listHandler?.({
+      params: { proofView: "full" },
+      respond: invalidViewRespond,
+    } as never);
+    expect(invalidViewRespond.mock.calls[0]?.[0]).toBe(false);
+    expect(invalidViewRespond.mock.calls[0]?.[2]?.message).toContain('proofView must be "bounded"');
 
     const eventsRespond = vi.fn();
     await methods.get("workboard.notifications.events")?.handler({
@@ -153,7 +161,7 @@ describe("workboard gateway methods", () => {
     expect(eventsRespond.mock.calls[0]?.[2]?.message).toContain("workboard.notifications.advance");
   });
 
-  it("projects representative card-bearing responses while proof pages and export remain complete", async () => {
+  it("keeps existing card responses complete and makes bounded list views explicit", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
       opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
@@ -199,7 +207,12 @@ describe("workboard gateway methods", () => {
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       return respond.mock.calls[0]?.[1] as Record<string, unknown>;
     };
-    const expectView = (value: unknown, total: number) => {
+    const expectCanonical = (value: unknown, total: number) => {
+      const canonical = value as { metadata?: { proof?: unknown[] } };
+      expect(canonical.metadata?.proof).toHaveLength(total);
+      expect(canonical).not.toHaveProperty("proofPage");
+    };
+    const expectBoundedView = (value: unknown, total: number) => {
       const view = value as {
         metadata?: { proof?: unknown[] };
         proofPage?: { total?: number; hasMore?: boolean };
@@ -210,8 +223,13 @@ describe("workboard gateway methods", () => {
 
     const listed = await invoke("workboard.cards.list");
     const listedCards = listed.cards as Array<{ id: string }>;
-    expectView(
+    expectCanonical(
       listedCards.find((entry) => entry.id === card.id),
+      100,
+    );
+    const bounded = await invoke("workboard.cards.list", { proofView: "bounded" });
+    expectBoundedView(
+      (bounded.cards as Array<{ id: string }>).find((entry) => entry.id === card.id),
       100,
     );
 
@@ -219,23 +237,23 @@ describe("workboard gateway methods", () => {
       id: card.id,
       patch: { notes: "Updated" },
     });
-    expectView(updated.card, 100);
+    expectCanonical(updated.card, 100);
 
     const bulk = await invoke("workboard.cards.bulk", {
       ids: [card.id],
       patch: { priority: "high" },
     });
-    expectView((bulk.cards as unknown[])[0], 100);
+    expectCanonical((bulk.cards as unknown[])[0], 100);
 
     const runs = await invoke("workboard.cards.runs", { id: card.id });
-    expectView(runs.card, 100);
+    expectCanonical(runs.card, 100);
 
     const attachments = await invoke("workboard.cards.attachments.list", { id: card.id });
-    expectView(attachments.card, 100);
+    expectCanonical(attachments.card, 100);
 
     const diagnostics = await invoke("workboard.cards.diagnostics");
     const diagnosticRows = diagnostics.diagnostics as Array<{ card: unknown }>;
-    expectView(
+    expectCanonical(
       diagnosticRows.find((row) => (row.card as { id?: string }).id === "diagnostic-card")?.card,
       100,
     );
@@ -246,7 +264,7 @@ describe("workboard gateway methods", () => {
       label: "Proof 100",
     });
     expect(added.proofId).toEqual(expect.any(String));
-    expectView(added.card, 101);
+    expectCanonical(added.card, 101);
 
     const page = await invoke("workboard.cards.proof.list", { id: card.id, limit: 10 });
     expect(page).toMatchObject({ total: 101, hasMore: true });

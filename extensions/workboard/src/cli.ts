@@ -11,7 +11,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
-import { redactCanonicalWorkboardCard } from "./card-output.js";
+import { redactClaimToken } from "./card-redaction.js";
 import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
 
 type JsonOptions = {
@@ -76,16 +76,16 @@ function formatCardLine(card: WorkboardCard): string {
 function redactDispatchResult(result: WorkboardDispatchResult): WorkboardDispatchResult {
   return {
     ...result,
-    promoted: result.promoted.map(redactCanonicalWorkboardCard),
-    reclaimed: result.reclaimed.map(redactCanonicalWorkboardCard),
-    blocked: result.blocked.map(redactCanonicalWorkboardCard),
-    orchestrated: result.orchestrated.map(redactCanonicalWorkboardCard),
+    promoted: result.promoted.map(redactClaimToken),
+    reclaimed: result.reclaimed.map(redactClaimToken),
+    blocked: result.blocked.map(redactClaimToken),
+    orchestrated: result.orchestrated.map(redactClaimToken),
   };
 }
 
 function writeCards(cards: WorkboardCard[], options: JsonOptions): void {
   if (options.json) {
-    writeJson({ cards: cards.map(redactCanonicalWorkboardCard) });
+    writeJson({ cards: cards.map(redactClaimToken) });
     return;
   }
   for (const card of cards) {
@@ -206,7 +206,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           workspaceAccess: { unrestricted: true },
         });
         if (options.json) {
-          writeJson({ card: redactCanonicalWorkboardCard(card) });
+          writeJson({ card: redactClaimToken(card) });
         } else {
           writeLine(formatCardLine(card));
         }
@@ -225,7 +225,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         throw new Error(error);
       }
       if (options.json) {
-        writeJson({ card: redactCanonicalWorkboardCard(card) });
+        writeJson({ card: redactClaimToken(card) });
       } else {
         writeLine(formatCardLine(card));
         if (card.notes) {
@@ -251,7 +251,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       }
       const updated = await params.store.move(card.id, options.status, undefined);
       if (options.json) {
-        writeJson({ card: redactCanonicalWorkboardCard(updated) });
+        writeJson({ card: redactClaimToken(updated) });
       } else {
         writeLine(formatCardLine(updated));
       }

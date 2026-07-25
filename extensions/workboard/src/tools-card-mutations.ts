@@ -1,8 +1,4 @@
-import {
-  WORKBOARD_STATUSES,
-  type WorkboardCard,
-  type WorkboardCardView,
-} from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
@@ -28,7 +24,7 @@ export function claimTokenField(description = "Claim token returned by workboard
 export function createWorkboardMoveTool(params: {
   store: WorkboardStore;
   readScopedCardToolParams: (rawParams: unknown) => Promise<ScopedMoveParams>;
-  redactedCardResult: (card: WorkboardCard) => AgentToolResult<{ card: WorkboardCardView }>;
+  redactedCardResult: (card: WorkboardCard) => AgentToolResult<{ card: WorkboardCard }>;
 }): AnyAgentTool {
   return {
     name: "workboard_move",

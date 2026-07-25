@@ -12,8 +12,8 @@ import type { TaskSummary } from "../tasks/task-summary.ts";
 export * from "@openclaw/workboard-contract";
 export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
 
-// Gateway responses carry projected card views, while legacy fixtures and
-// cached payloads may predate proofPage. Normalization fills the marker in.
+// List reads explicitly request projected cards; mutation responses, legacy
+// fixtures, and cached payloads can omit proofPage. Normalization fills it in.
 export type WorkboardCard = Omit<CanonicalWorkboardCard, "proofPage"> & {
   proofPage?: WorkboardProofPageInfo;
 };

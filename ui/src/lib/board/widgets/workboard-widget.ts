@@ -70,7 +70,9 @@ function loadSharedWorkboardCards(
   }
   // Every widget on a Gateway shares one in-flight snapshot; a board change
   // must not multiply full-card-list requests by the visible widget count.
-  const load = client.request("workboard.cards.list", {}).then(normalizeCardsPayload);
+  const load = client
+    .request("workboard.cards.list", { proofView: "bounded" })
+    .then(normalizeCardsPayload);
   runtime.loadPromise = load;
   const releaseLoad = () => {
     if (runtime.loadPromise === load) {

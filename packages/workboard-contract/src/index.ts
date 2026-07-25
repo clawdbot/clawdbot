@@ -378,6 +378,11 @@ export type WorkboardCardView = Omit<WorkboardCard, "proofPage"> & {
 };
 
 export type WorkboardListResult = {
+  cards: WorkboardCard[];
+  statuses: readonly WorkboardStatus[];
+};
+
+export type WorkboardListViewResult = {
   cards: WorkboardCardView[];
   statuses: readonly WorkboardStatus[];
 };

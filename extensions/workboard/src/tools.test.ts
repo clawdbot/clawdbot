@@ -237,7 +237,7 @@ describe("workboard tools", () => {
     );
   });
 
-  it("returns bounded card views and paginates canonical proof history", async () => {
+  it("keeps existing card responses complete and offers explicit bounded proof views", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const proof = Array.from({ length: 100 }, (_, index) => ({
       id: `proof-${index}`,
@@ -255,8 +255,18 @@ describe("workboard tools", () => {
     );
 
     const read = readPayload(await tools.get("workboard_read")?.execute("read", { id: card.id }));
-    expect((read.card as { metadata?: { proof?: unknown[] } }).metadata?.proof).toHaveLength(40);
-    expect(read.card).toMatchObject({ proofPage: { total: 100, hasMore: true } });
+    expect((read.card as { metadata?: { proof?: unknown[] } }).metadata?.proof).toHaveLength(100);
+    expect(read.card).not.toHaveProperty("proofPage");
+
+    const boundedRead = readPayload(
+      await tools
+        .get("workboard_read")
+        ?.execute("read-bounded", { id: card.id, proofView: "bounded" }),
+    );
+    expect((boundedRead.card as { metadata?: { proof?: unknown[] } }).metadata?.proof).toHaveLength(
+      40,
+    );
+    expect(boundedRead.card).toMatchObject({ proofPage: { total: 100, hasMore: true } });
 
     const commented = readPayload(
       await tools.get("workboard_comment")?.execute("comment", {
@@ -264,8 +274,8 @@ describe("workboard tools", () => {
         body: "Keep proof canonical.",
       }),
     );
-    expect(commented).toMatchObject({ proofPage: { total: 100, hasMore: true } });
-    expect((commented.metadata as { proof?: unknown[] }).proof).toHaveLength(40);
+    expect(commented).not.toHaveProperty("proofPage");
+    expect((commented.metadata as { proof?: unknown[] }).proof).toHaveLength(100);
 
     const added = readPayload(
       await tools.get("workboard_proof")?.execute("proof", {
@@ -275,10 +285,10 @@ describe("workboard tools", () => {
       }),
     );
     expect(added.proofId).toEqual(expect.any(String));
-    expect(added.card).toMatchObject({ proofPage: { total: 101, hasMore: true } });
+    expect(added.card).not.toHaveProperty("proofPage");
     expect(
       ((added.card as { metadata?: { proof?: unknown[] } }).metadata?.proof ?? []).length,
-    ).toBeLessThanOrEqual(40);
+    ).toBe(101);
 
     const first = readPayload(
       await tools.get("workboard_proof_list")?.execute("proof-list-1", {

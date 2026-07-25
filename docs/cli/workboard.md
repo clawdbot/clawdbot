@@ -37,11 +37,9 @@ canonical SQLite card directly. Their card JSON includes complete proof history
 and does not contain the output-only `proofPage` marker. Claim tokens are still
 redacted.
 
-`dispatch --json` is different because dispatch runs through the Gateway when
-available. Any card-bearing result arrays use bounded card views: they embed the
-newest proof and include `proofPage.total`, `proofPage.hasMore`, and, when older
-proof can be requested, `proofPage.nextCursor`. Gateway
-`workboard.cards.export` is the separate full-history export path.
+Gateway-backed `dispatch --json` preserves the same complete-proof response
+contract. The Gateway also exposes explicitly bounded list views for clients
+that opt in with `proofView: "bounded"`; that mode is not used by the CLI.
 
 ## `list`
 
@@ -161,9 +159,9 @@ gateway unavailable; data dispatch only: promoted=1 blocked=0
 ```
 
 JSON output includes the dispatch result. Gateway-backed dispatch can include
-`started` and `startFailures`; card-bearing arrays use bounded proof views with
-`proofPage`. Data-only fallback includes `gatewayUnavailable: true`. Claim
-tokens are redacted from card JSON output.
+`started` and `startFailures`; card-bearing arrays retain complete proof
+history. Data-only fallback includes `gatewayUnavailable: true`. Claim tokens
+are redacted from card JSON output.
 
 In the dashboard, the same dispatch result is shown as a short summary so an operator can see how many cards started, promoted, blocked, reclaimed, or failed without opening card details.
 
