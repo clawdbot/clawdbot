@@ -666,6 +666,12 @@ describe("release validation no-push transport", () => {
     );
     expect(packDockerArtifact.run).toContain("archive_sha256=");
     const validatePackage = step(dockerProducer, "Validate OpenClaw Docker E2E package");
+    expect(step(dockerProducer, "Setup Node environment")).toMatchObject({
+      if: "steps.plan.outputs.needs_package == '1'",
+      with: {
+        "install-deps": "true",
+      },
+    });
     expect(validatePackage.env).toMatchObject({
       EXPECTED_PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",
       EXPECTED_PACKAGE_SHA256: "${{ inputs.package_sha256 }}",

@@ -1982,11 +1982,12 @@ jobs:
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node environment
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
+        if: steps.plan.outputs.needs_package == '1'
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
+          install-bun: ${{ inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '' && 'true' || 'false' }}
+          install-deps: "true"
 
       - name: Validate OpenClaw package artifact identity
         id: input_package_artifact
