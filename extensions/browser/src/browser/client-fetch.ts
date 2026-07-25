@@ -155,9 +155,9 @@ function decodeBrowserControlResponseUtf8(body: Uint8Array, status: number): str
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(body);
   } catch {
-    throw new BrowserServiceError(
-      `Browser control response was not valid UTF-8 (HTTP ${status})`,
+    throw browserServiceErrorFromPayload(
       undefined,
+      `Browser control response was not valid UTF-8 (HTTP ${status})`,
       status,
     );
   }

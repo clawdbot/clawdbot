@@ -25,6 +25,7 @@ const STREAM_BODY_BYTES = 1024 * 1024;
 const SUCCESS_STREAM_CHUNK = Buffer.alloc(64 * 1024, "x");
 const SUCCESS_STREAM_BODY_BYTES = 33 * 1024 * 1024;
 const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
+const MALFORMED_UTF8_STATUSES = [200, 401, 408, 500, 504] as const;
 
 function scheduleStreamChunk(writeNext: () => void): void {
   // Separate event-loop turns preserve streaming and backpressure without a wall-clock sleep.
@@ -40,10 +41,8 @@ describe("fetchHttpJson error body boundary", () => {
   let resolveSmallConnectionClosed: () => void;
   let successStreamClosed: Promise<void>;
   let resolveSuccessStreamClosed: () => void;
-  let malformedSuccessConnectionClosed: Promise<void>;
-  let resolveMalformedSuccessConnectionClosed: () => void;
-  let malformedErrorConnectionClosed: Promise<void>;
-  let resolveMalformedErrorConnectionClosed: () => void;
+  let malformedConnectionClosed: Map<number, Promise<void>>;
+  let resolveMalformedConnectionClosed: Map<number, () => void>;
   let streamCompleted: boolean;
   let successStreamCompleted: boolean;
 
@@ -68,12 +67,16 @@ describe("fetchHttpJson error body boundary", () => {
     successStreamClosed = new Promise<void>((resolve) => {
       resolveSuccessStreamClosed = resolve;
     });
-    malformedSuccessConnectionClosed = new Promise<void>((resolve) => {
-      resolveMalformedSuccessConnectionClosed = resolve;
-    });
-    malformedErrorConnectionClosed = new Promise<void>((resolve) => {
-      resolveMalformedErrorConnectionClosed = resolve;
-    });
+    malformedConnectionClosed = new Map();
+    resolveMalformedConnectionClosed = new Map();
+    for (const status of MALFORMED_UTF8_STATUSES) {
+      malformedConnectionClosed.set(
+        status,
+        new Promise<void>((resolve) => {
+          resolveMalformedConnectionClosed.set(status, resolve);
+        }),
+      );
+    }
     streamCompleted = false;
     successStreamCompleted = false;
     server = http.createServer((req, res) => {
@@ -82,17 +85,10 @@ describe("fetchHttpJson error body boundary", () => {
         res.end('{"payload":"control 🦞"}');
         return;
       }
-      if (req.url === "/success-malformed-utf8") {
-        req.socket.once("close", () => resolveMalformedSuccessConnectionClosed());
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          Buffer.concat([Buffer.from('{"payload":"'), Buffer.from([0xff]), Buffer.from('"}')]),
-        );
-        return;
-      }
-      if (req.url === "/error-malformed-utf8") {
-        req.socket.once("close", () => resolveMalformedErrorConnectionClosed());
-        res.writeHead(500, { "Content-Type": "application/json" });
+      const malformedStatus = Number(req.url?.match(/^\/malformed-utf8\/(\d+)$/)?.[1]);
+      if (MALFORMED_UTF8_STATUSES.some((status) => status === malformedStatus)) {
+        req.socket.once("close", () => resolveMalformedConnectionClosed.get(malformedStatus)?.());
+        res.writeHead(malformedStatus, { "Content-Type": "application/json" });
         res.end(
           Buffer.concat([
             Buffer.from('{"error":"control '),
@@ -228,18 +224,27 @@ describe("fetchHttpJson error body boundary", () => {
     });
   });
 
-  it("rejects malformed UTF-8 success and error responses and releases each fetch", async () => {
-    for (const [path, status, connectionClosed] of [
-      ["/success-malformed-utf8", 200, malformedSuccessConnectionClosed],
-      ["/error-malformed-utf8", 500, malformedErrorConnectionClosed],
-    ] as const) {
-      const error = await fetchBrowserJson(`${baseUrl}${path}`).catch((err: unknown) => err);
+  it("rejects malformed UTF-8 responses, preserves retry policy, and releases each fetch", async () => {
+    for (const status of MALFORMED_UTF8_STATUSES) {
+      const error = await fetchBrowserJson(`${baseUrl}/malformed-utf8/${status}`).catch(
+        (err: unknown) => err,
+      );
 
       expect(error).toMatchObject({
         name: "BrowserServiceError",
-        message: `Browser control response was not valid UTF-8 (HTTP ${status})`,
         status,
       });
+      const message = error instanceof Error ? error.message : "";
+      expect(message).toContain(`Browser control response was not valid UTF-8 (HTTP ${status})`);
+      if (status === 401) {
+        expect(message).toContain("Do NOT retry the browser tool");
+      } else if (status === 408 || status === 504) {
+        expect(message).toContain("Retry the browser tool once");
+      } else {
+        expect(message).not.toContain("Retry the browser tool");
+      }
+      const connectionClosed = malformedConnectionClosed.get(status);
+      expect(connectionClosed).toBeDefined();
       await expect(connectionClosed).resolves.toBeUndefined();
     }
   });
