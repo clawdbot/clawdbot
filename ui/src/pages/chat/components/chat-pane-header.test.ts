@@ -101,6 +101,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     onBranchSelect: vi.fn(),
     ...patch,
   };
+  props.gatewaysSnapshot ??= props.nativeGateways?.snapshot;
   render(html`${renderChatPaneHeader(props)}`, container);
   return { container, props };
 }
@@ -149,6 +150,40 @@ describe("chat pane header", () => {
     current?.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true }));
     expect(capability.openWindow).toHaveBeenCalledWith("primary");
     expect(capability.select).not.toHaveBeenCalled();
+  });
+
+  it("re-renders gateway rows from a changed snapshot property", () => {
+    Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
+    let current = gatewaySnapshot;
+    const capability = {
+      ...nativeGateways(gatewaySnapshot),
+      get snapshot() {
+        return current;
+      },
+    };
+    const mounted = mount({ nativeGateways: capability, gatewaysSnapshot: current });
+    const next = {
+      ...gatewaySnapshot,
+      gateways: [
+        ...gatewaySnapshot.gateways,
+        {
+          id: "profile:backup",
+          name: "Backup",
+          kind: "remote" as const,
+          isPrimary: false,
+          canPromote: true,
+          health: "unknown" as const,
+        },
+      ],
+    };
+    current = next;
+    window.dispatchEvent(new CustomEvent("openclaw:native-gateways-changed", { detail: next }));
+
+    const props = { ...mounted.props, gatewaysSnapshot: capability.snapshot };
+    render(html`${renderChatPaneHeader(props)}`, mounted.container);
+
+    expect(mounted.container.querySelectorAll(".chat-pane__gateway-item")).toHaveLength(3);
+    expect(mounted.container.textContent).toContain("Backup");
   });
 
   it("disables set-primary when the viewed gateway cannot be promoted", () => {

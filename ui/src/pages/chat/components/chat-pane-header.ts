@@ -1,7 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
-import type { NativeGatewaysCapability, NativeGateway } from "../../../app/native-gateways.ts";
+import type {
+  NativeGatewaysCapability,
+  NativeGatewaysSnapshot,
+  NativeGateway,
+} from "../../../app/native-gateways.ts";
 import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import {
@@ -49,6 +53,7 @@ type ChatPaneHeaderProps = {
   sharingControl?: TemplateResult | typeof nothing;
   boardDockAction?: TemplateResult | typeof nothing;
   nativeGateways?: NativeGatewaysCapability | null;
+  gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   onboarding?: boolean;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
@@ -137,7 +142,7 @@ function gatewayHealthLabel(gateway: NativeGateway): string {
 
 function renderGatewayPicker(props: ChatPaneHeaderProps) {
   const capability = props.nativeGateways;
-  const snapshot = capability?.snapshot;
+  const snapshot = props.gatewaysSnapshot;
   if (
     !capability ||
     !snapshot ||

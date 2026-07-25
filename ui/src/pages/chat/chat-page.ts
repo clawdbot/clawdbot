@@ -586,6 +586,9 @@ export class ChatPage extends OpenClawLightDomElement {
           .narrow=${this.narrow}
           .mergedChrome=${this.mergedChrome && active}
           .nativeGateways=${showGatewayPicker ? this.context.nativeGateways : null}
+          .gatewaysSnapshot=${showGatewayPicker
+            ? (this.context.nativeGateways?.snapshot ?? null)
+            : null}
           .onboarding=${this.closest(".shell--onboarding") !== null}
           .onOpenSplitView=${splitMode || this.narrow ? undefined : this.openSplitView}
           .onSplitDown=${splitMode ? this.handleSplitDown : undefined}
