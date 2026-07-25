@@ -1,6 +1,4 @@
-/**
- * Cerebras onboarding config helpers.
- */
+import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
@@ -10,9 +8,12 @@ import {
   CEREBRAS_BASE_URL,
   CEREBRAS_MODEL_CATALOG,
 } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-/** Default Cerebras model reference used after onboarding. */
-export const CEREBRAS_DEFAULT_MODEL_REF = "cerebras/zai-glm-4.7";
+export const CEREBRAS_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
+  manifest,
+  "cerebras",
+)!;
 
 const cerebrasPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: CEREBRAS_DEFAULT_MODEL_REF,
@@ -25,7 +26,6 @@ const cerebrasPresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
-/** Applies Cerebras provider/catalog config and default model aliases. */
 export function applyCerebrasConfig(cfg: OpenClawConfig): OpenClawConfig {
   return cerebrasPresetAppliers.applyConfig(cfg);
 }

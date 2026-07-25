@@ -1,9 +1,11 @@
-// Venice plugin module implements models behavior.
 import {
   getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  buildManifestModelProviderConfig,
+  readManifestProviderDefaultModelRef,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger, retryAsync } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -17,8 +19,7 @@ const VENICE_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 });
 
 export const VENICE_BASE_URL = VENICE_MANIFEST_PROVIDER.baseUrl;
-const VENICE_DEFAULT_MODEL_ID = "kimi-k2-5";
-export const VENICE_DEFAULT_MODEL_REF = `venice/${VENICE_DEFAULT_MODEL_ID}`;
+export const VENICE_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "venice")!;
 const VENICE_ALLOWED_HOSTNAMES = ["api.venice.ai"];
 
 const VENICE_DEFAULT_COST = {

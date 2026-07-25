@@ -34,6 +34,7 @@
       "fireworks": {
         "baseUrl": "https://api.fireworks.ai/inference/v1",
         "api": "openai-completions",
+        "defaultModel": "accounts/fireworks/routers/kimi-k2p6-turbo",
         "models": [
           {
             "id": "accounts/fireworks/models/kimi-k2p6",
