@@ -36,14 +36,20 @@ async function respondWithContract(
 }
 
 function authenticatedPrincipalId(client: GatewayClient | null): string {
-  return (
+  if (!client) {
+    return "internal";
+  }
+  const stablePrincipal =
     client?.internal?.agentRuntimeIdentity?.sessionKey ??
-    client?.authenticatedUserId ??
     client?.connect.device?.id ??
-    client?.pairedClientId ??
-    client?.connId ??
-    "internal"
-  );
+    client?.authenticatedUserId ??
+    client?.pairedClientId;
+  if (!stablePrincipal) {
+    throw new ContractInputError(
+      "Agentic OS runtime contract requires a stable authenticated client identity",
+    );
+  }
+  return stablePrincipal;
 }
 
 function authenticatedRequesterAgentId(opts: GatewayRequestHandlerOptions): string {
@@ -170,7 +176,13 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
       } catch {
         // A child can fail before its transcript is created; lifecycle remains authoritative.
       }
-      const messages = Array.isArray(canonical?.messages) ? canonical.messages : [];
+      const sessionExists = canonical?.sessionExists === true;
+      const totalMessages =
+        typeof canonical?.totalMessages === "number" &&
+        Number.isSafeInteger(canonical.totalMessages) &&
+        canonical.totalMessages >= 0
+          ? canonical.totalMessages
+          : 0;
       const runId = typeof tracked.runId === "string" ? tracked.runId : undefined;
       const runtimeTask = runId ? findTaskByRunIdForStatus(runId) : undefined;
       const runSnapshot = runId ? await waitForAgentJob({ runId, timeoutMs: 0 }) : null;
@@ -189,9 +201,10 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
         ...tracked,
         runtime_session: {
           key: sessionKey,
-          observed: messages.length > 0,
-          message_count: messages.length,
-          transcript_available: canonical !== null,
+          observed: totalMessages > 0,
+          message_count: totalMessages,
+          session_exists: sessionExists,
+          transcript_available: sessionExists,
           lifecycle_status: lifecycleStatus,
           runtime_status: runSnapshot?.status ?? runtimeTask?.status ?? "unavailable",
           terminal: runSnapshot
