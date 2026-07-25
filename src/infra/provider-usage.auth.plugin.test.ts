@@ -37,6 +37,8 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   return {
     ...actual,
     resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
+    resolveProviderCanonicalIdWithPlugin: ({ provider }: { provider: string }) =>
+      provider === "z-ai" || provider === "z.ai" ? "zai" : provider.trim().toLowerCase(),
   };
 });
 
@@ -438,6 +440,7 @@ describe("resolveProviderAuths plugin boundary", () => {
         provider: "zai",
         authProfileId: "zai:work",
         config: {},
+        workspaceDir: "/workspaces/zai",
       }),
     ).resolves.toEqual({
       provider: "zai",
@@ -452,6 +455,7 @@ describe("resolveProviderAuths plugin boundary", () => {
       expect.objectContaining({
         store,
         profileId: "zai:work",
+        workspaceDir: "/workspaces/zai",
         allowRefresh: false,
       }),
     );
@@ -462,6 +466,7 @@ describe("resolveProviderAuths plugin boundary", () => {
   it.each([
     { storedProvider: "claude-cli", requestedProvider: "anthropic" },
     { storedProvider: "minimax-portal", requestedProvider: "minimax" },
+    { storedProvider: "z-ai", requestedProvider: "zai" },
   ])(
     "accepts $storedProvider exact profiles for canonical $requestedProvider usage",
     async ({ storedProvider, requestedProvider }) => {

@@ -112,11 +112,12 @@ function isProfileConfigCompatible(params: {
 async function buildOAuthApiKey(
   provider: string,
   credentials: OAuthCredential,
-  context: { cfg?: OpenClawConfig },
+  context: { cfg?: OpenClawConfig; workspaceDir?: string },
 ): Promise<string> {
   const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
     provider,
     config: context.cfg,
+    workspaceDir: context.workspaceDir,
     context: credentials,
   });
   return typeof formatted === "string" && formatted.length > 0 ? formatted : credentials.access;
@@ -180,6 +181,7 @@ type ResolveApiKeyForProfileParams = {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  workspaceDir?: string;
   forceRefresh?: boolean;
   /** When false, expired OAuth credentials resolve to null without refresh or fallback. */
   allowRefresh?: boolean;
@@ -276,6 +278,7 @@ async function tryResolveOAuthProfile(
     profileId,
     credential: cred,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     cfg,
     forceRefresh: params.forceRefresh,
   });
@@ -477,6 +480,7 @@ export async function resolveApiKeyForProfile(
     const resolved = await oauthManager.resolveOAuthAccess({
       store,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       profileId,
       credential: cred,
       cfg,

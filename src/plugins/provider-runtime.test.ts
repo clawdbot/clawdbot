@@ -90,6 +90,7 @@ let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.
 let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
 let refreshProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").refreshProviderOAuthCredentialWithPlugin;
+let resolveProviderCanonicalIdWithPlugin: typeof import("./provider-runtime.js").resolveProviderCanonicalIdWithPlugin;
 let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolveProviderRuntimePlugin;
 let providerRuntimeTesting: typeof import("./provider-runtime.js").testing;
 let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
@@ -345,6 +346,7 @@ describe("provider-runtime", () => {
       prepareProviderDynamicModel,
       prepareProviderRuntimeAuth,
       refreshProviderOAuthCredentialWithPlugin,
+      resolveProviderCanonicalIdWithPlugin,
       resolveProviderRuntimePlugin,
       testing: providerRuntimeTesting,
       runProviderDynamicModel,
@@ -377,6 +379,21 @@ describe("provider-runtime", () => {
     resolveBundledProviderPolicySurfaceMock.mockReset();
     resolveBundledProviderPolicySurfaceMock.mockReturnValue(null);
     providerRuntimeWarnMock.mockReset();
+  });
+
+  it("resolves provider aliases to the provider-owned canonical id", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "zai",
+        label: "Z.AI",
+        aliases: ["z-ai", "z.ai"],
+        auth: [],
+      },
+    ]);
+
+    expect(resolveProviderCanonicalIdWithPlugin({ provider: "z-ai" })).toBe("zai");
+    expect(resolveProviderCanonicalIdWithPlugin({ provider: "z.ai" })).toBe("zai");
+    expect(resolveProviderCanonicalIdWithPlugin({ provider: "zai" })).toBe("zai");
   });
 
   it("matches providers by alias for runtime hook lookup", () => {

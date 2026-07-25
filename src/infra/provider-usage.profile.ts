@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
+  resolveProviderCanonicalIdWithPlugin,
   resolveProviderUsageAuthWithPlugin,
   resolveProviderUsageSnapshotWithPlugin,
 } from "../plugins/provider-runtime.js";
@@ -169,8 +170,26 @@ export async function readProviderUsageProfile(
     throw new TypeError("provider usage authProfileId must be a string");
   }
 
-  const normalizedProvider = normalizeProviderId(params.providerId);
-  const provider = resolveUsageProviderId(normalizedProvider) ?? normalizedProvider;
+  const config = options.config ?? getRuntimeConfig();
+  const env = options.env ?? process.env;
+  const canonicalizeProvider = (
+    providerId: string | undefined,
+    credentialType?: "api_key" | "token" | "oauth",
+  ): string => {
+    const normalized = providerId
+      ? resolveUsageProviderId(providerId, { credentialType })
+      : undefined;
+    const provider = normalized ?? (providerId ? normalizeProviderId(providerId) : undefined);
+    return provider
+      ? resolveProviderCanonicalIdWithPlugin({
+          provider,
+          config,
+          workspaceDir: options.workspaceDir,
+          env,
+        })
+      : "";
+  };
+  const provider = canonicalizeProvider(params.providerId);
   const authProfileId = params.authProfileId.trim();
   if (!provider) {
     throw new TypeError("provider usage providerId must not be empty");
@@ -180,8 +199,6 @@ export async function readProviderUsageProfile(
   }
 
   const timeoutMs = normalizeReadTimeout(params.timeoutMs);
-  const config = options.config ?? getRuntimeConfig();
-  const env = options.env ?? process.env;
   const fetchFn = options.fetch
     ? resolveFetch(options.fetch)
     : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
@@ -193,7 +210,9 @@ export async function readProviderUsageProfile(
     provider,
     authProfileId,
     agentDir: options.agentDir,
+    workspaceDir: options.workspaceDir,
     config,
+    env,
   });
   if (!auth) {
     throw new Error("provider usage auth profile unavailable");
@@ -216,10 +235,9 @@ export async function readProviderUsageProfile(
   const isOAuthCredential = auth.credentialType === "oauth" || auth.credentialType === "token";
   const matchesExactProvider = (providerIds: string[] | undefined): boolean =>
     providerIds === undefined ||
-    providerIds.some((providerId) => {
-      const normalized = normalizeProviderId(providerId);
-      return (resolveUsageProviderId(normalized) ?? normalized) === provider;
-    });
+    providerIds.some(
+      (providerId) => canonicalizeProvider(providerId, auth.credentialType) === provider,
+    );
   const snapshot = await withTimeout(
     (async () => {
       const providerAuth = await resolveProviderUsageAuthWithPlugin({
@@ -246,15 +264,11 @@ export async function readProviderUsageProfile(
             if (!isOAuthCredential) {
               return null;
             }
-            if (request?.provider) {
-              const normalizedRequestedProvider = normalizeProviderId(request.provider);
-              const requestedProvider =
-                resolveUsageProviderId(normalizedRequestedProvider, {
-                  credentialType: auth.credentialType,
-                }) ?? normalizedRequestedProvider;
-              if (requestedProvider !== provider) {
-                return null;
-              }
+            if (
+              request?.provider &&
+              canonicalizeProvider(request.provider, auth.credentialType) !== provider
+            ) {
+              return null;
             }
             return exactUsageToken;
           },
@@ -295,7 +309,7 @@ export async function readProviderUsageProfile(
     return failureSnapshot(message.trim() || "Fetch failed");
   });
 
-  if (normalizeProviderId(snapshot.provider) !== provider) {
+  if (canonicalizeProvider(snapshot.provider) !== provider) {
     throw new Error("provider usage snapshot provider mismatch");
   }
   return sanitizeProfileSnapshot({

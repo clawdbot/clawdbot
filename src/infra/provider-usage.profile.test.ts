@@ -11,6 +11,12 @@ vi.mock("./provider-usage.auth.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderCanonicalIdWithPlugin: ({ provider }: { provider: string }) =>
+    provider === "z-ai" || provider === "z.ai"
+      ? "zai"
+      : provider === "alias-openai"
+        ? "openai"
+        : provider.trim().toLowerCase(),
   resolveProviderUsageAuthWithPlugin: (...args: unknown[]) =>
     resolveProviderUsageAuthWithPluginMock(...args),
   resolveProviderUsageSnapshotWithPlugin: (...args: unknown[]) =>
@@ -103,7 +109,7 @@ describe("readProviderUsageProfile", () => {
           resolveApiKeyCandidatesFromConfigAndStore: (request?: {
             providerIds?: string[];
           }) => Promise<string[]>;
-          resolveOAuthToken: () => Promise<{
+          resolveOAuthToken: (request?: { provider?: string }) => Promise<{
             token: string;
             accountId?: string;
             email?: string;
@@ -113,11 +119,13 @@ describe("readProviderUsageProfile", () => {
       expect(params.context.env).toEqual({});
       expect(params.context.resolveApiKeyFromConfigAndStore()).toBeUndefined();
       await expect(params.context.resolveApiKeyCandidatesFromConfigAndStore()).resolves.toEqual([]);
-      await expect(params.context.resolveOAuthToken()).resolves.toEqual({
-        token: "private-token",
-        accountId: "account-1",
-        email: "private@example.com",
-      });
+      await expect(params.context.resolveOAuthToken({ provider: "alias-openai" })).resolves.toEqual(
+        {
+          token: "private-token",
+          accountId: "account-1",
+          email: "private@example.com",
+        },
+      );
       return { token: "provider-policy-token", accountId: "policy-account" };
     });
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue({
@@ -221,6 +229,7 @@ describe("readProviderUsageProfile", () => {
   it.each([
     { requestedProvider: "claude-cli", canonicalProvider: "anthropic" },
     { requestedProvider: "minimax-portal", canonicalProvider: "minimax" },
+    { requestedProvider: "z-ai", canonicalProvider: "zai" },
   ])(
     "normalizes $requestedProvider to the canonical $canonicalProvider usage owner",
     async ({ requestedProvider, canonicalProvider }) => {

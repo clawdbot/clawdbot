@@ -20,7 +20,10 @@ import {
   passesManifestOwnerBasePolicy,
 } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
+import {
+  resolveProviderCanonicalIdWithPlugin,
+  resolveProviderUsageAuthWithPlugin,
+} from "../plugins/provider-runtime.js";
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { isOAuthOnlyUsageProvider, resolveUsageProviderId } from "./provider-usage.shared.js";
@@ -479,15 +482,34 @@ export async function resolveProviderAuthProfile(params: {
   provider: UsageProviderId;
   authProfileId: string;
   agentDir?: string;
+  workspaceDir?: string;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): Promise<ProviderAuth | null> {
-  const provider = normalizeProviderId(params.provider);
+  const cfg = params.config ?? getRuntimeConfig();
+  const canonicalizeProvider = (
+    providerId: string | undefined,
+    credentialType?: "api_key" | "token" | "oauth",
+  ): string => {
+    const normalized = providerId
+      ? resolveUsageProviderId(providerId, { credentialType })
+      : undefined;
+    const provider = normalized ?? (providerId ? normalizeProviderId(providerId) : undefined);
+    return provider
+      ? resolveProviderCanonicalIdWithPlugin({
+          provider,
+          config: cfg,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+        })
+      : "";
+  };
+  const provider = canonicalizeProvider(params.provider);
   const authProfileId = params.authProfileId.trim();
   if (!provider || !authProfileId) {
     return null;
   }
 
-  const cfg = params.config ?? getRuntimeConfig();
   const store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
     allowKeychainPrompt: false,
     readOnly: true,
@@ -495,8 +517,7 @@ export async function resolveProviderAuthProfile(params: {
   });
   const credential = store.profiles[authProfileId];
   const credentialProvider = credential
-    ? (resolveUsageProviderId(credential.provider, { credentialType: credential.type }) ??
-      normalizeProviderId(credential.provider))
+    ? canonicalizeProvider(credential.provider, credential.type)
     : undefined;
   if (!credential || credentialProvider !== provider) {
     return null;
@@ -509,15 +530,14 @@ export async function resolveProviderAuthProfile(params: {
       store,
       profileId: authProfileId,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       allowRefresh: false,
     });
   } catch {
     return null;
   }
-  const resolvedProvider = resolveUsageProviderId(resolved?.provider, {
-    credentialType: credential.type,
-  });
-  if (!resolved || (resolvedProvider ?? normalizeProviderId(resolved.provider)) !== provider) {
+  const resolvedProvider = canonicalizeProvider(resolved?.provider, credential.type);
+  if (!resolved || resolvedProvider !== provider) {
     return null;
   }
 

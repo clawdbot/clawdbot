@@ -290,6 +290,7 @@ describe("resolveApiKeyForProfile no-refresh mode", () => {
           },
         },
         profileId,
+        workspaceDir: "/workspaces/openai",
         allowRefresh: false,
       }),
     ).resolves.toEqual({
@@ -297,6 +298,12 @@ describe("resolveApiKeyForProfile no-refresh mode", () => {
       provider: "openai",
       email: undefined,
     });
+    expect(providerOAuthMocks.formatProviderAuthProfileApiKeyWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        workspaceDir: "/workspaces/openai",
+      }),
+    );
     expect(providerOAuthMocks.refreshProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
   });
 

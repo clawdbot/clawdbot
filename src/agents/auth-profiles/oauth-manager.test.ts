@@ -409,8 +409,11 @@ describe("createOAuthManager", () => {
           expires: Date.now() + 60_000,
         };
       });
+      const buildApiKey = vi.fn(
+        async (_provider, credential: OAuthCredential) => credential.access,
+      );
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
+        buildApiKey,
         refreshCredential,
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
@@ -423,9 +426,15 @@ describe("createOAuthManager", () => {
         profileId,
         credential: subCredential,
         agentDir,
+        workspaceDir: "/workspaces/sub-agent",
       });
 
       expect(refreshCredential).toHaveBeenCalledTimes(1);
+      expect(buildApiKey).toHaveBeenCalledWith(
+        "openai",
+        expect.any(Object),
+        expect.objectContaining({ workspaceDir: "/workspaces/sub-agent" }),
+      );
       if (!result) {
         throw new Error("Expected refreshed main-store OAuth result");
       }

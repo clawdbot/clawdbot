@@ -39,7 +39,7 @@ type OAuthManagerAdapter = {
   buildApiKey: (
     provider: string,
     credentials: OAuthCredential,
-    context: { cfg?: OpenClawConfig; agentDir?: string },
+    context: { cfg?: OpenClawConfig; agentDir?: string; workspaceDir?: string },
   ) => Promise<string>;
   refreshCredential: (credential: OAuthCredential) => Promise<OAuthCredentials | null>;
   readBootstrapCredential: (params: {
@@ -484,6 +484,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     profileId: string;
     provider: string;
     agentDir?: string;
+    workspaceDir?: string;
     cfg?: OpenClawConfig;
     forceRefresh?: boolean;
     attemptedCredentials?: OAuthCredential[];
@@ -506,6 +507,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             apiKey: await adapter.buildApiKey(cred.provider, cred, {
               cfg: params.cfg,
               agentDir: params.agentDir,
+              workspaceDir: params.workspaceDir,
             }),
             credential: cred,
           };
@@ -532,6 +534,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 apiKey: await adapter.buildApiKey(mainCred.provider, mainCred, {
                   cfg: params.cfg,
                   agentDir: params.agentDir,
+                  workspaceDir: params.workspaceDir,
                 }),
                 credential: mainCred,
               };
@@ -592,6 +595,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 apiKey: await adapter.buildApiKey(externallyManaged.provider, externallyManaged, {
                   cfg: params.cfg,
                   agentDir: params.agentDir,
+                  workspaceDir: params.workspaceDir,
                 }),
                 credential: externallyManaged,
               };
@@ -644,6 +648,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               apiKey: await adapter.buildApiKey(recovered.provider, recovered, {
                 cfg: params.cfg,
                 agentDir: params.agentDir,
+                workspaceDir: params.workspaceDir,
               }),
               credential: recovered,
             };
@@ -662,6 +667,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           apiKey: await adapter.buildApiKey(cred.provider, refreshedCredentials, {
             cfg: params.cfg,
             agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
           }),
           credential: refreshedCredentials,
         };
@@ -682,6 +688,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     profileId: string;
     provider: string;
     agentDir?: string;
+    workspaceDir?: string;
     cfg?: OpenClawConfig;
     forceRefresh?: boolean;
     attemptedCredentials?: OAuthCredential[];
@@ -695,6 +702,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     profileId: string;
     credential: OAuthCredential;
     agentDir?: string;
+    workspaceDir?: string;
     cfg?: OpenClawConfig;
     forceRefresh?: boolean;
     allowRefresh?: boolean;
@@ -707,6 +715,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         apiKey: await adapter.buildApiKey(params.credential.provider, params.credential, {
           cfg: params.cfg,
           agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
         }),
         credential: params.credential,
       };
@@ -732,6 +741,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         apiKey: await adapter.buildApiKey(effectiveCredential.provider, effectiveCredential, {
           cfg: params.cfg,
           agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
         }),
         credential: effectiveCredential,
       };
@@ -742,6 +752,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         profileId: params.profileId,
         provider: params.credential.provider,
         agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         cfg: params.cfg,
         forceRefresh: params.forceRefresh,
         attemptedCredentials,
@@ -763,6 +774,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           apiKey: await adapter.buildApiKey(refreshed.provider, refreshed, {
             cfg: params.cfg,
             agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
           }),
           credential: refreshed,
         };
@@ -785,6 +797,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             apiKey: await adapter.buildApiKey(recovered.provider, recovered, {
               cfg: params.cfg,
               agentDir: params.agentDir,
+              workspaceDir: params.workspaceDir,
             }),
             credential: recovered,
           };
@@ -794,6 +807,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             profileId: params.profileId,
             provider: params.credential.provider,
             agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
             cfg: params.cfg,
             forceRefresh: params.forceRefresh,
             attemptedCredentials,
@@ -833,6 +847,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               apiKey: await adapter.buildApiKey(mainCred.provider, mainCred, {
                 cfg: params.cfg,
                 agentDir: params.agentDir,
+                workspaceDir: params.workspaceDir,
               }),
               credential: mainCred,
             };
