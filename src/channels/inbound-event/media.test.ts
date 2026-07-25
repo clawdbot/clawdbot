@@ -491,8 +491,7 @@ describe("channel inbound media facts", () => {
     expect(hasStagedMediaFacts(facts)).toBe(
       stageableFacts.length > 0 &&
         stageableFacts.every(
-          (fact) =>
-            Boolean(normalizeOptionalString(fact.workspaceDir)) || fact.staged === true,
+          (fact) => Boolean(normalizeOptionalString(fact.workspaceDir)) || fact.staged === true,
         ),
     );
     expect(facts).toHaveLength(expectedCount);
