@@ -1692,7 +1692,7 @@ export async function loadSessionCostSummariesFromCache(params: {
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
-  const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
+  let rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
   const fileTasks = params.sessions.map(
     (session) => async () => await resolveUsageCostTranscriptFile(session.sessionFile),
   );
@@ -1724,6 +1724,40 @@ export async function loadSessionCostSummariesFromCache(params: {
       formatDay: dayFormatter,
     });
   });
+  if (staleFiles.size > 0 && cachedFiles === 0) {
+    const result = await refreshCostUsageCache({
+      config: params.config,
+      agentId: params.agentId,
+      agentDir,
+      sessionFiles: [...staleFiles],
+    });
+    if (result === "refreshed") {
+      rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
+      staleFiles.clear();
+      cachedFiles = 0;
+      for (const [index, session] of params.sessions.entries()) {
+        const file = files[index];
+        const stored = file ? rollups.get(file.filePath) : undefined;
+        summaries[index] =
+          file && stored && isUsageCostRollupFresh({ stored, file })
+            ? buildSessionCostSummaryFromRollup({
+                rollup: stored.entry.rollup,
+                sessionId: session.sessionId,
+                sessionFile: session.sessionFile,
+                startMs,
+                endMs,
+                includeUntimestamped: params.includeUntimestamped === true || !hasExplicitRange,
+                formatDay: dayFormatter,
+              })
+            : null;
+        if (summaries[index]) {
+          cachedFiles += 1;
+        } else {
+          staleFiles.add(file?.filePath ?? session.sessionFile);
+        }
+      }
+    }
+  }
   const refreshRequested = params.requestRefresh !== false && staleFiles.size > 0;
   if (refreshRequested) {
     requestCostUsageCacheRefresh({
