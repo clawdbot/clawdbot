@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +9,8 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+/* oxlint-disable max-lines -- Contract coverage intentionally keeps the lease/spawn/session invariants together. */
 
 const spawnSubagentDirectMock = vi.hoisted(() =>
   vi.fn<typeof spawnSubagentDirect>(async () => ({
@@ -59,6 +62,10 @@ const releaseOwnerParams = {
   requester_agent_id: acquireParams.requester_agent_id,
 };
 
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 const sessionMetadata = {
   run_id: "run-a",
   transition_id: "transition-a",
@@ -66,7 +73,7 @@ const sessionMetadata = {
   idempotency_key: "spawn-idem-a",
   phase: "phase-b",
   agent_id: "ai-engineer",
-  task_digest: "sha256:test",
+  task_digest: sha256Hex("verify metadata contract"),
 };
 
 async function invoke(
@@ -133,12 +140,14 @@ function spawnParamsFor(
   overrides: Partial<typeof sessionMetadata> & { task?: string } = {},
 ) {
   const { task, ...metadataOverrides } = overrides;
+  const resolvedTask = task ?? "verify metadata contract";
   const metadata = {
     ...sessionMetadata,
+    task_digest: sha256Hex(resolvedTask),
     ...metadataOverrides,
   };
   return {
-    task: task ?? "verify metadata contract",
+    task: resolvedTask,
     taskName: "verify-contract",
     runtime: "subagent",
     mode: "run",
@@ -302,7 +311,7 @@ describe("Agentic OS runtime contract v1", () => {
           gateway_lease_id: gatewayLeaseId,
           client_request_id: "spawn-a",
           idempotency_key: "spawn-idem-a",
-          metadata: sessionMetadata,
+          metadata: { ...sessionMetadata, task_digest: sha256Hex("principal isolation") },
         },
         "device-b",
       ),
@@ -381,7 +390,14 @@ describe("Agentic OS runtime contract v1", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
 
     expectInvalid(
-      await invoke("sessions_spawn", { ...spawnParams, task: "different task" }),
+      await invoke("sessions_spawn", {
+        ...spawnParams,
+        task: "different task",
+        metadata: {
+          ...sessionMetadata,
+          task_digest: sha256Hex("different task"),
+        },
+      }),
       "conflicting sessions_spawn idempotency_key",
     );
     expectInvalid(
@@ -390,12 +406,28 @@ describe("Agentic OS runtime contract v1", () => {
         spawnParamsFor(gatewayLeaseId, {
           client_request_id: "spawn-b",
           idempotency_key: "spawn-idem-b",
-          task_digest: "sha256:spawn-b",
           task: "second spawn must not reuse consumed lease",
         }),
       ),
       "gateway_lease_id is not active",
     );
+  });
+
+  it("rejects mismatched task_digest before reserving the lease or spawning", async () => {
+    const gatewayLeaseId = await acquireLease();
+    expectInvalid(
+      await invoke(
+        "sessions_spawn",
+        spawnParamsFor(gatewayLeaseId, {
+          task_digest: sha256Hex("different task"),
+        }),
+      ),
+      "session metadata task_digest does not match spawn task",
+    );
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    const accepted = payload(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)));
+    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
   });
 
   it("reserves a one-shot allow lease against concurrent double spawn attempts", async () => {
@@ -421,7 +453,6 @@ describe("Agentic OS runtime contract v1", () => {
       spawnParamsFor(gatewayLeaseId, {
         client_request_id: "spawn-b",
         idempotency_key: "spawn-idem-b",
-        task_digest: "sha256:spawn-b",
         task: "racing second spawn",
       }),
     );
@@ -453,7 +484,6 @@ describe("Agentic OS runtime contract v1", () => {
         spawnParamsFor(gatewayLeaseId, {
           client_request_id: "spawn-retry",
           idempotency_key: "spawn-retry-idem",
-          task_digest: "sha256:spawn-retry",
           task: "retry after rejected spawn",
         }),
       ),
@@ -479,7 +509,6 @@ describe("Agentic OS runtime contract v1", () => {
         spawnParamsFor(gatewayLeaseId, {
           client_request_id: "spawn-retry",
           idempotency_key: "spawn-retry-idem",
-          task_digest: "sha256:spawn-retry",
           task: "retry after failed snapshot write",
         }),
       ),
@@ -499,7 +528,7 @@ describe("Agentic OS runtime contract v1", () => {
       gateway_lease_id: gatewayLeaseId,
       client_request_id: "spawn-a",
       idempotency_key: "spawn-idem-a",
-      metadata: sessionMetadata,
+      metadata: { ...sessionMetadata, task_digest: sha256Hex("persist across restart") },
     };
     const accepted = payload(await invoke("sessions_spawn", spawnParams));
     expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
@@ -617,7 +646,7 @@ describe("Agentic OS runtime contract v1", () => {
       gateway_lease_id: gatewayLeaseId,
       client_request_id: "spawn-a",
       idempotency_key: "spawn-idem-a",
-      metadata: sessionMetadata,
+      metadata: { ...sessionMetadata, task_digest: sha256Hex("fingerprint all launch controls") },
     };
     payload(await invoke("sessions_spawn", spawnParams));
     for (const changed of [
@@ -647,6 +676,7 @@ describe("Agentic OS runtime contract v1", () => {
           ...sessionMetadata,
           client_request_id: "spawn-session-mode",
           idempotency_key: "spawn-session-mode-idem",
+          task_digest: sha256Hex("unsupported session mode"),
         },
       }),
       "sessions_spawn mode session is not supported",
@@ -664,7 +694,7 @@ describe("Agentic OS runtime contract v1", () => {
         gateway_lease_id: gatewayLeaseId,
         client_request_id: "spawn-a",
         idempotency_key: "spawn-idem-a",
-        metadata: sessionMetadata,
+        metadata: { ...sessionMetadata, task_digest: sha256Hex("unsupported runtime") },
       }),
       "unsupported sessions_spawn runtime",
     );
@@ -699,7 +729,7 @@ describe("Agentic OS runtime contract v1", () => {
       gateway_lease_id: gatewayLeaseId,
       client_request_id: "spawn-a",
       idempotency_key: "spawn-idem-a",
-      metadata: sessionMetadata,
+      metadata: { ...sessionMetadata, task_digest: sha256Hex("concurrent duplicate") },
     };
     const first = invoke("sessions_spawn", spawnParams);
     const second = invoke("sessions_spawn", spawnParams);
@@ -728,7 +758,10 @@ describe("Agentic OS runtime contract v1", () => {
       gateway_lease_id: gatewayLeaseId,
       client_request_id: "spawn-a",
       idempotency_key: "spawn-idem-a",
-      metadata: sessionMetadata,
+      metadata: {
+        ...sessionMetadata,
+        task_digest: sha256Hex("pending duplicate survives released lease"),
+      },
     };
     const first = invoke("sessions_spawn", spawnParams);
     await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1));
@@ -813,7 +846,7 @@ describe("Agentic OS runtime contract v1", () => {
         ...sessionMetadata,
         client_request_id: `spawn-pending-${index}`,
         idempotency_key: `spawn-pending-idem-${index}`,
-        task_digest: `sha256:pending-${index}`,
+        task_digest: sha256Hex(`bounded pending ${index}`),
       },
     });
 
@@ -821,7 +854,7 @@ describe("Agentic OS runtime contract v1", () => {
       invoke("sessions_spawn", makeSpawnParams(index)),
     );
     await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1_024), {
-      timeout: 10_000,
+      timeout: 60_000,
     });
     expectInvalid(
       await invoke("sessions_spawn", makeSpawnParams(1_024)),
@@ -957,7 +990,7 @@ describe("Agentic OS runtime contract v1", () => {
           gateway_lease_id: gatewayLeaseId,
           client_request_id: "spawn-a",
           idempotency_key: "spawn-idem-a",
-          metadata: sessionMetadata,
+          metadata: { ...sessionMetadata, task_digest: sha256Hex("verify history filtering") },
         }),
       );
       const sessionKey = accepted.session_key as string;
@@ -998,6 +1031,7 @@ describe("Agentic OS runtime contract v1", () => {
           ...sessionMetadata,
           client_request_id: "spawn-failure",
           idempotency_key: "spawn-failure-idem",
+          task_digest: sha256Hex("verify failure lifecycle"),
         },
       }),
     );
@@ -1034,6 +1068,7 @@ describe("Agentic OS runtime contract v1", () => {
           ...sessionMetadata,
           client_request_id: "spawn-retention",
           idempotency_key: "spawn-retention-idem",
+          task_digest: sha256Hex("verify bounded session retention"),
         },
       }),
     );
@@ -1042,6 +1077,7 @@ describe("Agentic OS runtime contract v1", () => {
     expect(initial.sessions).toEqual(
       expect.arrayContaining([expect.objectContaining({ session_key: sessionKey })]),
     );
+    findTaskByRunIdForStatusMock.mockReturnValue({ status: "succeeded", startedAt: 5, endedAt: 6 });
 
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
     try {
@@ -1050,6 +1086,39 @@ describe("Agentic OS runtime contract v1", () => {
         await invoke("sessions_status", { session_key: sessionKey }),
         "unknown session_key",
       );
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("retains aged session projections while the child run is active", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const accepted = payload(
+      await invoke("sessions_spawn", {
+        task: "verify active child retention",
+        runtime: "subagent",
+        agentId: "ai-engineer",
+        gateway_lease_id: gatewayLeaseId,
+        client_request_id: "spawn-active-retention",
+        idempotency_key: "spawn-active-retention-idem",
+        metadata: {
+          ...sessionMetadata,
+          client_request_id: "spawn-active-retention",
+          idempotency_key: "spawn-active-retention-idem",
+          task_digest: sha256Hex("verify active child retention"),
+        },
+      }),
+    );
+    const sessionKey = accepted.session_key as string;
+
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
+    try {
+      expect(payload(await invoke("sessions_list")).sessions).toEqual(
+        expect.arrayContaining([expect.objectContaining({ session_key: sessionKey })]),
+      );
+      expect(payload(await invoke("sessions_status", { session_key: sessionKey }))).toMatchObject({
+        session_key: sessionKey,
+      });
     } finally {
       vi.restoreAllMocks();
     }

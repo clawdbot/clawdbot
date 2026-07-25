@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSubagentDirect } from "../agents/subagent-spawn.js";
+import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 import {
   AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS,
   AGENTIC_OS_RUNTIME_MAX_RECORDS,
@@ -32,6 +33,8 @@ import {
   runtimeSnapshotPath,
   saveAgenticOsRuntimeSnapshot,
 } from "./agentic-os-runtime-contract-store.js";
+
+/* oxlint-disable max-lines -- Runtime contract v1 remains centralized for the durable lease/session invariants. */
 
 const leasesByGatewayId = new Map<string, LeaseRecord>();
 const acquireByIdempotencyKey = new Map<string, LeaseRecord>();
@@ -217,6 +220,9 @@ function pruneExpiredLeases(now = Date.now()) {
     if (now - record.created_at_ms <= AGENTIC_OS_RUNTIME_SESSION_RETENTION_MS) {
       continue;
     }
+    if (sessionRecordHasActiveChildRun(record)) {
+      continue;
+    }
     sessionsByKey.delete(sessionKey);
     if (spawnByIdempotencyKey.get(record.idempotencyKey) === record) {
       spawnByIdempotencyKey.delete(record.idempotencyKey);
@@ -229,6 +235,14 @@ function pruneExpiredLeases(now = Date.now()) {
   if (changed) {
     persistRuntimeState();
   }
+}
+
+function sessionRecordHasActiveChildRun(record: SessionRecord): boolean {
+  if (!record.runId) {
+    return false;
+  }
+  const runtimeTask = findTaskByRunIdForStatus(record.runId);
+  return runtimeTask?.status === "queued" || runtimeTask?.status === "running";
 }
 
 function assertRecordCapacity(map: ReadonlyMap<unknown, unknown>, label: string) {
@@ -462,6 +476,10 @@ function spawnResultRunId(result: Record<string, unknown>): string | undefined {
   return typeof value === "string" && value ? value : undefined;
 }
 
+function taskDigest(task: string): string {
+  return createHash("sha256").update(task).digest("hex");
+}
+
 function spawnProjectionPayload(record: SessionRecord): Record<string, unknown> {
   const projection = sessionProjection(record);
   return {
@@ -494,6 +512,9 @@ export async function spawnAgenticOsSession(
   const metadataIdempotencyKey = metadata.idempotency_key;
   if (metadataClientRequestId !== clientRequestId || metadataIdempotencyKey !== idempotencyKey) {
     return rejectConflict("session metadata identity does not match spawn identity");
+  }
+  if (metadata.task_digest !== taskDigest(task)) {
+    return rejectConflict("session metadata task_digest does not match spawn task");
   }
   const agentId =
     typeof params.agentId === "string" && params.agentId

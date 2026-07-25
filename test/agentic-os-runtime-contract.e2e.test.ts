@@ -148,6 +148,7 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
         ).toEqual([]);
 
         const taskMarker = `real-child-marker-${probeId}`;
+        const task = `Return the completion marker for ${taskMarker}`;
         const metadata = {
           run_id: acquireParams.run_id,
           transition_id: acquireParams.transition_id,
@@ -155,10 +156,10 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
           idempotency_key: `spawn-idem-${probeId}`,
           phase: acquireParams.phase,
           agent_id: "worker",
-          task_digest: sha256(taskMarker),
+          task_digest: sha256(task),
         };
         const spawnParams = {
-          task: `Return the completion marker for ${taskMarker}`,
+          task,
           taskName: "agentic-os-real-gateway-probe",
           runtime: "subagent",
           mode: "run",
@@ -300,19 +301,20 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
           "subagents.allowLease.acquire",
           failureAcquireParams,
         );
+        const failureTask = `Trigger the isolated failure marker ${FAILURE_MARKER}`;
         const failureMetadata = {
           ...metadata,
           run_id: failureAcquireParams.run_id,
           transition_id: failureAcquireParams.transition_id,
           client_request_id: `spawn-failure-${probeId}`,
           idempotency_key: `spawn-failure-idem-${probeId}`,
-          task_digest: sha256(FAILURE_MARKER),
+          task_digest: sha256(failureTask),
         };
         const failureSpawn = await client.request<{ runId: string; session_key: string }>(
           "sessions_spawn",
           {
             ...spawnParams,
-            task: `Trigger the isolated failure marker ${FAILURE_MARKER}`,
+            task: failureTask,
             taskName: "agentic-os-real-gateway-failure-probe",
             gateway_lease_id: failureLease.gateway_lease_id,
             client_request_id: failureMetadata.client_request_id,
