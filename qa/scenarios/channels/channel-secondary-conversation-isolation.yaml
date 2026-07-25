@@ -6,8 +6,6 @@ scenario:
   coverage:
     primary:
       - channels.room-session-group-messages
-    secondary:
-      - agent-runtime.session-turn-ordering
   objective: Verify a reply in a secondary conversation stays isolated from the primary conversation.
   successCriteria:
     - The primary conversation receives only its marker.

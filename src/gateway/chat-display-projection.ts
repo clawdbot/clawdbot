@@ -14,6 +14,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -1501,13 +1502,8 @@ function isEmptyTextOnlyContent(content: unknown): boolean {
   return sawText;
 }
 
-function hasTranscriptMediaPaths(message: Record<string, unknown>): boolean {
-  const mediaPaths = Array.isArray(message.MediaPaths)
-    ? message.MediaPaths
-    : typeof message.MediaPath === "string"
-      ? [message.MediaPath]
-      : [];
-  return mediaPaths.some((value) => typeof value === "string" && value.trim());
+function hasTranscriptMediaFacts(message: Record<string, unknown>): boolean {
+  return (readPersistedMediaFacts(message) ?? []).some(isMeaningfulMediaFact);
 }
 
 function extractProjectedText(content: unknown): string {
@@ -1783,7 +1779,7 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (
     roleContent.role === "user" &&
     isEmptyTextOnlyContent(message.content ?? message.text) &&
-    !hasTranscriptMediaPaths(message)
+    !hasTranscriptMediaFacts(message)
   ) {
     return true;
   }

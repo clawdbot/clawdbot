@@ -46,6 +46,105 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     harness.observer.dispose();
   });
 
+  it("accepts a routed terminal event after a contextless duplicate", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(30_000);
+    const storedDigest = persistedLiveDigest();
+    const readSession = vi.fn(() => ({
+      sessionId: "session-id",
+      updatedAt: 1_000,
+      observerDigest: storedDigest,
+    }));
+    const harness = createHarness({ subscribe: false, readSession });
+    const contextlessTerminal = event({
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 0, endedAt: 30_000 },
+    });
+    delete contextlessTerminal.sessionKey;
+
+    harness.observer.handleEvent(contextlessTerminal);
+    harness.observer.handleEvent(
+      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 30_000 } }),
+    );
+    await flushObserver();
+
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    expect(harness.persistDigest.mock.calls[0]?.[0]?.digest).toMatchObject({ health: "done" });
+    harness.observer.dispose();
+  });
+
+  it("finalizes an active run from a contextless terminal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const harness = createHarness();
+    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+    vi.setSystemTime(30_000);
+    const contextlessTerminal = event({
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 0, endedAt: 30_000 },
+    });
+    delete contextlessTerminal.sessionKey;
+
+    harness.observer.handleEvent(contextlessTerminal);
+    await flushObserver();
+
+    const digest = harness.broadcastToConnIds.mock.calls.at(-1)?.[1] as
+      | SessionObserverDigest
+      | undefined;
+    expect(digest?.health).toBe("done");
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    harness.observer.dispose();
+  });
+
+  it("finalizes a dormant run from a contextless terminal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const storedDigest = persistedLiveDigest();
+    const readSession = vi.fn(() => ({
+      sessionId: "session-id",
+      updatedAt: 1_000,
+      observerDigest: storedDigest,
+    }));
+    const harness = createHarness({ readSession });
+    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+    harness.observer.removeConnection("conn-1");
+    vi.setSystemTime(30_000);
+    const contextlessTerminal = event({
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 0, endedAt: 30_000 },
+    });
+    delete contextlessTerminal.sessionKey;
+    delete contextlessTerminal.agentId;
+
+    harness.observer.handleEvent(contextlessTerminal);
+    await flushObserver();
+
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    expect(harness.persistDigest.mock.calls[0]?.[0]?.digest).toMatchObject({
+      runId: "run-1",
+      health: "done",
+    });
+    harness.observer.dispose();
+  });
+
+  it("suppresses live events after a contextless terminal", () => {
+    const harness = createHarness();
+    const contextlessTerminal = event({ stream: "lifecycle", data: { phase: "end" } });
+    delete contextlessTerminal.sessionKey;
+
+    harness.observer.handleEvent(contextlessTerminal);
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Late progress" },
+      }),
+    );
+
+    expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(harness.persistDigest).not.toHaveBeenCalled();
+    harness.observer.dispose();
+  });
+
   it.each([
     { phase: "end", expected: "done" },
     { phase: "error", expected: "failed" },

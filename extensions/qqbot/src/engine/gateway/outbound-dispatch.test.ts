@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   DEFAULT_MEDIA_SEND_ERROR,
@@ -710,16 +711,18 @@ describe("dispatchOutbound", () => {
   });
 
   it("does not expose default sandbox roots through gateway qqmedia replies", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-root-boundary-"));
-    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "qqbot-agent-root-boundary-",
+    });
+    const tmpRoot = openClawState.root;
     try {
       const workspaceDir = path.join(tmpRoot, "workspace");
-      const stateSandboxDir = path.join(tmpRoot, "state", "sandboxes", "other-agent");
+      const stateSandboxDir = openClawState.statePath("sandboxes", "other-agent");
       const stateSandboxFile = path.join(stateSandboxDir, "outside-report.docx");
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.mkdir(stateSandboxDir, { recursive: true });
       await fs.writeFile(stateSandboxFile, Buffer.from("outside"));
-      process.env.OPENCLAW_STATE_DIR = path.join(tmpRoot, "state");
       const runtime = makeRuntime({
         onDeliver: async (deliver) => {
           await deliver({ text: `<qqmedia>${stateSandboxFile}</qqmedia>` }, { kind: "block" });
@@ -739,12 +742,7 @@ describe("dispatchOutbound", () => {
 
       expect(sendMediaMock).not.toHaveBeenCalled();
     } finally {
-      if (originalStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = originalStateDir;
-      }
-      await fs.rm(tmpRoot, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 

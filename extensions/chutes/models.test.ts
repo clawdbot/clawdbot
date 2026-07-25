@@ -4,6 +4,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChutesModelDefinition,
+  CHUTES_DEFAULT_MODEL_ID,
   CHUTES_DEFAULT_MODEL_REF,
   CHUTES_MODEL_CATALOG,
   discoverChutesModels,
@@ -13,9 +14,11 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const EXPECTED_STATIC_MODEL_IDS = [
   "deepseek-ai/DeepSeek-V3.2-TEE",
+  "moonshotai/Kimi-K2.6-TEE",
   "moonshotai/Kimi-K2.5-TEE",
-  "zai-org/GLM-5-TEE",
+  "zai-org/GLM-5.2-TEE",
   "MiniMaxAI/MiniMax-M2.5-TEE",
+  "Qwen/Qwen3.6-27B-TEE",
   "Qwen/Qwen3.5-397B-A17B-TEE",
 ];
 
@@ -117,7 +120,7 @@ describe("chutes-models", () => {
   });
 
   it("keeps image-capable fallback models in the runtime catalog", () => {
-    const visionModelIds = ["moonshotai/Kimi-K2.5-TEE", "Qwen/Qwen3.5-397B-A17B-TEE"];
+    const visionModelIds = ["moonshotai/Kimi-K2.6-TEE", "Qwen/Qwen3.6-27B-TEE"];
     for (const id of visionModelIds) {
       const model = CHUTES_MODEL_CATALOG.find((candidate) => candidate.id === id);
       expect(model).toBeDefined();
@@ -133,6 +136,21 @@ describe("chutes-models", () => {
     const runtimeIds = CHUTES_MODEL_CATALOG.map((model) => model.id);
     expect(manifestIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
     expect(runtimeIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
+    expect(CHUTES_DEFAULT_MODEL_ID).toBe("zai-org/GLM-5.2-TEE");
+    expect(
+      manifest.modelCatalog.providers.chutes.models
+        .filter((model) => "status" in model && model.status === "deprecated")
+        .map((model) => ({ id: model.id, replacedBy: model.replacedBy })),
+    ).toEqual([
+      {
+        id: "moonshotai/Kimi-K2.5-TEE",
+        replacedBy: "moonshotai/Kimi-K2.6-TEE",
+      },
+      {
+        id: "Qwen/Qwen3.5-397B-A17B-TEE",
+        replacedBy: "Qwen/Qwen3.6-27B-TEE",
+      },
+    ]);
 
     const cfg = applyChutesConfig({});
     expect(cfg.models?.providers?.chutes?.models.map((model) => model.id)).toEqual(
@@ -140,27 +158,29 @@ describe("chutes-models", () => {
     );
     expect(cfg.agents?.defaults?.model).toEqual({
       primary: CHUTES_DEFAULT_MODEL_REF,
-      fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.5-TEE"],
+      fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.6-TEE"],
     });
     expect(cfg.agents?.defaults?.imageModel).toEqual({
-      primary: "chutes/moonshotai/Kimi-K2.5-TEE",
-      fallbacks: ["chutes/Qwen/Qwen3.5-397B-A17B-TEE"],
+      primary: "chutes/moonshotai/Kimi-K2.6-TEE",
+      fallbacks: ["chutes/Qwen/Qwen3.6-27B-TEE"],
     });
     expect(cfg.agents?.defaults?.models?.["chutes-fast"]).toBeUndefined();
     expect(cfg.agents?.defaults?.models?.["chutes-pro"]?.alias).toBe(
       "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
     );
     expect(cfg.agents?.defaults?.models?.["chutes-vision"]?.alias).toBe(
-      "chutes/moonshotai/Kimi-K2.5-TEE",
+      "chutes/moonshotai/Kimi-K2.6-TEE",
     );
-    const configuredTargets = [
+    const catalogBackedTargets = [
       CHUTES_DEFAULT_MODEL_REF,
       "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
-      "chutes/moonshotai/Kimi-K2.5-TEE",
-      "chutes/Qwen/Qwen3.5-397B-A17B-TEE",
+      "chutes/moonshotai/Kimi-K2.6-TEE",
+      "chutes/Qwen/Qwen3.6-27B-TEE",
     ];
     expect(
-      configuredTargets.every((modelRef) => runtimeIds.includes(modelRef.slice("chutes/".length))),
+      catalogBackedTargets.every((modelRef) =>
+        runtimeIds.includes(modelRef.slice("chutes/".length)),
+      ),
     ).toBe(true);
   });
 
@@ -180,7 +200,7 @@ describe("chutes-models", () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({
         data: [
-          { id: "zai-org/GLM-5-TEE" },
+          { id: "zai-org/GLM-5.2-TEE" },
           {
             id: "new-provider/new-model-r1",
             supported_features: ["reasoning"],
@@ -199,7 +219,7 @@ describe("chutes-models", () => {
       if (models.length === 3) {
         const firstModel = requireChutesModel(models, 0);
         const secondModel = requireChutesModel(models, 1);
-        expect(firstModel.id).toBe("zai-org/GLM-5-TEE");
+        expect(firstModel.id).toBe("zai-org/GLM-5.2-TEE");
         expect(secondModel.reasoning).toBe(true);
         expect(secondModel.cost).toEqual({
           input: 0.1,

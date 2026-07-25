@@ -645,6 +645,13 @@ describe("qa tool coverage report", () => {
           "#80320 Codex app-server intentionally owns apply_patch natively; this fixture still needs valid patch-shaped fault injection before it can prove product behavior.",
       }),
     );
+    expect(report.rows.find((row) => row.tool === "sessions_spawn")).toEqual(
+      expect.objectContaining({
+        required: true,
+        tracking: expect.stringContaining("#80319"),
+        action: expect.stringContaining("report-only"),
+      }),
+    );
     expect(report.rows.find((row) => row.tool === "message-tool")).toEqual(
       expect.objectContaining({
         bucket: "optional-profile-or-plugin",

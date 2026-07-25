@@ -1,4 +1,3 @@
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
 // Owns durable approval matching and allow-always persistence.
 import { canonicalizeExecApprovalPolicyRules } from "./exec-approval-policy-snapshot.js";
@@ -199,7 +198,10 @@ function applyAllowlistEntryUpdate(params: {
     source?: ExecAllowlistEntry["source"];
   };
 }): ExecApprovalsFile | null {
-  const target = params.agentId ?? DEFAULT_AGENT_ID;
+  if (!params.agentId) {
+    throw new Error("Exec allowlist update requires an explicit agent id.");
+  }
+  const target = params.agentId;
   const agents = params.file.agents ?? {};
   const existing = agents[target] ?? {};
   const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];

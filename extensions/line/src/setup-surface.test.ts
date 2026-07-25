@@ -375,9 +375,11 @@ describe("linePlugin status.probeAccount", () => {
       timeoutMs: 50,
     };
 
-    await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual(
-      await probeLineBot("token", 50),
-    );
+    const directResult = await probeLineBot("token", 50);
+    await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual({
+      ...directResult,
+      elapsedMs: expect.any(Number),
+    });
   });
 });
 

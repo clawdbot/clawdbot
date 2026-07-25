@@ -557,6 +557,39 @@ describe("discoverOpenClawPlugins", () => {
     });
   });
 
+  it("recognizes the validated manifest id of an explicitly configured plugin file", async () => {
+    const stateDir = makeTempDir();
+    const coreDir = path.join(stateDir, "configured-plugins", "acme-core");
+    const coreEntry = path.join(coreDir, "index.ts");
+    mkdirSafe(coreDir);
+    writePluginManifest({ pluginDir: coreDir, id: "acme-core" });
+    writePluginEntry(coreEntry);
+
+    const dependentDir = path.join(stateDir, "extensions", "acme-addon");
+    createPackagePluginWithEntry({
+      packageDir: dependentDir,
+      packageName: "@acme/acme-addon",
+      pluginId: "acme-addon",
+    });
+    writePluginManifest({
+      pluginDir: dependentDir,
+      id: "acme-addon",
+      requiresPlugins: ["acme-core"],
+    });
+
+    const result = await discoverWithStateDir(stateDir, { extraPaths: [coreEntry] });
+
+    expectCandidatePresence(result, {
+      present: ["index", "acme-addon"],
+      absent: ["acme-core"],
+    });
+    expectNoDiagnostic({
+      diagnostics: result.diagnostics,
+      pluginId: "acme-addon",
+      messageIncludes: 'requires plugin "acme-core"',
+    });
+  });
+
   it.skipIf(!canCreateDirectorySymlinks)(
     "discovers symlinked plugin directories in global roots",
     async () => {

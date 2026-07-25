@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord as readRecord,
   readStringValue as readString,
@@ -33,15 +34,6 @@ async function listDocumentIds(documentsDir: string): Promise<string[]> {
       .toSorted();
   } catch {
     return [];
-  }
-}
-
-async function pathExists(candidate: string): Promise<boolean> {
-  try {
-    await fs.access(candidate);
-    return true;
-  } catch {
-    return false;
   }
 }
 

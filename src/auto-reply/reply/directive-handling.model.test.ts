@@ -1313,7 +1313,7 @@ describe("/model chat UX", () => {
     });
 
     expect(resolved.errorText).toContain(
-      'Add "openai/gpt-5.5" or its provider wildcard to agents.list[].modelPolicy.allow.',
+      'Add "openai/gpt-5.5" or its provider wildcard to agents.entries.*.modelPolicy.allow.',
     );
   });
 

@@ -628,7 +628,7 @@
   padding: 3px;
   border-radius: 999px;
   border: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
-  background: color-mix(in oklab, var(--surface) 92%, transparent);
+  background: color-mix(in oklab, var(--panel) 92%, transparent);
 }
 
 .dreams-advanced__sort-btn {

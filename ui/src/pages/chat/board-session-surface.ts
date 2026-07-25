@@ -1,6 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
@@ -27,7 +26,6 @@ export type WorkboardCardChipProps = {
 
 type BoardSessionSurfaceProps = {
   snapshot: BoardViewSnapshot;
-  sessions: readonly GatewaySessionRow[];
   observer?: BoardObserverContext;
   activeTabId: string;
   dock: BoardTab["chatDock"];
@@ -170,7 +168,6 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
         .activeTabId=${props.activeTabId}
         .widgetFrameUrl=${props.widgetFrameUrl}
         .callbacks=${props.callbacks}
-        .sessions=${props.sessions}
         .observer=${props.observer}
         .canMutate=${props.canMutate}
         .canGrant=${props.canGrant}

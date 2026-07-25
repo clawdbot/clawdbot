@@ -28,7 +28,7 @@ export async function readPolicyFile(
       ocDocName: basename(displayName),
     };
   } catch (err) {
-    if (isNotFound(err)) {
+    if (isNotFoundPathError(err)) {
       return null;
     }
     throw err;
@@ -48,7 +48,7 @@ export async function readExecApprovalsFile(
       ocDocName: "exec-approvals.json",
     };
   } catch (err) {
-    if (isNotFound(err)) {
+    if (isNotFoundPathError(err)) {
       return null;
     }
     throw err;
@@ -64,7 +64,7 @@ export async function readWorkspaceFile(
     const fs = await loadFsPromisesModule();
     return { raw: await fs.readFile(path, "utf-8"), path };
   } catch (err) {
-    if (isNotFound(err)) {
+    if (isNotFoundPathError(err)) {
       return null;
     }
     throw err;
@@ -129,7 +129,7 @@ function resolveWorkspacePath(ctx: HealthCheckContext, fileName: string): string
   return resolve(ctx.cwd ?? process.cwd(), fileName);
 }
 
-function isNotFound(err: unknown): boolean {
+function isNotFoundPathError(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
 }
 

@@ -480,8 +480,8 @@ describe("renderAgentFiles", () => {
               missing: false,
             },
             {
-              name: "HEARTBEAT.md",
-              path: "/tmp/workspace/HEARTBEAT.md",
+              name: "SOUL.md",
+              path: "/tmp/workspace/SOUL.md",
               missing: false,
             },
           ],
@@ -501,9 +501,9 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    const heartbeatTab = expectAgentTab(container, "HEARTBEAT");
-    expect(heartbeatTab.disabled).toBe(true);
-    heartbeatTab.click();
+    const soulTab = expectAgentTab(container, "SOUL");
+    expect(soulTab.disabled).toBe(true);
+    soulTab.click();
     expect(onSelectFile).not.toHaveBeenCalled();
   });
 

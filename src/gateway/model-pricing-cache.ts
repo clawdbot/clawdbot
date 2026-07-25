@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -990,7 +991,7 @@ function collectConfiguredModelPricingRefs(
     ...normalizationParams,
   });
 
-  for (const agent of config.agents?.list ?? []) {
+  for (const agent of listAgentEntries(config)) {
     addModelListLike({
       value: agent.model,
       aliasIndex,

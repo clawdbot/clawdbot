@@ -11,6 +11,12 @@ export type {
   SessionUpstreamKind,
   SessionUpstreamProbe,
 } from "../plugins/session-catalog.js";
+export {
+  createSessionCatalogAdoptionCoordinator,
+  listAdoptedSessionCatalogSessions,
+  sessionCatalogAdoptedSessionKey,
+  sessionCatalogAdoptedSourceKey,
+} from "../plugins/session-catalog.js";
 export type {
   SessionCatalog,
   SessionCatalogCapabilities,

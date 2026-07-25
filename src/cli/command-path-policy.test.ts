@@ -322,6 +322,12 @@ describe("command-path-policy", () => {
     );
   });
 
+  it("routes ClawHub skill verification through the network proxy", () => {
+    expect(
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "verify", "@demo-owner/weather"]),
+    ).toBe("default");
+  });
+
   it("uses the longest catalog command path for deep network proxy overrides", async () => {
     const catalog: readonly CliCommandCatalogEntry[] = [
       { commandPath: ["nodes"], policy: { networkProxy: "bypass" } },

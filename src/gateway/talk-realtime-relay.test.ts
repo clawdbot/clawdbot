@@ -11,6 +11,7 @@ import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -25,6 +26,7 @@ import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
   createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
+  ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
@@ -38,7 +40,10 @@ const activeRelaySessions = new Map<string, string>();
 function createTalkRealtimeRelaySession(
   params: Parameters<typeof createTalkRealtimeRelaySessionRaw>[0],
 ): ReturnType<typeof createTalkRealtimeRelaySessionRaw> {
-  const session = createTalkRealtimeRelaySessionRaw(params);
+  const session = createTalkRealtimeRelaySessionRaw({
+    cfg: { agents: { entries: { main: { default: true } } } },
+    ...params,
+  });
   activeRelaySessions.set(session.relaySessionId, params.connId);
   return session;
 }
@@ -192,10 +197,16 @@ describe("talk realtime gateway relay", () => {
         sessionKey: "agent:main:main",
         runId: "run-before-transcript",
       });
+      registerTalkRealtimeRelayAgentRun({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-consult",
+        sessionKey: "agent:main:other",
+        runId: "run-other-session",
+      });
 
       expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
         status: "open",
-        consultRunIds: ["run-before-transcript"],
+        consultRunIds: ["run-before-transcript", "run-other-session"],
       });
       stopTalkRealtimeRelaySession({
         relaySessionId: session.relaySessionId,
@@ -208,6 +219,101 @@ describe("talk realtime gateway relay", () => {
       );
     } finally {
       clientVoiceSessionTesting.reset();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pins an unscoped relay owner before the configured default changes", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-owner-pin-")),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    let runtimeConfig: OpenClawConfig = {
+      agents: { entries: { main: { default: true }, ops: {} } },
+    };
+    try {
+      const session = createTalkRealtimeRelaySessionRaw({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => runtimeConfig,
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-owner-pin",
+        provider: createIdleRelayProvider(),
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: "main",
+      });
+      activeRelaySessions.set(session.relaySessionId, "conn-owner-pin");
+      runtimeConfig = {
+        agents: { entries: { main: {}, ops: { default: true } } },
+      };
+
+      ensureTalkRealtimeRelayVoiceSession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-owner-pin",
+        sessionKey: "main",
+      });
+      stopTalkRealtimeRelaySession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-owner-pin",
+      });
+      await vi.waitFor(() =>
+        expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
+          "closed",
+        ),
+      );
+      expect(clientVoiceSessionTesting.readRecord("ops", session.relaySessionId)).toBeUndefined();
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pins a scoped relay owner from the trimmed session key", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-trimmed-owner-")),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    try {
+      const session = createTalkRealtimeRelaySessionRaw({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({
+            agents: { entries: { main: {}, ops: { default: true } } },
+          }),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-trimmed-owner",
+        provider: createIdleRelayProvider(),
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: " agent:main:main ",
+      });
+      activeRelaySessions.set(session.relaySessionId, "conn-trimmed-owner");
+
+      ensureTalkRealtimeRelayVoiceSession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-trimmed-owner",
+        sessionKey: "agent:main:main",
+      });
+
+      expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
+        status: "open",
+      });
+      expect(clientVoiceSessionTesting.readRecord("ops", session.relaySessionId)).toBeUndefined();
+    } finally {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       envSnapshot.restore();

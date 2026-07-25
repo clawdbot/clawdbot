@@ -1,7 +1,7 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { setImmediate as delayImmediate, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
   COMMITTED_WAL_SENTINEL,
   STRESS_TABLE_SQL,
@@ -14,8 +14,10 @@ type WriterReadyMessage = {
 
 type WriterPartialMessage = {
   batch: number;
+  batchesCommitted: number;
   kind: "partial";
   rows: number;
+  rowsCommitted: number;
 };
 
 type WriterReleasedMessage = {
@@ -45,6 +47,11 @@ export type WriterHandle = {
   child: ChildProcess;
   stderr: string[];
   stopped: boolean;
+};
+
+export type WriterExit = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
 };
 
 const WRITER_MESSAGE_TIMEOUT_MS = 30_000;
@@ -143,18 +150,18 @@ export async function stopWriter(writer: WriterHandle): Promise<WriterResultMess
   return result;
 }
 
-async function waitForChildExit(child: ChildProcess): Promise<void> {
+async function waitForChildExit(child: ChildProcess): Promise<WriterExit> {
   if (child.exitCode !== null || child.signalCode !== null) {
-    return;
+    return { code: child.exitCode, signal: child.signalCode };
   }
-  await new Promise<void>((resolve, reject) => {
+  return await new Promise<WriterExit>((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error("SQLite reliability writer did not exit after stopping."));
+      reject(new Error("SQLite reliability writer did not exit after termination was requested."));
     }, WRITER_MESSAGE_TIMEOUT_MS);
-    const onExit = () => {
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
-      resolve();
+      resolve({ code, signal });
     };
     const onError = (error: Error) => {
       cleanup();
@@ -170,12 +177,26 @@ async function waitForChildExit(child: ChildProcess): Promise<void> {
   });
 }
 
+export async function crashWriter(writer: WriterHandle): Promise<WriterExit> {
+  if (writer.stopped) {
+    throw new Error("SQLite reliability writer was already stopped.");
+  }
+  if (!writer.child.kill("SIGKILL")) {
+    throw new Error("SQLite reliability writer exited before the crash signal was delivered.");
+  }
+  const exit = await waitForChildExit(writer.child);
+  writer.stopped = true;
+  return exit;
+}
+
 export async function terminateWriter(writer: WriterHandle): Promise<void> {
   if (writer.child.exitCode !== null || writer.child.signalCode !== null) {
+    writer.stopped = true;
     return;
   }
   writer.child.kill();
   await waitForChildExit(writer.child).catch(() => undefined);
+  writer.stopped = true;
 }
 
 function parseWriterChildArgs(argv: string[]): {
@@ -234,8 +255,7 @@ function parseWriterChildArgs(argv: string[]): {
 
 async function runWriterChild(argv: string[]): Promise<void> {
   const options = parseWriterChildArgs(argv);
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(options.databasePath);
+  const database = openNodeSqliteDatabase(options.databasePath);
   let nextBatch = 0;
   let batchesCommitted = 0;
   let rowsCommitted = 0;
@@ -267,9 +287,10 @@ async function runWriterChild(argv: string[]): Promise<void> {
     const insert = database.prepare(
       "INSERT INTO openclaw_reliability_entries (batch, ordinal, payload) VALUES (?, ?, ?)",
     );
-    const insertSentinel = database.prepare(
-      "INSERT INTO openclaw_reliability_sentinel (id, payload) VALUES (1, ?)",
-    );
+    const upsertSentinel = database.prepare(`
+      INSERT INTO openclaw_reliability_sentinel (id, payload) VALUES (1, ?)
+      ON CONFLICT(id) DO UPDATE SET payload = excluded.payload
+    `);
     const deleteExpired = database.prepare(
       "DELETE FROM openclaw_reliability_entries WHERE batch < ?",
     );
@@ -300,7 +321,7 @@ async function runWriterChild(argv: string[]): Promise<void> {
       database.exec("BEGIN IMMEDIATE;");
       try {
         if (includeSentinel) {
-          insertSentinel.run(COMMITTED_WAL_SENTINEL);
+          upsertSentinel.run(COMMITTED_WAL_SENTINEL);
         }
         for (let ordinal = 0; ordinal < options.rowsPerBatch; ordinal += 1) {
           insert.run(nextBatch, ordinal, `${nextBatch}:${ordinal}:${payload}`);
@@ -330,8 +351,10 @@ async function runWriterChild(argv: string[]): Promise<void> {
           }
           sendMessage({
             batch: heldBatch,
+            batchesCommitted,
             kind: "partial",
             rows: heldRows,
+            rowsCommitted,
           } satisfies WriterPartialMessage);
           while (!shouldReleasePartial()) {
             await delay(1);

@@ -12,8 +12,8 @@ import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-c
 import { groqMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const GROQ_DEFAULT_MODEL_REF = "groq/llama-3.3-70b-versatile";
-const GROQ_DEFAULT_MODEL_ID = "llama-3.3-70b-versatile";
+const GROQ_DEFAULT_MODEL_REF = "groq/openai/gpt-oss-120b";
+const GROQ_OVERSIZED_RECOVERY_MODEL_ID = "llama-3.3-70b-versatile";
 const GROQ_FALLBACK_MAX_TOKENS = 1_024;
 
 function buildGroqCatalogProvider() {
@@ -194,7 +194,7 @@ export default definePluginEntry({
           ctx.streamFn,
           // Older compatible hosts omit this provenance. Only a known discovered default
           // is safe to replace; an unknown value could be a user-configured cap.
-          ctx.modelId === GROQ_DEFAULT_MODEL_ID &&
+          ctx.modelId === GROQ_OVERSIZED_RECOVERY_MODEL_ID &&
             !hasExplicitMaxTokens(ctx.extraParams) &&
             !hasExplicitMaxTokens(ctx.model?.params) &&
             ctx.model?.maxTokensSource === "discovered",
