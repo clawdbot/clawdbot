@@ -71,9 +71,11 @@ describe("session storage readiness", () => {
   });
 
   it("times out without starting overlapping probes", async () => {
-    let releaseProbe:
-      | ((value: { writable: true; reason: string; message: string }) => void)
-      | null = null;
+    let releaseProbe: (value: {
+      writable: true;
+      reason: string;
+      message: string;
+    }) => void = () => {};
     const probe = vi.fn(
       () =>
         new Promise<{ writable: true; reason: string; message: string }>((resolve) => {
@@ -96,7 +98,7 @@ describe("session storage readiness", () => {
     expect(second).toMatchObject({ writable: null, reason: "SessionStorageProbeTimedOut" });
     expect(probe).toHaveBeenCalledTimes(1);
 
-    releaseProbe?.({
+    releaseProbe({
       writable: true,
       reason: "SessionStorageReady",
       message: "ready",
