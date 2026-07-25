@@ -357,6 +357,24 @@ describe("getMemorySearchManager caching", () => {
     }
   });
 
+  it("does not return a failed-close wrapper after a module reload", async () => {
+    const agentId = "reload-failed-close";
+    const cfg = createQmdCfg(agentId);
+    const firstManager = requireManager(await getMemorySearchManager({ cfg, agentId }));
+    mockPrimary.close.mockRejectedValueOnce(new Error("qmd close failed"));
+
+    await expect(closeMemorySearchManager({ cfg, agentId })).rejects.toThrow("qmd close failed");
+
+    vi.resetModules();
+    const freshModule = await import("./search-manager.js");
+    try {
+      const second = await freshModule.getMemorySearchManager({ cfg, agentId, withLease });
+      expect(second.manager).not.toBe(firstManager);
+    } finally {
+      await freshModule.closeAllMemorySearchManagers();
+    }
+  });
+
   it("reuses the same QMD manager instance for repeated calls", async () => {
     const cfg = createQmdCfg("main");
 
@@ -1308,6 +1326,27 @@ describe("getMemorySearchManager caching", () => {
     });
     expect(nextMain.manager).not.toBe(mainManager);
     expect(nextOther.manager).toBe(otherManager);
+  });
+
+  it("blocks qmd replacement while scoped teardown closes its builtin fallback", async () => {
+    const agentId = "scoped-fallback-close-race";
+    const cfg = createQmdCfg(agentId);
+    const firstManager = requireManager(await getMemorySearchManager({ cfg, agentId }));
+    (firstManager as unknown as { fallback: typeof fallbackManager }).fallback = fallbackManager;
+    const fallbackCloseGate = createDeferred<void>();
+    fallbackManager.close.mockImplementationOnce(async () => await fallbackCloseGate.promise);
+
+    const closePromise = closeMemorySearchManager({ cfg, agentId });
+    await vi.waitFor(() => expect(fallbackManager.close).toHaveBeenCalledTimes(1));
+    const secondPromise = getMemorySearchManager({ cfg, agentId });
+    await Promise.resolve();
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+
+    fallbackCloseGate.resolve();
+    await closePromise;
+    const secondManager = requireManager(await secondPromise);
+    expect(secondManager).not.toBe(firstManager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
   it("closes the requested agent builtin index manager on scoped teardown", async () => {

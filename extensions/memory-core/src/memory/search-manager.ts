@@ -84,6 +84,8 @@ type MemorySearchManagerCacheStore = {
   qmdManagerCache: Map<string, CachedQmdManagerEntry>;
   pendingQmdManagerCreates: Map<string, PendingQmdManagerCreate>;
   qmdManagerOpenFailures: Map<string, QmdManagerOpenFailure>;
+  scopeLifecycleTails: Map<string, Promise<void>>;
+  globalClosePromise: Promise<void> | null;
 };
 
 const QMD_MANAGER_OPEN_FAILURE_COOLDOWN_MS = 60_000;
@@ -93,6 +95,8 @@ function createMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
     qmdManagerCache: new Map<string, CachedQmdManagerEntry>(),
     pendingQmdManagerCreates: new Map<string, PendingQmdManagerCreate>(),
     qmdManagerOpenFailures: new Map<string, QmdManagerOpenFailure>(),
+    scopeLifecycleTails: new Map<string, Promise<void>>(),
+    globalClosePromise: null,
   };
 }
 
@@ -112,6 +116,15 @@ function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
     if (!(cacheStore.qmdManagerOpenFailures instanceof Map)) {
       cacheStore.qmdManagerOpenFailures = new Map<string, QmdManagerOpenFailure>();
     }
+    if (!(cacheStore.scopeLifecycleTails instanceof Map)) {
+      cacheStore.scopeLifecycleTails = new Map<string, Promise<void>>();
+    }
+    if (
+      cacheStore.globalClosePromise !== null &&
+      !(cacheStore.globalClosePromise instanceof Promise)
+    ) {
+      cacheStore.globalClosePromise = null;
+    }
     return cacheStore as MemorySearchManagerCacheStore;
   }
   const repaired = createMemorySearchManagerCacheStore();
@@ -120,11 +133,53 @@ function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
 }
 
 const log = createSubsystemLogger("memory");
+const MEMORY_SEARCH_MANAGER_CACHE_STORE = getMemorySearchManagerCacheStore();
 const {
   qmdManagerCache: QMD_MANAGER_CACHE,
   pendingQmdManagerCreates: PENDING_QMD_MANAGER_CREATES,
   qmdManagerOpenFailures: QMD_MANAGER_OPEN_FAILURES,
-} = getMemorySearchManagerCacheStore();
+} = MEMORY_SEARCH_MANAGER_CACHE_STORE;
+
+async function runMemorySearchManagerScopeOperation<T>(
+  scopeKey: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  while (MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise) {
+    const globalClose = MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise;
+    try {
+      await globalClose;
+    } catch {
+      if (MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise === globalClose) {
+        await closeAllMemorySearchManagers();
+      }
+    }
+  }
+  const previous =
+    MEMORY_SEARCH_MANAGER_CACHE_STORE.scopeLifecycleTails.get(scopeKey) ?? Promise.resolve();
+  const result = previous.then(operation, operation);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  MEMORY_SEARCH_MANAGER_CACHE_STORE.scopeLifecycleTails.set(scopeKey, tail);
+  try {
+    return await result;
+  } finally {
+    if (MEMORY_SEARCH_MANAGER_CACHE_STORE.scopeLifecycleTails.get(scopeKey) === tail) {
+      MEMORY_SEARCH_MANAGER_CACHE_STORE.scopeLifecycleTails.delete(scopeKey);
+    }
+  }
+}
+
+async function runMemorySearchManagerGlobalClose(operation: () => Promise<void>): Promise<void> {
+  const previous = MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise ?? Promise.resolve();
+  const closePromise = previous.then(operation, operation);
+  MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise = closePromise;
+  await closePromise;
+  if (MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise === closePromise) {
+    MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise = null;
+  }
+}
 const managerRuntimeLoader = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
 const loadManagerRuntime = managerRuntimeLoader;
 
@@ -144,6 +199,11 @@ type MemorySearchManagerParams = {
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
 };
+
+function isClosedMemorySearchManager(manager: MemorySearchManager): boolean {
+  const isClosed = Reflect.get(manager, "isClosed");
+  return typeof isClosed === "function" && isClosed.call(manager) === true;
+}
 
 function getActiveQmdManagerOpenFailure(
   scopeKey: string,
@@ -202,6 +262,16 @@ function applyManagerDebug(
 }
 
 export async function getMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
+  const scopeKey = buildQmdManagerScopeKey(normalizeAgentId(params.agentId));
+  return await runMemorySearchManagerScopeOperation(
+    scopeKey,
+    async () => await getMemorySearchManagerWithinLifecycle(params),
+  );
+}
+
+async function getMemorySearchManagerWithinLifecycle(
   params: MemorySearchManagerParams,
 ): Promise<MemorySearchManagerResult> {
   const acquireStartedAt = Date.now();
@@ -321,7 +391,14 @@ export async function getMemorySearchManager(
       return { entry: cacheEntry };
     };
 
-    const cached = QMD_MANAGER_CACHE.get(scopeKey);
+    let cached = QMD_MANAGER_CACHE.get(scopeKey);
+    if (cached && isClosedMemorySearchManager(cached.manager)) {
+      await cached.manager.close();
+      if (QMD_MANAGER_CACHE.get(scopeKey) === cached) {
+        QMD_MANAGER_CACHE.delete(scopeKey);
+      }
+      cached = undefined;
+    }
     const cachedMatchesIdentity = cached?.identityKey === identityKey;
     if (cachedMatchesIdentity) {
       if (params.purpose === "status") {
@@ -387,7 +464,7 @@ export async function getMemorySearchManager(
     const pending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
     if (pending) {
       await pending.promise;
-      return finish(await getMemorySearchManager(params), {
+      return finish(await getMemorySearchManagerWithinLifecycle(params), {
         backend: "qmd",
         managerCacheState: "pending-create-wait",
         qmdIdentityHash: debugIdentityHash,
@@ -404,12 +481,19 @@ export async function getMemorySearchManager(
           recordQmdManagerOpenFailure(scopeKey, identityKey, pendingFailureReason);
           return null;
         }
-        QMD_MANAGER_CACHE.set(scopeKey, created.entry);
         if (cached) {
-          await closeQmdManagerForReplacement(cached.manager).catch((err: unknown) => {
-            log.warn(`failed to retire replaced qmd memory manager: ${formatErrorMessage(err)}`);
-          });
+          try {
+            await closeQmdManagerForReplacement(cached.manager);
+          } catch (err) {
+            await created.entry.manager.close?.().catch((closeErr: unknown) => {
+              log.warn(
+                `failed to close unused qmd memory manager: ${formatErrorMessage(closeErr)}`,
+              );
+            });
+            throw err;
+          }
         }
+        QMD_MANAGER_CACHE.set(scopeKey, created.entry);
         return created.entry.manager;
       })().finally(() => {
         const currentPending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
@@ -525,26 +609,62 @@ class BorrowedMemoryManager implements MemorySearchManager {
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
+  await runMemorySearchManagerGlobalClose(closeAllMemorySearchManagersWithinLifecycle);
+}
+
+async function closeAllMemorySearchManagersWithinLifecycle(): Promise<void> {
+  const scopeTails = Array.from(MEMORY_SEARCH_MANAGER_CACHE_STORE.scopeLifecycleTails.values());
+  if (scopeTails.length > 0) {
+    await Promise.allSettled(scopeTails);
+  }
   const pendingCreates = Array.from(PENDING_QMD_MANAGER_CREATES.values(), (entry) => entry.promise);
   await Promise.allSettled(pendingCreates);
-  const managers = Array.from(QMD_MANAGER_CACHE.values(), (entry) => entry.manager);
-  PENDING_QMD_MANAGER_CREATES.clear();
-  QMD_MANAGER_CACHE.clear();
+  const entries = Array.from(QMD_MANAGER_CACHE.entries());
   QMD_MANAGER_OPEN_FAILURES.clear();
-  for (const manager of managers) {
+  let firstError: unknown;
+  let closeFailed = false;
+  for (const [scopeKey, entry] of entries) {
     try {
-      await manager.close?.();
+      await entry.manager.close?.();
+      if (QMD_MANAGER_CACHE.get(scopeKey) === entry) {
+        QMD_MANAGER_CACHE.delete(scopeKey);
+      }
     } catch (err) {
+      if (!closeFailed) {
+        firstError = err;
+      }
+      closeFailed = true;
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
     }
   }
   if (managerRuntimeLoader.peek()) {
-    const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
-    await closeAllMemoryIndexManagers();
+    try {
+      const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
+      await closeAllMemoryIndexManagers();
+    } catch (err) {
+      if (!closeFailed) {
+        firstError = err;
+      }
+      closeFailed = true;
+    }
+  }
+  if (closeFailed) {
+    throw firstError;
   }
 }
 
 export async function closeMemorySearchManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  const scopeKey = buildQmdManagerScopeKey(normalizeAgentId(params.agentId));
+  await runMemorySearchManagerScopeOperation(
+    scopeKey,
+    async () => await closeMemorySearchManagerWithinLifecycle(params),
+  );
+}
+
+async function closeMemorySearchManagerWithinLifecycle(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
@@ -555,18 +675,34 @@ export async function closeMemorySearchManager(params: {
     await Promise.allSettled([pending.promise]);
   }
   const cached = QMD_MANAGER_CACHE.get(scopeKey);
+  let closeError: unknown;
+  let closeFailed = false;
   if (cached) {
-    QMD_MANAGER_CACHE.delete(scopeKey);
-    QMD_MANAGER_OPEN_FAILURES.delete(scopeKey);
     try {
       await cached.manager.close?.();
+      if (QMD_MANAGER_CACHE.get(scopeKey) === cached) {
+        QMD_MANAGER_CACHE.delete(scopeKey);
+      }
+      QMD_MANAGER_OPEN_FAILURES.delete(scopeKey);
     } catch (err) {
+      closeError = err;
+      closeFailed = true;
       log.warn(`failed to close qmd memory manager for agent ${normalizedAgentId}: ${String(err)}`);
     }
   }
   if (managerRuntimeLoader.peek()) {
-    const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
-    await closeMemoryIndexManagersForAgent({ cfg: params.cfg, agentId: normalizedAgentId });
+    try {
+      const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
+      await closeMemoryIndexManagersForAgent({ cfg: params.cfg, agentId: normalizedAgentId });
+    } catch (err) {
+      if (!closeFailed) {
+        closeError = err;
+      }
+      closeFailed = true;
+    }
+  }
+  if (closeFailed) {
+    throw closeError;
   }
 }
 
@@ -576,6 +712,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   private lastError?: string;
   private cacheEvicted = false;
   private closed = false;
+  private closePromise: Promise<void> | null = null;
   private closeReason = "memory search manager is closed";
 
   constructor(
@@ -736,9 +873,24 @@ class FallbackMemoryManager implements MemorySearchManager {
   }
 
   async close() {
-    if (this.closed) {
+    const existingClose = this.closePromise;
+    if (existingClose) {
+      await existingClose;
       return;
     }
+    const closeOperation = this.closeOnce();
+    this.closePromise = closeOperation;
+    try {
+      await closeOperation;
+    } catch (err) {
+      if (this.closePromise === closeOperation) {
+        this.closePromise = null;
+      }
+      throw err;
+    }
+  }
+
+  private async closeOnce(): Promise<void> {
     this.closed = true;
     await this.deps.primary.close?.();
     await this.fallback?.close?.();
@@ -774,6 +926,10 @@ class FallbackMemoryManager implements MemorySearchManager {
     if (this.closed) {
       throw new Error(this.closeReason);
     }
+  }
+
+  isClosed(): boolean {
+    return this.closed;
   }
 
   private evictCacheEntry(): void {

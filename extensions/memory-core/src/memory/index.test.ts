@@ -1754,7 +1754,7 @@ describe("memory index", () => {
     await concurrentGlobalClose;
     managersForCleanup.add(replacement);
     expect(replacement === first).toBe(false);
-    expect((replacement as unknown as { closed: boolean }).closed).toBe(true);
+    expect((replacement as unknown as { closed: boolean }).closed).toBe(false);
   });
 
   it("does not reuse memory index managers across local-service hosts", async () => {
