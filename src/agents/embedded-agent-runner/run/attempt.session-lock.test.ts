@@ -164,4 +164,25 @@ describe("createEmbeddedAttemptSessionLockController", () => {
 
     expect(controller.hasSessionTakeover()).toBe(true);
   });
+
+  it("does not wait on a stalled reload after the disposal timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
+        lockOptions: { sessionFile: "agent:main:main" },
+        reloadPromptReleasedSessionFile: async () => await new Promise<void>(() => {}),
+      });
+
+      await controller.releaseForPrompt();
+      void controller.reacquireAfterPrompt();
+      await Promise.resolve();
+      const disposal = controller.dispose();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(disposal).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

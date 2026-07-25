@@ -179,14 +179,16 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     hasSessionTakeover: () => takeoverDetected,
     dispose: async () => {
       disposed = true;
+      let promptSettleTimedOut = false;
       if (promptReleased) {
         let timeout: ReturnType<typeof setTimeout> | undefined;
-        await Promise.race([
-          promptSettled,
-          new Promise<void>((resolve) => {
-            timeout = setTimeout(resolve, PROMPT_DISPOSE_SETTLE_TIMEOUT_MS);
+        const promptSettledBeforeTimeout = await Promise.race([
+          promptSettled.then(() => true),
+          new Promise<false>((resolve) => {
+            timeout = setTimeout(() => resolve(false), PROMPT_DISPOSE_SETTLE_TIMEOUT_MS);
           }),
         ]);
+        promptSettleTimedOut = !promptSettledBeforeTimeout;
         if (timeout) {
           clearTimeout(timeout);
         }
@@ -196,6 +198,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           settlePrompt?.();
           settlePrompt = undefined;
         }
+      }
+      if (promptSettleTimedOut) {
+        return;
       }
       await serializeLifecycle(() => {});
     },
