@@ -1,4 +1,3 @@
-export const MODEL_CATALOG_MIN_VERSION: "2026.7.0";
 export const MODEL_CATALOG_MIN_MODELS: 200;
 export const OPENROUTER_MODELS_URL: "https://openrouter.ai/api/v1/models";
 export const LITELLM_PRICING_URL: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -62,15 +61,3 @@ export function enrichModelCatalogPricing(options: {
   fetchImpl?: typeof fetch;
 }): Promise<number>;
 export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle): string;
-export function runPublishModelCatalog(options?: {
-  args?: string[];
-  rootDir?: string;
-  now?: () => number;
-  sourceCommit?: string;
-  fetchImpl?: typeof fetch;
-}): Promise<{
-  bundle: PublishedModelCatalogBundle;
-  summary: ModelCatalogBundleSummary;
-  pricingEnriched: number;
-  wrote: boolean;
-}>;

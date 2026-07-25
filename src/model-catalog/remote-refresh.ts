@@ -18,14 +18,13 @@ import {
   writeRemoteModelCatalog,
 } from "./remote-store.js";
 
-export const DEFAULT_REMOTE_MODEL_CATALOG_URL =
-  "https://catalog.openclaw.ai/models/v1/catalog.json";
+const DEFAULT_REMOTE_MODEL_CATALOG_URL = "https://catalog.openclaw.ai/models/v1/catalog.json";
 export const REMOTE_MODEL_CATALOG_TTL_MS = 6 * 60 * 60_000;
 const REMOTE_MODEL_CATALOG_TIMEOUT_MS = 15_000;
 const REMOTE_MODEL_CATALOG_MAX_BYTES = 4 * 1024 * 1024;
 
 type RefreshCounts = { providers: number; models: number };
-export type RemoteModelCatalogRefreshResult =
+type RemoteModelCatalogRefreshResult =
   | ({ status: "updated" | "unchanged"; generatedAt: number } & RefreshCounts)
   | ({ status: "fresh"; generatedAt: number; nextCheckInMs: number } & RefreshCounts)
   | { status: "disabled"; providers: 0; models: 0 }

@@ -4,13 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  DEFAULT_REMOTE_MODEL_CATALOG_URL,
   refreshRemoteModelCatalog,
   REMOTE_MODEL_CATALOG_TTL_MS,
+  resolveRemoteCatalogUrl,
 } from "./remote-refresh.js";
 import { readRemoteModelCatalog, writeRemoteModelCatalog } from "./remote-store.js";
 
 const roots: string[] = [];
+const DEFAULT_REMOTE_MODEL_CATALOG_URL = resolveRemoteCatalogUrl({});
 const bundle = {
   schemaVersion: 1,
   generatedAt: 1_753_500_000_000,

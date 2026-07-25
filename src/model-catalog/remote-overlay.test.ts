@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getRemoteModelCatalogOverlay } from "./remote-overlay.js";
 import {
-  getRemoteModelCatalogOverlay,
   resetRemoteModelCatalogOverlayForTest,
   setRemoteModelCatalogOverlaySourcesForTest,
-} from "./remote-overlay.js";
+} from "./remote-overlay.test-support.js";
 
 const mocks = {
   builtAt: vi.fn<() => number | undefined>(),

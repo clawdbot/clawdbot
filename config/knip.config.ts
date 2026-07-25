@@ -488,6 +488,21 @@ const config = {
       ],
       project: ["src/**/*.ts!"],
     },
+    "packages/model-catalog-core": {
+      // Mirror the published export map so package-owned runtime dependencies
+      // are traced from the TypeScript sources instead of the JS fallback.
+      entry: [
+        "src/index.ts!",
+        "src/configured-model-refs.ts!",
+        "src/model-catalog-normalize.ts!",
+        "src/model-catalog-refs.ts!",
+        "src/model-catalog-types.ts!",
+        "src/provider-id.ts!",
+        "src/provider-model-id-normalization.ts!",
+        "src/provider-model-id-normalize.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
     "packages/normalization-core": {
       // Mirror package.json exports; root and UI builds consume these source subpaths directly.
       entry: [

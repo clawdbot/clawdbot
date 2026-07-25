@@ -1,6 +1,9 @@
 // Manifest model-catalog planner tests cover plugin-owned row planning, filters, conflicts, and suppressions.
 import { describe, expect, it } from "vitest";
-import { planManifestModelCatalogRows, planManifestModelCatalogSuppressions } from "./index.js";
+import {
+  planManifestModelCatalogRows,
+  planManifestModelCatalogSuppressions,
+} from "./manifest-planner.js";
 
 describe("manifest model catalog planner", () => {
   it("overlays only declared providers and keeps remote transport fields inert", () => {

@@ -10,7 +10,7 @@ import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
 import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./remote-refresh.js";
 import { readRemoteModelCatalog } from "./remote-store.js";
 
-export type RemoteModelCatalogOverlay = Readonly<Record<string, ModelCatalogProvider>>;
+type RemoteModelCatalogOverlay = Readonly<Record<string, ModelCatalogProvider>>;
 
 let cachedOverlay: { sourceUrl: string; value: RemoteModelCatalogOverlay | null } | undefined;
 let readBundledGeneratedAt = bundledCatalogGeneratedAt;
@@ -58,15 +58,24 @@ export function getRemoteModelCatalogOverlay(
   }
 }
 
-export function resetRemoteModelCatalogOverlayForTest(): void {
+function resetRemoteModelCatalogOverlayForTest(): void {
   cachedOverlay = undefined;
 }
 
-export function setRemoteModelCatalogOverlaySourcesForTest(sources?: {
+function setRemoteModelCatalogOverlaySourcesForTest(sources?: {
   bundledGeneratedAt?: typeof bundledCatalogGeneratedAt;
   readStoredCatalog?: typeof readRemoteModelCatalog;
 }): void {
   cachedOverlay = undefined;
   readBundledGeneratedAt = sources?.bundledGeneratedAt ?? bundledCatalogGeneratedAt;
   readStoredCatalog = sources?.readStoredCatalog ?? readRemoteModelCatalog;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.remoteModelCatalogOverlayTestApi")
+  ] = {
+    resetRemoteModelCatalogOverlayForTest,
+    setRemoteModelCatalogOverlaySourcesForTest,
+  };
 }

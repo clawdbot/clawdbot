@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
+const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
 export const MODEL_CATALOG_MIN_MODELS = 200;
 export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 export const LITELLM_PRICING_URL =
@@ -443,7 +443,7 @@ function resolveSourceCommit(rootDir) {
   }).trim();
 }
 
-export async function runPublishModelCatalog(options = {}) {
+async function runPublishModelCatalog(options = {}) {
   const rootDir = options.rootDir ?? defaultRootDir;
   const args = parsePublishModelCatalogArgs(options.args ?? process.argv.slice(2));
   const generatedAt = (options.now ?? Date.now)();
