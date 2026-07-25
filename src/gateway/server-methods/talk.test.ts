@@ -1642,6 +1642,7 @@ describe("talk.session unified handlers", () => {
       configuredProviderId: "openai",
       providerConfigs: { openai: { apiKey: "openai-key" } },
       defaultModel: "gpt-realtime-default",
+      surface: "bridge",
     });
     expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
       agentId: "main",
