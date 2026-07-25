@@ -5,6 +5,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 
@@ -263,15 +264,13 @@ describe("gateway usage helpers", () => {
       context: { getRuntimeConfig: vi.fn(() => ({})) },
     } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
 
-    expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = expectDefined(
-      respond.mock.calls[0],
-      "respond.mock.calls[0] test invariant",
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "startDate and endDate must be provided together"),
     );
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    expect(JSON.stringify(error)).toContain("startDate and endDate must be provided together");
     expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
+    expect(vi.mocked(discoverAllSessions)).not.toHaveBeenCalled();
   });
 
   it("parseUtcOffsetToMinutes supports whole-hour and half-hour offsets", () => {
