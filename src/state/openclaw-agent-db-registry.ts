@@ -74,7 +74,15 @@ function areAsciiCaseVariants(left: string | undefined, right: string | undefine
 }
 
 function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
-  if (!/[^\x00-\x7F]/u.test(`${left}${right}`)) {
+  const hasNonAscii = (value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      if (value.charCodeAt(index) > 0x7f) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!hasNonAscii(left) && !hasNonAscii(right)) {
     return false;
   }
   const lowercaseEquivalent = left.toLowerCase() === right.toLowerCase();
