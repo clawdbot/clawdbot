@@ -1,6 +1,5 @@
 // Microsoft tests cover speech provider plugin behavior.
-import { mkdtempSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -8,7 +7,8 @@ import {
   getDebugProxyCaptureStore,
   initializeDebugProxyCapture,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -66,6 +66,21 @@ function requireFirstEdgeTtsCall(edgeSpy: ReturnType<typeof vi.spyOn>): {
 }
 
 describe("listMicrosoftVoices", () => {
+  let openClawState: OpenClawTestState;
+
+  beforeEach(async () => {
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "microsoft-voices-capture-",
+    });
+  });
+
+  afterEach(async () => {
+    await openClawState.cleanup();
+  });
+
+  // Install after local teardown so the proxy snapshot is restored before the
+  // state helper removes its directory and restores the outer environment.
   const proxyReset = installDebugProxyTestResetHooks();
 
   it("maps Microsoft voice metadata into speech voice options", async () => {
@@ -178,10 +193,8 @@ describe("listMicrosoftVoices", () => {
   });
 
   it("records voice discovery exchanges in debug proxy capture mode", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-capture-"));
     proxyReset.captureProxyEnv();
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
-    process.env.OPENCLAW_STATE_DIR = tempDir;
     process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-session";
 
     globalThis.fetch = vi
@@ -217,10 +230,8 @@ describe("listMicrosoftVoices", () => {
   });
 
   it("does not double-capture voice discovery when the global fetch patch is installed", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-global-"));
     proxyReset.captureProxyEnv();
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
-    process.env.OPENCLAW_STATE_DIR = tempDir;
     process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-global-session";
 
     globalThis.fetch = vi.fn(

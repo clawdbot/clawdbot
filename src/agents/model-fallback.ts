@@ -2080,6 +2080,7 @@ export async function runWithImageModelFallback<T>(params: {
   modelOverride?: string;
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
+  abortSignal?: AbortSignal;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
@@ -2102,6 +2103,10 @@ export async function runWithImageModelFallback<T>(params: {
       attempts,
       attempt: i + 1,
       total: candidates.length,
+      abortSignal: params.abortSignal,
+    }).catch((error: unknown) => {
+      params.abortSignal?.throwIfAborted();
+      throw error;
     });
     if ("success" in attemptRun) {
       return attemptRun.success;

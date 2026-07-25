@@ -208,13 +208,9 @@ export const terminalPanelStyles = css`
     border-radius: 50%;
     animation: tp-spin 0.8s linear infinite;
   }
-  .tp-empty,
   .tp-error {
     padding: 10px 12px;
     font-size: 12px;
-    color: var(--muted, #8a919e);
-  }
-  .tp-error {
     color: var(--danger, #ff6b6b);
   }
   @keyframes tp-spin {

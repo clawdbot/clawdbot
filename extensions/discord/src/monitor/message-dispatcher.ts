@@ -3,6 +3,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -58,80 +59,8 @@ type DiscordMessageDispatcherWithLifecycle = DiscordMessageDispatcher & {
   deactivate: () => Promise<void>;
 };
 
-type DiscordFlushIngressSettlement = {
-  lifecycle: DiscordIngressLifecycle | undefined;
-  settle: () => Promise<void>;
-  abandon: (error?: unknown) => Promise<void>;
-};
-
 function isNonEmptyString(value: string | undefined): value is string {
   return typeof value === "string" && value.length > 0;
-}
-
-function buildFlushIngressLifecycle(
-  entries: Array<{ turnAdoptionLifecycle?: DiscordIngressLifecycle }>,
-): DiscordFlushIngressSettlement {
-  const lifecycles = entries
-    .map((entry) => entry.turnAdoptionLifecycle)
-    .filter((lifecycle) => lifecycle !== undefined);
-  const [firstLifecycle] = lifecycles;
-  if (!firstLifecycle) {
-    return {
-      lifecycle: undefined,
-      settle: async () => {},
-      abandon: async () => {},
-    };
-  }
-  let handedOff = false;
-  const adoptAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAdopted();
-    }
-  };
-  return {
-    lifecycle: {
-      abortSignal:
-        lifecycles.length === 1
-          ? firstLifecycle.abortSignal
-          : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-      onAdopted: async () => {
-        handedOff = true;
-        await adoptAll();
-      },
-      onDeferred: () => {
-        handedOff = true;
-        for (const lifecycle of lifecycles) {
-          lifecycle.onDeferred();
-        }
-      },
-      onAdoptionFinalizing: () => {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onAdoptionFinalizing();
-        }
-      },
-      onAbandoned: async () => {
-        handedOff = true;
-        for (const lifecycle of lifecycles) {
-          await lifecycle.onAbandoned();
-        }
-      },
-    },
-    // A gate or deliberate no-dispatch still consumes every merged queue row.
-    settle: async () => {
-      if (!handedOff) {
-        await adoptAll();
-      }
-    },
-    abandon: async () => {
-      if (handedOff) {
-        return;
-      }
-      handedOff = true;
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAbandoned();
-      }
-    },
-  };
 }
 
 export function createDiscordMessageDispatcher(
@@ -209,7 +138,9 @@ export function createDiscordMessageDispatcher(
         if (!last) {
           return;
         }
-        const ingress = buildFlushIngressLifecycle(entries);
+        const ingress = fanInChannelIngressLifecycles(
+          entries.map((entry) => entry.turnAdoptionLifecycle),
+        );
         const abortSignal = last.abortSignal;
         if (abortSignal?.aborted) {
           await ingress.abandon(abortSignal.reason);

@@ -2,11 +2,9 @@
 // Bridges browser Talk audio sessions with realtime voice provider plugins.
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   buildRealtimeVoiceAgentConsultWorkingResponse,
@@ -18,6 +16,7 @@ import {
   shouldAutoControlRealtimeVoiceAgentText,
   type RealtimeVoiceAgentControlResult,
 } from "../talk/agent-run-control.js";
+import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
 import {
   appendRelayVoiceTranscript,
   closeClientVoiceSession,
@@ -190,7 +189,7 @@ function logRelayVoiceFailure(session: RelaySession, message: string, error: unk
 
 function resolveRelayAgentIdFromCurrentConfig(session: RelaySession, sessionKey: string): string {
   const config = session.voiceConfig ?? session.context.getRuntimeConfig();
-  return resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(config));
+  return resolveTalkSessionAgentId(config, sessionKey);
 }
 
 function bindRelaySessionKey(session: RelaySession, sessionKey: string): void {
@@ -1028,9 +1027,9 @@ export function createTalkRealtimeRelaySession(
     sessionKey: initialSessionKey,
     ...(initialSessionKey
       ? {
-          agentId: resolveAgentIdFromSessionKey(
+          agentId: resolveTalkSessionAgentId(
+            params.cfg ?? params.context.getRuntimeConfig(),
             initialSessionKey,
-            resolveDefaultAgentId(params.cfg ?? params.context.getRuntimeConfig()),
           ),
         }
       : {}),

@@ -59,6 +59,7 @@ import {
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
@@ -423,6 +424,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
   deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
@@ -438,6 +440,7 @@ async function runResponsesAgentCommand(params: {
       runId: params.runId,
       deliver: false,
       messageChannel: params.messageChannel,
+      senderIsOwner: params.senderIsOwner,
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
       abortSignal: params.abortSignal,
@@ -479,6 +482,7 @@ export async function handleOpenResponsesHttpRequest(
     sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
     return true;
   }
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
@@ -752,6 +756,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });
@@ -1138,6 +1143,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });

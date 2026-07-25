@@ -360,6 +360,11 @@ function resolveHeartbeatConfig(
   return { ...defaults, ...overrides };
 }
 
+function resolveAmbientHeartbeatAgentId(cfg: OpenClawConfig): string {
+  const configured = normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId);
+  return normalizeAgentId(configured ?? resolveDefaultAgentId(cfg));
+}
+
 function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {
   if (!heartbeat) {
     return undefined;
@@ -399,13 +404,18 @@ export function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       })
       .filter((entry) => entry.agentId);
   }
+  const configuredAgentId = normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId);
+  if (configuredAgentId) {
+    const agentId = normalizeAgentId(configuredAgentId);
+    return [{ agentId, heartbeat: resolveHeartbeatConfig(cfg, agentId) }];
+  }
   if (cfg.agents?.defaults?.heartbeat) {
     return listAgentIds(cfg).map((agentId) => ({
       agentId,
       heartbeat: resolveHeartbeatConfig(cfg, agentId),
     }));
   }
-  const fallbackId = resolveDefaultAgentId(cfg);
+  const fallbackId = resolveAmbientHeartbeatAgentId(cfg);
   return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
 }
 
@@ -2612,7 +2622,7 @@ export function startHeartbeatRunner(opts: {
     };
 
     if (requestedSessionKey || requestedAgentId) {
-      const targetAgentId = requestedTargetAgentId ?? resolveDefaultAgentId(wakeConfig);
+      const targetAgentId = requestedTargetAgentId ?? resolveAmbientHeartbeatAgentId(wakeConfig);
       const targetAgent = state.agents.get(targetAgentId);
       // Task intent wins scheduled-task coalescing, so the cadence payload—not
       // the final intent—proves that the persisted monitor tick joined this turn.

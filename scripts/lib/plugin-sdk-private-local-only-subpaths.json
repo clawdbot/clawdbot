@@ -159,6 +159,7 @@
   "test-media-generation",
   "test-media-understanding",
   "test-node-mocks",
+  "test-state",
   "text-autolink-runtime",
   "text-utility-runtime",
   "thread-bindings-runtime",

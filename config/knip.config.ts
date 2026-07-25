@@ -167,7 +167,8 @@ const rootEntries = [
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
-  "src/plugin-sdk/*.ts!",
+  // Local-only test-state consumers are modeled by the full-tree test scan.
+  "src/plugin-sdk/!(test-state).ts!",
 ] as const;
 
 const bundledPluginEntries = [

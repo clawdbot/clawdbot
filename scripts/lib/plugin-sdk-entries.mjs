@@ -69,6 +69,7 @@ const nonProductionPluginSdkSubpathSet = new Set([
   "test-media-generation",
   "test-media-understanding",
   "test-node-mocks",
+  "test-state",
 ]);
 
 /** Plugin SDK entrypoints built in ordinary source and packaged runtime builds. */
