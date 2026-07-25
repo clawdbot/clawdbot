@@ -471,6 +471,39 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toBeNull();
   });
 
+  it("isolates stop hook failures to the failing account", async () => {
+    const accountIds = ["broken", "healthy"];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const stopAccount = vi.fn(async ({ accountId }: ChannelGatewayContext<TestAccount>) => {
+      if (accountId === "broken") {
+        throw new Error("stop hook failed");
+      }
+    });
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+        startAccount,
+        stopAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    await flushMicrotasks();
+    await expect(manager.stopChannel("discord")).resolves.toBeUndefined();
+
+    const accounts = manager.getRuntimeSnapshot().channelAccounts.discord;
+    expect(stopAccount.mock.calls.map(([context]) => context.accountId)).toEqual(accountIds);
+    expect(accounts?.broken).toMatchObject({ running: false, lastError: "stop hook failed" });
+    expect(accounts?.healthy).toMatchObject({ running: false, lastError: null });
+  });
+
   it("does not enumerate configured accounts when stopping a never-started channel", async () => {
     const listAccountIds = vi.fn(() => [DEFAULT_ACCOUNT_ID]);
     const resolveAccount = vi.fn(() => ({ enabled: true, configured: true }));
@@ -1327,6 +1360,48 @@ describe("server-channels auto restart", () => {
     expect(succeedingStart).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps healthy accounts running when a whole-channel start has one failure", async () => {
+    const brokenAccount = { enabled: true, configured: true };
+    const healthyAccount = { enabled: true, configured: true };
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => ["broken", "healthy"],
+        resolveAccount: (_cfg, accountId) =>
+          accountId === "broken" ? brokenAccount : healthyAccount,
+        isConfigured: (account) => {
+          if (account === brokenAccount) {
+            throw new Error("invalid broken config");
+          }
+          return true;
+        },
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await expect(manager.startChannel("discord")).resolves.toBeUndefined();
+    await flushMicrotasks();
+
+    const accounts = manager.getRuntimeSnapshot().channelAccounts.discord;
+    expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual(["healthy"]);
+    expect(accounts?.broken).toMatchObject({
+      running: false,
+      lastError: "invalid broken config",
+    });
+    expect(accounts?.healthy?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+
+    healthyAccount.enabled = false;
+    await expect(manager.startChannel("discord")).rejects.toThrow("invalid broken config");
+  });
+
   it("keeps only the degraded channel account cold", async () => {
     const discordStart = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {});
     const slackStart = vi.fn(async () => {});
@@ -1806,53 +1881,6 @@ describe("server-channels auto restart", () => {
     });
 
     expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
-  });
-
-  it("handles stopAccount throw without leaving other accounts uncleaned", async () => {
-    const ACCOUNT_A = "account-a";
-    const ACCOUNT_B = "account-b";
-
-    const stopAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
-      if (ctx.accountId === ACCOUNT_A) {
-        throw new Error("network error");
-      }
-    });
-
-    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      await new Promise<void>((r) => {
-        abortSignal.addEventListener("abort", () => r(), { once: true });
-      });
-    });
-
-    installTestRegistry(
-      createTestPlugin({
-        id: "multi-account",
-        listAccountIds: () => [ACCOUNT_A, ACCOUNT_B],
-        resolveAccount: () => ({ enabled: true, configured: true }),
-        startAccount,
-        stopAccount,
-      }),
-    );
-
-    const manager = createManager({ channelIds: ["multi-account"] });
-
-    await manager.startChannels();
-    await flushMicrotasks();
-
-    // stopChannel resolves (error is caught, cleanup continues)
-    await manager.stopChannel("multi-account");
-
-    const snapshot = manager.getRuntimeSnapshot();
-
-    // Account A: stopped with lastError preserved
-    expect(snapshot.channelAccounts["multi-account"]?.[ACCOUNT_A]?.running).toBe(false);
-    expect(snapshot.channelAccounts["multi-account"]?.[ACCOUNT_A]?.lastError).toBe("network error");
-
-    // Account B: stopped cleanly, unaffected by A
-    expect(snapshot.channelAccounts["multi-account"]?.[ACCOUNT_B]?.running).toBe(false);
-    expect(snapshot.channelAccounts["multi-account"]?.[ACCOUNT_B]?.lastError).toBeNull();
-
-    expect(stopAccount).toHaveBeenCalledTimes(2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

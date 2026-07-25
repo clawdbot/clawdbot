@@ -493,6 +493,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return;
     }
 
+    let handedOffAccountStarts = 0;
     const startup = await runTasksWithConcurrency({
       limit: CHANNEL_STARTUP_CONCURRENCY,
       tasks: accountIds.map((id) => async () => {
@@ -884,6 +885,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             return store.tasks.get(id) === trackedPromise;
           }
           handedOffTask = true;
+          handedOffAccountStarts += 1;
           store.tasks.set(id, trackedPromise);
         } catch (error) {
           if (!handedOffTask) {
@@ -907,8 +909,20 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           }
         }
       }),
+      onTaskError: (error, index) => {
+        if (!accountId) {
+          const id = accountIds[index];
+          ensureChannelLog(channelId).error?.(
+            `[${id}] channel startup failed: ${formatErrorMessage(error)}`,
+          );
+        }
+      },
     });
-    if (startup.hasError) {
+    // Whole-channel callers own independent accounts, so one failed account
+    // must not roll back healthy siblings. Total failure still reaches recovery.
+    const hasStartedAccount =
+      handedOffAccountStarts > 0 || accountIds.some((id) => store.tasks.has(id));
+    if (startup.hasError && (accountId || !hasStartedAccount)) {
       throw startup.firstError;
     }
   };
@@ -965,6 +979,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         abort?.abort();
         const log = ensureChannelLog(channelId);
         const runtime = ensureChannelRuntime(channelId);
+        let stopError: string | undefined;
         if (plugin?.gateway?.stopAccount) {
           try {
             const account = plugin.config.resolveAccount(cfg, id);
@@ -978,12 +993,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               getStatus: () => getRuntime(channelId, id),
               setStatus: (next) => setRuntime(channelId, id, next),
             });
-          } catch (err) {
-            log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(err)}`);
-            setRuntime(channelId, id, {
-              accountId: id,
-              lastError: formatErrorMessage(err),
-            });
+          } catch (error) {
+            // A plugin hook failure belongs to this account. Preserve its
+            // diagnostic, but always finish manager-owned lifecycle cleanup.
+            stopError = formatErrorMessage(error);
+            log.warn?.(`[${id}] stopAccount failed: ${stopError}`);
           }
         }
         const stoppedCleanly = await waitForChannelStopGracefully(
@@ -1019,6 +1033,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         setStoppedRuntime(channelId, id, {
           restartPending: false,
           lastStopAt: Date.now(),
+          ...(stopError ? { lastError: stopError } : {}),
         });
       }),
     );
