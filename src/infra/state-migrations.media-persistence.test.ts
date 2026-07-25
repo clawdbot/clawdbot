@@ -18,10 +18,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import {
-  mediaPersistenceMigrationTesting,
-  migrateLegacyMediaPersistence,
-} from "./state-migrations.media-persistence.js";
+import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 
 const tempDirs: string[] = [];
 const PREVIOUS_VERSION = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
@@ -853,11 +850,13 @@ describe("legacy media persistence doctor migration", () => {
       env,
       eventsBySession: { drift: [event] },
     });
-    expect(() =>
-      mediaPersistenceMigrationTesting.migrateRegisteredDatabase({
-        agentId: "main",
-        pathname: databasePath,
-        beforeTransaction: () => {
+    const transcriptDrift = migrateLegacyMediaPersistence({
+      env,
+      hooks: {
+        beforeDatabaseTransaction: (pathname) => {
+          if (pathname !== databasePath) {
+            return;
+          }
           const writer = new DatabaseSync(databasePath);
           writer
             .prepare(
@@ -866,8 +865,9 @@ describe("legacy media persistence doctor migration", () => {
             .run("drift");
           writer.close();
         },
-      }),
-    ).toThrow("source changed");
+      },
+    });
+    expect(transcriptDrift.warnings.join("\n")).toContain("source changed");
     expect(readDatabaseSnapshot(databasePath).version.user_version).toBe(PREVIOUS_VERSION);
 
     const trajectoryWriter = new DatabaseSync(databasePath);
@@ -883,11 +883,13 @@ describe("legacy media persistence doctor migration", () => {
         2000,
       );
     trajectoryWriter.close();
-    expect(() =>
-      mediaPersistenceMigrationTesting.migrateRegisteredDatabase({
-        agentId: "main",
-        pathname: databasePath,
-        beforeTransaction: () => {
+    const trajectoryDrift = migrateLegacyMediaPersistence({
+      env,
+      hooks: {
+        beforeDatabaseTransaction: (pathname) => {
+          if (pathname !== databasePath) {
+            return;
+          }
           const writer = new DatabaseSync(databasePath);
           writer
             .prepare(
@@ -901,23 +903,39 @@ describe("legacy media persistence doctor migration", () => {
             );
           writer.close();
         },
-      }),
-    ).toThrow("trajectory source changed");
+      },
+    });
+    expect(trajectoryDrift.warnings.join("\n")).toContain("trajectory source changed");
     expect(readDatabaseSnapshot(databasePath).version.user_version).toBe(PREVIOUS_VERSION);
 
-    const archivePath = path.join(stateDir, "drift.jsonl.deleted.2026-07-24T01-02-03.000Z");
+    const archivePath = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "sessions",
+      "drift.jsonl.deleted.2026-07-24T01-02-03.000Z",
+    );
     writeArchive(archivePath, [event], false);
-    expect(() =>
-      mediaPersistenceMigrationTesting.migrateTranscriptArchive(archivePath, {
-        beforeReplace: () => fs.writeFileSync(archivePath, "replacement\n"),
-      }),
-    ).toThrow("changed before atomic");
+    const archiveDrift = migrateLegacyMediaPersistence({
+      env,
+      hooks: {
+        beforeArchiveReplace: (candidate) => {
+          if (candidate === archivePath) {
+            fs.writeFileSync(archivePath, "replacement\n");
+          }
+        },
+      },
+    });
+    expect(archiveDrift.warnings.join("\n")).toContain("changed before atomic");
     expect(fs.readFileSync(archivePath, "utf8")).toBe("replacement\n");
   });
 
   it("rejects ambiguous sparse arrays and ignores stale interrupted temp files", () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-sparse-");
-    const archivePath = path.join(stateDir, "sparse.jsonl.bak.2026-07-24T01-02-03.000Z");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    createLegacyDatabaseFixture({ env, eventsBySession: {} });
+    const archiveDir = path.join(stateDir, "agents", "main", "sessions");
+    const archivePath = path.join(archiveDir, "sparse.jsonl.bak.2026-07-24T01-02-03.000Z");
     const event = createEvent({
       id: "event-1",
       parentId: null,
@@ -929,19 +947,21 @@ describe("legacy media persistence doctor migration", () => {
       },
     });
     writeArchive(archivePath, [event], false);
-    expect(() => mediaPersistenceMigrationTesting.migrateTranscriptArchive(archivePath)).toThrow(
+    expect(migrateLegacyMediaPersistence({ env }).warnings.join("\n")).toContain(
       "ambiguous sparse positional alignment",
     );
+    fs.unlinkSync(archivePath);
 
     const corruptArchivePath = path.join(
-      stateDir,
+      archiveDir,
       "corrupt.jsonl.deleted.2026-07-24T01-02-04.000Z",
     );
     fs.writeFileSync(corruptArchivePath, "{broken\n");
-    expect(() =>
-      mediaPersistenceMigrationTesting.migrateTranscriptArchive(corruptArchivePath),
-    ).toThrow("invalid transcript JSON");
+    expect(migrateLegacyMediaPersistence({ env }).warnings.join("\n")).toContain(
+      "invalid transcript JSON",
+    );
     expect(fs.readFileSync(corruptArchivePath, "utf8")).toBe("{broken\n");
+    fs.unlinkSync(corruptArchivePath);
 
     writeArchive(
       archivePath,
@@ -956,7 +976,9 @@ describe("legacy media persistence doctor migration", () => {
       false,
     );
     fs.writeFileSync(`${archivePath}.media-retirement.999.interrupted.tmp`, "partial");
-    expect(mediaPersistenceMigrationTesting.migrateTranscriptArchive(archivePath)).toBe(true);
+    expect(migrateLegacyMediaPersistence({ env }).changes.join("\n")).toContain(
+      "Migrated archived transcript media",
+    );
     expect(readSessionArchiveContentSync(archivePath)).toContain('"__openclaw"');
   });
 });

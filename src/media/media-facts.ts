@@ -160,7 +160,7 @@ function hasUnderCardinalLegacyTypes(source: MediaFactSource): boolean {
   return types.length > 0 && types.length < slotCount;
 }
 
-export type CanonicalizedPersistedMediaMessage<T extends object> = {
+type CanonicalizedPersistedMediaMessage<T extends object> = {
   changed: boolean;
   hadLegacy: boolean;
   message: T;

@@ -567,6 +567,10 @@ function listTranscriptArchives(directory: string): string[] {
 /** Doctor-only migration from top-level Media* transcript fields to canonical facts. */
 export function migrateLegacyMediaPersistence(
   params: {
+    hooks?: {
+      beforeArchiveReplace?: (archivePath: string) => void;
+      beforeDatabaseTransaction?: (databasePath: string) => void;
+    };
     env?: NodeJS.ProcessEnv;
   } = {},
 ): MigrationMessages {
@@ -602,6 +606,9 @@ export function migrateLegacyMediaPersistence(
     try {
       const result = migrateRegisteredDatabase({
         agentId: entry.agentId,
+        beforeTransaction: params.hooks?.beforeDatabaseTransaction
+          ? () => params.hooks?.beforeDatabaseTransaction?.(pathname)
+          : undefined,
         pathname,
       });
       if (result.versionAdvanced) {
@@ -631,7 +638,13 @@ export function migrateLegacyMediaPersistence(
     }
     for (const archive of archives) {
       try {
-        if (migrateTranscriptArchive(archive)) {
+        if (
+          migrateTranscriptArchive(archive, {
+            beforeReplace: params.hooks?.beforeArchiveReplace
+              ? () => params.hooks?.beforeArchiveReplace?.(archive)
+              : undefined,
+          })
+        ) {
           changes.push(`Migrated archived transcript media in ${archive}.`);
         }
       } catch (error) {
@@ -643,9 +656,3 @@ export function migrateLegacyMediaPersistence(
   }
   return { changes, warnings };
 }
-
-export const mediaPersistenceMigrationTesting = {
-  migrateRegisteredDatabase,
-  migrateTranscriptArchive,
-  transformTranscriptEvent,
-};
