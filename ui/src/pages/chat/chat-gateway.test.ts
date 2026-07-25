@@ -3072,6 +3072,630 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([persistedUser, optimisticUser]);
   });
 
+  it("preserves a distinct pending turn after an earlier repeated-history anchor", async () => {
+    const firstRepeatedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { seq: 1 },
+    };
+    const secondRepeatedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { seq: 2 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "a distinct pending turn" }],
+      __openclaw: { idempotencyKey: "third-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstRepeatedUser, secondRepeatedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstRepeatedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstRepeatedUser, secondRepeatedUser, optimisticUser]);
+  });
+
+  it("does not revive an unmatched pending turn beyond unrelated history", async () => {
+    const sharedUser = {
+      role: "user",
+      content: [{ type: "text", text: "shared earlier turn" }],
+      __openclaw: { id: "shared-user", seq: 1 },
+    };
+    const laterUser = {
+      role: "user",
+      content: [{ type: "text", text: "different authoritative turn" }],
+      __openclaw: { id: "later-user", seq: 2 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [sharedUser, laterUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [sharedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([sharedUser, laterUser]);
+  });
+
+  it("does not adopt an imported message through a colliding native transcript id", async () => {
+    const nativeUser = {
+      role: "user",
+      content: [{ type: "text", text: "native transcript" }],
+      __openclaw: { id: "source-local-id" },
+    };
+    const importedUser = {
+      role: "user",
+      content: [{ type: "text", text: "imported transcript" }],
+      __openclaw: {
+        id: "source-local-id",
+        externalId: "source-local-id",
+        importedFrom: "claude-cli",
+        cliSessionId: "imported-session",
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [nativeUser, importedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [nativeUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([nativeUser, importedUser]);
+  });
+
+  it("does not guess an imported source identity when its session is missing", async () => {
+    const firstImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: {
+        id: "source-local-id",
+        externalId: "source-local-id",
+        importedFrom: "claude-cli",
+      },
+    };
+    const secondImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: {
+        id: "source-local-id",
+        externalId: "source-local-id",
+        importedFrom: "claude-cli",
+      },
+    };
+    const previousImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: {
+        id: "source-local-id",
+        externalId: "source-local-id",
+        importedFrom: "claude-cli",
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstImportedUser, secondImportedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousImportedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstImportedUser, secondImportedUser]);
+  });
+
+  it("does not anchor a missing canonical id to another same-sequence projection", async () => {
+    const unrelatedProjection = {
+      role: "user",
+      content: [{ type: "text", text: "different sequence projection" }],
+      __openclaw: { seq: 7 },
+    };
+    const previousProjection = {
+      role: "user",
+      content: [{ type: "text", text: "original sequence projection" }],
+      __openclaw: { id: "missing-canonical-id", seq: 7 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [unrelatedProjection] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousProjection, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([unrelatedProjection]);
+  });
+
+  it("does not adopt import provenance lacking an external id as a native row", async () => {
+    const nativeUser = {
+      role: "user",
+      content: [{ type: "text", text: "native transcript" }],
+      __openclaw: { id: "source-local-id" },
+    };
+    const importedUser = {
+      role: "user",
+      content: [{ type: "text", text: "imported transcript" }],
+      __openclaw: {
+        id: "source-local-id",
+        importedFrom: "claude-cli",
+        cliSessionId: "imported-session",
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [nativeUser, importedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [nativeUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([nativeUser, importedUser]);
+  });
+
+  it("does not use matching display text to adopt an incomplete imported source", async () => {
+    const previousImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: { externalId: "first-import", importedFrom: "claude-cli" },
+    };
+    const otherImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "repeated imported turn" }],
+      __openclaw: { externalId: "different-import", importedFrom: "claude-cli" },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [otherImportedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousImportedUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([otherImportedUser]);
+  });
+
+  it("does not drop a canonical id for a same-text sequence projection", async () => {
+    const unrelatedProjection = {
+      role: "user",
+      content: [{ type: "text", text: "repeated projection" }],
+      __openclaw: { seq: 7 },
+    };
+    const previousProjection = {
+      role: "user",
+      content: [{ type: "text", text: "repeated projection" }],
+      __openclaw: { id: "missing-canonical-id", seq: 7 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [unrelatedProjection] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousProjection, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([unrelatedProjection]);
+  });
+
+  it("does not revive an identity-free tail after a distinct repeated history turn", async () => {
+    const firstUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "first-user", seq: 1 },
+    };
+    const secondUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "second-user", seq: 2 },
+    };
+    const identityFreeTail = {
+      role: "user",
+      content: [{ type: "text", text: "identity-free pending turn" }],
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [firstUser, secondUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstUser, identityFreeTail],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstUser, secondUser]);
+  });
+
+  it("does not reconcile native legacy history with an imported display match", async () => {
+    const previousNativeUser = {
+      role: "user",
+      content: [{ type: "text", text: "same visible turn" }],
+      __openclaw: { senderId: "native-user" },
+    };
+    const importedUser = {
+      role: "user",
+      content: [{ type: "text", text: "same visible turn" }],
+      __openclaw: {
+        externalId: "external-user",
+        importedFrom: "claude-cli",
+        cliSessionId: "external-session",
+      },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [importedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousNativeUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([importedUser]);
+  });
+
+  it("does not replay an optimistic send already persisted before the history anchor", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "already persisted prompt" }],
+      __openclaw: { id: "persisted-user", seq: 1, idempotencyKey: "persisted-run:user" },
+    };
+    const persistedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "already persisted answer" }],
+      __openclaw: { id: "persisted-assistant", seq: 2 },
+    };
+    const staleOptimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "already persisted prompt" }],
+      __openclaw: { idempotencyKey: "persisted-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, persistedAssistant],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, persistedAssistant, staleOptimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, persistedAssistant]);
+  });
+
+  it("does not cross unrelated signature-free history markers", async () => {
+    const firstMarker = {
+      content: [{ type: "status", value: "first marker" }],
+      __openclaw: { id: "first-marker", seq: 1 },
+    };
+    const laterMarker = {
+      content: [{ type: "status", value: "different marker" }],
+      __openclaw: { id: "later-marker", seq: 2 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unmatched pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [firstMarker, laterMarker] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstMarker, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstMarker, laterMarker]);
+  });
+
+  it("does not duplicate repeated history without an echoed send identity", async () => {
+    const firstUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "first-user", seq: 1 },
+    };
+    const persistedRepeatedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "persisted-repeated-user", seq: 2 },
+    };
+    const optimisticRepeatedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { idempotencyKey: "repeated-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstUser, persistedRepeatedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstUser, optimisticRepeatedUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstUser, persistedRepeatedUser]);
+  });
+
+  it("does not revive an assistant after its user was persisted before the anchor", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "already persisted prompt" }],
+      __openclaw: { id: "persisted-user", seq: 1, idempotencyKey: "persisted-run:user" },
+    };
+    const persistedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "already persisted answer" }],
+      __openclaw: { id: "persisted-assistant", seq: 2 },
+    };
+    const staleOptimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "already persisted prompt" }],
+      __openclaw: { idempotencyKey: "persisted-run:user" },
+    };
+    const staleOptimisticAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "stale streamed assistant" }],
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, persistedAssistant],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [
+        persistedUser,
+        persistedAssistant,
+        staleOptimisticUser,
+        staleOptimisticAssistant,
+      ],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, persistedAssistant]);
+  });
+
+  it("preserves a distinct repeated send when the earlier anchor has different text", async () => {
+    const setupUser = {
+      role: "user",
+      content: [{ type: "text", text: "setup" }],
+      __openclaw: { id: "setup-user", seq: 1, idempotencyKey: "setup-run:user" },
+    };
+    const secondUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "second-user", seq: 2, idempotencyKey: "second-run:user" },
+    };
+    const thirdUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { idempotencyKey: "third-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [setupUser, secondUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [setupUser, thirdUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([setupUser, secondUser, thirdUser]);
+  });
+
+  it("keeps a new repeated prompt after a different same-text turn reaches history", async () => {
+    const firstUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "first-user", idempotencyKey: "first-run:user", seq: 1 },
+    };
+    const secondUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { id: "second-user", idempotencyKey: "second-run:user", seq: 2 },
+    };
+    const optimisticThirdUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { idempotencyKey: "third-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [firstUser, secondUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstUser, optimisticThirdUser],
+      chatRunId: "third-run",
+      chatStream: "Still working on the third turn.",
+      chatStreamStartedAt: 100,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstUser, secondUser, optimisticThirdUser]);
+    expect(state.chatRunId).toBe("third-run");
+    expect(state.chatStream).toBe("Still working on the third turn.");
+    expect(state.chatStreamStartedAt).toBe(100);
+  });
+
+  it("reconciles repeated imported messages using the complete external source identity", async () => {
+    const firstImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: {
+        id: "shared-external-id",
+        externalId: "shared-external-id",
+        importedFrom: "claude-cli",
+        cliSessionId: "first-session",
+      },
+    };
+    const secondImportedUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: {
+        id: "shared-external-id",
+        externalId: "shared-external-id",
+        importedFrom: "claude-cli",
+        cliSessionId: "second-session",
+      },
+    };
+    const optimisticSecondUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstImportedUser, secondImportedUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [firstImportedUser, optimisticSecondUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstImportedUser, secondImportedUser]);
+  });
+
+  it("does not invent an anchor for ambiguous identity-free repeated history", async () => {
+    const firstLegacyUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { senderId: "alice" },
+    };
+    const secondLegacyUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { senderId: "alice" },
+    };
+    const previousLegacyUser = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      __openclaw: { senderId: "alice" },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "unproven pending turn" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [firstLegacyUser, secondLegacyUser],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousLegacyUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([firstLegacyUser, secondLegacyUser]);
+  });
+
+  it("does not attach a current optimistic turn to an unrelated older snapshot", async () => {
+    const olderHistoryUser = {
+      role: "user",
+      content: [{ type: "text", text: "older snapshot" }],
+      __openclaw: { id: "older-user", seq: 1 },
+    };
+    const currentHistoryUser = {
+      role: "user",
+      content: [{ type: "text", text: "current snapshot" }],
+      __openclaw: { id: "current-user", seq: 2 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "pending on the current snapshot" }],
+      __openclaw: { idempotencyKey: "pending-run:user" },
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [olderHistoryUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [currentHistoryUser, optimisticUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([olderHistoryUser]);
+  });
+
+  it("never restores a hidden optimistic assistant during history reconciliation", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "visible prompt" }],
+      __openclaw: { id: "visible-user", seq: 1 },
+    };
+    const hiddenAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [persistedUser] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, hiddenAssistant],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser]);
+  });
+
   it("keeps active streamed assistant text when history reload returns a stale snapshot", async () => {
     const persistedUser = {
       role: "user",
