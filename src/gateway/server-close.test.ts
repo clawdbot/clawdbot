@@ -1409,6 +1409,10 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
+    const closeOrder: string[] = [];
+    mocks.drainRetainedEmbeddingProviders.mockImplementation(async () => {
+      closeOrder.push("embedding-providers");
+    });
     const lifecycleUnsub = vi.fn();
     const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
@@ -1419,6 +1423,13 @@ describe("createGatewayCloseHandler", () => {
         lifecycleUnsub,
         taskUnsub,
         transcriptUnsub,
+        httpServer: {
+          close: (callback: (err?: Error | null) => void) => {
+            closeOrder.push("http-server");
+            callback(null);
+          },
+          closeIdleConnections: vi.fn(),
+        } as never,
       }),
     );
 
@@ -1432,6 +1443,7 @@ describe("createGatewayCloseHandler", () => {
     expect(mocks.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllBundleLspRuntimes).toHaveBeenCalledTimes(1);
     expect(mocks.drainRetainedEmbeddingProviders).toHaveBeenCalledTimes(1);
+    expect(closeOrder).toEqual(["http-server", "embedding-providers"]);
   });
 
   it("starts bundle MCP and LSP runtime disposal concurrently", async () => {

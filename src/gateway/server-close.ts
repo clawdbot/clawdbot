@@ -866,12 +866,6 @@ export function createGatewayCloseHandler(
         }
       });
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
-      await disposeRuntimeWithShutdownGrace({
-        label: "embedding-providers",
-        dispose: drainRetainedEmbeddingProvidersOnDemand,
-        graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
-        warnings,
-      });
       await measureCloseStep("bundle-runtimes", async () => {
         await Promise.all([
           disposeRuntimeWithShutdownGrace({
@@ -1038,6 +1032,12 @@ export function createGatewayCloseHandler(
             }
           }
         }
+      });
+      await disposeRuntimeWithShutdownGrace({
+        label: "embedding-providers",
+        dispose: drainRetainedEmbeddingProvidersOnDemand,
+        graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
+        warnings,
       });
     } finally {
       try {
