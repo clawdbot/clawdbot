@@ -32,5 +32,15 @@ export function createSessionObserverAudience(params: {
       }
       return recipients;
     },
+
+    criticalRecipients(sessionKey: string): ReadonlySet<string> {
+      const recipients = new Set(params.subscribers.get(sessionKey));
+      // sessions.subscribe is operator.read-gated. Critical fanout drops only
+      // Control UI visibility, preserving the existing subscription boundary.
+      for (const connId of params.sessionEventSubscribers?.getAll() ?? []) {
+        recipients.add(connId);
+      }
+      return recipients;
+    },
   };
 }

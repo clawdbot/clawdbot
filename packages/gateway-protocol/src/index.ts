@@ -475,8 +475,6 @@ import {
   SessionsCompanionResetResultSchema,
   SessionsCompanionStateParamsSchema,
   SessionsCompanionStateResultSchema,
-  SessionsObserverAskParamsSchema,
-  SessionsObserverAskResultSchema,
   SessionsObserverVisibilityParamsSchema,
   SessionsObserverVisibilityResultSchema,
   SessionWorktreeInfoSchema,
@@ -823,7 +821,6 @@ export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
 export const validateSessionsCompanionAskParams = lazyCompile(SessionsCompanionAskParamsSchema);
 export const validateSessionsCompanionStateParams = lazyCompile(SessionsCompanionStateParamsSchema);
 export const validateSessionsCompanionResetParams = lazyCompile(SessionsCompanionResetParamsSchema);
-export const validateSessionsObserverAskParams = lazyCompile(SessionsObserverAskParamsSchema);
 export const validateSessionsObserverVisibilityParams = lazyCompile(
   SessionsObserverVisibilityParamsSchema,
 );
@@ -1242,8 +1239,6 @@ export {
   SessionsCompanionResetResultSchema,
   SessionsCompanionStateParamsSchema,
   SessionsCompanionStateResultSchema,
-  SessionsObserverAskParamsSchema,
-  SessionsObserverAskResultSchema,
   SessionsObserverVisibilityParamsSchema,
   SessionsObserverVisibilityResultSchema,
   SessionWorktreeInfoSchema,
@@ -1937,8 +1932,6 @@ export type {
   SessionsCompanionResetResult,
   SessionsCompanionStateParams,
   SessionsCompanionStateResult,
-  SessionsObserverAskParams,
-  SessionsObserverAskResult,
   SessionsObserverVisibilityParams,
   SessionsObserverVisibilityResult,
   SessionPlacementState,

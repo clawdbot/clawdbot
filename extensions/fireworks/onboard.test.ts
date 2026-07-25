@@ -12,7 +12,7 @@ describe("Fireworks onboarding", () => {
       FIREWORKS_DEFAULT_MODEL_REF,
     );
     expect(config.agents?.defaults?.models).toEqual({
-      [FIREWORKS_DEFAULT_MODEL_REF]: { alias: "Kimi K2.6 Turbo" },
+      [FIREWORKS_DEFAULT_MODEL_REF]: { alias: "GLM 5.2 Fast" },
     });
   });
 });
