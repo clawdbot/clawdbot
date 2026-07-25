@@ -228,6 +228,10 @@ function buildOpenAICompatibleLiveModel(
         "max_context_length",
         "maxModelLen",
         "max_model_len",
+        // Anthropic names the context window by its input side. Appended so a
+        // provider already matching an earlier key keeps its current value.
+        "max_input_tokens",
+        "maxInputTokens",
       ],
     ) ??
     fallback.contextWindow ??
@@ -243,6 +247,11 @@ function buildOpenAICompatibleLiveModel(
         "maxOutputTokens",
         "output_token_limit",
         "outputTokenLimit",
+        // Anthropic reports the output cap as max_tokens. Kept last so the
+        // unambiguous completion-specific names above still win where both
+        // appear, and no provider's existing resolution changes.
+        "max_tokens",
+        "maxTokens",
       ],
     ) ??
     fallback.maxTokens ??
