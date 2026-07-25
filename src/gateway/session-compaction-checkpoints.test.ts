@@ -510,7 +510,11 @@ describe("session-compaction-checkpoints", () => {
       cwd: dir,
     });
     const appended = await appendTranscriptMessage(target, {
-      message: { role: "assistant", content: "active", timestamp: 1 } as AssistantMessage,
+      message: {
+        role: "assistant",
+        content: "active",
+        timestamp: 1,
+      } as unknown as AssistantMessage,
       now: Date.parse("2026-06-15T00:00:01.000Z"),
     });
 

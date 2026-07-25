@@ -4526,20 +4526,27 @@ describe("runCliAgent reliability", () => {
       expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
       expect(JSON.stringify(hookRunner.runAgentEnd.mock.calls)).not.toContain("secret prompt");
 
-      const blockedLine = expectDefined(
-        transcriptEvents.find((entry) => entry.type === "message"),
+      const blockedLine = requireRecord(
+        expectDefined(
+          transcriptEvents.find(
+            (entry) => requireRecord(entry, "transcript entry").type === "message",
+          ),
+          "blocked transcript message",
+        ),
         "blocked transcript message",
       );
-      expect(blockedLine.message.content[0].text).toBe(
+      const blockedMessage = requireRecord(blockedLine.message, "blocked message");
+      const blockedContent = requireArray(blockedMessage.content, "blocked content");
+      expect(requireRecord(blockedContent[0], "blocked text").text).toBe(
         "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
       );
       expect(JSON.stringify(blockedLine)).not.toContain("secret prompt");
       expect(JSON.stringify(blockedLine)).not.toContain("matched secret prompt");
-      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked.blockedBy).toBe(
-        "policy-plugin",
-      );
-      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked).not.toHaveProperty("reason");
-      expect(Object.hasOwn(blockedLine.message["__openclaw"], "beforeAgentRunBlocked")).toBe(true);
+      const blockedMetadata = requireRecord(blockedMessage["__openclaw"], "blocked metadata");
+      const blockedState = requireRecord(blockedMetadata.beforeAgentRunBlocked, "blocked state");
+      expect(blockedState.blockedBy).toBe("policy-plugin");
+      expect(blockedState).not.toHaveProperty("reason");
+      expect(Object.hasOwn(blockedMetadata, "beforeAgentRunBlocked")).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
