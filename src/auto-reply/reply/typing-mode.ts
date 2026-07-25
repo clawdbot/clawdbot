@@ -162,6 +162,13 @@ export function createTypingSignaler(params: {
       return;
     }
     if (!typing.isActive()) {
+      // In message mode, typing must wait for renderable reply text, matching
+      // signalToolStart(). Otherwise execution-phase activity (tool calls,
+      // reasoning) starts the indicator before any message exists, making
+      // "message" behave like "instant".
+      if (shouldStartOnMessageStart && !hasRenderableText) {
+        return;
+      }
       await typing.startTypingLoop();
     }
     typing.refreshTypingTtl();
