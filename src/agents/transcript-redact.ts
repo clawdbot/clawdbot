@@ -30,11 +30,9 @@ function redactTranscriptOptions(cfg?: OpenClawConfig) {
   const patterns = resolveTranscriptRedactPatterns(
     cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns,
   );
-  if (patterns === undefined) {
-    return undefined;
-  }
   return {
     mode: "tools" as const,
+    preserveUrlQueryValues: true,
     ...(patterns !== undefined ? { patterns } : {}),
   };
 }

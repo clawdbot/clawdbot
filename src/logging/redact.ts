@@ -143,6 +143,7 @@ const ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOK
 // quotes still mask like plain values instead of escaping both patterns.
 const STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN = String.raw`(^|[\s,;])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`;
 const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60]?[^\s&#"'\x60<>]+)`;
+const URL_QUERY_REDACT_PATTERN = String.raw`/[?&](?:${AUTH_QUERY_KEYS}|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^&#\s<>]+)/gi`;
 const CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`;
 const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=\s+)([^\s#"'\x60<>]+)/g`;
@@ -187,6 +188,7 @@ const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
   ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
 ]);
 const shellReferencePreservingPatterns = new WeakSet<RegExp>();
+const urlQueryRedactionPatterns = new WeakSet<RegExp>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<RegExp>();
@@ -198,7 +200,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
   // URL query parameters. Keep this separate from ENV-style assignments so
   // lower-case URL secrets stay redacted without hiding config-key diagnostics.
-  String.raw`/[?&](?:${AUTH_QUERY_KEYS}|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^&#\s<>]+)/gi`,
+  URL_QUERY_REDACT_PATTERN,
   // JSON fields.
   String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|credential|authorization|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material|${PAYMENT_CREDENTIAL_JSON_KEYS})"\s*:\s*"([^"]+)"`,
   // HTTP client diagnostics often stringify request config objects using
@@ -368,6 +370,7 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
 export type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: RedactPattern[];
+  preserveUrlQueryValues?: boolean;
 };
 
 export type ResolvedRedactOptions = {
@@ -403,6 +406,9 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   }
   if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
+  }
+  if (pattern && raw === URL_QUERY_REDACT_PATTERN) {
+    urlQueryRedactionPatterns.add(pattern);
   }
   if (
     pattern &&
@@ -941,7 +947,9 @@ function redactText(
   patterns: RegExp[],
   options?: {
     fullContext?: boolean;
+    preserveUrlQueryValues?: boolean;
     redactFormBodies?: boolean;
+    redactUrlQueryPairs?: boolean;
     redactStructuredAuthHeaders?: boolean;
   },
 ): string {
@@ -949,11 +957,16 @@ function redactText(
   if (options?.redactStructuredAuthHeaders) {
     next = redactStructuredAuthHeaders(next, "***");
   }
-  if (options?.redactFormBodies) {
+  if (options?.redactUrlQueryPairs) {
     next = redactUrlQueryPairs(next);
+  }
+  if (options?.redactFormBodies) {
     next = redactFormBody(next);
   }
   for (const pattern of patterns) {
+    if (options?.preserveUrlQueryValues && urlQueryRedactionPatterns.has(pattern)) {
+      continue;
+    }
     const replacer = (...args: unknown[]) => {
       const hasNamedGroups =
         args.length > 0 &&
@@ -1102,7 +1115,10 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
     return exactRedacted;
   }
   return redactText(exactRedacted, resolved.patterns, {
+    preserveUrlQueryValues: resolvedOptions.preserveUrlQueryValues,
     redactFormBodies: resolved.redactFormBodies,
+    redactUrlQueryPairs:
+      resolved.redactFormBodies && resolvedOptions.preserveUrlQueryValues !== true,
     redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
   });
 }
@@ -1142,6 +1158,7 @@ export function redactToolPayloadTextWithConfig(
     return redactText(exactRedacted, resolved.patterns, {
       fullContext: true,
       redactFormBodies: resolved.redactFormBodies,
+      redactUrlQueryPairs: resolved.redactFormBodies,
       redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
     });
   }
@@ -1164,7 +1181,9 @@ function redactSensitiveFieldValueWithOptions(
     return exactRedacted;
   }
   const redacted = redactText(exactRedacted, resolved.patterns, {
+    preserveUrlQueryValues: options.preserveUrlQueryValues,
     redactFormBodies: resolved.redactFormBodies,
+    redactUrlQueryPairs: resolved.redactFormBodies && options.preserveUrlQueryValues !== true,
     redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
   });
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);

@@ -81,6 +81,55 @@ describe("redactTranscriptMessage", () => {
     expect(text).toContain("end");
   });
 
+  it("preserves capability URL query values while retaining secret redaction", () => {
+    const capabilityUrl =
+      "https://checkout.example/resume?token=opaque-magic-link&code=callback-code&signature=signed";
+    const msg = textMessage(
+      [
+        capabilityUrl,
+        "https://api.example/request?key=sk-abcdef1234567890xyz",
+        "body: token=opaque-form-secret-value&safe=1",
+        "Authorization: Bearer opaque-bearer-credential",
+      ].join("\n"),
+    );
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "(msgContent(result) as Array<{ text: string }>)[0] test invariant",
+    ).text;
+
+    expect(text).toContain(capabilityUrl);
+    expect(text).not.toContain("sk-abcdef1234567890xyz");
+    expect(text).not.toContain("opaque-form-secret-value");
+    expect(text).not.toContain("opaque-bearer-credential");
+  });
+
+  it("preserves capability URLs in structured tool arguments", () => {
+    const capabilityUrl =
+      "https://files.example/download?token=opaque-download-token&signature=signed";
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "web_fetch",
+          arguments: { url: capabilityUrl },
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const args = (
+      msgContent(result) as Array<{
+        arguments: Record<string, string>;
+      }>
+    )[0]!.arguments;
+
+    expect(args.url).toBe(capabilityUrl);
+  });
+
   it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {
     const msg = {
       role: "assistant",
