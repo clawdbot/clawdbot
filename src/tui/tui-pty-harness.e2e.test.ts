@@ -916,6 +916,33 @@ describe.sequential("TUI PTY harness", () => {
     TEST_TIMEOUT_MS,
   );
 
+  it.each([
+    {
+      sessionKey: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
+      message: "mixed-case matrix session identity proof",
+    },
+    {
+      sessionKey: "agent:main:signal:group:AbC123=",
+      message: "mixed-case signal session identity proof",
+    },
+  ])(
+    "preserves provider-owned identity when selecting $sessionKey in the terminal",
+    async ({ sessionKey, message }) => {
+      await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
+      await fixture.waitForLogEntry(
+        (entry) => entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
+      );
+
+      await fixture.run.write(`${message}\r`, { delay: false });
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+      );
+
+      expect(sent.payload).toMatchObject({ sessionKey, message });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it(
     "creates a backend session from /new and adopts its canonical key",
     async () => {
