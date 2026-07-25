@@ -767,6 +767,10 @@ describe("isShortWindowRateLimitMessage", () => {
     ["429 usage limit reached for this billing period", false],
     ["Provider API error (429): Provider returned error", false],
     ["rate limit exceeded", false],
+    [
+      "Requests have exceeded the throughput limit on your Provisioned-Managed deployment. If you continue to exceed your limit, consider increasing the number of provisioned throughput units deployed.",
+      true,
+    ],
   ])("classifies %s", (message, expected) => {
     expect(isShortWindowRateLimitMessage(message)).toBe(expected);
   });
