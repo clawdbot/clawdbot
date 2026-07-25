@@ -614,10 +614,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             listSessionEntries: session.listSessionEntries,
             createSessionEntry: async (params) =>
               await runWithPluginScope(async () => {
-                if (
-                  "agentHarnessId" in params.initialEntry ===
-                  "cliBackendId" in params.initialEntry
-                ) {
+                const runtimeOwnerCount = [
+                  "agentHarnessId" in params.initialEntry,
+                  "cliBackendId" in params.initialEntry,
+                  "acpSessionBinding" in params.initialEntry,
+                ].filter(Boolean).length;
+                if (runtimeOwnerCount !== 1) {
                   throw new Error(
                     `Plugin "${pluginId}" session creation requires exactly one runtime owner.`,
                   );
@@ -628,6 +630,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   assertOwnedHarness(params.initialEntry.agentHarnessId, "create its sessions");
                   assertReservedSessionKeyOwned(params.key, "create");
                   return await session.createSessionEntry(params);
+                }
+                if ("acpSessionBinding" in params.initialEntry) {
+                  if (!params.key.startsWith(`plugin:${pluginId}:`)) {
+                    throw new Error(
+                      `Plugin "${pluginId}" session keys must start with "plugin:${pluginId}:".`,
+                    );
+                  }
+                  return await session.createSessionEntry({
+                    ...params,
+                    initialEntry: { ...params.initialEntry, pluginOwnerId: pluginId },
+                  });
                 }
                 const cliInitial = params.initialEntry;
                 const backend = registry.cliBackends.find(

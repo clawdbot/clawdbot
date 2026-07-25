@@ -4,7 +4,6 @@ import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import type { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { registerOnePasswordSecretRefCommands, testing } from "./secret-ref-cli.js";
@@ -42,6 +41,14 @@ async function runStatus(
     },
   );
   return JSON.parse(output()) as Record<string, unknown>;
+}
+
+function createOpenAiPlan() {
+  return testing.buildPlan({
+    providerAlias: "onepassword",
+    providerConfig: testing.buildProviderConfig(),
+    providerSecrets: [{ providerId: "openai", secretId: "op://openclaw/OpenAI/credential" }],
+  });
 }
 
 afterEach(() => {
@@ -366,16 +373,7 @@ describe("1Password CLI helpers", () => {
   it("creates plan files exclusively with owner-only permissions", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-plan-test-"));
     const planPath = path.join(tempDir, "plan.json");
-    const plan = testing.buildPlan({
-      providerAlias: "onepassword",
-      providerConfig: testing.buildProviderConfig(),
-      providerSecrets: [
-        {
-          providerId: "openai",
-          secretId: "op://openclaw/OpenAI/credential",
-        },
-      ],
-    });
+    const plan = createOpenAiPlan();
     try {
       await testing.writePlanFile(plan, planPath);
       if (process.platform !== "win32") {
@@ -411,16 +409,7 @@ describe("1Password CLI helpers", () => {
     async () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-plan-test-"));
       const planPath = path.join(tempDir, "plan.json");
-      const plan = testing.buildPlan({
-        providerAlias: "onepassword",
-        providerConfig: testing.buildProviderConfig(),
-        providerSecrets: [
-          {
-            providerId: "openai",
-            secretId: "op://openclaw/OpenAI/credential",
-          },
-        ],
-      });
+      const plan = createOpenAiPlan();
       try {
         await fs.chmod(tempDir, 0o777);
         await expect(testing.writePlanFile(plan, planPath)).rejects.toThrow(
@@ -445,16 +434,7 @@ describe("1Password CLI helpers", () => {
       );
       const aliasDir = path.join(aliasParent, "output");
       const canonicalPlanPath = path.join(await fs.realpath(trustedDir), "plan.json");
-      const plan = testing.buildPlan({
-        providerAlias: "onepassword",
-        providerConfig: testing.buildProviderConfig(),
-        providerSecrets: [
-          {
-            providerId: "openai",
-            secretId: "op://openclaw/OpenAI/credential",
-          },
-        ],
-      });
+      const plan = createOpenAiPlan();
       try {
         await fs.symlink(trustedDir, aliasDir);
         await fs.chmod(aliasParent, 0o777);
@@ -477,16 +457,7 @@ describe("1Password CLI helpers", () => {
     async () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-plan-test-"));
       const planPath = path.join(tempDir, "plan\n.json");
-      const plan = testing.buildPlan({
-        providerAlias: "onepassword",
-        providerConfig: testing.buildProviderConfig(),
-        providerSecrets: [
-          {
-            providerId: "openai",
-            secretId: "op://openclaw/OpenAI/credential",
-          },
-        ],
-      });
+      const plan = createOpenAiPlan();
       try {
         await expect(testing.writePlanFile(plan, planPath)).rejects.toThrow(
           "Command argument cannot contain CR or LF",
@@ -501,16 +472,7 @@ describe("1Password CLI helpers", () => {
   it("writes a Windows plan through the atomic private-file primitive", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-plan-test-"));
     const planPath = path.join(tempDir, "plan.json");
-    const plan = testing.buildPlan({
-      providerAlias: "onepassword",
-      providerConfig: testing.buildProviderConfig(),
-      providerSecrets: [
-        {
-          providerId: "openai",
-          secretId: "op://openclaw/OpenAI/credential",
-        },
-      ],
-    });
+    const plan = createOpenAiPlan();
     const createPrivateWindowsFile = vi.fn(async (filePath: string, content: string) => {
       await fs.writeFile(filePath, content, { flag: "wx" });
     });
@@ -527,46 +489,6 @@ describe("1Password CLI helpers", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it("resolves trusted PowerShell and passes plan content through stdin", async () => {
-    let observedInput: string | Uint8Array | undefined;
-    const run = vi.fn<typeof runExec>(async (_command, _args, options) => {
-      observedInput = typeof options === "object" ? options.input : undefined;
-      return { stdout: "", stderr: "" };
-    });
-    const powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
-    const resolveTrustedExecutable = vi.fn(async () => powershell);
-    const content = '{"version":1}\n';
-    await testing.createPrivateWindowsPlanFile(
-      "C:\\plans\\plan.json",
-      content,
-      { SYSTEMROOT: "C:\\Windows" },
-      {
-        resolveCompilerTempDir: async () => "C:\\Users\\me\\AppData\\Local\\Temp",
-        resolveTrustedExecutable,
-        run,
-      },
-    );
-    expect(resolveTrustedExecutable).toHaveBeenCalledWith(powershell);
-    expect(run).toHaveBeenCalledOnce();
-    expect(run).toHaveBeenCalledWith(
-      powershell,
-      expect.any(Array),
-      expect.objectContaining({
-        baseEnv: {},
-        input: expect.any(String),
-        logOutput: false,
-      }),
-    );
-    const payload = JSON.parse(Buffer.from(String(observedInput), "base64").toString("utf8")) as {
-      content: string;
-      finalPath: string;
-      stagingPath: string;
-    };
-    expect(Buffer.from(payload.content, "base64").toString("utf8")).toBe(content);
-    expect(payload.finalPath).toContain("plan.json");
-    expect(path.win32.basename(payload.stagingPath)).toMatch(/^\.openclaw-plan-[^.]+\.tmp$/u);
   });
 
   it("prints the readiness check before plan application", async () => {

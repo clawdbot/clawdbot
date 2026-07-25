@@ -62,10 +62,10 @@
                   ? "light"
                   : "dark";
           document.documentElement.setAttribute("data-theme", resolved);
-          document.documentElement.setAttribute(
-            "data-theme-mode",
-            resolved.includes("light") ? "light" : "dark",
-          );
+          var resolvedMode = resolved.includes("light") ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme-mode", resolvedMode);
+          // Carapace CSS selects on [data-theme-resolved]; keep in lockstep.
+          document.documentElement.setAttribute("data-theme-resolved", resolvedMode);
         } catch (e) {}
       })();
     </script>
