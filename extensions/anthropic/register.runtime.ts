@@ -58,6 +58,7 @@ import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
+import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
@@ -950,6 +951,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
                 ...(key ? { "x-api-key": key } : {}),
               };
             },
+            acceptUnknownModel: acceptsAnthropicLiveModelContract,
           },
         }),
     },

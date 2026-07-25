@@ -93,6 +93,13 @@ export type OpenAICompatibleModelDiscoveryOptions = {
   readRows?: FetchLiveProviderModelRowsParams["readRows"];
   /** Provider-specific authorization headers for non-Bearer model-list APIs. */
   buildRequestHeaders?: FetchLiveProviderModelRowsParams["buildRequestHeaders"];
+  /**
+   * Gate for discovered ids the manifest does not already publish. Providers
+   * whose request shaping is model-version specific use this to drop models
+   * they cannot yet shape, so discovery never surfaces a selectable model that
+   * would build an invalid request. Manifest-published ids bypass it.
+   */
+  acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean;
 };
 
 export type BuildOpenAICompatibleProviderCatalogParams = {
@@ -491,6 +498,7 @@ export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
     ...params.providerConfig,
     ...(params.apiKey ? { apiKey: params.apiKey } : {}),
   };
+  const acceptUnknownModel = params.modelDiscovery?.acceptUnknownModel;
   const endpoint = params.modelDiscovery?.endpointUrl
     ? resolveFixedLiveModelDiscoveryEndpoint(fallback.baseUrl, params.modelDiscovery.endpointUrl)
     : resolveLiveModelDiscoveryEndpoint(
@@ -513,9 +521,9 @@ export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
       readRows: params.modelDiscovery?.readRows,
       buildRequestHeaders: params.modelDiscovery?.buildRequestHeaders,
       shouldCacheRows: (modelRows) =>
-        buildOpenAICompatibleLiveModels(modelRows, fallback).length > 0,
+        buildOpenAICompatibleLiveModels(modelRows, fallback, acceptUnknownModel).length > 0,
     });
-    const models = buildOpenAICompatibleLiveModels(rows, fallback);
+    const models = buildOpenAICompatibleLiveModels(rows, fallback, acceptUnknownModel);
     if (models.length > 0) {
       return { ...fallback, models };
     }
