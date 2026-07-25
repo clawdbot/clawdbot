@@ -309,6 +309,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
+  private providerRetirementPromise: Promise<void> = Promise.resolve();
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
   protected providerUnavailableReason?: string;
@@ -551,11 +552,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private applyProviderResult(providerResult: EmbeddingProviderResult): void {
-    if (this.provider?.close) {
-      this.provider.close().catch((err: unknown) => {
-        log.warn(`memory embeddings: failed to close previous provider: ${formatErrorMessage(err)}`);
-      });
-    }
     const providerState = resolveMemoryProviderState(providerResult);
     this.provider = providerState.provider;
     this.fallbackFrom = providerState.fallbackFrom;
@@ -582,6 +578,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     if (!this.providerInitPromise) {
       this.providerInitPromise = (async () => {
+        await this.retireCurrentProvider();
+        if (this.closed) {
+          return;
+        }
         const providerResult = await MemoryIndexManager.loadProviderResult({
           cfg: this.cfg,
           agentId: this.agentId,
@@ -608,10 +608,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   protected resetProviderInitializationForRetry(): void {
-    if (this.provider?.close) {
-      this.provider.close().catch(() => {});
-    }
-    this.provider = null;
+    void this.retireCurrentProvider();
     this.providerInitialized = false;
     this.providerInitPromise = null;
     this.providerUnavailableReason = undefined;
@@ -627,8 +624,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     const message = formatErrorMessage(err);
     const degradedProvider = this.provider;
-    this.provider = null;
-    this.providerRuntime = undefined;
+    void this.retireCurrentProvider();
     this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
     this.providerLifecycle = createDegradedMemoryProviderLifecycle({
       providerId: degradedProvider.id,
@@ -639,12 +635,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
-    void Promise.resolve(degradedProvider.close?.()).catch((errLocal: unknown) => {
-      log.debug(`memory embeddings: failed to close degraded local provider: ${String(errLocal)}`);
-    });
     log.warn("memory embeddings: local provider degraded after worker failure", {
       error: message,
     });
+  }
+
+  protected override retireCurrentProvider(): Promise<void> {
+    const provider = this.provider;
+    if (!provider) {
+      return this.providerRetirementPromise;
+    }
+    this.provider = null;
+    this.providerRuntime = undefined;
+    // Provider replacement must wait for the previous worker to exit; otherwise
+    // repeated retries can accumulate local workers on constrained hosts.
+    const retirement = this.providerRetirementPromise.then(async () => {
+      await provider.close?.();
+    });
+    this.providerRetirementPromise = retirement.catch((err: unknown) => {
+      log.warn(`memory embeddings: failed to close previous provider: ${formatErrorMessage(err)}`);
+    });
+    return this.providerRetirementPromise;
   }
 
   protected isRequiredProviderUnavailable(): boolean {
@@ -1575,6 +1586,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
+    const pendingFallbackInit = this.getPendingFallbackProviderInitialization();
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
       this.watchTimer = null;
@@ -1653,6 +1665,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     };
     await awaitPendingManagerWork({
       pendingProviderInit,
+      onError: reportPendingWorkError,
+    });
+    await awaitPendingManagerWork({
+      pendingProviderInit: pendingFallbackInit?.then(() => undefined),
+      onError: reportPendingWorkError,
+    });
+    await awaitPendingManagerWork({
+      pendingProviderInit: this.providerRetirementPromise,
       onError: reportPendingWorkError,
     });
     rememberCurrentProvider();

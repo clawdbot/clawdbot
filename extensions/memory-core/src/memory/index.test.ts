@@ -2063,6 +2063,113 @@ describe("memory index", () => {
     });
   });
 
+  it("waits for degraded provider shutdown before replacement initialization", async () => {
+    const cfg = createCfg({ fallback: "fallback-provider" });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        model: string;
+        embedQuery: (text: string) => Promise<number[]>;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+        close: () => Promise<void>;
+      } | null;
+      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.id = "local";
+    fields.markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+
+    const callsBeforeSearch = providerCalls.length;
+    const searchPromise = manager.search("alpha");
+    try {
+      await Promise.resolve();
+      expect(providerCalls).toHaveLength(callsBeforeSearch);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+      await searchPromise;
+    }
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toEqual(["openai"]);
+  });
+
+  it("waits for provider shutdown before retry initialization", async () => {
+    const cfg = createCfg({ provider: "openai" });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    (
+      manager as unknown as {
+        resetProviderInitializationForRetry: () => void;
+      }
+    ).resetProviderInitializationForRetry();
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+
+    const callsBeforeProbe = providerCalls.length;
+    const probePromise = manager.probeEmbeddingAvailability();
+    try {
+      await Promise.resolve();
+      expect(providerCalls).toHaveLength(callsBeforeProbe);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+      await probePromise;
+    }
+    expect(providerCalls.slice(callsBeforeProbe).map((call) => call.provider)).toEqual(["openai"]);
+  });
+
+  it("waits for active provider shutdown before fallback initialization", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+
+    const callsBeforeSearch = providerCalls.length;
+    const searchPromise = manager.search("alpha");
+    try {
+      await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+      expect(providerCalls).toHaveLength(callsBeforeSearch);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+      await searchPromise;
+    }
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+    ]);
+  });
+
   it("does not activate fallback during search when index identity is already mismatched", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",

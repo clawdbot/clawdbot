@@ -47,6 +47,15 @@ export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
+  private fallbackProviderInitPromise: Promise<boolean> | null = null;
+
+  protected async retireCurrentProvider(): Promise<void> {
+    const provider = this.provider;
+    this.provider = null;
+    this.providerRuntime = undefined;
+    await provider?.close?.();
+  }
+
   private createSyncProgress(
     onProgress: (update: MemorySyncProgressUpdate) => void,
   ): MemorySyncProgressState {
@@ -310,6 +319,29 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected async activateFallbackProvider(reason: string): Promise<boolean> {
+    if (this.closed) {
+      return false;
+    }
+    const pending = this.fallbackProviderInitPromise;
+    if (pending) {
+      return await pending;
+    }
+    const activation = this.activateFallbackProviderOnce(reason);
+    this.fallbackProviderInitPromise = activation;
+    try {
+      return await activation;
+    } finally {
+      if (this.fallbackProviderInitPromise === activation) {
+        this.fallbackProviderInitPromise = null;
+      }
+    }
+  }
+
+  protected getPendingFallbackProviderInitialization(): Promise<boolean> | null {
+    return this.fallbackProviderInitPromise;
+  }
+
+  private async activateFallbackProviderOnce(reason: string): Promise<boolean> {
     const currentProviderId = resolveFallbackCurrentProviderId({
       provider: this.provider,
       lifecycle: this.providerLifecycle,
@@ -326,6 +358,24 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return false;
     }
 
+    const currentState = {
+      provider: this.provider,
+      fallbackFrom: this.fallbackFrom,
+      fallbackReason: this.fallbackReason,
+      providerUnavailableReason: undefined,
+      providerRuntime: this.providerRuntime,
+      lifecycle: this.providerLifecycle,
+    };
+    this.providerLifecycle = {
+      mode: "degraded",
+      providerId: currentProviderId,
+      reason,
+    };
+    await this.retireCurrentProvider();
+    if (this.closed) {
+      return false;
+    }
+
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
       agentDir: resolveAgentDir(this.cfg, this.agentId),
@@ -334,14 +384,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     });
 
     const fallbackState = applyMemoryFallbackProviderState({
-      current: {
-        provider: this.provider,
-        fallbackFrom: this.fallbackFrom,
-        fallbackReason: this.fallbackReason,
-        providerUnavailableReason: undefined,
-        providerRuntime: this.providerRuntime,
-        lifecycle: this.providerLifecycle,
-      },
+      current: currentState,
       fallbackFrom: currentProviderId,
       reason,
       result: fallbackResult,
