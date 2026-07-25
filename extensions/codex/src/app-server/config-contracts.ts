@@ -87,14 +87,14 @@ export type ResolvedCodexComputerUseConfig = {
   marketplaceName?: string;
 };
 
-export type CodexPluginEntryConfig = {
+type CodexPluginEntryConfig = {
   enabled?: boolean;
   marketplaceName?: string;
   pluginName?: string;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
 };
 
-export type CodexPluginsConfig = {
+type CodexPluginsConfig = {
   enabled?: boolean;
   allow_all_plugins?: boolean;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
@@ -118,21 +118,21 @@ export type CodexSupervisionEndpoint =
       authTokenEnv?: string;
     };
 
-export type CodexSupervisionConfig = {
+type CodexSupervisionConfig = {
   enabled?: boolean;
   endpoints?: CodexSupervisionEndpoint[];
   allowRawTranscripts?: boolean;
   allowWriteControls?: boolean;
 };
 
-export type CodexAppServerExperimentalConfig = {
+type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
 };
 
-export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
-export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
-export type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
-export type CodexAppServerNetworkProxyMode = "limited" | "full";
+type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
+type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
+type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
+type CodexAppServerNetworkProxyMode = "limited" | "full";
 
 export type CodexAppServerNetworkProxyConfig = {
   enabled?: boolean;
