@@ -54,6 +54,7 @@ export const TARGET_KEYS = [
   "memory.qmd.sessions.exportDir",
   "memory.qmd.sessions.retentionDays",
   "memory.qmd.limits.maxResults",
+  "memory.qmd.limits.candidateLimit",
   "memory.qmd.limits.maxSnippetChars",
   "memory.qmd.limits.maxInjectedChars",
   "memory.qmd.limits.timeoutMs",

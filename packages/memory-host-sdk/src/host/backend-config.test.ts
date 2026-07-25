@@ -548,6 +548,7 @@ describe("resolveMemoryBackendConfig", () => {
           },
           limits: {
             maxResults: 0.5,
+            candidateLimit: 0.5,
             maxSnippetChars: 0.5,
             maxInjectedChars: 0.5,
             timeoutMs: 0.5,
@@ -565,6 +566,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(qmd.update.embedTimeoutMs).toBe(120_000);
     expect(qmd.limits).toMatchObject({
       maxResults: 1,
+      candidateLimit: 1,
       maxSnippetChars: 1,
       maxInjectedChars: 1,
       timeoutMs: 1,
@@ -588,6 +590,7 @@ describe("resolveMemoryBackendConfig", () => {
           },
           limits: {
             maxResults: Number.NaN,
+            candidateLimit: Number.POSITIVE_INFINITY,
             maxSnippetChars: Number.POSITIVE_INFINITY,
             maxInjectedChars: Number.NEGATIVE_INFINITY,
             timeoutMs: Number.NaN,
@@ -605,6 +608,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(qmd.update.embedTimeoutMs).toBe(120_000);
     expect(qmd.limits).toMatchObject({
       maxResults: 4,
+      candidateLimit: undefined,
       maxSnippetChars: 450,
       maxInjectedChars: 2_200,
       timeoutMs: 4_000,
@@ -660,6 +664,22 @@ describe("resolveMemoryBackendConfig", () => {
     const qmd = requireQmdConfig(resolved);
     expect(qmd.searchMode).toBe("query");
     expect(qmd.rerank).toBe(false);
+  });
+
+  it("resolves qmd reranker candidate limit override", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          limits: {
+            candidateLimit: 12,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).limits.candidateLimit).toBe(12);
   });
 
   it("resolves qmd mcporter search tool override", () => {

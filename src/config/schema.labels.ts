@@ -478,6 +478,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.qmd.sessions.exportDir": "QMD Session Export Directory",
   "memory.qmd.sessions.retentionDays": "QMD Session Retention (days)",
   "memory.qmd.limits.maxResults": "QMD Max Results",
+  "memory.qmd.limits.candidateLimit": "QMD Rerank Candidate Limit",
   "memory.qmd.limits.maxSnippetChars": "QMD Max Snippet Chars",
   "memory.qmd.limits.maxInjectedChars": "QMD Max Injected Chars",
   "memory.qmd.limits.timeoutMs": "QMD Search Timeout (ms)",

@@ -293,6 +293,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Defines how long exported session files are kept before automatic pruning, in days (default: unlimited). Set a finite value for storage hygiene or compliance retention policies.",
   "memory.qmd.limits.maxResults":
     "Limits how many QMD hits are returned into the agent loop for each recall request (default: 6). Increase for broader recall context, or lower to keep prompts tighter and faster.",
+  "memory.qmd.limits.candidateLimit":
+    "Limits how many QMD query candidates are sent to the reranker. Lower this to keep query-mode reranking responsive on CPU-only or large indexes while still preserving reranking.",
   "memory.qmd.limits.maxSnippetChars":
     "Caps per-result snippet length extracted from QMD hits in characters (default: 700). Lower this when prompts bloat quickly, and raise only if answers consistently miss key details.",
   "memory.qmd.limits.maxInjectedChars":

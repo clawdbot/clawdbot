@@ -85,6 +85,7 @@ export type ResolvedMemoryBackendConfig = {
 
 /** @public */ export type ResolvedQmdLimitsConfig = {
   maxResults: number;
+  candidateLimit?: number;
   maxSnippetChars: number;
   maxInjectedChars: number;
   timeoutMs: number;
@@ -274,6 +275,7 @@ function resolveStartupDelayMs(raw: number | undefined): number {
 function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig {
   return {
     maxResults: resolvePositiveIntegerConfig(raw?.maxResults, DEFAULT_QMD_LIMITS.maxResults),
+    candidateLimit: resolvePositiveIntegerConfig(raw?.candidateLimit),
     maxSnippetChars: resolvePositiveIntegerConfig(
       raw?.maxSnippetChars,
       DEFAULT_QMD_LIMITS.maxSnippetChars,

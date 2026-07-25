@@ -576,6 +576,7 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | Key                       | Type     | Default | Description                |
     | --------------------------- | -------- | ------- | ------------------------------ |
     | `limits.maxResults`       | `number` | `4`     | Max search results         |
+    | `limits.candidateLimit`   | `number` | --      | Max QMD query candidates sent to the reranker; passed as `-C` / `--candidate-limit` in direct CLI mode and `candidateLimit` in QMD's MCP query tool |
     | `limits.maxSnippetChars`  | `number` | `450`   | Clamp snippet length       |
     | `limits.maxInjectedChars` | `number` | `2200`  | Clamp total injected chars |
     | `limits.timeoutMs`        | `number` | `4000`  | QMD command timeout during QMD-backed search, including `memory_search`; setup, sync, builtin fallback, and supplemental work keep the default tool deadline |
@@ -623,7 +624,7 @@ QMD initializes lazily when memory is first used; its adapter owns refresh and e
     qmd: {
       includeDefaultMemory: true,
       update: { interval: "5m", debounceMs: 15000 },
-      limits: { maxResults: 4, timeoutMs: 4000 },
+      limits: { maxResults: 4, candidateLimit: 12, timeoutMs: 4000 },
       scope: {
         default: "deny",
         rules: [{ action: "allow", match: { chatType: "direct" } }],

@@ -65,6 +65,7 @@ type MemoryQmdSessionConfig = {
 /** Search and injection limits for QMD memory results. */
 type MemoryQmdLimitsConfig = {
   maxResults?: number;
+  candidateLimit?: number;
   maxSnippetChars?: number;
   maxInjectedChars?: number;
   timeoutMs?: number;

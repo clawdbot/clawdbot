@@ -3043,6 +3043,36 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("passes the configured reranker candidate limit to direct qmd query", async () => {
+    configureQmd({ searchMode: "query", limits: { candidateLimit: 12 } });
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager, resolved } = await createManager();
+    const maxResults = resolved.qmd?.limits.maxResults;
+    if (!maxResults) {
+      throw new Error("qmd maxResults missing");
+    }
+
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toStrictEqual([]);
+
+    const queryCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "query");
+    expect(queryCalls).toEqual([
+      ["query", "test", "--json", "-n", String(maxResults), "-C", "12", "-c", "workspace-main"],
+    ]);
+    await manager.close();
+  });
+
   const abortSearchScenarios = [
     {
       name: "aborts the in-flight qmd search subprocess when the caller signal aborts",
@@ -3430,6 +3460,40 @@ describe("QmdMemoryManager", () => {
           limit: expect.any(Number),
           collections: ["workspace-main"],
           rerank: false,
+        });
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.close();
+  });
+
+  it("passes the configured reranker candidate limit to the QMD query tool via mcporter", async () => {
+    configureQmd({
+      searchMode: "query",
+      limits: { candidateLimit: 12 },
+      mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+    });
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(args[1]).toBe("qmd.query");
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
+        expect(callArgs).toMatchObject({
+          searches: [
+            { type: "lex", query: "hello" },
+            { type: "vec", query: "hello" },
+            { type: "hyde", query: "hello" },
+          ],
+          limit: expect.any(Number),
+          candidateLimit: 12,
+          collections: ["workspace-main"],
         });
         emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
         return child;

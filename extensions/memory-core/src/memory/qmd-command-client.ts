@@ -187,6 +187,9 @@ export class QmdCommandClient {
       ? {
           searches: this.buildV2Searches(params.query, params.searchCommand),
           limit: params.limit,
+          ...(typeof this.qmd.limits.candidateLimit === "number"
+            ? { candidateLimit: this.qmd.limits.candidateLimit }
+            : {}),
           ...(params.searchCommand === "search" || params.searchCommand === "vsearch"
             ? { rerank: false }
             : {}),

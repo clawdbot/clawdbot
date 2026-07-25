@@ -463,6 +463,9 @@ export abstract class QmdManagerSearchSupport extends QmdManagerLifecycle {
     const normalizedQuery = command === "search" ? normalizeHanBm25Query(query) : query;
     if (command === "query") {
       const args = ["query", normalizedQuery, "--json", "-n", String(limit)];
+      if (this.qmd.searchMode === "query" && this.qmd.limits.candidateLimit !== undefined) {
+        args.push("-C", String(this.qmd.limits.candidateLimit));
+      }
       if (this.qmd.searchMode === "query" && this.qmd.rerank === false) {
         args.push("--no-rerank");
       }

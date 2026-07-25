@@ -110,6 +110,7 @@ const MemoryQmdSessionSchema = z.strictObject({
 
 const MemoryQmdLimitsSchema = z.strictObject({
   maxResults: z.number().int().positive().optional(),
+  candidateLimit: z.number().int().positive().optional(),
   maxSnippetChars: z.number().int().positive().optional(),
   maxInjectedChars: z.number().int().positive().optional(),
   timeoutMs: z.number().int().nonnegative().optional(),

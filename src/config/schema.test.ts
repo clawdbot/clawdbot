@@ -180,6 +180,34 @@ describe("config schema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts qmd reranker candidate limit override", () => {
+    const result = OpenClawSchema.safeParse({
+      memory: {
+        backend: "qmd",
+        qmd: {
+          limits: {
+            candidateLimit: 8,
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects non-positive qmd reranker candidate limit override", () => {
+    const result = OpenClawSchema.safeParse({
+      memory: {
+        backend: "qmd",
+        qmd: {
+          limits: {
+            candidateLimit: 0,
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects retired status reaction emoji overrides", () => {
     const result = OpenClawSchema.safeParse({
       messages: {

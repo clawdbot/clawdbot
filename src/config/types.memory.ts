@@ -140,6 +140,7 @@ export type MemoryQmdSessionConfig = {
 /** Retrieval and injection limits for QMD memory results. */
 export type MemoryQmdLimitsConfig = {
   maxResults?: number;
+  candidateLimit?: number;
   maxSnippetChars?: number;
   maxInjectedChars?: number;
   timeoutMs?: number;
