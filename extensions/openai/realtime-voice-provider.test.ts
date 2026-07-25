@@ -5,6 +5,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const CODEX_REALTIME_GLOBAL_STATE = Symbol.for("openclaw.codex.realtime-voice.v1");
+const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
+
+function readInternalRealtimeVoiceProviderApi(provider: object) {
+  return Reflect.get(provider, INTERNAL_REALTIME_VOICE_PROVIDER) as {
+    isBrowserSessionConfigured: (ctx: {
+      cfg?: object;
+      providerConfig: Record<string, unknown>;
+    }) => boolean;
+    resolveBrowserSessionCapabilities: (ctx: {
+      cfg?: object;
+      providerConfig: Record<string, unknown>;
+    }) => {
+      handlesAgentConsult?: boolean;
+      supportsToolCalls?: boolean;
+      supportsVideoFrames?: boolean;
+      transports?: string[];
+    };
+    cancelBrowserSession: (
+      request: Record<string, unknown>,
+      session: { provider: string; transport: "webrtc"; clientSecret: string },
+    ) => Promise<void>;
+  };
+}
 
 const {
   FakeWebSocket,
@@ -338,11 +361,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const provider = buildOpenAIRealtimeVoiceProvider({
       resolveCodexRealtimeBrowserSessionFallback: () => broker,
     });
+    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
 
     expect(
-      provider.resolveCapabilities?.({
+      internalApi.resolveBrowserSessionCapabilities({
         providerConfig: {},
-        surface: "browser-session",
       }),
     ).toMatchObject({
       transports: ["webrtc"],
@@ -351,7 +374,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       supportsVideoFrames: false,
     });
     expect(
-      provider.resolveCapabilities?.({
+      internalApi.resolveBrowserSessionCapabilities({
         providerConfig: { apiKey: "sk-platform" }, // pragma: allowlist secret
       }),
     ).toBe(provider.capabilities);
@@ -375,12 +398,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     const provider = buildOpenAIRealtimeVoiceProvider();
+    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
 
-    expect(provider.isConfigured({ providerConfig: {}, surface: "browser-session" })).toBe(true);
+    expect(provider.isConfigured({ providerConfig: {} })).toBe(false);
+    expect(internalApi.isBrowserSessionConfigured({ providerConfig: {} })).toBe(true);
     expect(
-      provider.resolveCapabilities?.({
+      internalApi.resolveBrowserSessionCapabilities({
         providerConfig: {},
-        surface: "browser-session",
       }),
     ).toMatchObject({
       handlesAgentConsult: true,
@@ -823,10 +847,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       cfg,
       providerConfig: {},
       model: "gpt-realtime-2",
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-agent-workspace",
+      initialItems: [],
     };
+    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
 
-    expect(provider.isConfigured({ ...request, surface: "browser-session" })).toBe(true);
     expect(provider.isConfigured(request)).toBe(false);
+    expect(internalApi.isBrowserSessionConfigured(request)).toBe(true);
     const session = await provider.createBrowserSession?.(request);
     expect(session).toMatchObject({
       clientSecret: "codex-session-token",
@@ -835,7 +863,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     if (!session) {
       throw new Error("Expected Codex OAuth browser session");
     }
-    await provider.cancelBrowserSession?.(request, session);
+    await internalApi.cancelBrowserSession(request, session);
     expect(isConfigured).toHaveBeenCalledWith();
     expect(createBrowserSession).toHaveBeenCalledWith(request);
     expect(cancelBrowserSession).toHaveBeenCalledWith(session);

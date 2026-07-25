@@ -172,19 +172,12 @@ export type RealtimeVoiceProviderPlugin = {
   models?: readonly string[];
   autoSelectOrder?: number;
   capabilities?: RealtimeVoiceProviderCapabilities;
-  resolveCapabilities?: (
-    ctx: RealtimeVoiceProviderConfiguredContext,
-  ) => RealtimeVoiceProviderCapabilities;
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
   createBrowserSession?: (
     req: RealtimeVoiceBrowserSessionCreateRequest,
   ) => Promise<RealtimeVoiceBrowserSession>;
-  cancelBrowserSession?: (
-    req: RealtimeVoiceBrowserSessionCreateRequest,
-    session: RealtimeVoiceBrowserSession,
-  ) => Promise<void> | void;
 };
 
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;

@@ -1498,19 +1498,49 @@ type CodexRealtimeBrowserSessionFallback = NonNullable<
   ReturnType<typeof readCodexRealtimeBrowserSessionFallback>
 >;
 
+type OpenAIInternalRealtimeBrowserSessionCreateRequest =
+  RealtimeVoiceBrowserSessionCreateRequest & {
+    agentId: string;
+    workspaceDir: string;
+    initialItems: Array<{
+      role: "user" | "assistant";
+      text: string;
+    }>;
+  };
+
+type OpenAIInternalRealtimeVoiceCapabilities = RealtimeVoiceProviderCapabilities & {
+  handlesAgentConsult?: boolean;
+};
+
+type OpenAIInternalRealtimeVoiceProviderApi = {
+  isBrowserSessionConfigured: (ctx: {
+    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
+    providerConfig: RealtimeVoiceProviderConfig;
+  }) => boolean;
+  resolveBrowserSessionCapabilities?: (ctx: {
+    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
+    providerConfig: RealtimeVoiceProviderConfig;
+  }) => OpenAIInternalRealtimeVoiceCapabilities;
+  cancelBrowserSession?: (
+    request: OpenAIInternalRealtimeBrowserSessionCreateRequest,
+    session: RealtimeVoiceBrowserSession,
+  ) => Promise<void> | void;
+};
+
 type CodexRealtimeGlobalState = {
   version: 1;
   fallback?: {
-    capabilities: Partial<RealtimeVoiceProviderCapabilities>;
+    capabilities: Partial<OpenAIInternalRealtimeVoiceCapabilities>;
     isConfigured: () => boolean;
     createBrowserSession: (
-      request: RealtimeVoiceBrowserSessionCreateRequest,
+      request: OpenAIInternalRealtimeBrowserSessionCreateRequest,
     ) => Promise<RealtimeVoiceBrowserSession>;
     cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
   };
 };
 
 const CODEX_REALTIME_GLOBAL_STATE = Symbol.for("openclaw.codex.realtime-voice.v1");
+const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 
 function readCodexRealtimeBrowserSessionFallback() {
   const state = (
@@ -1534,7 +1564,7 @@ function resolveConfiguredCodexRealtimeFallback(
 }
 
 async function createOpenAIRealtimeBrowserSession(
-  req: RealtimeVoiceBrowserSessionCreateRequest,
+  req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
   resolveCodexFallback: () => CodexRealtimeBrowserSessionFallback | undefined,
 ): Promise<RealtimeVoiceBrowserSession> {
   const config = normalizeProviderConfig(req.providerConfig);
@@ -1626,7 +1656,7 @@ async function createOpenAIRealtimeBrowserSession(
 }
 
 async function cancelOpenAIRealtimeBrowserSession(
-  _req: RealtimeVoiceBrowserSessionCreateRequest,
+  _req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
   session: RealtimeVoiceBrowserSession,
 ): Promise<void> {
   const fallback = codexFallbackBySession.get(session);
@@ -1641,57 +1671,22 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
 }): RealtimeVoiceProviderPlugin {
   const resolveCodexFallback =
     options?.resolveCodexRealtimeBrowserSessionFallback ?? readCodexRealtimeBrowserSessionFallback;
-  return {
+  const provider: RealtimeVoiceProviderPlugin = {
     id: "openai",
     label: "OpenAI Realtime Voice",
     defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
-    resolveCapabilities: ({ cfg, providerConfig, surface }) => {
-      const config = normalizeProviderConfig(providerConfig);
-      if (
-        config.azureEndpoint ||
-        config.azureDeployment ||
-        hasOpenAIRealtimePlatformAuthInput({
-          configuredApiKey: config.apiKey,
-          cfg,
-        })
-      ) {
-        return OPENAI_REALTIME_CAPABILITIES;
-      }
-      if (surface !== "browser-session") {
-        return OPENAI_REALTIME_CAPABILITIES;
-      }
-      const fallback = resolveConfiguredCodexRealtimeFallback(resolveCodexFallback);
-      if (!fallback) {
-        return OPENAI_REALTIME_CAPABILITIES;
-      }
-      return {
-        ...OPENAI_REALTIME_CAPABILITIES,
-        handlesAgentConsult: true,
-        supportsToolCalls: false,
-        supportsVideoFrames: false,
-        ...fallback.capabilities,
-      };
-    },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ cfg, providerConfig, surface }) => {
+    isConfigured: ({ cfg, providerConfig }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
-      if (
-        hasOpenAIRealtimePlatformAuthInput({
-          configuredApiKey: config.apiKey,
-          cfg,
-        })
-      ) {
-        return true;
-      }
-      return (
-        surface === "browser-session" &&
-        resolveConfiguredCodexRealtimeFallback(resolveCodexFallback) !== undefined
-      );
+      return hasOpenAIRealtimePlatformAuthInput({
+        configuredApiKey: config.apiKey,
+        cfg,
+      });
     },
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
@@ -1716,8 +1711,57 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
         azureApiVersion: config.azureApiVersion,
       });
     },
-    createBrowserSession: (req) => createOpenAIRealtimeBrowserSession(req, resolveCodexFallback),
+    createBrowserSession: (req) =>
+      createOpenAIRealtimeBrowserSession(
+        req as OpenAIInternalRealtimeBrowserSessionCreateRequest,
+        resolveCodexFallback,
+      ),
+  };
+  const internalApi: OpenAIInternalRealtimeVoiceProviderApi = {
+    isBrowserSessionConfigured: ({ cfg, providerConfig }) => {
+      const config = normalizeProviderConfig(providerConfig);
+      if (
+        config.azureEndpoint ||
+        config.azureDeployment ||
+        hasOpenAIRealtimePlatformAuthInput({
+          configuredApiKey: config.apiKey,
+          cfg,
+        })
+      ) {
+        return false;
+      }
+      return resolveConfiguredCodexRealtimeFallback(resolveCodexFallback) !== undefined;
+    },
+    resolveBrowserSessionCapabilities: ({ cfg, providerConfig }) => {
+      const config = normalizeProviderConfig(providerConfig);
+      if (
+        config.azureEndpoint ||
+        config.azureDeployment ||
+        hasOpenAIRealtimePlatformAuthInput({
+          configuredApiKey: config.apiKey,
+          cfg,
+        })
+      ) {
+        return OPENAI_REALTIME_CAPABILITIES;
+      }
+      const fallback = resolveConfiguredCodexRealtimeFallback(resolveCodexFallback);
+      if (!fallback) {
+        return OPENAI_REALTIME_CAPABILITIES;
+      }
+      return {
+        ...OPENAI_REALTIME_CAPABILITIES,
+        handlesAgentConsult: true,
+        supportsToolCalls: false,
+        supportsVideoFrames: false,
+        ...fallback.capabilities,
+      };
+    },
     cancelBrowserSession: cancelOpenAIRealtimeBrowserSession,
   };
+  Object.defineProperty(provider, INTERNAL_REALTIME_VOICE_PROVIDER, {
+    configurable: true,
+    value: internalApi,
+  });
+  return provider;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

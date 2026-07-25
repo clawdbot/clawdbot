@@ -5,7 +5,6 @@ import type { TalkTransport } from "./talk-events.js";
 export type RealtimeVoiceProviderId = string;
 
 export type RealtimeVoiceRole = "user" | "assistant";
-export type RealtimeVoiceInitialItemRole = RealtimeVoiceRole | "developer";
 
 export type RealtimeVoiceCloseReason = "completed" | "error";
 
@@ -92,8 +91,6 @@ export type RealtimeVoiceProviderCapabilities = {
   supportsBargeIn?: boolean;
   /** True when provider VAD reports confirmed interruptions through onClearAudio("barge-in"). */
   handlesInputAudioBargeIn?: boolean;
-  /** True when the provider owns agent delegation instead of exposing client-side function tools. */
-  handlesAgentConsult?: boolean;
   supportsToolCalls?: boolean;
   supportsVideoFrames?: boolean;
   supportsSessionResumption?: boolean;
@@ -107,8 +104,6 @@ export type RealtimeVoiceProviderResolveConfigContext = {
 export type RealtimeVoiceProviderConfiguredContext = {
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
-  /** Runtime surface being selected; browser-only routes must not make gateway bridges eligible. */
-  surface?: "browser-session" | "bridge";
 };
 
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
@@ -124,14 +119,8 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
 
 export type RealtimeVoiceBrowserSessionCreateRequest = {
   cfg?: OpenClawConfig;
-  agentId?: string;
-  workspaceDir?: string;
   providerConfig: RealtimeVoiceProviderConfig;
   instructions?: string;
-  initialItems?: Array<{
-    role: RealtimeVoiceInitialItemRole;
-    text: string;
-  }>;
   tools?: RealtimeVoiceTool[];
   model?: string;
   voice?: string;

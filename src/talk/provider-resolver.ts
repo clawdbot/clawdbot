@@ -7,11 +7,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredCapabilityProvider } from "../plugin-sdk/provider-selection-runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import {
+  isInternalRealtimeVoiceBrowserSessionConfigured,
+  resolveInternalRealtimeVoiceBrowserSessionCapabilities,
+  type InternalRealtimeVoiceProviderCapabilities,
+} from "./provider-internal.js";
 import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
-import type {
-  RealtimeVoiceProviderCapabilities,
-  RealtimeVoiceProviderConfig,
-} from "./provider-types.js";
+import type { RealtimeVoiceProviderConfig } from "./provider-types.js";
 
 /** Resolved realtime voice provider plus provider-normalized config. */
 export type ResolvedRealtimeVoiceProvider = {
@@ -42,13 +44,32 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   providerConfig: RealtimeVoiceProviderConfig;
   cfg?: OpenClawConfig;
   surface?: "browser-session" | "bridge";
-}): RealtimeVoiceProviderCapabilities | undefined {
-  return (
-    params.provider.resolveCapabilities?.({
+}): InternalRealtimeVoiceProviderCapabilities | undefined {
+  if (params.surface === "browser-session") {
+    const internalCapabilities = resolveInternalRealtimeVoiceBrowserSessionCapabilities(params);
+    if (internalCapabilities) {
+      return internalCapabilities;
+    }
+  }
+  return params.provider.capabilities;
+}
+
+export function isRealtimeVoiceProviderConfigured(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  cfg?: OpenClawConfig;
+  providerConfig: RealtimeVoiceProviderConfig;
+  surface?: "browser-session" | "bridge";
+}): boolean {
+  if (
+    params.provider.isConfigured({
       cfg: params.cfg,
       providerConfig: params.providerConfig,
-      surface: params.surface,
-    }) ?? params.provider.capabilities
+    })
+  ) {
+    return true;
+  }
+  return (
+    params.surface === "browser-session" && isInternalRealtimeVoiceBrowserSessionConfigured(params)
   );
 }
 
@@ -86,7 +107,8 @@ export function resolveConfiguredRealtimeVoiceProvider(
       );
     },
     isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-      provider.isConfigured({
+      isRealtimeVoiceProviderConfigured({
+        provider,
         cfg,
         providerConfig,
         surface: params.surface,

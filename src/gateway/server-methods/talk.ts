@@ -45,6 +45,7 @@ import {
   listRealtimeVoiceProviders,
 } from "../../talk/provider-registry.js";
 import {
+  isRealtimeVoiceProviderConfigured,
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
 } from "../../talk/provider-resolver.js";
@@ -360,7 +361,8 @@ function buildTalkCatalog(config: OpenClawConfig) {
           id: provider.id,
           label: provider.label,
           configured: configuredOrFalse(() =>
-            provider.isConfigured({
+            isRealtimeVoiceProviderConfigured({
+              provider,
               cfg: config,
               providerConfig,
               surface: realtimeSurface,

@@ -43,6 +43,10 @@ import {
 } from "../../talk/client-voice-session.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL } from "../../talk/describe-view-tool.js";
 import {
+  cancelInternalRealtimeVoiceBrowserSession,
+  type InternalRealtimeVoiceBrowserSessionCreateRequest,
+} from "../../talk/provider-internal.js";
+import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
 } from "../../talk/provider-resolver.js";
@@ -281,7 +285,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           providerCapabilities?.handlesAgentConsult === true
             ? normalizeOptionalString(realtimeContext.instructions)
             : buildRealtimeInstructions(realtimeContext.instructions);
-        const browserSessionRequest = {
+        const browserSessionRequest: InternalRealtimeVoiceBrowserSessionCreateRequest = {
           cfg: runtimeConfig,
           agentId,
           workspaceDir: resolveAgentWorkspaceDir(runtimeConfig, agentId),
@@ -320,7 +324,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             });
           } catch (error) {
             try {
-              await resolution.provider.cancelBrowserSession?.(browserSessionRequest, session);
+              await cancelInternalRealtimeVoiceBrowserSession({
+                provider: resolution.provider,
+                request: browserSessionRequest,
+                session,
+              });
             } catch (cancelError) {
               context.logGateway.warn(
                 `talk browser session cleanup failed: ${formatForLog(cancelError)}`,
@@ -362,7 +370,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           return;
         }
         try {
-          await resolution.provider.cancelBrowserSession?.(browserSessionRequest, session);
+          await cancelInternalRealtimeVoiceBrowserSession({
+            provider: resolution.provider,
+            request: browserSessionRequest,
+            session,
+          });
         } catch (cancelError) {
           context.logGateway.warn(
             `talk browser session cleanup failed: ${formatForLog(cancelError)}`,

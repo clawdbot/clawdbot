@@ -1,6 +1,7 @@
 // Talk provider resolver tests cover provider selection from config.
 import { describe, expect, it } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import { attachInternalRealtimeVoiceProviderApi } from "./provider-internal.js";
 import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
@@ -52,11 +53,14 @@ describe("realtime voice provider resolver", () => {
       id: "browser-only",
       label: "Browser only",
       autoSelectOrder: 1,
-      isConfigured: ({ surface }) => surface === "browser-session",
+      isConfigured: () => false,
       createBridge: () => {
         throw new Error("unused");
       },
     };
+    attachInternalRealtimeVoiceProviderApi(browserOnly, {
+      isBrowserSessionConfigured: () => true,
+    });
     const bridge: RealtimeVoiceProviderPlugin = {
       id: "bridge",
       label: "Bridge",
@@ -160,17 +164,20 @@ describe("realtime voice provider resolver", () => {
         outputAudioFormats: [],
         supportsVideoFrames: true,
       },
-      resolveCapabilities: ({ providerConfig }) => ({
-        transports: ["webrtc"],
-        inputAudioFormats: [],
-        outputAudioFormats: [],
-        supportsVideoFrames: providerConfig.authMode !== "native",
-      }),
       isConfigured: () => true,
       createBridge: () => {
         throw new Error("unused");
       },
     };
+    attachInternalRealtimeVoiceProviderApi(provider, {
+      isBrowserSessionConfigured: () => true,
+      resolveBrowserSessionCapabilities: ({ providerConfig }) => ({
+        transports: ["webrtc"],
+        inputAudioFormats: [],
+        outputAudioFormats: [],
+        supportsVideoFrames: providerConfig.authMode !== "native",
+      }),
+    });
 
     expect(
       resolveRealtimeVoiceProviderCapabilities({

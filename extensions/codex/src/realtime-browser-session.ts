@@ -31,16 +31,29 @@ const CODEX_REALTIME_MAX_SDP_BYTES = 256 * 1024;
 const CODEX_REALTIME_START_TIMEOUT_MS = 60_000;
 const CODEX_REALTIME_PROBE_COOLDOWN_MS = 1_000;
 
+type CodexRealtimeBrowserSessionCreateRequest = RealtimeVoiceBrowserSessionCreateRequest & {
+  agentId?: string;
+  workspaceDir?: string;
+  initialItems?: Array<{
+    role: "user" | "assistant";
+    text: string;
+  }>;
+};
+
+type CodexRealtimeProviderCapabilities = Partial<RealtimeVoiceProviderCapabilities> & {
+  handlesAgentConsult?: boolean;
+};
+
 type PendingOffer = {
   expiresAt: number;
-  request: RealtimeVoiceBrowserSessionCreateRequest;
+  request: CodexRealtimeBrowserSessionCreateRequest;
 };
 
 export type CodexRealtimeBrowserSessionFallback = {
-  capabilities: Partial<RealtimeVoiceProviderCapabilities>;
+  capabilities: CodexRealtimeProviderCapabilities;
   isConfigured: () => boolean;
   createBrowserSession: (
-    request: RealtimeVoiceBrowserSessionCreateRequest,
+    request: CodexRealtimeBrowserSessionCreateRequest,
   ) => Promise<RealtimeVoiceBrowserSession>;
   cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
 };
@@ -165,7 +178,7 @@ function buildCodexRealtimeStartParams(params: {
   sdp: string;
   developerInstructions?: string;
   voice?: string;
-  initialItems?: RealtimeVoiceBrowserSessionCreateRequest["initialItems"];
+  initialItems?: CodexRealtimeBrowserSessionCreateRequest["initialItems"];
 }): Record<string, unknown> {
   const initialItems = [
     ...(params.developerInstructions
@@ -375,7 +388,7 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
       requestProbe();
       return false;
     },
-    createBrowserSession: async (request: RealtimeVoiceBrowserSessionCreateRequest) => {
+    createBrowserSession: async (request: CodexRealtimeBrowserSessionCreateRequest) => {
       if (cleanedUp || shutdownController.signal.aborted) {
         throw new Error("Codex OAuth realtime is stopping; restart Gateway and try again");
       }
