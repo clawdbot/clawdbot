@@ -1,14 +1,18 @@
-export type SidebarSlotId = "chat" | "discussion" | "detail";
-export type SidebarSide = "left" | "right";
-export type SidebarPanel = { id: string; slot: SidebarSlotId };
-export type SidebarColumn = {
-  id: string;
-  side: SidebarSide;
-  panels: SidebarPanel[];
-  activePanelId: string;
-  width: number;
-};
-export type SidebarLayout = { columns: SidebarColumn[] };
+import type {
+  SidebarColumn,
+  SidebarLayout,
+  SidebarPanel,
+  SidebarSide,
+  SidebarSlotId,
+} from "./sidebar-layout-types.ts";
+
+export type {
+  SidebarColumn,
+  SidebarLayout,
+  SidebarPanel,
+  SidebarSide,
+  SidebarSlotId,
+} from "./sidebar-layout-types.ts";
 
 const SIDEBAR_DEFAULT_WIDTH_PX = 360;
 const SIDEBAR_CHAT_DEFAULT_WIDTH_PX = 480;

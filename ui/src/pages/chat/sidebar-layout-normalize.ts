@@ -4,7 +4,7 @@ import type {
   SidebarLayout,
   SidebarPanel,
   SidebarSlotId,
-} from "./sidebar-layout.ts";
+} from "./sidebar-layout-types.ts";
 
 const DEFAULT_WIDTH = 360;
 const CHAT_DEFAULT_WIDTH = 480;
