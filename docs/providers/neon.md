@@ -15,13 +15,13 @@ proxy providers.
 Each Neon branch has its own gateway host, so requests are scoped to the branch you point at, the
 same isolation your Neon database already has.
 
-| Property     | Value                                                                                 |
-| ------------ | ------------------------------------------------------------------------------------- |
-| Provider id  | `neon` (custom; configure under `models.providers.neon`)                              |
-| Plugin       | none; not a bundled OpenClaw provider plugin                                          |
-| Auth         | Neon credential with the `ai_gateway:invoke` scope, sent as a bearer token            |
-| API          | `openai-completions`, plus `openai-responses` for the Codex models                    |
-| Base URL     | `$NEON_AI_GATEWAY_BASE_URL/v1`, or `/openai/v1` for the Responses API                 |
+| Property    | Value                                                                      |
+| ----------- | -------------------------------------------------------------------------- |
+| Provider id | `neon` (custom; configure under `models.providers.neon`)                   |
+| Plugin      | none; not a bundled OpenClaw provider plugin                               |
+| Auth        | Neon credential with the `ai_gateway:invoke` scope, sent as a bearer token |
+| API         | `openai-completions`, plus `openai-responses` for the Codex models         |
+| Base URL    | `$NEON_AI_GATEWAY_BASE_URL/v1`, or `/openai/v1` for the Responses API      |
 
 <Note>
   Neon AI Gateway is a custom OpenAI-compatible provider, not a bundled OpenClaw provider plugin.
