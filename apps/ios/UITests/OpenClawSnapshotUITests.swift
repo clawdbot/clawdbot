@@ -1,4 +1,3 @@
-import Darwin
 import UIKit
 import XCTest
 
@@ -1023,21 +1022,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line)
     {
-        let app = self.app
-        _ = Self.terminateDebugAppProcess()
         if let app {
-            XCTAssertTrue(
-                self.waitForAppToStop(app, timeout: 5),
-                "OpenClaw did not terminate before the next launch",
-                file: file,
-                line: line)
+            app.terminate()
+            _ = self.waitForAppToStop(app, timeout: 5)
         }
         self.app = nil
-    }
-
-    private static func terminateDebugAppProcess() -> Bool {
-        let command = "/usr/bin/xcrun simctl terminate booted \(Self.debugAppBundleIdentifier)"
-        return system(command) == 0
     }
 
     private func waitForAppToStop(_ app: XCUIApplication, timeout: TimeInterval) -> Bool {
