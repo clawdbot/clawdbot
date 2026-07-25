@@ -713,7 +713,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
-    The method is read-only and returns a token-free snapshot. The host binds profile lookup to the trusted active-agent scope; calls outside that scope fail closed instead of reading the default agent store. It resolves only `authProfileId`; a missing, expired, or provider-mismatched profile does not fall back to another credential. Before fetching, the exact credential passes through the provider's usage-auth policy with profile-scoped resolvers, so ambient environment credentials cannot replace it or contribute account metadata. Usage-owner aliases are normalized to their canonical provider (for example, `claude-cli` to `anthropic` and `minimax-portal` to `minimax`). Identity output and credential refresh are intentionally unsupported on this surface.
+    The method is read-only and returns a token-free snapshot. The host binds both profile lookup and provider-hook workspace resolution to the trusted active-agent scope; calls outside that scope fail closed instead of reading the default agent store or active plugin workspace. It resolves only `authProfileId`; a missing, expired, or provider-mismatched profile does not fall back to another credential. Before fetching, the exact credential passes through the provider's usage-auth policy with profile-scoped resolvers, so ambient environment credentials cannot replace it or contribute account metadata. Usage-owner aliases are normalized to their canonical provider (for example, `claude-cli` to `anthropic` and `minimax-portal` to `minimax`). Identity output and credential refresh are intentionally unsupported on this surface.
 
   </Accordion>
   <Accordion title="api.runtime.state">

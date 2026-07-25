@@ -5,6 +5,7 @@ const readProviderUsageProfileMock = vi.fn();
 const getPluginRuntimeGatewayRequestScopeMock = vi.fn();
 const getRuntimeConfigMock = vi.fn();
 const resolveAgentDirMock = vi.fn();
+const resolveAgentWorkspaceDirMock = vi.fn();
 
 vi.mock("../../infra/provider-usage.profile.js", () => ({
   readProviderUsageProfile: (...args: unknown[]) => readProviderUsageProfileMock(...args),
@@ -20,6 +21,7 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentDir: (...args: unknown[]) => resolveAgentDirMock(...args),
+  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
 }));
 
 import { readProviderUsageProfileForRuntime } from "./runtime-provider-usage.runtime.js";
@@ -37,8 +39,10 @@ describe("readProviderUsageProfileForRuntime", () => {
     getPluginRuntimeGatewayRequestScopeMock.mockReset();
     getRuntimeConfigMock.mockReset();
     resolveAgentDirMock.mockReset();
+    resolveAgentWorkspaceDirMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({ agents: { entries: { work: {} } } });
     resolveAgentDirMock.mockReturnValue("/agents/work");
+    resolveAgentWorkspaceDirMock.mockReturnValue("/workspaces/work");
     readProviderUsageProfileMock.mockResolvedValue({
       provider: "openai",
       authProfileId: "openai:default",
@@ -66,9 +70,11 @@ describe("readProviderUsageProfileForRuntime", () => {
     await readProviderUsageProfileForRuntime(request);
 
     expect(resolveAgentDirMock).toHaveBeenCalledWith(config, "work");
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(config, "work");
     expect(readProviderUsageProfileMock).toHaveBeenCalledWith(request, {
       config,
       agentDir: "/agents/work",
+      workspaceDir: "/workspaces/work",
     });
   });
 });

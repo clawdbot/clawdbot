@@ -1,5 +1,5 @@
 // Lazy bridge: keeps the plugin runtime entrypoint small while provider usage stays core-owned.
-import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { readProviderUsageProfile } from "../../infra/provider-usage.profile.js";
 import type {
@@ -18,6 +18,8 @@ export async function readProviderUsageProfileForRuntime(
     throw new Error("Provider usage reads require a trusted active agent scope.");
   }
   const config = getRuntimeConfig();
-  const agentDir = resolveAgentDir(config, normalizeAgentId(scopedAgentId));
-  return readProviderUsageProfile(params, { config, agentDir });
+  const agentId = normalizeAgentId(scopedAgentId);
+  const agentDir = resolveAgentDir(config, agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
+  return readProviderUsageProfile(params, { config, agentDir, workspaceDir });
 }
