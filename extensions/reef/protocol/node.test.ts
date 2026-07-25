@@ -9,6 +9,7 @@ import { signReceipt } from "./receipts.js";
 import { useReefTempDirs } from "./test-support.js";
 
 const durabilityTestState = vi.hoisted(() => ({
+  afterEnsure: undefined as ((receipt: { path: string }) => Promise<void> | void) | undefined,
   parentSyncOutcome: undefined as
     | { status: "synced" }
     | { status: "unsupported"; code?: string }
@@ -25,6 +26,7 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
     ...actual,
     ensureDurableDirectory: async (...args: Parameters<typeof actual.ensureDurableDirectory>) => {
       const receipt = await actual.ensureDurableDirectory(...args);
+      await durabilityTestState.afterEnsure?.(receipt);
       return durabilityTestState.parentSyncOutcome
         ? { ...receipt, parentSync: durabilityTestState.parentSyncOutcome }
         : receipt;
@@ -40,6 +42,7 @@ const receiptId = "01JZ0000000000000000000000";
 const tempDirs = useReefTempDirs(afterEach);
 
 afterEach(() => {
+  durabilityTestState.afterEnsure = undefined;
   durabilityTestState.parentSyncOutcome = undefined;
   durabilityTestState.syncOutcome = undefined;
   vi.restoreAllMocks();
@@ -121,6 +124,31 @@ describe("Node stores", () => {
       ).rejects.toThrow(
         /Reef journal directory does not support crash-durable synchronization \(ENOTSUP\)/u,
       );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "appends through the pinned canonical directory after a symlink retarget",
+    async () => {
+      const root = tempDirs.make("reef-audit-parent-retarget-");
+      const firstDirectory = join(root, "first");
+      const secondDirectory = join(root, "second");
+      const requestedDirectory = join(root, "requested");
+      await fs.mkdir(firstDirectory);
+      await fs.mkdir(secondDirectory);
+      await fs.symlink(firstDirectory, requestedDirectory);
+      const requestedPath = join(requestedDirectory, "nested", "audit.jsonl");
+      durabilityTestState.afterEnsure = async () => {
+        await fs.unlink(requestedDirectory);
+        await fs.symlink(secondDirectory, requestedDirectory);
+      };
+
+      await new JsonlAuditStore(requestedPath, auditKey).appendEvent("one", { id: 1 }, 10);
+
+      await expect(
+        readFile(join(firstDirectory, "nested", "audit.jsonl"), "utf8"),
+      ).resolves.toContain('"type":"one"');
+      await expect(fs.readdir(secondDirectory)).resolves.toEqual([]);
     },
   );
 

@@ -1,5 +1,5 @@
 import { open as openFile, readFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
 import {
@@ -294,7 +294,8 @@ async function appendDurably(path: string, contents: string): Promise<void> {
     directoryPath: await canonicalPathFromExistingAncestor(dirname(path)),
   });
   requireJournalDirectorySync(parent.parentSync);
-  const handle = await openFile(path, "a", 0o600);
+  const journalPath = join(parent.path, basename(path));
+  const handle = await openFile(journalPath, "a", 0o600);
   try {
     await handle.writeFile(contents, "utf8");
     await handle.sync();

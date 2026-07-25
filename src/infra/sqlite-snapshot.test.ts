@@ -669,19 +669,22 @@ describe("createVerifiedSqliteSnapshot", () => {
     }
   });
 
-  it("removes its published target when directory sync is unsupported", async () => {
-    const tempDir = await createTempDir();
-    const sourcePath = path.join(tempDir, "source.sqlite");
-    const targetPath = path.join(tempDir, "snapshot.sqlite");
-    const sqlite = requireNodeSqlite();
-    createEmptySqliteDatabase(sqlite, sourcePath);
-    durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
+  it.runIf(process.platform !== "win32")(
+    "removes its published target when directory sync is unsupported",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      const sqlite = requireNodeSqlite();
+      createEmptySqliteDatabase(sqlite, sourcePath);
+      durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
 
-    await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
-      /SQLite publication directory does not support crash-durable directory synchronization \(ENOTSUP\)/u,
-    );
-    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /SQLite publication directory does not support crash-durable directory synchronization \(ENOTSUP\)/u,
+      );
+      await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects a transient publication directory replacement during sync",

@@ -109,6 +109,7 @@ afterEach(async () => {
   durabilityTestState.syncOutcome = undefined;
   resolveSystemBinMock.mockClear();
   runExecMock.mockReset();
+  vi.restoreAllMocks();
   await tempDirs.cleanup();
 });
 
@@ -312,6 +313,48 @@ describe("loadGatewayTlsRuntime", () => {
     await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
     await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("foreign key material");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "publishes through the pinned canonical directory after a symlink retarget",
+    async () => {
+      const root = await createTempDir();
+      const firstDirectory = path.join(root, "first");
+      const secondDirectory = path.join(root, "second");
+      const requestedDirectory = path.join(root, "requested");
+      await fs.mkdir(firstDirectory);
+      await fs.mkdir(secondDirectory);
+      await fs.symlink(firstDirectory, requestedDirectory);
+      const certPath = path.join(requestedDirectory, "gateway-cert.pem");
+      const keyPath = path.join(requestedDirectory, "gateway-key.pem");
+      runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+        await writeGeneratedTlsPair(args);
+      });
+      const originalLink = fs.link.bind(fs);
+      let retargeted = false;
+      vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+        if (!retargeted) {
+          retargeted = true;
+          await fs.unlink(requestedDirectory);
+          await fs.symlink(secondDirectory, requestedDirectory);
+          await originalLink(source, target);
+          await fs.unlink(requestedDirectory);
+          await fs.symlink(firstDirectory, requestedDirectory);
+          return;
+        }
+        await originalLink(source, target);
+      });
+
+      await expect(
+        loadGatewayTlsRuntime({ enabled: true, certPath, keyPath }),
+      ).resolves.toMatchObject({
+        enabled: true,
+      });
+      await expect(
+        fs.readdir(firstDirectory).then((entries) => entries.toSorted()),
+      ).resolves.toEqual(["gateway-cert.pem", "gateway-key.pem"]);
+      await expect(fs.readdir(secondDirectory)).resolves.toEqual([]);
+    },
+  );
 
   it("publishes best-effort and warns once when hard links are unavailable", async () => {
     const dir = await createTempDir();

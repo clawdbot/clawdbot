@@ -423,24 +423,27 @@ describe("local SQLite snapshot repository", () => {
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
 
-  it("rejects unsupported snapshot directory synchronization", async () => {
-    const tempDir = await createTempDir();
-    const sourcePath = path.join(tempDir, "source.sqlite");
-    const repositoryPath = path.join(tempDir, "snapshots");
-    createGenericDatabase(sourcePath);
-    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
-    durabilityTestState.pinnedSyncOutcome = { status: "unsupported", code: "ENOTSUP" };
+  it.runIf(process.platform !== "win32")(
+    "rejects unsupported snapshot directory synchronization",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const repositoryPath = path.join(tempDir, "snapshots");
+      createGenericDatabase(sourcePath);
+      const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+      durabilityTestState.pinnedSyncOutcome = { status: "unsupported", code: "ENOTSUP" };
 
-    await expect(
-      provider.create({
-        path: sourcePath,
-        identity: { role: "generic", id: "unsupported-directory-sync" },
-      }),
-    ).rejects.toThrow(
-      /SQLite snapshot directory does not support crash-durable directory synchronization \(ENOTSUP\)/u,
-    );
-    await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
-  });
+      await expect(
+        provider.create({
+          path: sourcePath,
+          identity: { role: "generic", id: "unsupported-directory-sync" },
+        }),
+      ).rejects.toThrow(
+        /SQLite snapshot directory does not support crash-durable directory synchronization \(ENOTSUP\)/u,
+      );
+      await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "publishes payload only after the pending directory is durable",

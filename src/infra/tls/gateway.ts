@@ -182,7 +182,7 @@ async function generateSelfSignedCert(params: {
     }
     const certPublication = await publishGeneratedTlsOutput(
       stagedCertPath,
-      params.certPath,
+      path.join(certDirectory.path, path.basename(params.certPath)),
       cert,
       certDirectory,
     );
@@ -190,7 +190,7 @@ async function generateSelfSignedCert(params: {
     // Preserve the published certificate on key failure: conditional pathname removal is not atomic.
     const keyPublication = await publishGeneratedTlsOutput(
       stagedKeyPath,
-      params.keyPath,
+      path.join(keyDirectory.path, path.basename(params.keyPath)),
       key,
       keyDirectory,
     );
