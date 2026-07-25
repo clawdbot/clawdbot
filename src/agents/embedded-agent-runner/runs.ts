@@ -170,6 +170,8 @@ function normalizeSessionFileRegistryKey(sessionFile: string | undefined): strin
   const resolved = path.resolve(normalized);
   const parent = path.dirname(resolved);
   try {
+    // Canonicalize only the parent so a registry key stays stable when the
+    // transcript file itself is created or removed during the active run.
     return path.join(fs.realpathSync(parent), path.basename(resolved));
   } catch {
     return resolved;
