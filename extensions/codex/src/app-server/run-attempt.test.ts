@@ -376,12 +376,7 @@ async function buildCodexTurnContextForTest(
     sessionAgentId,
     memoryToolNames,
   });
-  const threadDeveloperInstructions = [
-    testing.buildDeveloperInstructions(params, { dynamicTools }),
-    workspaceBootstrapContext.developerInstructions,
-  ]
-    .filter((section) => section?.trim())
-    .join("\n\n");
+  const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
