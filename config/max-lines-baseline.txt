@@ -953,7 +953,6 @@ src/plugins/loader.test-harness.ts
 src/plugins/management-service.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/manifest-registry.ts
-src/plugins/manifest.ts
 src/plugins/marketplace.test.ts
 src/plugins/marketplace.ts
 src/plugins/official-external-plugin-catalog.test.ts
