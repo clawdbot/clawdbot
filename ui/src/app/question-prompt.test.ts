@@ -68,7 +68,10 @@ describe("question event parsing", () => {
           event: "question.requested",
           payload: requestedPayload(),
         },
-        "run-question",
+        {
+          sessionKey: "agent:main:main",
+          chatRunId: "run-question",
+        },
       ),
     ).toBe(true);
     expect(state.prompts.get("question-1")).toMatchObject({
@@ -93,6 +96,28 @@ describe("question event parsing", () => {
       status: "answered",
       answers: { answers: { format: ["Compact"] } },
     });
+  });
+
+  it("does not attach the selected session run to a background-session question", () => {
+    const state = createState();
+    expect(
+      handleQuestionPromptEvent(
+        state,
+        {
+          event: "question.requested",
+          payload: requestedPayload({ sessionKey: "agent:main:background" }),
+        },
+        {
+          sessionKey: "agent:main:main",
+          chatRunId: "run-current",
+        },
+      ),
+    ).toBe(true);
+    expect(state.prompts.get("question-1")).toMatchObject({
+      sessionKey: "agent:main:background",
+      status: "pending",
+    });
+    expect(state.prompts.get("question-1")).not.toHaveProperty("runId");
   });
 
   it("rejects malformed records and answer maps", () => {

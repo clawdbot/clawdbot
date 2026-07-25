@@ -6,6 +6,10 @@ import type {
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
+import {
+  uiSessionEventMatches,
+  type UiSessionDefaultsHost,
+} from "../lib/sessions/session-key.ts";
 
 type QuestionClient = {
   request: (method: string, params?: unknown) => Promise<unknown>;
@@ -47,6 +51,11 @@ type QuestionPromptState = {
   tickTimer: ReturnType<typeof globalThis.setTimeout> | null;
   refreshRetryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   onChange: () => void;
+};
+
+type QuestionPromptRunHost = UiSessionDefaultsHost & {
+  sessionKey: string;
+  chatRunId?: string | null;
 };
 
 type QuestionAnswerValues = Record<string, string[]>;
@@ -345,7 +354,7 @@ function applyQuestionResolution(
 export function handleQuestionPromptEvent(
   state: QuestionPromptState,
   event: Pick<GatewayEventFrame, "event" | "payload">,
-  activeRunId?: string | null,
+  runHost?: QuestionPromptRunHost,
 ): boolean {
   if (event.event === "question.requested") {
     const record = parseQuestionRequestedEvent(event.payload);
@@ -357,8 +366,15 @@ export function handleQuestionPromptEvent(
       return true;
     }
     const prompt = promptFromRecord(state, record, previous);
-    if (!prompt.runId && activeRunId) {
-      prompt.runId = activeRunId;
+    // Question broadcasts are gateway-global. Only the matching pane may lend
+    // its browser-local run id, or a background prompt will inherit the wrong turn.
+    if (
+      !prompt.runId &&
+      record.sessionKey &&
+      runHost?.chatRunId &&
+      uiSessionEventMatches(runHost, record.sessionKey, record.agentId)
+    ) {
+      prompt.runId = runHost.chatRunId;
     }
     const unmatched = state.unmatchedResolutions.get(record.id);
     if (unmatched) {

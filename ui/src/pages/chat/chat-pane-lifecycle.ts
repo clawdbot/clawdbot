@@ -306,7 +306,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneReset {
           }
         }
         if (state) {
-          handleQuestionPromptEvent(this.questionPromptState, event, state.chatRunId);
+          handleQuestionPromptEvent(this.questionPromptState, event, state);
         }
         if (state && !parseCatalogSessionKey(state.sessionKey)) {
           if (event.event === "task.suggestion" && event.payload) {
