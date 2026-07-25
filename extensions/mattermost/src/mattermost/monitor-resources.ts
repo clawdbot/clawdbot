@@ -17,11 +17,13 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtim
 import {
   buildMattermostApiUrl,
   fetchMattermostChannel,
+  fetchMattermostPost,
   fetchMattermostUser,
   sendMattermostTyping,
   updateMattermostPost,
   type MattermostChannel,
   type MattermostClient,
+  type MattermostPost,
   type MattermostUser,
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
@@ -61,6 +63,7 @@ export function formatMattermostInboundMediaText(params: {
 
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+const POST_CACHE_TTL_MS = 5 * 60_000;
 const MONITOR_RESOURCE_CACHE_MAX_ENTRIES = 1000;
 // Match Telegram/Tlon inbound media: header wait is independent of body idle.
 const MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
@@ -96,6 +99,7 @@ export function createMattermostMonitorResources(params: {
   } = params;
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
   const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
+  const postCache = new Map<string, { value: MattermostPost | null; expiresAt: number }>();
 
   const getCachedValue = <T>(
     cache: Map<string, { value: T | null; expiresAt: number }>,
@@ -229,6 +233,25 @@ export function createMattermostMonitorResources(params: {
     }
   };
 
+  // Caches the thread-root post so repeated reply-to-bot checks in the same thread reuse the
+  // author instead of re-fetching; the root author is stable for the cache lifetime.
+  const resolvePostInfo = async (postId: string): Promise<MattermostPost | null> => {
+    const rawNow = Date.now();
+    const cached = getCachedValue(postCache, postId, asDateTimestampMs(rawNow));
+    if (cached !== undefined) {
+      return cached;
+    }
+    try {
+      const info = await fetchMattermostPost(client, postId);
+      setCachedValue(postCache, postId, info, POST_CACHE_TTL_MS, rawNow);
+      return info;
+    } catch (err) {
+      logger.debug?.(`mattermost: post lookup failed: ${String(err)}`);
+      setCachedValue(postCache, postId, null, POST_CACHE_TTL_MS, rawNow);
+      return null;
+    }
+  };
+
   const buildModelPickerProps = (
     channelId: string,
     buttons: Array<unknown>,
@@ -261,6 +284,7 @@ export function createMattermostMonitorResources(params: {
     sendTypingIndicator,
     resolveChannelInfo,
     resolveUserInfo,
+    resolvePostInfo,
     updateModelPickerPost,
   };
 }

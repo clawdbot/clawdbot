@@ -7,7 +7,12 @@ import {
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
+import {
+  fetchMattermostPost,
+  updateMattermostPost,
+  type MattermostClient,
+  type MattermostPost,
+} from "./client.js";
 import {
   isTrustedProxyAddress,
   readRequestBodyWithLimit,
@@ -501,7 +506,7 @@ export function createMattermostInteractionHandler(params: {
     let originalPost: MattermostPost | null;
     let clickedButtonName: string | null = null;
     try {
-      originalPost = await client.request<MattermostPost>(`/posts/${payload.post_id}`);
+      originalPost = await fetchMattermostPost(client, payload.post_id);
       const postChannelId = originalPost.channel_id?.trim();
       if (!postChannelId || postChannelId !== payload.channel_id) {
         log?.(

@@ -313,11 +313,11 @@ Group messages require a mention unless overridden per group. Defaults live per 
 
 Supported implicit mention facts are channel-specific:
 
-| Fact                  | Current built-in producers                       |
-| --------------------- | ------------------------------------------------ |
-| Reply to the bot      | Discord, Microsoft Teams, QQBot, Slack, Telegram |
-| Quote of the bot      | WhatsApp, Zalo personal                          |
-| Bot joined the thread | Mattermost, Slack, Tlon                          |
+| Fact                  | Current built-in producers                                   |
+| --------------------- | ------------------------------------------------------------ |
+| Reply to the bot      | Discord, Mattermost, Microsoft Teams, QQBot, Slack, Telegram |
+| Quote of the bot      | WhatsApp, Zalo personal                                      |
+| Bot joined the thread | Mattermost, Slack, Tlon                                      |
 
 Each fact defaults to enabled when the channel produces it. Set the corresponding `implicitMentions` flag to `false` to stop that fact from bypassing mention gating; native explicit mentions remain unaffected. A flag has no effect on channels that do not produce that fact.
 

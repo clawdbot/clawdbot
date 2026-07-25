@@ -4,7 +4,9 @@ import {
   formatInboundEnvelope,
   implicitMentionKindWhen,
   type ChannelInboundTurnPlan,
+  type InboundImplicitMentionKind,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   buildChannelProgressDraftLineForEntry,
@@ -50,7 +52,10 @@ import {
   renderMattermostProviderPickerView,
   resolveMattermostModelPickerCurrentModel,
 } from "./model-picker.js";
-import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
+import {
+  resolveMattermostInboundMentionDecision,
+  resolveMattermostReplyToBot,
+} from "./monitor-activation.js";
 import {
   authorizeMattermostCommandInvocation,
   formatMattermostDirectMessageDropLog,
@@ -574,6 +579,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     sendTypingIndicator,
     resolveChannelInfo,
     resolveUserInfo,
+    resolvePostInfo,
     updateModelPickerPost,
   } = createMattermostMonitorResources({
     accountId: account.accountId,
@@ -1183,22 +1189,46 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         groupId: channelId,
         requireMentionOverride: account.requireMention,
       });
-    const implicitMentionKinds = implicitMentionKindWhen(
+    const buildMentionDecision = (implicitMentionKinds: readonly InboundImplicitMentionKind[]) =>
+      resolveMattermostInboundMentionDecision({
+        cfg,
+        accountId: account.accountId,
+        kind,
+        requireMention: shouldRequireMention || oncharEnabled,
+        canDetectMention: canDetectMention || oncharEnabled,
+        wasMentioned: wasMentioned || oncharTriggered,
+        implicitMentionKinds,
+        allowTextCommands,
+        hasControlCommand: isControlCommand,
+        commandAuthorized,
+      });
+    const participantKinds = implicitMentionKindWhen(
       "bot_thread_participant",
       threadAlreadyEngaged,
     );
-    const mentionDecision = resolveMattermostInboundMentionDecision({
-      cfg,
-      accountId: account.accountId,
-      kind,
-      requireMention: shouldRequireMention || oncharEnabled,
-      canDetectMention: canDetectMention || oncharEnabled,
-      wasMentioned: wasMentioned || oncharTriggered,
-      implicitMentionKinds,
-      allowTextCommands,
-      hasControlCommand: isControlCommand,
-      commandAuthorized,
-    });
+    let mentionDecision = buildMentionDecision(participantKinds);
+    // Reply-to-bot parity (Slack/Telegram): a reply whose thread root the bot authored counts as
+    // addressing it. The root author is absent from the `posted` payload, so resolve it only when
+    // the cheap decision would otherwise drop this reply and the operator left reply-to-bot enabled,
+    // then re-evaluate so the shared resolver still owns policy.
+    if (
+      mentionDecision.shouldSkip &&
+      threadRootId &&
+      resolveChannelImplicitMentions({
+        cfg,
+        channel: "mattermost",
+        accountId: account.accountId,
+      }).replyToBot
+    ) {
+      const replyToBot = await resolveMattermostReplyToBot({
+        threadRootId,
+        botUserId,
+        fetchRootPost: resolvePostInfo,
+      });
+      if (replyToBot) {
+        mentionDecision = buildMentionDecision([...participantKinds, "reply_to_bot"]);
+      }
+    }
     const { shouldBypassMention } = mentionDecision;
 
     if (
