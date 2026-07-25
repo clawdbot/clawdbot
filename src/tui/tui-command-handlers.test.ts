@@ -1161,6 +1161,18 @@ describe("tui command handlers", () => {
     expect(openclaw.addSystem).toHaveBeenCalledWith(expect.stringContaining("ultra"));
   });
 
+  it.each([
+    { command: "verbose", usage: "usage: /verbose <on|off|full>" },
+    { command: "reasoning", usage: "usage: /reasoning <on|off|stream>" },
+  ])("shows the complete canonical no-argument /$command usage", async ({ command, usage }) => {
+    const { handleCommand, addSystem, patchSession } = createHarness();
+
+    await handleCommand(`/${command}`);
+
+    expect(addSystem).toHaveBeenCalledWith(usage);
+    expect(patchSession).not.toHaveBeenCalled();
+  });
+
   it("hides tools locally for /verbose off without reloading history", async () => {
     const patchResult = { entry: { verboseLevel: "off" } };
     const patchSession = vi.fn().mockResolvedValue(patchResult);
@@ -1196,6 +1208,31 @@ describe("tui command handlers", () => {
 
     await handleCommand("/verbose on");
 
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(refreshSessionInfo).not.toHaveBeenCalled();
+    expect(clearTools).not.toHaveBeenCalled();
+  });
+
+  it("reloads history for /verbose full so prior full tool output becomes visible", async () => {
+    const patchResult = { entry: { verboseLevel: "full" } };
+    const patchSession = vi.fn().mockResolvedValue(patchResult);
+    const applySessionInfoFromPatch = vi.fn();
+    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, clearTools } = createHarness({
+      patchSession,
+      applySessionInfoFromPatch,
+      loadHistory,
+      refreshSessionInfo,
+    });
+
+    await handleCommand("/verbose full");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      verboseLevel: "full",
+    });
+    expect(applySessionInfoFromPatch).toHaveBeenCalledWith(patchResult);
     expect(loadHistory).toHaveBeenCalledTimes(1);
     expect(refreshSessionInfo).not.toHaveBeenCalled();
     expect(clearTools).not.toHaveBeenCalled();
