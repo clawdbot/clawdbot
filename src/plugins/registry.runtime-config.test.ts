@@ -518,7 +518,9 @@ describe("plugin registry runtime config scope", () => {
       return patch ? { ...entry, ...patch } : entry;
     });
     session.upsertSessionEntry = vi.fn(async () => {});
-    session.updateSessionStoreEntry = vi.fn(async (params) => typedEntries[params.sessionKey]);
+    session.updateSessionStoreEntry = vi.fn(
+      async (params) => typedEntries[params.sessionKey] ?? null,
+    );
     let admissionScope = getPluginRuntimeGatewayRequestScope();
     session.runWithWorkAdmission = vi.fn(async (_params, run) => {
       admissionScope = getPluginRuntimeGatewayRequestScope();
@@ -679,7 +681,7 @@ describe("plugin registry runtime config scope", () => {
         sessionId: undefined,
         sessionKey: undefined,
         sessionFile: ordinaryNoIdKey,
-      }),
+      } as never),
     ).resolves.toEqual({ ok: true });
     await expect(
       otherApi.runtime.agent.runEmbeddedAgent({
