@@ -23,7 +23,7 @@ const EXTRACT_FAILURE_TEXT =
   "Browser extract could not answer this question. Fall back to action=snapshot and inspect the page directly.";
 const EXTRACT_MAX_OUTPUT_TOKENS = 2_048;
 
-export type BrowserExtractCompletionDeps = {
+type BrowserExtractCompletionDeps = {
   completeWithPreparedSimpleCompletionModel: typeof import("openclaw/plugin-sdk/simple-completion-runtime").completeWithPreparedSimpleCompletionModel;
   extractAssistantText: typeof import("openclaw/plugin-sdk/simple-completion-runtime").extractAssistantText;
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -33,7 +33,7 @@ export type BrowserExtractCompletionDeps = {
   sanitizeHtml: typeof import("openclaw/plugin-sdk/web-content-extractor").sanitizeHtml;
 };
 
-export type BrowserExtractDeps = BrowserExtractCompletionDeps & {
+type BrowserExtractDeps = BrowserExtractCompletionDeps & {
   browserPageContent: typeof browserPageContent;
 };
 
