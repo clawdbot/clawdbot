@@ -82,6 +82,16 @@ export type EmbeddedAgentSubscribeState = {
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
+  /** Throttle/state for provisional write/edit tool-stream emits during arg streaming. */
+  provisionalToolStreamStateById?: Map<
+    string,
+    {
+      lastEmittedAtMs: number;
+      lastContentLength?: number;
+      started: boolean;
+      lastPath?: string;
+    }
+  >;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;

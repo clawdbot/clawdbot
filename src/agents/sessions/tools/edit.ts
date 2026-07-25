@@ -59,11 +59,12 @@ const replaceEditSchema = Type.Object(
 const editSchema = Type.Object(
   {
     path: Type.String({
-      description: "File path; relative/absolute.",
+      description:
+        "File path; relative/absolute. Emit this key first in the tool-call JSON (before edits) so the UI can show the target while edits stream.",
     }),
     edits: Type.Array(replaceEditSchema, {
       description:
-        "Targeted replacements against original file; no overlap/nesting. Merge nearby changes.",
+        "Targeted replacements against original file; no overlap/nesting. Merge nearby changes. Stream after path.",
     }),
   },
   {},
@@ -398,9 +399,10 @@ export function createEditToolDefinition(
     name: "edit",
     label: "edit",
     description:
-      "Exact single-file replacements. oldText unique/non-overlapping against original. Merge nearby changes; omit large unchanged spans.",
+      "Exact single-file replacements. oldText unique/non-overlapping against original. Merge nearby changes; omit large unchanged spans. Emit path before edits in the arguments JSON; the file is written only when the tool call completes.",
     promptSnippet: "Exact file edits; multiple disjoint edits per call",
     promptGuidelines: [
+      "In edit arguments JSON, emit path before edits so the target file is known while edits stream.",
       "oldText must match exactly",
       "Multiple disjoint locations: one call, multiple edits[]",
       "Match original file; no overlap/nesting; merge nearby",

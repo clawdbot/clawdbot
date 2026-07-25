@@ -137,8 +137,37 @@ describe("tool display details", () => {
     );
 
     expect(readDetail).toBe("lines 2-3 from /tmp/a.txt");
-    expect(writeDetail).toBe("to /tmp/a.txt (3 chars)");
-    expect(editDetail).toBe("in /tmp/a.txt (4 chars)");
+    expect(writeDetail).toBe("to /tmp/a.txt");
+    expect(editDetail).toBe("in /tmp/a.txt");
+  });
+
+  it("omits contentLength from write/edit details (viewport owns progress)", () => {
+    const writeDetail = formatToolDetail(
+      resolveToolDisplay({
+        name: "write",
+        args: { path: "/tmp/a.txt", contentLength: 12_000 },
+      }),
+    );
+    const editDetail = formatToolDetail(
+      resolveToolDisplay({
+        name: "edit",
+        args: { path: "/tmp/a.txt", contentLength: 4 },
+      }),
+    );
+
+    expect(writeDetail).toBe("to /tmp/a.txt");
+    expect(editDetail).toBe("in /tmp/a.txt");
+  });
+
+  it("omits write details before path arrives", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "write",
+          args: { contentLength: 1089, content: "partial…" },
+        }),
+      ),
+    ).toBeUndefined();
   });
 
   it("formats web_search query with quotes", () => {

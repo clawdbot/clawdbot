@@ -33,9 +33,13 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const writeSchema = Type.Object({
   path: Type.String({
-    description: "File path; relative/absolute.",
+    description:
+      "File path; relative/absolute. Emit this key first in the tool-call JSON (before content) so the UI can show the target while content streams.",
   }),
-  content: Type.String({ description: "File content." }),
+  content: Type.String({
+    description:
+      "File content. Stream after path; the file is written only when the tool call completes.",
+  }),
 });
 
 const WriteToolOutputSchema = Type.Union([
@@ -534,9 +538,13 @@ export function createWriteToolDefinition(
   return {
     name: "write",
     label: "write",
-    description: "Write/overwrite file; creates parent directories.",
+    description:
+      "Write/overwrite file; creates parent directories. Emit path before content in the arguments JSON; the file is written only when the tool call completes.",
     promptSnippet: "Create/overwrite files",
-    promptGuidelines: ["Use only new files/complete rewrites."],
+    promptGuidelines: [
+      "Use only new files/complete rewrites.",
+      "In write arguments JSON, emit path before content so the target file is known while content streams.",
+    ],
     parameters: writeSchema,
     outputSchema: WriteToolOutputSchema,
     async execute(

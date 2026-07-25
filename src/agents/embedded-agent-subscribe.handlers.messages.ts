@@ -31,6 +31,7 @@ import type {
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
+import { maybeEmitProvisionalMutationToolProgress } from "./embedded-agent-subscribe.provisional-tool-progress.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
@@ -731,6 +732,17 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+
+  // Provisional write/edit progress must run even when commentary text is
+  // suppressed — otherwise long content streaming looks like a freeze.
+  if (evtType === "toolcall_start" || evtType === "toolcall_delta") {
+    maybeEmitProvisionalMutationToolProgress(ctx, {
+      message: msg,
+      assistantMessageEvent: assistantRecord,
+    });
+    return;
+  }
+
   const eventAssistantMessage =
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
       ? (assistantRecord.partial as AssistantMessage)

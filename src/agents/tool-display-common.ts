@@ -274,6 +274,8 @@ function resolveWriteDetail(toolKey: string, args: unknown): string | undefined 
 
   const path = resolvePathArg(record) ?? normalizeOptionalString(record.url);
   if (!path) {
+    // Path-less streaming write/edit: the row/diff viewport owns progress.
+    // Do not emit "N chars" / contentLength details that leak into tool shells.
     return undefined;
   }
 
@@ -281,20 +283,8 @@ function resolveWriteDetail(toolKey: string, args: unknown): string | undefined 
     return `from ${path}`;
   }
 
+  // Path owns the detail; +N / live diff viewport carry content progress.
   const destinationPrefix = toolKey === "edit" ? "in" : "to";
-  const content =
-    typeof record.content === "string"
-      ? record.content
-      : typeof record.newText === "string"
-        ? record.newText
-        : typeof record.new_string === "string"
-          ? record.new_string
-          : undefined;
-
-  if (content && content.length > 0) {
-    return `${destinationPrefix} ${path} (${content.length} chars)`;
-  }
-
   return `${destinationPrefix} ${path}`;
 }
 
