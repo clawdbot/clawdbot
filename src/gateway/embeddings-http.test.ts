@@ -29,10 +29,13 @@ let createEmbeddingProviderMock: ReturnType<
         model: string;
         embedQuery: (text: string) => Promise<number[]>;
         embedBatch: (texts: string[]) => Promise<number[][]>;
+        close: () => Promise<void>;
       };
     }>
   >
 >;
+let embedBatchMock: ReturnType<typeof vi.fn<(texts: string[]) => Promise<number[][]>>>;
+let closeEmbeddingProviderMock: ReturnType<typeof vi.fn<() => Promise<void>>>;
 let clearMemoryEmbeddingProviders: typeof import("../plugins/memory-embedding-providers.js").clearMemoryEmbeddingProviders;
 let registerMemoryEmbeddingProvider: typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider;
 let clearEmbeddingProviders: typeof import("../plugins/embedding-providers.js").clearEmbeddingProviders;
@@ -108,14 +111,18 @@ beforeAll(async () => {
   ({ clearMemoryEmbeddingProviders, registerMemoryEmbeddingProvider } =
     await import("../plugins/memory-embedding-providers.js"));
   ({ clearEmbeddingProviders } = await import("../plugins/embedding-providers.js"));
+  embedBatchMock = vi.fn(async (texts: string[]) =>
+    texts.map((_text, index) => [index + 0.1, index + 0.2]),
+  );
+  closeEmbeddingProviderMock = vi.fn(async () => {});
   createEmbeddingProviderMock = vi.fn(
     async (options: { provider: string; model: string; agentDir?: string }) => ({
       provider: {
         id: options.provider,
         model: options.model,
         embedQuery: async () => [0.1, 0.2],
-        embedBatch: async (texts: string[]) =>
-          texts.map((_text, index) => [index + 0.1, index + 0.2]),
+        embedBatch: embedBatchMock,
+        close: closeEmbeddingProviderMock,
       },
     }),
   );
@@ -257,6 +264,7 @@ function latestCreateGenericEmbeddingProviderOptions(): {
 
 describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it("embeds string and array inputs", async () => {
+    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
     const single = await postEmbeddings({
       model: "openclaw/default",
       input: "hello",
@@ -285,6 +293,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     const lastCall = latestCreateEmbeddingProviderOptions();
     expect(lastCall.provider).toBe("openai");
     expect(lastCall.model).toBe("text-embedding-3-small");
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 3);
   });
 
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {
@@ -573,5 +582,18 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       type: "api_error",
       message: "internal error",
     });
+  });
+
+  it("closes the provider when embedding fails", async () => {
+    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+    embedBatchMock.mockRejectedValueOnce(new Error("embedding failed"));
+
+    const res = await postEmbeddings({
+      model: "openclaw/default",
+      input: "hello",
+    });
+
+    expect(res.status).toBe(500);
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
   });
 });

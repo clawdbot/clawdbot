@@ -354,22 +354,30 @@ export async function handleOpenAiEmbeddingsHttpRequest(
           }
         : undefined,
     });
-    const embeddings = await provider.embedBatch(texts);
-    const encodingFormat = payload.encoding_format === "base64" ? "base64" : "float";
+    try {
+      const embeddings = await provider.embedBatch(texts);
+      const encodingFormat = payload.encoding_format === "base64" ? "base64" : "float";
 
-    sendJson(res, 200, {
-      object: "list",
-      data: embeddings.map((embedding, index) => ({
-        object: "embedding",
-        index,
-        embedding: encodingFormat === "base64" ? encodeEmbeddingBase64(embedding) : embedding,
-      })),
-      model: requestModel,
-      usage: {
-        prompt_tokens: 0,
-        total_tokens: 0,
-      },
-    });
+      sendJson(res, 200, {
+        object: "list",
+        data: embeddings.map((embedding, index) => ({
+          object: "embedding",
+          index,
+          embedding: encodingFormat === "base64" ? encodeEmbeddingBase64(embedding) : embedding,
+        })),
+        model: requestModel,
+        usage: {
+          prompt_tokens: 0,
+          total_tokens: 0,
+        },
+      });
+    } finally {
+      await provider.close?.().catch((closeErr: unknown) => {
+        logWarn(
+          `openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`,
+        );
+      });
+    }
   } catch (err) {
     logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
     sendJson(res, 500, {
