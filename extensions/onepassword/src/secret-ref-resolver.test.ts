@@ -4,16 +4,41 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SECRET_FILE_MAX_BYTES } from "openclaw/plugin-sdk/secret-file-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
-const resolverPath = fileURLToPath(
+const sourceResolverPath = fileURLToPath(
   new URL("../onepassword-secret-ref-resolver.js", import.meta.url),
 );
+const sourceStaticAssetPaths = [
+  sourceResolverPath,
+  fileURLToPath(new URL("../onepassword-op-path.js", import.meta.url)),
+  fileURLToPath(new URL("../onepassword-secret-id.js", import.meta.url)),
+];
 const manifestPath = fileURLToPath(new URL("../openclaw.plugin.json", import.meta.url));
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 const tempDirs: string[] = [];
+let resolverPath = sourceResolverPath;
+let stagedResolverRoot: string | undefined;
+
+beforeAll(() => {
+  const tempRoot = path.join(process.cwd(), ".tmp");
+  fs.mkdirSync(tempRoot, { recursive: true });
+  stagedResolverRoot = fs.mkdtempSync(path.join(tempRoot, "onepassword-resolver-"));
+  for (const sourcePath of sourceStaticAssetPaths) {
+    fs.copyFileSync(sourcePath, path.join(stagedResolverRoot, path.basename(sourcePath)));
+  }
+  // Shipped bundled assets live in the root `openclaw` package scope. Stage them there so
+  // plain-Node child resolution matches the package instead of this source extension package.
+  resolverPath = path.join(stagedResolverRoot, path.basename(sourceResolverPath));
+});
+
+afterAll(() => {
+  if (stagedResolverRoot) {
+    fs.rmSync(stagedResolverRoot, { recursive: true, force: true });
+  }
+});
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-1password-test-"));
@@ -87,7 +112,7 @@ afterEach(() => {
 
 describe("plugin manifest", () => {
   it("declares the 1Password resolver as a managed Node SecretRef preset", () => {
-    const resolverSource = fs.readFileSync(resolverPath, "utf8");
+    const resolverSource = fs.readFileSync(sourceResolverPath, "utf8");
     const readIntegerConstant = (name: string): number => {
       const match = new RegExp(`const ${name} = (\\d[\\d_]*)`, "u").exec(resolverSource);
       return Number(match?.[1]?.replaceAll("_", ""));
