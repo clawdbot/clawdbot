@@ -46,7 +46,6 @@ const SCENARIOS = {
   "webchat-auto-tts": {
     title: "WebChat auto TTS delivery",
     sourcePath: "qa/scenarios/media/webchat-auto-tts.yaml",
-    primaryCoverageIds: ["media.tts", "media.outbound-voice-audio-delivery"],
     docsRefs: ["docs/tools/tts.md", "docs/tools/media-overview.md"],
     codeRefs: [
       SOURCE_PATH,
@@ -58,7 +57,6 @@ const SCENARIOS = {
   "active-talk-agent-run-status": {
     title: "Active Talk agent-run control boundaries",
     sourcePath: "qa/scenarios/runtime/active-talk-agent-run-status.yaml",
-    primaryCoverageIds: ["voice.active-talk-agent-run-status"],
     docsRefs: ["docs/nodes/talk.md", "docs/web/control-ui.md"],
     codeRefs: [
       SOURCE_PATH,
@@ -577,14 +575,13 @@ async function runMediaTalkGatewayProducer(
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${options.scenarioId}.log`,
-    primaryModel: "mock-openai/gpt-5.5",
+    primaryModel: "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
       id: options.scenarioId,
       title: scenario.title,
       sourcePath: scenario.sourcePath,
-      primaryCoverageIds: scenario.primaryCoverageIds,
       docsRefs: scenario.docsRefs,
       codeRefs: scenario.codeRefs,
     },

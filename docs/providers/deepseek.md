@@ -76,18 +76,15 @@ available to that process (for example, in `~/.openclaw/.env` or via
 
 ## Built-in catalog
 
-| Model ref                    | Name              | Input | Context   | Max output | Notes                                               |
-| ---------------------------- | ----------------- | ----- | --------- | ---------- | --------------------------------------------------- |
-| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Default model; V4 thinking-capable surface          |
-| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | V4 thinking-capable surface                         |
-| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 1,000,000 | 384,000    | Deprecated V4 Flash non-thinking compatibility name |
-| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 1,000,000 | 384,000    | Deprecated V4 Flash thinking compatibility name     |
+| Model ref                    | Name              | Input | Context   | Max output | Notes                                      |
+| ---------------------------- | ----------------- | ----- | --------- | ---------- | ------------------------------------------ |
+| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Default model; V4 thinking-capable surface |
+| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | V4 thinking-capable surface                |
 
 <Warning>
-DeepSeek will retire `deepseek-chat` and `deepseek-reasoner` on July 24, 2026
-at 15:59 UTC. They currently route to DeepSeek V4 Flash in non-thinking and
-thinking mode, respectively. Move configured model refs to
-`deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro` before the cutoff.
+DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on July 24, 2026 at
+15:59 UTC. Those model IDs are no longer accessible. Move configured model refs
+to `deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro`.
 </Warning>
 
 OpenClaw's local cost estimates follow DeepSeek's published cache-hit,

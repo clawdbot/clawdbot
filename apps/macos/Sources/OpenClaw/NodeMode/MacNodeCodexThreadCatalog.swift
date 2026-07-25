@@ -6,6 +6,8 @@ enum MacNodeCodexThreadCatalogContract {
     static let pluginId = "codex"
     static let capability = "codex-app-server-threads"
     static let listCommand = "codex.appServer.threads.list.v1"
+    static let turnsCommand = "codex.appServer.thread.turns.list.v1"
+    static let commands = [listCommand, turnsCommand]
 }
 
 enum MacNodeCodexThreadCatalog {
@@ -42,11 +44,11 @@ enum MacNodeCodexThreadCatalog {
             case .unsupportedAppServerHomeScope:
                 "UNAVAILABLE: paired macOS Codex catalog requires appServer.homeScope user"
             case .appServerUnavailable:
-                "UNAVAILABLE: Codex app-server thread list failed"
+                "UNAVAILABLE: Codex app-server request failed"
             case .responseTooLarge:
-                "UNAVAILABLE: Codex app-server thread metadata exceeded the size limit"
+                "UNAVAILABLE: Codex app-server response exceeded the size limit"
             case .timedOut:
-                "UNAVAILABLE: Codex app-server thread list timed out"
+                "UNAVAILABLE: Codex app-server request timed out"
             }
         }
 
@@ -63,6 +65,12 @@ enum MacNodeCodexThreadCatalog {
         var limit = 50
         var searchTerm: String?
         var cwd: String?
+    }
+
+    private struct TurnParams {
+        var threadId: String
+        var cursor: String?
+        var limit = 20
     }
 
     private struct ConfiguredAppServer {
@@ -171,6 +179,15 @@ enum MacNodeCodexThreadCatalog {
         }
     }
 
+    static func turns(paramsJSON: String?) async throws -> String {
+        let params = try decodeTurnParams(paramsJSON)
+        let root = OpenClawConfigFile.loadDict()
+        guard self.shouldAdvertise(root: root) else {
+            throw CatalogError.catalogDisabled
+        }
+        return try await self.turns(params: params, invocation: resolveInvocation(root: root))
+    }
+
     static func list(
         paramsJSON: String?,
         loadRoot: () -> [String: Any]) async throws -> String
@@ -184,6 +201,93 @@ enum MacNodeCodexThreadCatalog {
         }
         let invocation = try self.resolveInvocation(root: root)
         return try await self.list(params: params, invocation: invocation)
+    }
+
+    static func turns(
+        paramsJSON: String?,
+        executable: String,
+        arguments: [String]? = nil,
+        cwd: URL? = nil,
+        clearEnv: [String] = [],
+        timeoutSeconds: Double = MacNodeCodexThreadCatalog.defaultTimeoutSeconds,
+        maxLineBytes: Int = 20 * 1024 * 1024) async throws -> String
+    {
+        let params = try decodeTurnParams(paramsJSON)
+        return try await self.turns(
+            params: params,
+            invocation: ResolvedInvocation(
+                executable: executable,
+                arguments: arguments ?? self.defaultArguments,
+                cwd: cwd,
+                clearEnv: clearEnv),
+            timeoutSeconds: timeoutSeconds,
+            maxLineBytes: maxLineBytes)
+    }
+
+    private static func turns(
+        params: TurnParams,
+        invocation: ResolvedInvocation,
+        timeoutSeconds: Double = MacNodeCodexThreadCatalog.defaultTimeoutSeconds,
+        maxLineBytes: Int = 20 * 1024 * 1024) async throws -> String
+    {
+        let deadline = Date().addingTimeInterval(max(0.01, timeoutSeconds))
+        try await self.requireCatalogThread(
+            params.threadId,
+            invocation: invocation,
+            deadline: deadline)
+        var requestParams: [String: Any] = [
+            "threadId": params.threadId,
+            "limit": params.limit,
+            "sortDirection": "desc",
+            "itemsView": "full",
+        ]
+        if let cursor = params.cursor {
+            requestParams["cursor"] = cursor
+        }
+        let session = try CodexAppServerThreadRequestSession(
+            invocation: invocation,
+            method: "thread/turns/list",
+            requestParams: requestParams,
+            timeoutSeconds: max(0.01, deadline.timeIntervalSinceNow),
+            maxLineBytes: maxLineBytes)
+        let output = try await session.run()
+        guard let payload = String(data: output.resultData, encoding: .utf8) else {
+            throw CatalogError.appServerUnavailable
+        }
+        return payload
+    }
+
+    private static func requireCatalogThread(
+        _ threadId: String,
+        invocation: ResolvedInvocation,
+        deadline: Date) async throws
+    {
+        var cursor: String?
+        var seenCursors = Set<String>()
+        for _ in 0..<100 {
+            let remainingTimeout = deadline.timeIntervalSinceNow
+            guard remainingTimeout > 0 else { throw CatalogError.timedOut }
+            let payload = try await list(
+                params: ListParams(cursor: cursor, limit: 100),
+                invocation: invocation,
+                timeoutSeconds: remainingTimeout)
+            guard let response = try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+                  let sessions = response["sessions"] as? [[String: Any]]
+            else {
+                throw CatalogError.appServerUnavailable
+            }
+            if sessions.contains(where: { $0["threadId"] as? String == threadId }) {
+                return
+            }
+            guard let nextCursor = response["nextCursor"] as? String,
+                  !nextCursor.isEmpty,
+                  !seenCursors.contains(nextCursor)
+            else { break }
+            seenCursors.insert(nextCursor)
+            cursor = nextCursor
+        }
+        throw CatalogError.invalidParams(
+            "Codex session is not a non-archived interactive CLI or VS Code session")
     }
 
     static func shouldAdvertise(root: [String: Any]? = nil) -> Bool {
@@ -231,13 +335,14 @@ enum MacNodeCodexThreadCatalog {
         maxLineBytes: Int = 5 * 1024 * 1024) async throws -> String
     {
         guard params.searchTerm != nil else {
-            let session = try CodexAppServerThreadListSession(
+            let session = try CodexAppServerThreadRequestSession(
                 invocation: invocation,
-                listParams: self.appServerParams(params),
+                method: "thread/list",
+                requestParams: self.appServerParams(params),
                 timeoutSeconds: timeoutSeconds,
                 maxLineBytes: maxLineBytes)
             let output = try await session.run()
-            return try self.normalize(listResultData: output.listResultData)
+            return try self.normalize(listResultData: output.resultData)
         }
 
         // Native search also inspects transcript-derived previews. Scan a bounded
@@ -258,14 +363,15 @@ enum MacNodeCodexThreadCatalog {
             var pageParams = params
             pageParams.cursor = cursor
             pageParams.limit = remainingLimit
-            let session = try CodexAppServerThreadListSession(
+            let session = try CodexAppServerThreadRequestSession(
                 invocation: invocation,
-                listParams: self.appServerParams(pageParams),
+                method: "thread/list",
+                requestParams: self.appServerParams(pageParams),
                 timeoutSeconds: remainingTimeout,
                 maxLineBytes: maxLineBytes)
             let output = try await session.run()
             let page = try self.normalizedResponse(
-                listResultData: output.listResultData,
+                listResultData: output.resultData,
                 searchTerm: params.searchTerm)
             if pageIndex == 0 {
                 backwardsCursor = page.backwardsCursor
@@ -878,6 +984,39 @@ extension MacNodeCodexThreadCatalog {
         return params
     }
 
+    private static func decodeTurnParams(_ paramsJSON: String?) throws -> TurnParams {
+        guard let paramsJSON,
+              let data = paramsJSON.data(using: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw CatalogError.invalidParams("parameters must be a valid JSON object")
+        }
+        let allowed = Set(["threadId", "cursor", "limit"])
+        if let unknown = raw.keys.first(where: { !allowed.contains($0) }) {
+            throw CatalogError.invalidParams("unknown Codex transcript parameter: \(unknown)")
+        }
+        guard let threadId = try optionalString(
+            raw,
+            key: "threadId",
+            maxLength: maxSessionIdLength)
+        else {
+            throw CatalogError.invalidParams("threadId is required")
+        }
+        var params = TurnParams(threadId: threadId)
+        params.cursor = try self.optionalString(raw, key: "cursor", maxLength: self.maxCursorLength)
+        if let value = raw["limit"] {
+            guard let number = value as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.rounded() == number.doubleValue,
+                  (1...50).contains(number.intValue)
+            else {
+                throw CatalogError.invalidParams("limit must be an integer from 1 to 50")
+            }
+            params.limit = number.intValue
+        }
+        return params
+    }
+
     private static func optionalString(
         _ params: [String: Any],
         key: String,
@@ -1069,14 +1208,14 @@ extension MacNodeCodexThreadCatalog {
     }
 }
 
-private final class CodexAppServerThreadListSession: @unchecked Sendable {
+private final class CodexAppServerThreadRequestSession: @unchecked Sendable {
     struct Output {
-        var listResultData: Data
+        var resultData: Data
     }
 
     private enum Phase {
         case initialize
-        case list
+        case request
     }
 
     private let process = Process()
@@ -1084,7 +1223,7 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
     private let stdoutPipe = Pipe()
     private let stderrPipe = Pipe()
     private let queue = DispatchQueue(label: "ai.openclaw.codex-thread-catalog")
-    private let listRequestData: Data
+    private let requestData: Data
     private let timeoutSeconds: Double
     private let maxLineBytes: Int
     private var continuation: CheckedContinuation<Output, Error>?
@@ -1101,7 +1240,8 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
 
     init(
         invocation: MacNodeCodexThreadCatalog.ResolvedInvocation,
-        listParams: [String: Any],
+        method: String,
+        requestParams: [String: Any],
         timeoutSeconds: Double,
         maxLineBytes: Int) throws
     {
@@ -1119,10 +1259,10 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
         self.process.standardError = self.stderrPipe
         self.timeoutSeconds = max(0.01, timeoutSeconds)
         self.maxLineBytes = max(1, maxLineBytes)
-        self.listRequestData = try Self.jsonData([
+        self.requestData = try Self.jsonData([
             "id": 2,
-            "method": "thread/list",
-            "params": listParams,
+            "method": method,
+            "params": requestParams,
         ])
     }
 
@@ -1237,21 +1377,21 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
                 self.finish(.failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable))
                 return
             }
-            self.phase = .list
+            self.phase = .request
             do {
                 try self.write(Self.initializedNotificationData())
-                try self.write(self.listRequestData)
+                try self.write(self.requestData)
             } catch {
                 self.finish(.failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable))
             }
-        case (.list, 2):
+        case (.request, 2):
             guard let result = message["result"] as? [String: Any],
                   let resultData = try? Self.jsonData(result)
             else {
                 self.finish(.failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable))
                 return
             }
-            self.finish(.success(Output(listResultData: resultData)))
+            self.finish(.success(Output(resultData: resultData)))
         default:
             break
         }
@@ -1289,6 +1429,7 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
                     "title": "OpenClaw macOS Node",
                     "version": GatewayEnvironment.appVersionString() ?? "unknown",
                 ],
+                "capabilities": ["experimentalApi": true],
             ],
         ])
     }

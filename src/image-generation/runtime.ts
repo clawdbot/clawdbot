@@ -25,7 +25,7 @@ const log = createSubsystemLogger("image-generation");
 // Runtime dependency seam for tests and plugin-host callers. Production uses
 // the plugin registry and provider-env helpers by default.
 /** Dependency seam used by image-generation runtime tests and plugin host callers. */
-export type ImageGenerationRuntimeDeps = {
+type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
   listProviders?: typeof listImageGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
@@ -41,7 +41,7 @@ function buildNoImageGenerationModelConfiguredMessage(
   const listProviders = deps.listProviders ?? listImageGenerationProviders;
   return buildNoCapabilityModelConfiguredMessage({
     capabilityLabel: "image-generation",
-    modelConfigKey: "imageGenerationModel",
+    modelConfigKey: "mediaModels.image",
     providers: listProviders(cfg),
     getProviderEnvVars: deps.getProviderEnvVars,
   });
@@ -64,10 +64,10 @@ export async function generateImage(
   const logger = deps.log ?? log;
   const requestedTimeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.imageGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.image);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.image,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
     agentDir: params.agentDir,

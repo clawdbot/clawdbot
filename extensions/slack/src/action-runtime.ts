@@ -14,6 +14,7 @@ import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
 import { hasSlackNativeDataBlock } from "./native-data-blocks.js";
+import type { SlackReplyDeliveryMessage } from "./reply-blocks.js";
 import {
   createActionGate,
   imageResultFromFile,
@@ -110,6 +111,8 @@ export type SlackActionContext = {
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  /** Slack-private ordered delivery plan prepared after presentation normalization. */
+  preparedMessages?: readonly SlackReplyDeliveryMessage[];
 };
 
 /**
@@ -190,7 +193,7 @@ function hasPotentialSlackNamedPolicy(params: {
 }
 
 function resolveSlackDmReadAllowed(account: ResolvedSlackAccount): boolean {
-  const dmPolicy = account.config.dmPolicy ?? account.config.dm?.policy ?? "pairing";
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
   return account.config.dm?.enabled !== false && dmPolicy !== "disabled";
 }
 
@@ -478,30 +481,20 @@ export async function handleSlackAction(
     );
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
-  const { resolveSlackAccount } = await loadSlackAccountsRuntime();
+  const { resolveSlackAccount, resolveSlackOperationToken } = await loadSlackAccountsRuntime();
   const account = resolveSlackAccount({ cfg, accountId });
   if (account.config.enterpriseOrgInstall === true) {
     throw new Error("Slack action tools are unavailable for Enterprise Grid org installs.");
   }
   const actionConfig = account.actions ?? cfg.channels?.slack?.actions;
   const isActionEnabled = createActionGate(actionConfig);
-  const userToken = account.userToken;
   const botToken = account.botToken?.trim();
-  const allowUserWrites = account.config.userTokenReadOnly === false;
-
-  // Choose the most appropriate token for Slack read/write operations.
-  const getTokenForOperation = (operation: "read" | "write") => {
-    if (operation === "read") {
-      return userToken ?? botToken;
-    }
-    if (!allowUserWrites) {
-      return botToken;
-    }
-    return botToken ?? userToken;
-  };
 
   const buildActionOpts = (operation: "read" | "write") => {
-    const token = getTokenForOperation(operation);
+    const token = resolveSlackOperationToken(account, operation);
+    if (!token && account.identity === "user") {
+      throw new Error(`Slack operation token missing for account "${account.accountId}".`);
+    }
     const tokenOverride = token && token !== botToken ? token : undefined;
     return {
       cfg,
@@ -531,8 +524,8 @@ export async function handleSlackAction(
       const { emoji, remove, isEmpty } = readReactionParams(params, {
         removeErrorMessage: "Emoji is required to remove a Slack reaction.",
       });
+      await assertReadTargetAllowed(channelId);
       if (remove) {
-        await assertReadTargetAllowed(channelId);
         if (writeOpts) {
           await slackActionRuntime.removeSlackReaction(channelId, messageId, emoji, writeOpts);
         } else {
@@ -541,13 +534,11 @@ export async function handleSlackAction(
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
-        await assertReadTargetAllowed(channelId);
         const removed = writeOpts
           ? await slackActionRuntime.removeOwnSlackReactions(channelId, messageId, writeOpts)
           : await slackActionRuntime.removeOwnSlackReactions(channelId, messageId);
         return jsonResult({ ok: true, removed });
       }
-      await assertReadTargetAllowed(channelId);
       if (writeOpts) {
         await slackActionRuntime.reactSlackMessage(channelId, messageId, emoji, writeOpts);
       } else {
@@ -576,8 +567,25 @@ export async function handleSlackAction(
         const blocks = readSlackBlocksParam(params);
         const replyBroadcast = readBooleanParam(params, "replyBroadcast");
         const textIsSlackMrkdwn = readBooleanParam(params, "textIsSlackMrkdwn");
-        const separateTextAndBlocks = readBooleanParam(params, "separateTextAndBlocks");
-        if (!content && !mediaUrl && !blocks) {
+        const textIsSlackPlainText = readBooleanParam(params, "textIsSlackPlainText");
+        const preparedMessages = context?.preparedMessages;
+        const authoredTextPlacement = readStringParam(params, "authoredTextPlacement") as
+          | "none"
+          | "blocks"
+          | "outside-blocks"
+          | undefined;
+        if (
+          authoredTextPlacement &&
+          authoredTextPlacement !== "none" &&
+          authoredTextPlacement !== "blocks" &&
+          authoredTextPlacement !== "outside-blocks"
+        ) {
+          throw new Error("Slack authoredTextPlacement is invalid.");
+        }
+        const nativeDataFallbackBaseText = readStringParam(params, "nativeDataFallbackBaseText", {
+          allowEmpty: true,
+        });
+        if (!content && !mediaUrl && !blocks && !preparedMessages?.length) {
           throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
         }
         if (replyBroadcast && mediaUrl) {
@@ -593,47 +601,83 @@ export async function handleSlackAction(
             suppressImplicitThread: params.topLevel === true || params.threadTs === null,
           },
         );
-        const sendOpts = {
+        const baseSendOpts = {
           ...writeOpts,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
+        };
+        const sendOpts = {
+          ...baseSendOpts,
           ...(replyBroadcast ? { replyBroadcast } : {}),
           ...(textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
+          ...(textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+          ...(authoredTextPlacement ? { authoredTextPlacement } : {}),
+          ...(nativeDataFallbackBaseText !== undefined ? { nativeDataFallbackBaseText } : {}),
         };
         const sendContentAndBlocks = async () => {
-          const nativeDataOwnsChunking = hasSlackNativeDataBlock(blocks);
-          if (
-            content &&
-            (separateTextAndBlocks ||
-              (content.length > SLACK_TEXT_LIMIT && !nativeDataOwnsChunking))
-          ) {
-            return await slackActionRuntime.sendSlackMessage(to, content, {
-              ...sendOpts,
+          const shouldSplitLongContent =
+            content && content.length > SLACK_TEXT_LIMIT && !hasSlackNativeDataBlock(blocks);
+          if (content && shouldSplitLongContent) {
+            // Reuse the resolved thread for both sends. Invoking the action twice
+            // could consume replyToMode=first and move the full text off-thread.
+            const { replyBroadcast: _replyBroadcast, ...blockSendOpts } = sendOpts;
+            await slackActionRuntime.sendSlackMessage(to, "", {
+              ...blockSendOpts,
               blocks,
-              separateTextAndBlocks: true,
             });
+            return await slackActionRuntime.sendSlackMessage(to, content, sendOpts);
           }
           return await slackActionRuntime.sendSlackMessage(to, content ?? "", {
             ...sendOpts,
             blocks,
           });
         };
-        const result = blocks
+        const result = preparedMessages?.length
           ? await (async () => {
+              let lastResult:
+                | Awaited<ReturnType<typeof slackActionRuntime.sendSlackMessage>>
+                | undefined;
               if (mediaUrl) {
-                await slackActionRuntime.sendSlackMessage(to, "", {
-                  ...sendOpts,
+                lastResult = await slackActionRuntime.sendSlackMessage(to, "", {
+                  ...baseSendOpts,
                   mediaUrl,
                 });
               }
-              return await sendContentAndBlocks();
+              for (const [index, message] of preparedMessages.entries()) {
+                lastResult = await slackActionRuntime.sendSlackMessage(to, message.text, {
+                  ...baseSendOpts,
+                  ...(index === 0 && replyBroadcast ? { replyBroadcast: true } : {}),
+                  ...(message.blocks ? { blocks: message.blocks } : {}),
+                  ...(message.authoredTextPlacement
+                    ? { authoredTextPlacement: message.authoredTextPlacement }
+                    : {}),
+                  ...(Object.hasOwn(message, "nativeDataFallbackBaseText")
+                    ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
+                    : {}),
+                  ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+                });
+              }
+              if (!lastResult) {
+                throw new Error("Slack prepared message plan produced no delivery.");
+              }
+              return lastResult;
             })()
-          : await slackActionRuntime.sendSlackMessage(to, content ?? "", {
-              ...sendOpts,
-              mediaUrl: mediaUrl ?? undefined,
-              blocks,
-            });
+          : blocks
+            ? await (async () => {
+                if (mediaUrl) {
+                  await slackActionRuntime.sendSlackMessage(to, "", {
+                    ...sendOpts,
+                    mediaUrl,
+                  });
+                }
+                return await sendContentAndBlocks();
+              })()
+            : await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                ...sendOpts,
+                mediaUrl: mediaUrl ?? undefined,
+                blocks,
+              });
 
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
@@ -747,7 +791,13 @@ export async function handleSlackAction(
             (message as { ts?: unknown }).ts,
           ),
         );
-        return jsonResult({ ok: true, messages, hasMore: result.hasMore });
+        return jsonResult({
+          ok: true,
+          channelId,
+          ...(threadId ? { threadId } : {}),
+          messages,
+          hasMore: result.hasMore,
+        });
       }
       case "downloadFile": {
         const fileId = readStringParam(params, "fileId", { required: true });
@@ -766,7 +816,7 @@ export async function handleSlackAction(
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
-        const readToken = getTokenForOperation("read");
+        const readToken = resolveSlackOperationToken(account, "read");
         const downloaded = await slackActionRuntime.downloadSlackFile(fileId, {
           ...readOpts,
           ...(readToken && !readOpts?.token ? { token: readToken } : {}),
@@ -862,7 +912,7 @@ export async function handleSlackAction(
     }
     const userId = readStringParam(params, "userId", { required: true });
     assertSlackMemberInfoAllowed({ account, context, userId });
-    const info = writeOpts
+    const info = readOpts
       ? await slackActionRuntime.getSlackMemberInfo(userId, readOpts)
       : await slackActionRuntime.getSlackMemberInfo(userId);
     return jsonResult({ ok: true, info });
@@ -895,3 +945,4 @@ export async function handleSlackAction(
 
   throw new Error(`Unknown action: ${action}`);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

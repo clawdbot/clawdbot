@@ -1,7 +1,17 @@
 // Verifies simple-completion model selection preserves provider, model, and profile refs.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { resolveSimpleCompletionSelectionForAgent as resolveSimpleCompletionSelectionForAgentBase } from "./simple-completion-runtime.js";
+
+function resolveSimpleCompletionSelectionForAgent(
+  params: Parameters<typeof resolveSimpleCompletionSelectionForAgentBase>[0],
+) {
+  return resolveSimpleCompletionSelectionForAgentBase({
+    ...params,
+    cfg: migratePersistedImplicitMainRoster(params.cfg).config as OpenClawConfig,
+  });
+}
 
 function requireSelection(selection: ReturnType<typeof resolveSimpleCompletionSelectionForAgent>) {
   // Narrows absent selections so each case can assert parsed provider/model fields.
@@ -185,7 +195,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
     );
     expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.5");
+    expect(selection.modelId).toBe("gpt-5.6-sol");
   });
 
   it("uses configured provider fallback when default provider is unavailable", () => {
@@ -219,6 +229,6 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
     );
     expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.5");
+    expect(selection.modelId).toBe("gpt-5.6-sol");
   });
 });

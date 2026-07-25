@@ -1,10 +1,9 @@
 /**
  * Gateway pre-auth hardening tests.
  */
-import { writeFile } from "node:fs/promises";
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -14,9 +13,18 @@ import { tryBeginGatewaySuspendAdmission } from "../process/gateway-work-admissi
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import {
+  attachGatewayUpgradeHandler,
+  attachWorkerGatewayUpgradeHandler,
+  createGatewayHttpServer,
+} from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import {
+  GATEWAY_WS_CONNECTION_KIND_PROPERTY,
+  GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  type GatewayIngressWebSocket,
+  type GatewayWsClient,
+} from "./server/ws-types.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   createGatewaySuiteHarness,
@@ -101,6 +109,49 @@ async function expectIdlePreauthSocketClose() {
 }
 
 describe("gateway pre-auth hardening", () => {
+  it("tags worker-only upgrades with the trusted ingress kind and budget", async () => {
+    const httpServer = http.createServer();
+    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    const workerBudget = createPreauthConnectionBudget(1);
+    const accepted = new Promise<GatewayIngressWebSocket>((resolve) => {
+      wss.once("connection", (socket) => {
+        resolve(socket as GatewayIngressWebSocket);
+      });
+    });
+    attachWorkerGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      preauthConnectionBudget: workerBudget,
+    });
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        client.once("open", resolve);
+        client.once("error", reject);
+      });
+      const socket = await accepted;
+      expect(socket[GATEWAY_WS_CONNECTION_KIND_PROPERTY]).toBe("worker");
+      expect(socket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY]).toBe(workerBudget);
+    } finally {
+      client.close();
+      await new Promise<void>((resolve) => {
+        client.once("close", () => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("rejects upgrades before websocket handlers attach (pre-auth budget enforced, then released)", async () => {
     const clients = new Set<GatewayWsClient>();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
@@ -165,31 +216,6 @@ describe("gateway pre-auth hardening", () => {
     setEnvForTest("OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS", "200");
 
     await expectIdlePreauthSocketClose();
-  });
-
-  it("uses gateway.handshakeTimeoutMs for idle unauthenticated sockets", async () => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("OPENCLAW_CONFIG_PATH missing in gateway preauth test");
-    }
-    await writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          gateway: {
-            handshakeTimeoutMs: 250,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    try {
-      await expectIdlePreauthSocketClose();
-    } finally {
-      await writeFile(configPath, "{}\n", "utf-8");
-    }
   });
 
   it("rejects oversized pre-auth connect frames before application-level auth responses", async () => {

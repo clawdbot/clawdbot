@@ -19,6 +19,52 @@ export {
 export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
 export * from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+
+/** @deprecated Shipped compat only (removed from core in #104546); no core caller. Removal with the next plugin-SDK major. */
+export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";
+
+/**
+ * @deprecated Shipped compat only; preserves the old substring semantics for
+ * external plugins. Core chat classification now maps canonical failover
+ * reasons (see gateway resolveChatErrorKindFromError). Removal with the next
+ * plugin-SDK major.
+ */
+export function detectErrorKind(err: unknown): ErrorKind | undefined {
+  if (err === undefined) {
+    return undefined;
+  }
+  const message = formatErrorMessage(err).toLowerCase();
+  const code = extractErrorCode(err)?.toLowerCase();
+  if (
+    message.includes("refusal") ||
+    message.includes("content_filter") ||
+    message.includes("sensitive") ||
+    message.includes("unhandled stop reason: refusal_policy")
+  ) {
+    return "refusal";
+  }
+  if (
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    message.includes("429") ||
+    code === "429"
+  ) {
+    return "rate_limit";
+  }
+  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
+    return "timeout";
+  }
+  if (
+    message.includes("context length") ||
+    message.includes("too many tokens") ||
+    message.includes("token limit") ||
+    message.includes("context_window")
+  ) {
+    return "context_length";
+  }
+  return undefined;
+}
 export * from "../infra/exec-approval-command-display.ts";
 export * from "../infra/exec-approval-channel-runtime.ts";
 export * from "../infra/exec-approval-reply.ts";

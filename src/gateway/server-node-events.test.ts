@@ -1,8 +1,21 @@
 // Gateway node event tests protect how node clients surface inbound commands,
 // delivery metadata, pairing state, and outbound payload lifecycle events.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../infra/gateway-suspend-coordinator.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
@@ -35,10 +48,11 @@ const buildSessionLookup = (
     updatedAt: entry.updatedAt ?? Date.now(),
     model: entry.model,
     modelProvider: entry.modelProvider,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId,
+    delivery: normalizeLegacySessionEntryDelivery({
+      ...entry,
+      sessionId: entry.sessionId ?? `sid-${sessionKey}`,
+      updatedAt: entry.updatedAt ?? Date.now(),
+    } as SessionEntry).delivery,
     label: entry.label,
     spawnedBy: entry.spawnedBy,
     parentSessionKey: entry.parentSessionKey,
@@ -72,11 +86,16 @@ const sanitizeInboundSystemTagsMock = vi.hoisted(() =>
       .replace(/^(\s*)System:(?=\s|$)/gim, "$1System (untrusted):"),
   ),
 );
-const updatePairedDeviceMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-const updatePairedNodeMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const updatePairedDevicePresenceMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
 const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: ingressAgentCommandMock,
+  ApnsRegistrationPairingChangedError: class ApnsRegistrationPairingChangedError extends Error {
+    constructor() {
+      super("node pairing changed before APNs registration");
+      this.name = "ApnsRegistrationPairingChangedError";
+    }
+  },
   buildOutboundSessionContext: vi.fn(({ sessionKey }: { sessionKey: string }) => ({
     key: sessionKey,
     agentId: "main",
@@ -121,6 +140,7 @@ const runtimeMocks = vi.hoisted(() => ({
     },
   ),
   resolveOutboundTarget: vi.fn(({ to }: { to: string }) => ({ ok: true, to })),
+  sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(
     (_cfg: OpenClawConfig, entry?: { model?: string; modelProvider?: string }) => ({
@@ -140,20 +160,19 @@ const runtimeMocks = vi.hoisted(() => ({
 
 vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
 vi.mock("../infra/device-pairing.js", () => ({
-  updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
+  updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));
-vi.mock("../infra/node-pairing.js", () => ({
-  updatePairedNodeMetadata: updatePairedNodeMetadataMock,
-}));
-
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
-import {
-  getRecentNodePresencePersistCountForTests,
-  handleNodeEvent,
-  resetNodeEventDeduplicationForTests,
-} from "./server-node-events.js";
+import { handleNodeEvent } from "./server-node-events.js";
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
@@ -163,6 +182,60 @@ const canonicalizeSessionEntryAliasesMock = runtimeMocks.canonicalizeSessionEntr
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
+const sendDurableMessageBatchMock = runtimeMocks.sendDurableMessageBatch;
+
+beforeEach(() => {
+  resetGatewayWorkAdmission();
+});
+
+afterEach(() => {
+  resetGatewayWorkAdmission();
+});
+
+async function runAdmittedNodeEvent(
+  ctx: NodeEventContext,
+  nodeId: string,
+  event: Parameters<typeof handleNodeEvent>[2],
+): Promise<void> {
+  const admission = tryBeginGatewayRootWorkAdmission();
+  expect(admission).not.toBeNull();
+  try {
+    await admission?.run(async () => {
+      await handleNodeEvent(ctx, nodeId, event);
+    });
+  } finally {
+    admission?.release();
+  }
+}
+
+function expectSuspendBusyWithRootWork(requestId: string): void {
+  expect(
+    prepareGatewaySuspend({
+      requestId,
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+    }),
+  ).toMatchObject({
+    status: "busy",
+    blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request", count: 1 })]),
+  });
+}
+
+function expectSuspendReady(requestId: string): void {
+  const result = prepareGatewaySuspend({
+    requestId,
+    pauseScheduling: vi.fn(),
+    resumeScheduling: vi.fn(),
+  });
+  expect(result).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
+  if (result.status === "ready") {
+    expect(resumeGatewaySuspend(result.suspensionId)).toMatchObject({
+      ok: true,
+      status: "running",
+      resumed: true,
+    });
+  }
+}
 
 const execEventHeartbeatOptions = (sessionKey?: string) => ({
   source: "exec-event",
@@ -185,9 +258,6 @@ function buildCtx(
     addChatRun: () => {},
     removeChatRun: () => undefined,
     chatAbortControllers: new Map(),
-    chatAbortedRuns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
     dedupe: new Map(),
     agentRunSeq: new Map(),
     getHealthCache: () => null,
@@ -257,16 +327,23 @@ function expectPresencePersistCall(
   reason: string,
 ): void {
   expect(mock).toHaveBeenCalledTimes(1);
-  const [actualDeviceId, metadata] = mockCall(mock) ?? [];
+  const [actualDeviceId, metadata, generation] = mockCall(mock) ?? [];
   expect(actualDeviceId).toBe(deviceId);
   expectFields(metadata, { lastSeenReason: reason });
+  expect(generation).toEqual({ nodeId: deviceId, key: `${deviceId}-generation` });
   const lastSeenAtMs = (metadata as { lastSeenAtMs?: unknown } | undefined)?.lastSeenAtMs;
   expect(typeof lastSeenAtMs).toBe("number");
 }
 
+function presenceConnection(deviceId: string, generation = `${deviceId}-generation`) {
+  return {
+    deviceId,
+    pairingGeneration: { nodeId: deviceId, key: generation },
+  };
+}
+
 describe("node exec events", () => {
   beforeEach(() => {
-    resetNodeEventDeduplicationForTests();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatMock.mockClear();
@@ -277,10 +354,8 @@ describe("node exec events", () => {
     persistInboundImagesForTranscriptMock.mockResolvedValue([]);
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sanitizeInboundSystemTagsMock.mockClear();
-    updatePairedDeviceMetadataMock.mockClear();
-    updatePairedDeviceMetadataMock.mockResolvedValue(true);
-    updatePairedNodeMetadataMock.mockClear();
-    updatePairedNodeMetadataMock.mockResolvedValue(true);
+    updatePairedDevicePresenceMock.mockClear();
+    updatePairedDevicePresenceMock.mockResolvedValue(true);
   });
 
   it("enqueues exec.started events", async () => {
@@ -334,7 +409,9 @@ describe("node exec events", () => {
   it("keeps a node run authorized from exec.started through exec.finished", async () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];
-    registry.register(makeNodeClient("conn-1", "node-1", frames), {});
+    registry.register(makeNodeClient("conn-1", "node-1", frames), {
+      pairingIdentity: "identity-a",
+    });
     const invoke = registry.invoke({
       nodeId: "node-1",
       command: "system.run",
@@ -419,7 +496,7 @@ describe("node exec events", () => {
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
-        runId: "run-2",
+        runId: "run-finished",
         exitCode: 0,
         timedOut: false,
         output: "done",
@@ -427,10 +504,10 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "Exec finished (node=node-2 id=run-2, code 0)\ndone",
+      "Exec finished (node=node-2 id=run-finished, code 0)\ndone",
       {
         sessionKey: "node-node-2",
-        contextKey: "exec:run-2",
+        contextKey: "exec:run-finished",
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions());
@@ -557,7 +634,10 @@ describe("node exec events", () => {
       }),
     });
 
-    const [[text]] = enqueueSystemEventMock.mock.calls;
+    const [text] = expectDefined(
+      enqueueSystemEventMock.mock.calls[0],
+      "(enqueueSystemEventMock.mock.calls)[0] test invariant",
+    );
     expect(typeof text).toBe("string");
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
@@ -581,7 +661,10 @@ describe("node exec events", () => {
       }),
     });
 
-    const [[text]] = enqueueSystemEventMock.mock.calls;
+    const [text] = expectDefined(
+      enqueueSystemEventMock.mock.calls[0],
+      "(enqueueSystemEventMock.mock.calls)[0] test invariant",
+    );
     // Must not contain a lone high surrogate (U+D800–U+DBFF).
     expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(text.endsWith("…")).toBe(true);
@@ -696,14 +779,19 @@ describe("node exec events", () => {
 
   it("stores direct APNs registrations from node events", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(ctx, "node-direct", {
-      event: "push.apns.register",
-      payloadJSON: JSON.stringify({
-        token: "abcd1234abcd1234abcd1234abcd1234",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-      }),
-    });
+    await handleNodeEvent(
+      ctx,
+      "node-direct",
+      {
+        event: "push.apns.register",
+        payloadJSON: JSON.stringify({
+          token: "abcd1234abcd1234abcd1234abcd1234",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+        }),
+      },
+      { resolveApnsRegistrationGeneration: () => "generation-node-direct" },
+    );
 
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
       nodeId: "node-direct",
@@ -711,25 +799,31 @@ describe("node exec events", () => {
       token: "abcd1234abcd1234abcd1234abcd1234",
       topic: "ai.openclaw.ios",
       environment: "sandbox",
+      expectedPairingGeneration: "generation-node-direct",
     });
   });
 
   it("stores relay APNs registrations from node events", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(ctx, "node-relay", {
-      event: "push.apns.register",
-      payloadJSON: JSON.stringify({
-        transport: "relay",
-        relayHandle: "relay-handle-123",
-        sendGrant: "send-grant-123",
-        gatewayDeviceId: "gateway-device-1",
-        installationId: "install-123",
-        topic: "ai.openclaw.ios",
-        environment: "production",
-        distribution: "official",
-        tokenDebugSuffix: "abcd1234",
-      }),
-    });
+    await handleNodeEvent(
+      ctx,
+      "node-relay",
+      {
+        event: "push.apns.register",
+        payloadJSON: JSON.stringify({
+          transport: "relay",
+          relayHandle: "relay-handle-123",
+          sendGrant: "send-grant-123",
+          gatewayDeviceId: "gateway-device-1",
+          installationId: "install-123",
+          topic: "ai.openclaw.ios",
+          environment: "production",
+          distribution: "official",
+          tokenDebugSuffix: "abcd1234",
+        }),
+      },
+      { resolveApnsRegistrationGeneration: () => "generation-node-relay" },
+    );
 
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
       nodeId: "node-relay",
@@ -741,25 +835,31 @@ describe("node exec events", () => {
       environment: "production",
       distribution: "official",
       tokenDebugSuffix: "abcd1234",
+      expectedPairingGeneration: "generation-node-relay",
     });
   });
 
   it("stores sandbox relay APNs registrations from node events", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(ctx, "node-relay-sandbox", {
-      event: "push.apns.register",
-      payloadJSON: JSON.stringify({
-        transport: "relay",
-        relayHandle: "relay-handle-123",
-        sendGrant: "send-grant-123",
-        gatewayDeviceId: "gateway-device-1",
-        installationId: "install-123",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-        distribution: "official",
-        tokenDebugSuffix: "abcd1234",
-      }),
-    });
+    await handleNodeEvent(
+      ctx,
+      "node-relay-sandbox",
+      {
+        event: "push.apns.register",
+        payloadJSON: JSON.stringify({
+          transport: "relay",
+          relayHandle: "relay-handle-123",
+          sendGrant: "send-grant-123",
+          gatewayDeviceId: "gateway-device-1",
+          installationId: "install-123",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+          distribution: "official",
+          tokenDebugSuffix: "abcd1234",
+        }),
+      },
+      { resolveApnsRegistrationGeneration: () => "generation-node-relay-sandbox" },
+    );
 
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
       nodeId: "node-relay-sandbox",
@@ -771,6 +871,7 @@ describe("node exec events", () => {
       environment: "sandbox",
       distribution: "official",
       tokenDebugSuffix: "abcd1234",
+      expectedPairingGeneration: "generation-node-relay-sandbox",
     });
   });
 
@@ -792,11 +893,65 @@ describe("node exec events", () => {
 
     expect(registerApnsRegistrationVi).not.toHaveBeenCalled();
   });
+
+  it("rejects APNs registration after the source pairing session is invalidated", async () => {
+    const warn = vi.fn();
+    const ctx: NodeEventContext = { ...buildCtx(), logGateway: { warn } };
+    const result = await handleNodeEvent(
+      ctx,
+      "node-invalidated-register",
+      {
+        event: "push.apns.register",
+        payloadJSON: JSON.stringify({
+          token: "abcd1234abcd1234abcd1234abcd1234",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+        }),
+      },
+      { resolveApnsRegistrationGeneration: async () => null },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "push.apns.register",
+      handled: false,
+      reason: "pairing_changed",
+    });
+    expect(registerApnsRegistrationVi).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "push apns register rejected node=node-invalidated-register: stale or invalidated pairing session",
+    );
+  });
+
+  it("returns pairing changed when APNs registration loses ownership in its transaction", async () => {
+    registerApnsRegistrationVi.mockRejectedValueOnce(
+      new runtimeMocks.ApnsRegistrationPairingChangedError(),
+    );
+    const result = await handleNodeEvent(
+      buildCtx(),
+      "node-transaction-invalidated-register",
+      {
+        event: "push.apns.register",
+        payloadJSON: JSON.stringify({
+          token: "abcd1234abcd1234abcd1234abcd1234",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+        }),
+      },
+      { resolveApnsRegistrationGeneration: async () => "generation-before-transaction" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "push.apns.register",
+      handled: false,
+      reason: "pairing_changed",
+    });
+  });
 });
 
 describe("voice transcript events", () => {
   beforeEach(() => {
-    resetNodeEventDeduplicationForTests();
     agentCommandMock.mockClear();
     canonicalizeSessionEntryAliasesMock.mockClear();
     loadSessionEntryMock.mockClear();
@@ -808,7 +963,7 @@ describe("voice transcript events", () => {
     });
   });
 
-  it("dedupes repeated transcript payloads for the same session", async () => {
+  it("dedupes repeated transcript agent dispatches for the same session", async () => {
     const addChatRun = vi.fn();
     const ctx = buildCtx();
     ctx.addChatRun = addChatRun;
@@ -830,6 +985,258 @@ describe("voice transcript events", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(addChatRun).toHaveBeenCalledTimes(1);
     expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists only the accepted replay session ID when identical new-session events race", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      ...buildSessionLookup(sessionKey),
+      entry: undefined,
+    }));
+    let persistedEntry: { sessionId?: string } | undefined;
+    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
+      const entry = update ? await update(undefined) : undefined;
+      persistedEntry = entry;
+      return { canonicalKey: target.canonicalKey, entry };
+    });
+    const detachedChecksStarted = createDeferred();
+    const detachedAdmission = createDeferred<boolean>();
+    let checkCount = 0;
+    const isConnectionCurrent = vi.fn(() => {
+      checkCount += 1;
+      if (checkCount === 1 || checkCount === 3) {
+        return true;
+      }
+      if (checkCount === 4) {
+        detachedChecksStarted.resolve();
+      }
+      return detachedAdmission.promise;
+    });
+    const payload = {
+      text: "one command for a new session",
+      sessionKey: "voice-new-session-replay-race",
+    };
+
+    await handleNodeEvent(
+      ctx,
+      "node-new-session-replay",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent },
+    );
+    await handleNodeEvent(
+      ctx,
+      "node-new-session-replay",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent },
+    );
+    await detachedChecksStarted.promise;
+    detachedAdmission.resolve(true);
+    await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(addChatRun).toHaveBeenCalledTimes(1);
+    const dispatched = mockCallArg(agentCommandMock) as { sessionId?: unknown };
+    expect(persistedEntry?.sessionId).toBe(dispatched.sessionId);
+  });
+
+  it("uses receipt time when delayed identical transcript admissions finish together", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const detachedChecksStarted = createDeferred();
+    const detachedAdmission = createDeferred<boolean>();
+    let checkCount = 0;
+    const isConnectionCurrent = vi.fn(() => {
+      checkCount += 1;
+      if (checkCount === 1 || checkCount === 3) {
+        return true;
+      }
+      if (checkCount === 4) {
+        detachedChecksStarted.resolve();
+      }
+      return detachedAdmission.promise;
+    });
+    const payload = {
+      text: "repeat after the replay window",
+      sessionKey: "voice-delayed-admission-window",
+    };
+
+    try {
+      await handleNodeEvent(
+        ctx,
+        "node-delayed-admission",
+        {
+          event: "voice.transcript",
+          payloadJSON: JSON.stringify(payload),
+        },
+        { isConnectionCurrent },
+      );
+      now = 3_000;
+      await handleNodeEvent(
+        ctx,
+        "node-delayed-admission",
+        {
+          event: "voice.transcript",
+          payloadJSON: JSON.stringify(payload),
+        },
+        { isConnectionCurrent },
+      );
+      await detachedChecksStarted.promise;
+      now = 10_000;
+      detachedAdmission.resolve(true);
+      await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(2));
+
+      expect(addChatRun).toHaveBeenCalledTimes(2);
+      expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("allows a current replay after rejecting the same transcript from a stale connection", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    const detachedChecksStarted = createDeferred();
+    const staleAdmission = createDeferred<boolean>();
+    let checkCount = 0;
+    const isConnectionCurrent = vi.fn(() => {
+      checkCount += 1;
+      if (checkCount === 1) {
+        return true;
+      }
+      if (checkCount === 2) {
+        detachedChecksStarted.resolve();
+      }
+      return staleAdmission.promise;
+    });
+    const payload = {
+      text: "replay after reconnect",
+      sessionKey: "voice-stale-replay-session",
+    };
+
+    await handleNodeEvent(
+      ctx,
+      "node-stale-voice",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent },
+    );
+    await detachedChecksStarted.promise;
+    await handleNodeEvent(
+      ctx,
+      "node-current-voice",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent: () => true },
+    );
+
+    expect(addChatRun).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+
+    staleAdmission.resolve(false);
+    await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+    expect(addChatRun).toHaveBeenCalledTimes(1);
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks a queued replay after an earlier stale reservation is released", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    const staleCheckStarted = createDeferred();
+    const staleAdmission = createDeferred<boolean>();
+    let staleCheckCount = 0;
+    const isStaleConnectionCurrent = vi.fn(() => {
+      staleCheckCount += 1;
+      if (staleCheckCount === 1) {
+        return true;
+      }
+      staleCheckStarted.resolve();
+      return staleAdmission.promise;
+    });
+    let replayCurrent = true;
+    const isReplayConnectionCurrent = vi.fn(() => replayCurrent);
+    const payload = {
+      text: "invalidate while queued",
+      sessionKey: "voice-queued-replay-currentness",
+    };
+
+    await handleNodeEvent(
+      ctx,
+      "node-stale-queued-voice",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent: isStaleConnectionCurrent },
+    );
+    await staleCheckStarted.promise;
+    await handleNodeEvent(
+      ctx,
+      "node-replay-invalidated-while-queued",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify(payload),
+      },
+      { isConnectionCurrent: isReplayConnectionCurrent },
+    );
+    await waitForFast(() => expect(isReplayConnectionCurrent).toHaveBeenCalledTimes(2));
+
+    replayCurrent = false;
+    staleAdmission.resolve(false);
+    await waitForFast(() => expect(isReplayConnectionCurrent).toHaveBeenCalledTimes(3));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(addChatRun).not.toHaveBeenCalled();
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the detached session-store touch after voice admission loses ownership", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    let checkCount = 0;
+    const isConnectionCurrent = vi.fn(() => {
+      checkCount += 1;
+      return checkCount <= 3;
+    });
+
+    await handleNodeEvent(
+      ctx,
+      "node-stale-after-voice-admission",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify({
+          text: "do not persist stale voice ownership",
+          sessionKey: "voice-detached-store-currentness",
+        }),
+      },
+      { isConnectionCurrent },
+    );
+    await waitForFast(() => expect(isConnectionCurrent).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(addChatRun).toHaveBeenCalledTimes(1);
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
   });
 
   it("rejects a missing harness-owned session before touching the store", async () => {
@@ -973,8 +1380,27 @@ describe("voice transcript events", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledTimes(1);
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(String(mockCallArg(warn))).toContain("voice session-store update failed");
+  });
+
+  it("keeps an accepted detached session-store touch visible to suspension", async () => {
+    const touch = createDeferred();
+    canonicalizeSessionEntryAliasesMock.mockImplementationOnce(() => touch.promise);
+
+    await runAdmittedNodeEvent(buildCtx(), "node-v-suspend", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({
+        text: "persist before suspension",
+        sessionKey: "voice-suspend-session",
+      }),
+    });
+
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    expectSuspendBusyWithRootWork("voice-touch-busy");
+    touch.resolve();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expectSuspendReady("voice-touch-ready");
   });
 
   it("preserves existing session metadata when touching the store for voice transcripts", async () => {
@@ -1267,11 +1693,15 @@ describe("agent request events", () => {
     runtimeMocks.resolveSessionAgentId.mockClear();
     runtimeMocks.resolveSessionModelRef.mockClear();
     runtimeMocks.resolveGatewayModelSupportsImages.mockClear();
-    persistInboundImagesForTranscriptMock.mockClear();
+    persistInboundImagesForTranscriptMock.mockReset();
+    persistInboundImagesForTranscriptMock.mockResolvedValue([]);
+    runtimeMocks.deleteMediaBuffer.mockClear();
     canonicalizeSessionEntryAliasesMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
+    sendDurableMessageBatchMock.mockReset();
+    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent" });
     parseMessageWithAttachmentsMock.mockResolvedValue({
       message: "parsed message",
       images: [],
@@ -1319,6 +1749,125 @@ describe("agent request events", () => {
     expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expectFields(mockCallArg(agentCommandMock), { sessionKey });
+  });
+
+  it("keeps an accepted detached agent dispatch visible to suspension", async () => {
+    const dispatch = createDeferred<never>();
+    agentCommandMock.mockImplementationOnce(() => dispatch.promise);
+
+    await runAdmittedNodeEvent(buildCtx(), "node-agent-suspend", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "finish before suspension",
+        sessionKey: "agent:main:suspend-agent",
+      }),
+    });
+
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    expectSuspendBusyWithRootWork("agent-dispatch-busy");
+    dispatch.resolve(undefined as never);
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expectSuspendReady("agent-dispatch-ready");
+  });
+
+  it("keeps an accepted detached receipt delivery visible to suspension", async () => {
+    const receipt = createDeferred<{ status: "sent" }>();
+    sendDurableMessageBatchMock.mockImplementationOnce(() => receipt.promise);
+
+    await runAdmittedNodeEvent(buildCtx(), "node-receipt-suspend", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "acknowledge before suspension",
+        sessionKey: "agent:main:suspend-receipt",
+        deliver: true,
+        receipt: true,
+        channel: "telegram",
+        to: "123",
+      }),
+    });
+
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    expectSuspendBusyWithRootWork("receipt-delivery-busy");
+    receipt.resolve({ status: "sent" });
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expectSuspendReady("receipt-delivery-ready");
+  });
+
+  it("does not launch agent work when pairing changes during model lookup", async () => {
+    const modelCatalog =
+      createDeferred<Awaited<ReturnType<NodeEventContext["loadGatewayModelCatalog"]>>>();
+    const ctx = buildCtx();
+    ctx.loadGatewayModelCatalog = vi.fn(() => modelCatalog.promise);
+    let connectionCurrent = true;
+    const isConnectionCurrent = vi.fn(async () => connectionCurrent);
+
+    const request = handleNodeEvent(
+      ctx,
+      "node-revoked-during-model-lookup",
+      {
+        event: "agent.request",
+        payloadJSON: JSON.stringify({
+          message: "describe this image",
+          sessionKey: "agent:main:revoked-during-model-lookup",
+          attachments: [{ type: "image", mimeType: "image/png", content: "AAAA" }],
+          deliver: true,
+          receipt: true,
+          channel: "telegram",
+          to: "123",
+        }),
+      },
+      { isConnectionCurrent },
+    );
+
+    await waitForFast(() => expect(ctx.loadGatewayModelCatalog).toHaveBeenCalledTimes(1));
+    connectionCurrent = false;
+    modelCatalog.resolve([]);
+
+    await expect(request).resolves.toEqual({
+      ok: true,
+      event: "agent.request",
+      handled: false,
+      reason: "pairing_changed",
+    });
+    expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
+    expect(persistInboundImagesForTranscriptMock).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("cleans persisted transcript media when detached agent admission is revoked", async () => {
+    persistInboundImagesForTranscriptMock.mockResolvedValueOnce([
+      {
+        id: "saved-after-admission",
+        path: "/media/inbound/saved-after-admission.png",
+        size: 5,
+        contentType: "image/png",
+      },
+    ]);
+    let currentnessChecks = 0;
+    const isConnectionCurrent = vi.fn(async () => {
+      currentnessChecks += 1;
+      return currentnessChecks < 6;
+    });
+
+    await handleNodeEvent(
+      buildCtx(),
+      "node-revoked-before-detached-start",
+      {
+        event: "agent.request",
+        payloadJSON: JSON.stringify({
+          message: "do not retain this media",
+          sessionKey: "agent:main:revoked-before-detached-start",
+        }),
+      },
+      { isConnectionCurrent },
+    );
+
+    await waitForFast(() => {
+      expect(runtimeMocks.deleteMediaBuffer).toHaveBeenCalledWith("saved-after-admission");
+    });
+    expect(agentCommandMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1541,26 +2090,20 @@ describe("agent request events", () => {
   });
 
   beforeEach(() => {
-    resetNodeEventDeduplicationForTests();
-    updatePairedDeviceMetadataMock.mockClear();
-    updatePairedDeviceMetadataMock.mockResolvedValue(true);
-    updatePairedNodeMetadataMock.mockClear();
-    updatePairedNodeMetadataMock.mockResolvedValue(true);
+    updatePairedDevicePresenceMock.mockClear();
+    updatePairedDevicePresenceMock.mockResolvedValue(true);
   });
 
   it("persists authenticated node presence alive events", async () => {
     const ctx = buildCtx();
     const result = await handleNodeEvent(
       ctx,
-      "ios-node",
+      "ios-presence-persist",
       {
         event: "node.presence.alive",
-        payloadJSON: JSON.stringify({
-          trigger: "bg_app_refresh",
-          sentAtMs: 123,
-        }),
+        payloadJSON: JSON.stringify({ trigger: "bg_app_refresh", sentAtMs: 123 }),
       },
-      { deviceId: "ios-node" },
+      presenceConnection("ios-presence-persist"),
     );
 
     expect(result).toEqual({
@@ -1569,14 +2112,16 @@ describe("agent request events", () => {
       handled: true,
       reason: "persisted",
     });
-    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
-    expectPresencePersistCall(updatePairedDeviceMetadataMock, "ios-node", "bg_app_refresh");
-    expect(getRecentNodePresencePersistCountForTests()).toBe(1);
+    expectPresencePersistCall(
+      updatePairedDevicePresenceMock,
+      "ios-presence-persist",
+      "bg_app_refresh",
+    );
   });
 
   it("rejects node presence alive events without authenticated device identity", async () => {
     const ctx = buildCtx();
-    const result = await handleNodeEvent(ctx, "ios-node", {
+    const result = await handleNodeEvent(ctx, "ios-presence-missing-identity", {
       event: "node.presence.alive",
       payloadJSON: JSON.stringify({ trigger: "silent_push" }),
     });
@@ -1587,70 +2132,79 @@ describe("agent request events", () => {
       handled: false,
       reason: "missing_device_identity",
     });
-    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
-    expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
-    expect(getRecentNodePresencePersistCountForTests()).toBe(0);
+    expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
   });
 
-  it("normalizes unknown node presence alive triggers before persistence", async () => {
-    const ctx = buildCtx();
-    await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "x".repeat(4096) }),
-      },
-      { deviceId: "ios-node" },
-    );
-
-    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
-    expectPresencePersistCall(updatePairedDeviceMetadataMock, "ios-node", "background");
-  });
-
-  it("does not throttle unknown node presence alive identities", async () => {
-    updatePairedNodeMetadataMock.mockResolvedValue(false);
-    updatePairedDeviceMetadataMock.mockResolvedValue(false);
-    const ctx = buildCtx();
+  it("rejects node presence alive events without the authenticated pairing generation", async () => {
     const result = await handleNodeEvent(
-      ctx,
-      "ios-node",
+      buildCtx(),
+      "ios-presence-missing-generation",
       {
         event: "node.presence.alive",
         payloadJSON: JSON.stringify({ trigger: "silent_push" }),
       },
-      { deviceId: "ios-node" },
+      { deviceId: "ios-presence-missing-generation" },
     );
 
     expect(result).toEqual({
       ok: true,
       event: "node.presence.alive",
       handled: false,
-      reason: "unpaired",
+      reason: "pairing_changed",
     });
-    expect(getRecentNodePresencePersistCountForTests()).toBe(0);
+    expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
+  });
+
+  it("does not throttle stale node presence alive generations", async () => {
+    updatePairedDevicePresenceMock.mockResolvedValue(false);
+    const ctx = buildCtx();
+    const result = await handleNodeEvent(
+      ctx,
+      "ios-presence-unpaired",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+      },
+      presenceConnection("ios-presence-unpaired"),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.alive",
+      handled: false,
+      reason: "pairing_changed",
+    });
+
+    updatePairedDevicePresenceMock.mockClear();
+    updatePairedDevicePresenceMock.mockResolvedValue(true);
+    const retry = await handleNodeEvent(
+      ctx,
+      "ios-presence-unpaired",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+      },
+      presenceConnection("ios-presence-unpaired"),
+    );
+    expect(retry).toEqual({
+      ok: true,
+      event: "node.presence.alive",
+      handled: true,
+      reason: "persisted",
+    });
+    expect(updatePairedDevicePresenceMock).toHaveBeenCalledTimes(1);
   });
 
   it("throttles repeated node presence alive persistence per device", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
-      },
-      { deviceId: "ios-node" },
-    );
-    const result = await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
-      },
-      { deviceId: "ios-node" },
-    );
+    const event = {
+      event: "node.presence.alive" as const,
+      payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+    };
+    const connection = presenceConnection("ios-presence-throttle");
+
+    await handleNodeEvent(ctx, "ios-presence-throttle", event, connection);
+    const result = await handleNodeEvent(ctx, "ios-presence-throttle", event, connection);
 
     expect(result).toEqual({
       ok: true,
@@ -1658,8 +2212,157 @@ describe("agent request events", () => {
       handled: true,
       reason: "throttled",
     });
-    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
-    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledTimes(1);
-    expect(getRecentNodePresencePersistCountForTests()).toBe(1);
+    expect(updatePairedDevicePresenceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not throttle the first presence update from a replacement generation", async () => {
+    const ctx = buildCtx();
+    const event = {
+      event: "node.presence.alive" as const,
+      payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+    };
+
+    await handleNodeEvent(
+      ctx,
+      "ios-presence-replacement",
+      event,
+      presenceConnection("ios-presence-replacement", "generation-a"),
+    );
+    const result = await handleNodeEvent(
+      ctx,
+      "ios-presence-replacement",
+      event,
+      presenceConnection("ios-presence-replacement", "generation-b"),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.alive",
+      handled: true,
+      reason: "persisted",
+    });
+    expect(updatePairedDevicePresenceMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("updates authenticated accessibility-backed node activity without a system event", async () => {
+    const broadcast = vi.fn();
+    const updateNodePresenceActivity = vi.fn(() => ({
+      lastActiveAtMs: 90_000,
+      presenceUpdatedAtMs: 100_000,
+    }));
+    const ctx: NodeEventContext = {
+      ...buildCtx(),
+      broadcast,
+      updateNodePresenceActivity,
+    };
+    const result = await handleNodeEvent(
+      ctx,
+      "mac-node",
+      {
+        event: "node.presence.activity",
+        payloadJSON: JSON.stringify({ idleSeconds: 10 }),
+      },
+      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: true },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.activity",
+      handled: true,
+      reason: "updated",
+    });
+    expect(updateNodePresenceActivity).toHaveBeenCalledWith({
+      nodeId: "mac-node",
+      connId: "conn-1",
+      idleSeconds: 10,
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "node.presence",
+      {
+        nodeId: "mac-node",
+        lastActiveAtMs: 90_000,
+        presenceUpdatedAtMs: 100_000,
+      },
+      { dropIfSlow: true },
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects node activity without the advertised accessibility permission", async () => {
+    const updateNodePresenceActivity = vi.fn();
+    const ctx: NodeEventContext = { ...buildCtx(), updateNodePresenceActivity };
+    const result = await handleNodeEvent(
+      ctx,
+      "mac-node",
+      {
+        event: "node.presence.activity",
+        payloadJSON: JSON.stringify({ idleSeconds: 0 }),
+      },
+      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: false },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.activity",
+      handled: false,
+      reason: "permission_required",
+    });
+    expect(updateNodePresenceActivity).not.toHaveBeenCalled();
+  });
+
+  it("clears authenticated node activity without requiring Accessibility", async () => {
+    const broadcast = vi.fn();
+    const clearNodePresenceActivity = vi.fn(() => true);
+    const ctx: NodeEventContext = {
+      ...buildCtx(),
+      broadcast,
+      clearNodePresenceActivity,
+    };
+    const result = await handleNodeEvent(
+      ctx,
+      "mac-node",
+      {
+        event: "node.presence.activity",
+        payloadJSON: JSON.stringify({ action: "clear" }),
+      },
+      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: false },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.activity",
+      handled: true,
+      reason: "cleared",
+    });
+    expect(clearNodePresenceActivity).toHaveBeenCalledWith({
+      nodeId: "mac-node",
+      connId: "conn-1",
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "node.presence",
+      { nodeId: "mac-node", lastActiveAtMs: null, presenceUpdatedAtMs: null },
+      { dropIfSlow: true },
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes unknown node presence alive triggers before persistence", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(
+      ctx,
+      "ios-presence-normalize",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "x".repeat(4096) }),
+      },
+      presenceConnection("ios-presence-normalize"),
+    );
+
+    expectPresencePersistCall(
+      updatePairedDevicePresenceMock,
+      "ios-presence-normalize",
+      "background",
+    );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

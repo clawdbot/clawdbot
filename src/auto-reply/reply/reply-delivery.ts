@@ -49,7 +49,7 @@ export function normalizeReplyPayloadDirectives(params: {
   }
 
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
-  const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrl ?? mediaUrls?.[0];
+  const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrls?.[0] ?? mediaUrls?.[0];
 
   const channelData = mergeReactionDirectiveChannelData(
     params.payload.channelData,

@@ -28,6 +28,31 @@ export function floatToPcm16(samples: Float32Array): Uint8Array {
   return bytes;
 }
 
+export function floatToG711Ulaw(samples: Float32Array): Uint8Array {
+  const bytes = new Uint8Array(samples.length);
+  for (let i = 0; i < samples.length; i += 1) {
+    const clamped = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    const pcm16 = Math.round(clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff);
+    let sign = 0;
+    let magnitude = pcm16;
+    if (magnitude < 0) {
+      sign = 0x80;
+      magnitude = -magnitude;
+    }
+    magnitude = Math.min(magnitude, 32635) + 0x84;
+
+    let exponent = 7;
+    let mask = 0x4000;
+    while ((magnitude & mask) === 0 && exponent > 0) {
+      exponent -= 1;
+      mask >>= 1;
+    }
+    const mantissa = (magnitude >> (exponent + 3)) & 0x0f;
+    bytes[i] = ~(sign | (exponent << 4) | mantissa) & 0xff;
+  }
+  return bytes;
+}
+
 export type RealtimeTalkAudioFrame = {
   peak: number;
   rms: number;
@@ -48,7 +73,43 @@ export function measureRealtimeTalkAudioFrame(samples: Float32Array): RealtimeTa
   };
 }
 
-export class RealtimeTalkAudioLevelMeter {
+export class RealtimeTalkPcmInputPump {
+  private source: MediaStreamAudioSourceNode | null = null;
+  private processor: ScriptProcessorNode | null = null;
+  private sink: GainNode | null = null;
+
+  start(
+    media: MediaStream,
+    context: AudioContext,
+    onSamples: (samples: Float32Array) => void,
+  ): void {
+    this.stop();
+    this.source = context.createMediaStreamSource(media);
+    this.processor = context.createScriptProcessor(4096, 1, 1);
+    this.sink = context.createGain();
+    this.sink.gain.value = 0;
+    this.processor.onaudioprocess = (event) => onSamples(event.inputBuffer.getChannelData(0));
+    this.source.connect(this.processor);
+    // Keep the processor in the rendered graph without turning capture into a
+    // local microphone monitor that can feed speakers back into barge-in.
+    this.processor.connect(this.sink);
+    this.sink.connect(context.destination);
+  }
+
+  stop(): void {
+    if (this.processor) {
+      this.processor.onaudioprocess = null;
+      this.processor.disconnect();
+      this.processor = null;
+    }
+    this.sink?.disconnect();
+    this.sink = null;
+    this.source?.disconnect();
+    this.source = null;
+  }
+}
+
+class RealtimeTalkAudioLevelMeter {
   private level = 0;
   private noiseFloor = 0.01;
 

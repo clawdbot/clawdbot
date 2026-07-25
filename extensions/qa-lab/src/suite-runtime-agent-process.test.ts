@@ -9,6 +9,7 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
 const waitForGatewayHealthyMock = vi.hoisted(() => vi.fn(async () => undefined));
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn(async () => undefined));
+const readSessionTranscriptSummaryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
@@ -24,10 +25,13 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   waitForTransportReady: waitForTransportReadyMock,
 }));
 
+vi.mock("./suite-runtime-agent-session.js", () => ({
+  readSessionTranscriptSummary: readSessionTranscriptSummaryMock,
+}));
+
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import {
   findManagedDreamingCronJob,
-  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
@@ -35,7 +39,6 @@ import {
   startAgentRun,
   waitForAgentRun,
   waitForAgentHistoryReply,
-  waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
 
 type MockEmitter = {
@@ -88,6 +91,7 @@ describe("qa suite runtime agent process helpers", () => {
     resolveQaNodeExecPathMock.mockClear();
     waitForGatewayHealthyMock.mockClear();
     waitForTransportReadyMock.mockClear();
+    readSessionTranscriptSummaryMock.mockReset();
   });
 
   it("runs the qa cli through the resolved node executable", async () => {
@@ -101,8 +105,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: { PATH: "/usr/bin" },
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["qa", "suite"],
@@ -135,8 +139,8 @@ describe("qa suite runtime agent process helpers", () => {
             tempRoot: "/tmp/runtime",
             runtimeEnv: { PATH: "/usr/bin" },
           },
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5-mini",
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna-mini",
           providerMode: "mock-openai",
         } as never,
         ["qa", "suite"],
@@ -166,8 +170,8 @@ describe("qa suite runtime agent process helpers", () => {
             tempRoot: "/tmp/runtime",
             runtimeEnv: { PATH: "/usr/bin" },
           },
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5-mini",
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna-mini",
           providerMode: "mock-openai",
         } as never,
         ["qa", "suite"],
@@ -205,8 +209,8 @@ describe("qa suite runtime agent process helpers", () => {
             tempRoot: "/tmp/runtime",
             runtimeEnv: { PATH: "/usr/bin" },
           },
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5-mini",
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna-mini",
           providerMode: "mock-openai",
         } as never,
         ["qa", "suite"],
@@ -224,6 +228,7 @@ describe("qa suite runtime agent process helpers", () => {
         {
           stdio: "ignore",
           windowsHide: true,
+          timeout: 5_000,
         },
       );
       expect(child.kill).not.toHaveBeenCalled();
@@ -255,11 +260,11 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: { PATH: "/usr/bin", OPENCLAW_STATE_DIR: "/tmp/default-state" },
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
-      ["crestodian", "-m", "overview"],
+      ["openclaw", "-m", "overview"],
       {
         env: {
           OPENCLAW_STATE_DIR: "/tmp/isolated-state",
@@ -277,7 +282,7 @@ describe("qa suite runtime agent process helpers", () => {
     expect(spawnCall?.[0]).toBe("/usr/bin/node");
     expect(spawnCall?.[1]).toEqual([
       path.join("/repo", "dist", "index.js"),
-      "crestodian",
+      "openclaw",
       "-m",
       "overview",
     ]);
@@ -298,8 +303,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search"],
@@ -324,8 +329,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -355,8 +360,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -386,8 +391,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -413,8 +418,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -444,8 +449,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -475,8 +480,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -506,8 +511,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -537,8 +542,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -565,8 +570,8 @@ describe("qa suite runtime agent process helpers", () => {
           tempRoot: "/tmp/runtime",
           runtimeEnv: {},
         },
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5-mini",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
       ["memory", "search", "--json"],
@@ -630,6 +635,42 @@ describe("qa suite runtime agent process helpers", () => {
     expect(gatewayArgs?.[2]).toBeTypeOf("object");
   });
 
+  it("starts an interactive run without CLI task tracking", async () => {
+    const gatewayCall = vi.fn(async () => ({ runId: "run-chat", status: "started" }));
+    const buildAgentDelivery = vi.fn(() => ({
+      channel: "qa-channel",
+      replyChannel: "qa-channel",
+      replyTo: "dm:qa-operator",
+    }));
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery,
+      },
+    } as never;
+
+    await expect(
+      startAgentRun(env, {
+        sessionKey: "agent:qa:main",
+        message: "hello",
+        taskTracking: false,
+      }),
+    ).resolves.toEqual({ runId: "run-chat", status: "started" });
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "chat.send",
+      {
+        idempotencyKey: expect.any(String),
+        sessionKey: "agent:qa:main",
+        message: "hello",
+        deliver: true,
+        originatingChannel: "qa-channel",
+        originatingTo: "dm:qa-operator",
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(buildAgentDelivery).toHaveBeenCalledWith({ target: "dm:qa-operator" });
+  });
+
   it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {
     const legacy = {
       id: "legacy",
@@ -651,8 +692,7 @@ describe("qa suite runtime agent process helpers", () => {
       delivery: { mode: "none" },
     };
 
-    expect(isManagedDreamingCronJob(legacy)).toBe(true);
-    expect(isManagedDreamingCronJob(current)).toBe(true);
+    expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, legacy])).toBe(legacy);
     expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, current])).toBe(current);
   });
 
@@ -734,6 +774,102 @@ describe("qa suite runtime agent process helpers", () => {
     });
   });
 
+  it("waits for persisted transcript tool evidence after agent completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayCall = vi
+        .fn()
+        .mockResolvedValueOnce({ runId: "run-transcript-evidence" })
+        .mockResolvedValueOnce({ status: "completed" });
+      readSessionTranscriptSummaryMock
+        .mockResolvedValueOnce({
+          assistantToolCallCounts: {},
+          completedToolCallCounts: {},
+          successfulToolCallCounts: {},
+          finalText: "",
+        })
+        .mockResolvedValueOnce({
+          assistantToolCallCounts: { web_fetch: 1 },
+          completedToolCallCounts: { web_fetch: 1 },
+          successfulToolCallCounts: { web_fetch: 1 },
+          finalText: "",
+        });
+      const env = {
+        gateway: { call: gatewayCall },
+        transport: {
+          buildAgentDelivery: vi.fn(() => ({
+            channel: "qa-channel",
+            replyChannel: "reply-channel",
+            replyTo: "reply-target",
+          })),
+        },
+      } as never;
+
+      const pending = runAgentPrompt(env, {
+        sessionKey: "session-transcript-evidence",
+        message: "call web_fetch",
+        transcriptToolName: "web_fetch",
+        requireSuccessfulTranscriptToolResult: true,
+      });
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(pending).resolves.toEqual({
+        started: { runId: "run-transcript-evidence" },
+        waited: { status: "completed" },
+      });
+      expect(readSessionTranscriptSummaryMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a persisted failed tool result after the call is visible", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayCall = vi
+        .fn()
+        .mockResolvedValueOnce({ runId: "run-failed-tool-evidence" })
+        .mockResolvedValueOnce({ status: "completed" });
+      readSessionTranscriptSummaryMock
+        .mockResolvedValueOnce({
+          assistantToolCallCounts: { session_status: 1 },
+          completedToolCallCounts: {},
+          successfulToolCallCounts: {},
+          finalText: "",
+        })
+        .mockResolvedValueOnce({
+          assistantToolCallCounts: { session_status: 1 },
+          completedToolCallCounts: { session_status: 1 },
+          successfulToolCallCounts: {},
+          finalText: "",
+        });
+      const env = {
+        gateway: { call: gatewayCall },
+        transport: {
+          buildAgentDelivery: vi.fn(() => ({
+            channel: "qa-channel",
+            replyChannel: "reply-channel",
+            replyTo: "reply-target",
+          })),
+        },
+      } as never;
+
+      const pending = runAgentPrompt(env, {
+        sessionKey: "session-failed-tool-evidence",
+        message: "call session_status with invalid input",
+        transcriptToolName: "session_status",
+      });
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(pending).resolves.toEqual({
+        started: { runId: "run-failed-tool-evidence" },
+        waited: { status: "completed" },
+      });
+      expect(readSessionTranscriptSummaryMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("waits for the latest assistant history reply", async () => {
     const gatewayCall = vi
       .fn()
@@ -764,6 +900,158 @@ describe("qa suite runtime agent process helpers", () => {
       { sessionKey: "session-history", limit: 12 },
       { timeoutMs: 10_000 },
     );
+  });
+
+  it("retries structured transient history failures through gateway log wrappers", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayError = Object.assign(new Error("session history is rebuilding"), {
+        gatewayCode: "UNAVAILABLE",
+        retryable: true,
+        retryAfterMs: 250,
+        details: { method: "chat.history" },
+      });
+      const wrappedError = new Error("gateway call failed", {
+        cause: new Error("gateway rpc failed", { cause: gatewayError }),
+      });
+      const gatewayCall = vi
+        .fn()
+        .mockRejectedValueOnce(wrappedError)
+        .mockResolvedValueOnce({
+          messages: [{ role: "assistant", content: "HISTORY-RETRY-OK" }],
+        });
+
+      const pending = waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-retry",
+        (text) => text === "HISTORY-RETRY-OK",
+        1_000,
+        1,
+      );
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(pending).resolves.toEqual({ text: "HISTORY-RETRY-OK" });
+      expect(gatewayCall).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves the final retryable history failure when the poll deadline expires", async () => {
+    const gatewayError = Object.assign(new Error("session history is rebuilding"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 1,
+      details: { method: "chat.history" },
+    });
+    const wrappedError = new Error("gateway call failed", { cause: gatewayError });
+    const gatewayCall = vi.fn().mockRejectedValue(wrappedError);
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-retry-timeout",
+        () => false,
+        220,
+        50,
+      ),
+    ).rejects.toMatchObject({
+      message: "timed out after 220ms",
+      cause: wrappedError,
+    });
+    expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not attach a recovered history failure to a later predicate timeout", async () => {
+    const gatewayError = Object.assign(new Error("session history is rebuilding"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 1,
+      details: { method: "chat.history" },
+    });
+    const gatewayCall = vi
+      .fn()
+      .mockRejectedValueOnce(gatewayError)
+      .mockResolvedValue({ messages: [{ role: "assistant", content: "still working" }] });
+
+    const timeoutError = await waitForAgentHistoryReply(
+      { gateway: { call: gatewayCall } } as never,
+      "session-history-recovered-timeout",
+      () => false,
+      220,
+      50,
+    ).catch((error: unknown) => error);
+
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect(timeoutError).not.toHaveProperty("cause");
+    expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not retry transient gateway errors for a different method", async () => {
+    const gatewayError = Object.assign(new Error("gateway method is rebuilding"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 250,
+      details: { method: "chat.startup" },
+    });
+    const gatewayCall = vi.fn().mockRejectedValueOnce(gatewayError);
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-wrong-method",
+        () => false,
+        1_000,
+        1,
+      ),
+    ).rejects.toBe(gatewayError);
+    expect(gatewayCall).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry unavailable gateway errors without the retryable contract", async () => {
+    const gatewayError = Object.assign(new Error("history unavailable"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: false,
+      retryAfterMs: 250,
+      details: { method: "chat.history" },
+    });
+    const gatewayCall = vi.fn().mockRejectedValueOnce(gatewayError);
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-not-retryable",
+        () => false,
+        1_000,
+        1,
+      ),
+    ).rejects.toBe(gatewayError);
+    expect(gatewayCall).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry retry-shaped predicate failures", async () => {
+    const predicateError = Object.assign(new Error("predicate unavailable"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 250,
+      details: { method: "chat.history" },
+    });
+    const gatewayCall = vi.fn().mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: "candidate reply" }],
+    });
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-predicate-error",
+        async () => {
+          throw predicateError;
+        },
+        1_000,
+        1,
+      ),
+    ).rejects.toBe(predicateError);
+    expect(gatewayCall).toHaveBeenCalledOnce();
   });
 
   it("waits for a specific agent run id", async () => {
@@ -820,27 +1108,5 @@ describe("qa suite runtime agent process helpers", () => {
     await expect(readDoctorMemoryStatus(env)).resolves.toEqual({
       dreaming: { enabled: true, shortTermCount: 3 },
     });
-  });
-
-  it("polls memory search results until the expected needle appears", async () => {
-    const search = vi
-      .fn()
-      .mockResolvedValueOnce({
-        results: [{ path: "memory/2020-01-01.md", text: "ORBIT-9" }],
-      })
-      .mockResolvedValueOnce({
-        results: [{ path: "memory/2020-01-01.md", text: "ORBIT-10" }],
-      });
-
-    await expect(
-      waitForMemorySearchMatch({
-        search,
-        expectedNeedle: "ORBIT-10",
-        timeoutMs: 2_000,
-      }),
-    ).resolves.toEqual({
-      results: [{ path: "memory/2020-01-01.md", text: "ORBIT-10" }],
-    });
-    expect(search).toHaveBeenCalledTimes(2);
   });
 });

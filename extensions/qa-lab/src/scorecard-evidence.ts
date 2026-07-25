@@ -84,12 +84,14 @@ function featureCounts(
   };
 }
 
-export function buildQaProfileScorecardEvidence(params: {
+function buildQaProfileScorecardEvidence(params: {
   evidence: QaEvidenceSummaryJson;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
 }): QaEvidenceScorecardJson {
-  const primaryCoverageIds = coverageIdsForRole(params.evidence.entries, "primary");
+  // Only passing primary evidence fulfills coverage; secondary evidence remains diagnostic.
+  const passingEntries = params.evidence.entries.filter((entry) => entry.result.status === "pass");
+  const primaryCoverageIds = coverageIdsForRole(passingEntries, "primary");
   const secondaryCoverageIds = coverageIdsForRole(params.evidence.entries, "secondary");
   const categoryInputs = params.categories.map((category) => ({
     category,

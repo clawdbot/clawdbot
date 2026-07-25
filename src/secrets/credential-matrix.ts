@@ -1,6 +1,6 @@
 /** Generates the documented matrix of user-supplied credential fields that accept SecretRefs. */
-import { getSourceSecretTargetRegistry } from "./target-registry-data.js";
-import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-policy.js";
+import { getSecretTargetRegistry } from "./target-registry-data.js";
+import { unsupportedSecretRefSurfacePolicy } from "./unsupported-surface-policy.js";
 
 type CredentialMatrixEntry = {
   id: string;
@@ -25,19 +25,9 @@ export type SecretRefCredentialMatrixDocument = {
 /** Builds the public SecretRef credential matrix from the source target registry. */
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
   const entriesByKey = new Map<string, CredentialMatrixEntry>();
-  for (const entry of getSourceSecretTargetRegistry()) {
-    const isCanonicalFirecrawlWebFetchEntry =
-      entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey";
-    // Firecrawl web fetch moved to the plugin-owned path, but matrix docs keep the public
-    // tools.web.fetch.firecrawl path as the canonical operator-facing surface.
-    const canonicalId = isCanonicalFirecrawlWebFetchEntry
-      ? "tools.web.fetch.firecrawl.apiKey"
-      : entry.id;
-    const canonicalPath = isCanonicalFirecrawlWebFetchEntry
-      ? "tools.web.fetch.firecrawl.apiKey"
-      : entry.pathPattern;
+  for (const entry of getSecretTargetRegistry({ sourceTree: true })) {
     const matrixEntry = Object.assign(
-      { id: canonicalId, configFile: entry.configFile, path: canonicalPath },
+      { id: entry.id, configFile: entry.configFile, path: entry.pathPattern },
       entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
       entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
       { secretShape: entry.secretShape, optIn: true as const },
@@ -69,7 +59,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
     pathSyntax: 'Dot path with "*" for map keys and "[]" for arrays.',
     scope:
       "Credentials that are strictly user-supplied and not minted/rotated by OpenClaw runtime.",
-    excludedMutableOrRuntimeManaged: getUnsupportedSecretRefSurfacePatterns(),
+    excludedMutableOrRuntimeManaged: unsupportedSecretRefSurfacePolicy.listPatterns(),
     entries,
   };
 }

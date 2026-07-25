@@ -26,7 +26,7 @@ type HandshakeConnectAuth = {
 
 type DeviceTokenCandidateSource = "explicit-device-token" | "shared-token-fallback";
 
-export type ConnectAuthState = {
+type ConnectAuthState = {
   authResult: GatewayAuthResult;
   authOk: boolean;
   authMethod: GatewayAuthResult["method"];

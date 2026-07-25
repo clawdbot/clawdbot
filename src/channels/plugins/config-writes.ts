@@ -9,7 +9,6 @@ import {
   authorizeConfigWriteShared,
   canBypassConfigWritePolicyShared,
   formatConfigWriteDeniedMessageShared,
-  resolveChannelConfigWritesShared,
   resolveConfigWriteTargetFromPathShared,
   resolveExplicitConfigWriteTargetShared,
   type ConfigWriteAuthorizationResultLike,
@@ -21,7 +20,7 @@ import type { ChannelId } from "./types.core.js";
 /**
  * Channel/account scope used by channel config write checks.
  */
-export type ConfigWriteScope = ConfigWriteScopeLike;
+type ConfigWriteScope = ConfigWriteScopeLike;
 
 /**
  * Target affected by a channel config write.
@@ -31,21 +30,10 @@ export type ConfigWriteTarget = ConfigWriteTargetLike;
 /**
  * Authorization result for a channel config write.
  */
-export type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike;
+type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike;
 
 function isInternalConfigWriteMessageChannel(channel?: string | null): boolean {
   return normalizeLowercaseStringOrEmpty(channel) === "webchat";
-}
-
-/**
- * Resolves whether config writes are enabled for a channel/account scope.
- */
-export function resolveChannelConfigWrites(params: {
-  cfg: OpenClawConfig;
-  channelId?: ChannelId | null;
-  accountId?: string | null;
-}): boolean {
-  return resolveChannelConfigWritesShared(params);
 }
 
 /**

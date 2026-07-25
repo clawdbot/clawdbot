@@ -1,0 +1,18 @@
+title: WhatsApp group-origin exec approval resolves from reaction
+scenario:
+  id: whatsapp-approval-exec-group-reaction-native
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.approver-target-resolution
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 60000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-approval-exec-group-reaction-native }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppApprovalExecGroupReactionNativeScenario
+  args: [{ expr: whatsappScenarioContext }]

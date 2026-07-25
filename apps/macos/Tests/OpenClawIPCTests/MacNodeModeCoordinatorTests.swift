@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -99,6 +100,27 @@ private actor CoordinatorDrainSnapshotProbe {
     }
 }
 
+private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
+    private var stopCount = 0
+
+    func start(command _: [String]) async throws -> MacNodeHostManifest {
+        MacNodeHostManifest(version: "test", caps: [], commands: [], pathEnv: "/usr/bin:/bin")
+    }
+
+    func supports(_: String) async -> Bool { false }
+    func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        BridgeInvokeResponse(id: request.id, ok: false)
+    }
+
+    func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
+    func cancel(invokeId _: String) async {}
+
+    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
+    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func stop() async { self.stopCount += 1 }
+    func stops() -> Int { self.stopCount }
+}
+
 struct MacNodeModeCoordinatorTests {
     private func waitUntil(
         _ description: String,
@@ -111,7 +133,9 @@ struct MacNodeModeCoordinatorTests {
             if await condition() {
                 return
             }
-            await Task.yield()
+            // Some callers run on MainActor; a real suspension lets the
+            // notification task make progress instead of polling it out.
+            try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("timed out waiting for \(description)")
     }
@@ -123,6 +147,33 @@ struct MacNodeModeCoordinatorTests {
         #expect(!MacNodeModeCoordinator.endpointAttemptIsCurrent(
             capturedGeneration: 7,
             currentGeneration: 8))
+    }
+
+    @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let notificationCenter = NotificationCenter()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            notificationCenter: notificationCenter,
+            observeNotifications: true)
+        // The full parallel suite can keep MainActor busy for several seconds.
+        let restartTimeout: Duration = .seconds(15)
+        defer { withExtendedLifetime(coordinator) {} }
+
+        notificationCenter.post(name: .openclawConfigDidChange, object: nil)
+
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
+            await worker.stops() == 1
+        }
+
+        notificationCenter.post(name: .openclawCLIInstalled, object: nil)
+
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
+            await worker.stops() == 2
+        }
     }
 
     @Test func `paused node state requires route disconnect`() {
@@ -146,64 +197,74 @@ struct MacNodeModeCoordinatorTests {
     }
 
     @Test func `first endpoint snapshot rejects a stale captured endpoint`() throws {
-        let first = try GatewayConnection.Config(
-            url: #require(URL(string: "wss://first.example.invalid")),
-            token: "first-token",
-            password: nil)
+        let first = GatewayConnection.EndpointSnapshot(
+            config: try GatewayConnection.Config(
+                url: #require(URL(string: "wss://first.example.invalid")),
+                token: "first-token",
+                password: nil),
+            routeAuthority: nil,
+            revision: 1)
         let replacement = try GatewayEndpointState.ready(
             mode: .remote,
             url: #require(URL(string: "wss://second.example.invalid")),
             token: "second-token",
-            password: nil)
+            password: nil,
+            routeRevision: 2)
 
         #expect(!MacNodeModeCoordinator.endpointState(replacement, matches: first))
     }
 
-    @Test func `stop pause and config changes revoke final connect admission`() throws {
-        let first = try GatewayConnection.Config(
-            url: #require(URL(string: "wss://first.example.invalid")),
-            token: "token",
-            password: nil)
-        let replacement = try GatewayConnection.Config(
-            url: #require(URL(string: "wss://second.example.invalid")),
-            token: "token",
-            password: nil)
+    @Test func `stop pause and endpoint changes revoke final connect admission`() throws {
+        let first = GatewayConnection.EndpointSnapshot(
+            config: try GatewayConnection.Config(
+                url: #require(URL(string: "wss://first.example.invalid")),
+                token: "token",
+                password: nil),
+            routeAuthority: nil,
+            revision: 1)
+        let replacement = GatewayConnection.EndpointSnapshot(
+            config: try GatewayConnection.Config(
+                url: #require(URL(string: "wss://second.example.invalid")),
+                token: "token",
+                password: nil),
+            routeAuthority: nil,
+            revision: 2)
 
         #expect(MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 4,
             isCancelled: false,
             isPaused: false,
-            capturedConfig: first,
-            currentConfig: first))
+            capturedEndpoint: first,
+            currentEndpoint: first))
         #expect(!MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 5,
             isCancelled: false,
             isPaused: false,
-            capturedConfig: first,
-            currentConfig: first))
+            capturedEndpoint: first,
+            currentEndpoint: first))
         #expect(!MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 4,
             isCancelled: true,
             isPaused: false,
-            capturedConfig: first,
-            currentConfig: first))
+            capturedEndpoint: first,
+            currentEndpoint: first))
         #expect(!MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 4,
             isCancelled: false,
             isPaused: true,
-            capturedConfig: first,
-            currentConfig: first))
+            capturedEndpoint: first,
+            currentEndpoint: first))
         #expect(!MacNodeModeCoordinator.endpointAttemptCanConnect(
             capturedGeneration: 4,
             currentGeneration: 4,
             isCancelled: false,
             isPaused: false,
-            capturedConfig: first,
-            currentConfig: replacement))
+            capturedEndpoint: first,
+            currentEndpoint: replacement))
     }
 
     @Test func `invoke admission stays bound to installed route authority`() {
@@ -420,7 +481,7 @@ struct MacNodeModeCoordinatorTests {
             isExistingInstallation: false) == .primary)
     }
 
-    @Test func `remote mode does not advertise browser proxy`() {
+    @Test func `native manifest excludes CLI-owned node commands`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
@@ -433,9 +494,24 @@ struct MacNodeModeCoordinatorTests {
         #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
         #expect(commands.contains(OpenClawCanvasCommand.present.rawValue))
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
+        #expect(!commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
+        #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
     }
 
-    @Test func `local mode advertises browser proxy when enabled`() {
+    @Test func `node permission metadata omits unknown authorization state`() {
+        let permissions = MacNodeModeCoordinator.advertisedPermissions([
+            .appleScript: .unknown,
+            .accessibility: .granted,
+            .screenRecording: .notGranted,
+        ])
+
+        #expect(permissions == [
+            Capability.accessibility.rawValue: true,
+            Capability.screenRecording.rawValue: false,
+        ])
+    }
+
+    @Test func `local native manifest leaves browser proxy to the CLI worker`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
@@ -444,43 +520,65 @@ struct MacNodeModeCoordinatorTests {
             connectionMode: .local)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
-        #expect(caps.contains(OpenClawCapability.browser.rawValue))
-        #expect(commands.contains(OpenClawBrowserCommand.proxy.rawValue))
+        #expect(!caps.contains(OpenClawCapability.browser.rawValue))
+        #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
     }
 
-    @Test func `local mode omits native Codex thread catalog`() {
+    @Test func `local mode omits native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .local,
-            codexThreadCatalogEnabled: true)
+            codexThreadCatalogEnabled: true,
+            claudeSessionCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
         #expect(!caps.contains(MacNodeCodexThreadCatalogContract.capability))
         #expect(!commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+        #expect(!commands.contains(MacNodeCodexThreadCatalogContract.turnsCommand))
+        #expect(!caps.contains(MacNodeClaudeSessionCatalogContract.capability))
+        #expect(!commands.contains(MacNodeClaudeSessionCatalogContract.listCommand))
+        #expect(!commands.contains(MacNodeClaudeSessionCatalogContract.readCommand))
     }
 
-    @Test func `remote mode advertises native Codex thread catalog`() {
+    @Test func `remote mode advertises native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .remote,
-            codexThreadCatalogEnabled: true)
+            codexThreadCatalogEnabled: true,
+            claudeSessionCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
         #expect(caps.contains(MacNodeCodexThreadCatalogContract.capability))
         #expect(commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+        #expect(commands.contains(MacNodeCodexThreadCatalogContract.turnsCommand))
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
             command: MacNodeCodexThreadCatalogContract.listCommand,
             catalogAdvertised: true))
         #expect(!MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
             command: MacNodeCodexThreadCatalogContract.listCommand,
             catalogAdvertised: false))
+        #expect(!MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
+            command: MacNodeCodexThreadCatalogContract.turnsCommand,
+            catalogAdvertised: false))
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
+            command: OpenClawSystemCommand.notify.rawValue,
+            catalogAdvertised: false))
+        #expect(caps.contains(MacNodeClaudeSessionCatalogContract.capability))
+        #expect(commands.contains(MacNodeClaudeSessionCatalogContract.listCommand))
+        #expect(commands.contains(MacNodeClaudeSessionCatalogContract.readCommand))
+        #expect(MacNodeModeCoordinator.routeSnapshotAllowsClaudeCatalogInvoke(
+            command: MacNodeClaudeSessionCatalogContract.listCommand,
+            catalogAdvertised: true))
+        #expect(!MacNodeModeCoordinator.routeSnapshotAllowsClaudeCatalogInvoke(
+            command: MacNodeClaudeSessionCatalogContract.readCommand,
+            catalogAdvertised: false))
+        #expect(MacNodeModeCoordinator.routeSnapshotAllowsClaudeCatalogInvoke(
             command: OpenClawSystemCommand.notify.rawValue,
             catalogAdvertised: false))
     }
@@ -751,7 +849,13 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `tls pin store key uses default wss port`() throws {
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
-        #expect(MacNodeModeCoordinator.tlsPinStoreKey(for: url) == "gateway.example.ts.net:443")
+        #expect(GatewayTLSRoute.storeKey(for: url) == "gateway.example.ts.net:443")
+    }
+
+    @Test func `tls pin store key preserves the shipped host identity`() throws {
+        let url = try #require(URL(string: "wss://Gateway.Example.ts.net"))
+
+        #expect(GatewayTLSRoute.storeKey(for: url) == "Gateway.Example.ts.net:443")
     }
 
     @Test func `remote tls params prefer configured fingerprint over stored pin`() throws {
@@ -764,28 +868,30 @@ struct MacNodeModeCoordinatorTests {
             ],
         ]
 
-        let params = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: root,
+            configuredFingerprint: GatewayRemoteConfig.resolveTLSFingerprint(root: root),
             storedFingerprint: "stored"))
 
-        #expect(params.expectedFingerprint == "sha256:configured")
-        #expect(params.allowTOFU == false)
-        #expect(params.storeKey == "gateway.example.com:443")
+        #expect(route.params.expectedFingerprint == "sha256:configured")
+        #expect(route.params.allowTOFU == false)
+        #expect(route.params.storeKey == "gateway.example.com:443")
+        #expect(!route.allowsTrustedPinReplacement)
     }
 
     @Test func `remote tls params allow first use only when no configured or stored pin exists`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
 
-        let params = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: [:],
+            configuredFingerprint: nil,
             storedFingerprint: nil))
 
-        #expect(params.expectedFingerprint == nil)
-        #expect(params.allowTOFU == true)
+        #expect(route.params.expectedFingerprint == nil)
+        #expect(route.params.allowTOFU == true)
+        #expect(route.allowsTrustedPinReplacement)
     }
 
     @Test func `local tls params ignore remote configured fingerprint`() throws {
@@ -798,27 +904,28 @@ struct MacNodeModeCoordinatorTests {
             ],
         ]
 
-        let params = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .local,
-            root: root,
+            configuredFingerprint: GatewayRemoteConfig.resolveTLSFingerprint(root: root),
             storedFingerprint: "stored-local"))
 
-        #expect(params.expectedFingerprint == "stored-local")
-        #expect(params.allowTOFU == false)
+        #expect(route.params.expectedFingerprint == "stored-local")
+        #expect(route.params.allowTOFU == false)
+        #expect(route.allowsTrustedPinReplacement)
     }
 
     @Test func `tls session cache reuses session box for unchanged params`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
         var cache = MacNodeGatewayTLSSessionCache()
-        let params = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:configured"]]],
+            configuredFingerprint: "sha256:configured",
             storedFingerprint: "stored"))
 
-        let first = cache.sessionBox(url: url, params: params)
-        let second = cache.sessionBox(url: url, params: params)
+        let first = cache.sessionBox(url: url, params: route.params)
+        let second = cache.sessionBox(url: url, params: route.params)
 
         #expect(ObjectIdentifier(first.session) == ObjectIdentifier(second.session))
     }
@@ -826,19 +933,19 @@ struct MacNodeModeCoordinatorTests {
     @Test func `tls session cache rebuilds session box when params change`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
         var cache = MacNodeGatewayTLSSessionCache()
-        let firstParams = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let firstRoute = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:configured"]]],
+            configuredFingerprint: "sha256:configured",
             storedFingerprint: "stored"))
-        let secondParams = try #require(MacNodeModeCoordinator.tlsParams(
-            for: url,
+        let secondRoute = try #require(GatewayTLSRoute.resolve(
+            url: url,
             connectionMode: .remote,
-            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:rotated"]]],
+            configuredFingerprint: "sha256:rotated",
             storedFingerprint: "stored"))
 
-        let first = cache.sessionBox(url: url, params: firstParams)
-        let second = cache.sessionBox(url: url, params: secondParams)
+        let first = cache.sessionBox(url: url, params: firstRoute.params)
+        let second = cache.sessionBox(url: url, params: secondRoute.params)
 
         #expect(ObjectIdentifier(first.session) != ObjectIdentifier(second.session))
     }
@@ -851,9 +958,43 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "gateway.example.ts.net:443",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: true)
+            systemTrustOk: true,
+            port: 443)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
 
-        #expect(MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(route.permitsTrustedPinReplacement(url: url, failure: failure))
+    }
+
+    @Test func `does not auto repair a redirected TLS authority`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
+        let redirectedHost = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "redirect.example.ts.net",
+            storeKey: "gateway.example.ts.net:443",
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+        let redirectedPort = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: "gateway.example.ts.net:443",
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 8443)
+
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedHost))
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedPort))
     }
 
     @Test func `does not auto repair untrusted remote pin mismatch`() throws {
@@ -864,9 +1005,77 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "gateway.example.com:443",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: true)
+            systemTrustOk: true,
+            port: 443)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
 
-        #expect(!MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+    }
+
+    @Test func `does not auto repair configured pin mismatch`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+        let failure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: "gateway.example.ts.net:443",
+            expectedFingerprint: "configured",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: "configured",
+            storedFingerprint: "old"))
+
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+    }
+
+    @Test func `stale repair cannot replace a newer stored pin`() async throws {
+        try await withFakeGatewayTLSKeychain {
+            let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+            let storeKey = "test-stale-repair"
+            GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
+            let route = try #require(GatewayTLSRoute.resolve(
+                url: url,
+                connectionMode: .remote,
+                configuredFingerprint: nil,
+                storedFingerprint: "old",
+                storeKey: storeKey))
+            let firstFailure = GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: storeKey,
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: true,
+                port: 443)
+            let staleFailure = GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: storeKey,
+                expectedFingerprint: "old",
+                observedFingerprint: "stale",
+                systemTrustOk: true,
+                port: 443)
+
+            let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+                route: route,
+                url: url,
+                failure: firstFailure)
+            let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+                route: route,
+                url: url,
+                failure: staleFailure)
+
+            #expect(firstRepaired)
+            #expect(!staleRepaired)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
+        }
     }
 
     @Test func `auto repairs trusted loopback pin mismatch`() throws {
@@ -877,9 +1086,15 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "127.0.0.1:18789",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: true)
+            systemTrustOk: true,
+            port: 18789)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
 
-        #expect(MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 
     @Test func `does not auto repair untrusted loopback pin mismatch`() throws {
@@ -890,8 +1105,14 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "127.0.0.1:18789",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: false)
+            systemTrustOk: false,
+            port: 18789)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old"))
 
-        #expect(!MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 }

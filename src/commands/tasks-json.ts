@@ -6,7 +6,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
-import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { listTaskAuditFindings } from "../tasks/task-registry.audit.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
@@ -40,9 +39,8 @@ function toSystemAuditFindings(params: {
   codeFilter?: TaskSystemAuditCode;
 }) {
   const tasks = listTaskJsonRecords();
-  const flows = listTaskFlowRecords();
   const taskFindings = listTaskAuditFindings({ tasks });
-  const flowFindings = listTaskFlowAuditFindings({ flows });
+  const flowFindings = listTaskFlowAuditFindings();
   const result = buildTaskSystemAuditFindings({
     taskFindings,
     flowFindings,

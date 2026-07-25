@@ -68,26 +68,22 @@ describe("slackOutbound", () => {
       mediaLocalRoots: ["/tmp/workspace"],
       mediaReadFile: undefined,
     });
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
-      3,
-      "C123",
-      "final text\n\nBlock body",
-      expect.objectContaining({
-        cfg,
-        threadTs: undefined,
-        accountId: "default",
-        blocks: [
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: "final text" },
-          },
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: "Block body" },
-          },
-        ],
-      }),
-    );
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(3, "C123", "final text\n\nBlock body", {
+      cfg,
+      threadTs: undefined,
+      accountId: "default",
+      authoredTextPlacement: "blocks",
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "final text", verbatim: true },
+        },
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "Block body" },
+        },
+      ],
+    });
     expect(result).toEqual({ channel: "slack", messageId: "m-final" });
   });
 
@@ -113,7 +109,11 @@ describe("slackOutbound", () => {
       cfg,
       threadTs: undefined,
       accountId: "default",
-      blocks: [{ type: "divider" }],
+      authoredTextPlacement: "blocks",
+      blocks: [
+        { type: "divider" },
+        { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
+      ],
     });
     expect(result).toEqual({ channel: "slack", messageId: "m-blocks" });
   });
@@ -142,7 +142,11 @@ describe("slackOutbound", () => {
       cfg,
       threadTs: "1712345678.123456",
       accountId: "default",
-      blocks: [{ type: "divider" }],
+      authoredTextPlacement: "blocks",
+      blocks: [
+        { type: "divider" },
+        { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
+      ],
     });
   });
 
@@ -170,7 +174,11 @@ describe("slackOutbound", () => {
       cfg,
       threadTs: undefined,
       accountId: "default",
-      blocks: [{ type: "divider" }],
+      authoredTextPlacement: "blocks",
+      blocks: [
+        { type: "divider" },
+        { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
+      ],
     });
   });
 

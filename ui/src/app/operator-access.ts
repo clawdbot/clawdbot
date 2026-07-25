@@ -1,19 +1,6 @@
 // Control UI app-level operator scope checks.
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 
-export function hasOperatorReadAccess(
-  auth: { role?: string; scopes?: readonly string[] } | null,
-): boolean {
-  if (!auth?.scopes) {
-    return false;
-  }
-  return roleScopesAllow({
-    role: auth.role ?? "operator",
-    requestedScopes: ["operator.read"],
-    allowedScopes: auth.scopes,
-  });
-}
-
 export function hasOperatorWriteAccess(
   auth: { role?: string; scopes?: readonly string[] } | null,
 ): boolean {
@@ -36,6 +23,38 @@ export function hasOperatorAdminAccess(
   return roleScopesAllow({
     role: auth.role ?? "operator",
     requestedScopes: ["operator.admin"],
+    allowedScopes: auth.scopes,
+  });
+}
+
+export function hasOperatorPairingAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth) {
+    return false;
+  }
+  if (!auth.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.pairing"],
+    allowedScopes: auth.scopes,
+  });
+}
+
+export function hasOperatorApprovalsAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth) {
+    return false;
+  }
+  if (!auth.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.approvals"],
     allowedScopes: auth.scopes,
   });
 }

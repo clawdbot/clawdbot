@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mjs";
-import { compareReleaseVersions, parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
+import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
 
 export function parseArgs(argv) {
   const args = new Map();

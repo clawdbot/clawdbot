@@ -2,13 +2,13 @@ title: Dreaming shadow trial report
 
 scenario:
   id: dreaming-shadow-trial-report
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.dreaming
+      - session-memory.memory-files-dreaming
     secondary:
-      - memory.promotion
-      - qa.artifact-safety
+      - session-memory.memory-files-promotion
+      - session-memory.memory-files-artifact-safety
   risk: medium
   capabilities:
     - tools.read
@@ -120,9 +120,9 @@ flow:
           args:
             - ref: env
             - 60000
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -172,7 +172,7 @@ flow:
               expr: "`shadow trial reply overclaimed promotion: ${outbound.text}`"
         - set: shadowTrialDebugRequests
           value:
-            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].slice(requestCountBefore).filter((request) => /dreaming shadow trial report check/i.test(String(request.allInputText ?? ''))) : []"
+            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => /dreaming shadow trial report check/i.test(String(request.allInputText ?? ''))) : []"
         - assert:
             expr: "!env.mock || shadowTrialDebugRequests.filter((request) => request.plannedToolName === 'read').length >= 2"
             message:

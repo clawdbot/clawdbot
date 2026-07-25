@@ -10,9 +10,9 @@ import {
   loadBundledPluginPublicSurface,
   resolveBundledPluginPublicModulePath,
 } from "../../../../test-utils/bundled-plugin-public-surface.js";
-import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } from "../../bundled-ids.js";
+import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } from "../../bundled.js";
 import type { ChannelId } from "../../channel-id.types.js";
-import type { ChannelPlugin } from "../../types.js";
+import type { ChannelPlugin } from "../../types.public.js";
 
 type ChannelPluginApiModule = Record<string, unknown>;
 type ChannelDirectoryContractModule = Record<string, unknown>;
@@ -296,25 +296,75 @@ export async function getBundledChannelDirectoryPluginAsync(
 }
 
 type ChannelThreadBindingArtifactModule = { defaultTopLevelPlacement?: unknown };
+type ChannelSessionKeyArtifactModule = Record<string, unknown>;
+type ChannelMessageToolArtifactModule = { describeMessageTool?: unknown };
+type ChannelGatewayAuthArtifactModule = { resolveGatewayAuthBypassPaths?: unknown };
 
-function isMissingBundledThreadBindingArtifact(error: unknown, id: ChannelId): boolean {
+function isMissingBundledArtifact(
+  error: unknown,
+  id: ChannelId,
+  artifactBasename: string,
+): boolean {
   return (
     error instanceof Error &&
-    error.message === `Unable to resolve bundled plugin public surface ${id}/thread-binding-api.js`
+    error.message === `Unable to resolve bundled plugin public surface ${id}/${artifactBasename}`
   );
+}
+
+// Lightweight artifacts are optional per channel; contract suites discover the
+// shipping set from the catalog, so a missing artifact resolves to null while
+// present-but-broken artifacts still fail the load.
+async function getOptionalBundledChannelArtifactAsync<T extends object>(
+  id: ChannelId,
+  artifactBasename: string,
+): Promise<T | null> {
+  return await loadBundledPluginPublicSurface<T>({
+    pluginId: id,
+    artifactBasename,
+  }).catch((error: unknown) => {
+    if (isMissingBundledArtifact(error, id, artifactBasename)) {
+      return null;
+    }
+    throw error;
+  });
 }
 
 /** Returns a bundled channel's thread-binding artifact, or null when it ships none. */
 export async function getBundledChannelThreadBindingArtifactAsync(
   id: ChannelId,
 ): Promise<ChannelThreadBindingArtifactModule | null> {
-  return await loadBundledPluginPublicSurface<ChannelThreadBindingArtifactModule>({
-    pluginId: id,
-    artifactBasename: "thread-binding-api.js",
-  }).catch((error: unknown) => {
-    if (isMissingBundledThreadBindingArtifact(error, id)) {
-      return null;
-    }
-    throw error;
-  });
+  return await getOptionalBundledChannelArtifactAsync<ChannelThreadBindingArtifactModule>(
+    id,
+    "thread-binding-api.js",
+  );
+}
+
+/** Returns a bundled channel's session-key artifact, or null when it ships none. */
+export async function getBundledChannelSessionKeyArtifactAsync(
+  id: ChannelId,
+): Promise<ChannelSessionKeyArtifactModule | null> {
+  return await getOptionalBundledChannelArtifactAsync<ChannelSessionKeyArtifactModule>(
+    id,
+    "session-key-api.js",
+  );
+}
+
+/** Returns a bundled channel's message-tool artifact, or null when it ships none. */
+export async function getBundledChannelMessageToolArtifactAsync(
+  id: ChannelId,
+): Promise<ChannelMessageToolArtifactModule | null> {
+  return await getOptionalBundledChannelArtifactAsync<ChannelMessageToolArtifactModule>(
+    id,
+    "message-tool-api.js",
+  );
+}
+
+/** Returns a bundled channel's gateway-auth artifact, or null when it ships none. */
+export async function getBundledChannelGatewayAuthArtifactAsync(
+  id: ChannelId,
+): Promise<ChannelGatewayAuthArtifactModule | null> {
+  return await getOptionalBundledChannelArtifactAsync<ChannelGatewayAuthArtifactModule>(
+    id,
+    "gateway-auth-api.js",
+  );
 }

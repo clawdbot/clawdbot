@@ -11,7 +11,7 @@ const GIT_TIMEOUT_MS = 3000;
 // checkouts that drifted off the mainline. "HEAD" is git's detached marker.
 const HIDDEN_BRANCHES = new Set(["main", "master", "HEAD"]);
 
-export async function detectDevInstallGitBranch(params: {
+async function detectDevInstallGitBranch(params: {
   root: string | null;
   runCommand?: typeof runCommandWithTimeout;
 }): Promise<string | null> {

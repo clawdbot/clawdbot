@@ -1,11 +1,15 @@
 // Session goal state tracks objective progress and token budgets in the session store.
 import crypto from "node:crypto";
+import {
+  recordSessionGoalChanged,
+  type SessionStateActorType,
+} from "../../sessions/session-state-events.js";
 import { formatTokenCount } from "../../utils/token-format.js";
-import { loadSessionEntry, patchSessionEntry } from "./session-accessor.js";
+import { loadSessionEntryReadOnly, patchSessionEntry } from "./session-accessor.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
-export type SessionGoalSnapshot = {
+type SessionGoalSnapshot = {
   status: "missing" | "found";
   goal?: SessionGoal;
 };
@@ -16,6 +20,8 @@ type SessionGoalStoreOptions = {
   now?: number;
   fallbackEntry?: SessionEntry;
   persist?: boolean;
+  actor?: { type: SessionStateActorType; id?: string };
+  agentId?: string;
 };
 
 type CreateSessionGoalOptions = SessionGoalStoreOptions & {
@@ -61,6 +67,20 @@ function normalizeTokenBudget(value: number | undefined): number | undefined {
 
 function cloneGoal(goal: SessionGoal): SessionGoal {
   return { ...goal };
+}
+
+function recordGoalChange(
+  options: SessionGoalStoreOptions,
+  entry: SessionEntry,
+  summary: string,
+): void {
+  recordSessionGoalChanged({
+    sessionKey: options.sessionKey,
+    entry,
+    actor: options.actor,
+    agentId: options.agentId,
+    summary,
+  });
 }
 
 export function resolveSessionGoalDisplayState(
@@ -162,7 +182,7 @@ export async function getSessionGoal(
   if (options.persist === false) {
     // Status rendering should not write incidental budget/baseline adoption unless callers opt in.
     const entry =
-      loadSessionEntry({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
+      loadSessionEntryReadOnly({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
       options.fallbackEntry;
     const projected = entry
       ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
@@ -223,6 +243,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
   if (!result || !created) {
     throw new Error("session not found");
   }
+  recordGoalChange(options, result, "goal created");
   return cloneGoal(created);
 }
 
@@ -281,6 +302,7 @@ export async function updateSessionGoalStatus(
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
   }
+  recordGoalChange(options, result, `goal status changed to ${updated.status}`);
   return cloneGoal(updated);
 }
 
@@ -313,6 +335,7 @@ export async function updateSessionGoalObjective(
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
   }
+  recordGoalChange(options, result, "goal objective changed");
   return cloneGoal(updated);
 }
 
@@ -328,5 +351,8 @@ export async function clearSessionGoal(options: SessionGoalStoreOptions): Promis
       return { goal: undefined };
     },
   );
+  if (result && removed) {
+    recordGoalChange(options, result, "goal cleared");
+  }
   return Boolean(result && removed);
 }

@@ -27,6 +27,7 @@ describe("captured plugin registration", () => {
               host: "worker.example",
               port: 22,
               user: "worker",
+              hostKey: ["ssh-ed25519", "AAAA"].join(" "),
               keyRef: { source: "env", provider: "default", id: "WORKER_SSH_KEY" },
             },
           }),
@@ -44,6 +45,12 @@ describe("captured plugin registration", () => {
               source: "static",
             },
           ],
+        });
+        api.registerSessionCatalog({
+          id: "captured-catalog",
+          label: "Captured Catalog",
+          list: async () => [],
+          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
         });
         api.registerVideoGenerationProvider({
           id: "captured-video",
@@ -109,6 +116,7 @@ describe("captured plugin registration", () => {
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
       "captured-provider",
     ]);
+    expect(captured.sessionCatalogs.map((provider) => provider.id)).toEqual(["captured-catalog"]);
     expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual([
       "captured-video",
     ]);

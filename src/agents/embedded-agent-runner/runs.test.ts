@@ -6,29 +6,27 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  testing as replyRunTesting,
   createReplyOperation,
   isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
-import {
-  markDiagnosticToolStartedForTest,
-  resetDiagnosticRunActivityForTest,
-} from "../../logging/diagnostic-run-activity.js";
+import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
 } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
-  testing,
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   clearEmbeddedAgentRunAbortabilityForRunId,
-  clearEmbeddedRunAbandonment,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunAbortableForRunId,
   isEmbeddedAgentRunAbortableForCompaction,
@@ -36,7 +34,6 @@ import {
   isEmbeddedRunAbandoned,
   formatEmbeddedAgentQueueFailureSummary,
   markActiveEmbeddedRunAbandoned,
-  markEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   retainEmbeddedAgentRunAbortabilityForRunId,
@@ -48,6 +45,7 @@ import {
   waitForActiveEmbeddedRuns,
   waitForEmbeddedAgentRunEnd,
 } from "./runs.js";
+import { testing } from "./runs.test-support.js";
 
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
@@ -63,6 +61,7 @@ function createRunHandle(
       text: string,
       options?: Parameters<RunHandle["queueMessage"]>[1],
     ) => Promise<void>;
+    supportsQueueMessageImages?: boolean;
     supportsTranscriptCommitWait?: boolean;
   } = {},
 ): RunHandle {
@@ -78,6 +77,7 @@ function createRunHandle(
       ? { isAbortable: () => overrides.isAbortable !== false }
       : {}),
     isCompacting: () => overrides.isCompacting ?? false,
+    supportsQueueMessageImages: overrides.supportsQueueMessageImages,
     supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
     abort,
   };
@@ -438,6 +438,7 @@ describe("embedded-agent runner run registry", () => {
     updateActiveEmbeddedRunSessionFile(
       "session-file-diagnostics",
       "/tmp/openclaw-run-registry-rotated.jsonl",
+      getAgentEventLifecycleGeneration(),
     );
 
     expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(
@@ -463,6 +464,40 @@ describe("embedded-agent runner run registry", () => {
     expect(queueMessage).toHaveBeenCalledWith("continue", {
       steeringMode: "all",
       sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
+  it("rejects images when the active run cannot preserve them", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-images", {
+      ...createRunHandle(),
+      queueMessage,
+    });
+
+    const outcome = queueEmbeddedAgentMessageWithOutcome("session-images", "inspect", {
+      images: [{ type: "image", data: "png", mimeType: "image/png" }],
+    });
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-images",
+      reason: "image_input_unsupported",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+
+    setActiveEmbeddedRun(
+      "session-images",
+      createRunHandle({ queueMessage, supportsQueueMessageImages: true }),
+    );
+
+    expect(
+      queueEmbeddedAgentMessageWithOutcome("session-images", "inspect", {
+        images: [{ type: "image", data: "png", mimeType: "image/png" }],
+      }).queued,
+    ).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("inspect", {
+      images: [{ type: "image", data: "png", mimeType: "image/png" }],
     });
   });
 
@@ -793,7 +828,7 @@ describe("embedded-agent runner run registry", () => {
     operation.setPhase("running");
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "visible group prompt", sender: { id: "user-42" } },
-      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+      target: createTestUserTurnTranscriptTarget(),
     });
 
     const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
@@ -853,6 +888,64 @@ describe("embedded-agent runner run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("waits without a timer when no run-end timeout is requested", async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = createRunHandle();
+      setActiveEmbeddedRun("session-unbounded", handle);
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const waitPromise = waitForEmbeddedAgentRunEnd("session-unbounded", null);
+
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+      clearActiveEmbeddedRun("session-unbounded", handle);
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a reply-backed run without an embedded handle", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:reply-wait",
+      sessionId: "session-reply-wait",
+      resetTriggered: false,
+    });
+
+    const waitPromise = waitForEmbeddedAgentRunEnd("session-reply-wait", null);
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    operation.complete();
+    await expect(waitPromise).resolves.toBe(true);
+  });
+
+  it("waits for a replacement run under the same session id", async () => {
+    const firstHandle = createRunHandle();
+    const replacementHandle = createRunHandle();
+    setActiveEmbeddedRun("session-replaced", firstHandle);
+
+    const waitPromise = waitForEmbeddedAgentRunEnd("session-replaced", null);
+    clearActiveEmbeddedRun("session-replaced", firstHandle);
+    setActiveEmbeddedRun("session-replaced", replacementHandle);
+    await Promise.resolve();
+
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    clearActiveEmbeddedRun("session-replaced", replacementHandle);
+    await expect(waitPromise).resolves.toBe(true);
   });
 
   it("waits for active runs to drain", async () => {
@@ -923,8 +1016,7 @@ describe("embedded-agent runner run registry", () => {
     );
     const handle = createRunHandle();
 
-    runsA.testing.resetActiveEmbeddedRuns();
-    runsB.testing.resetActiveEmbeddedRuns();
+    testing.resetActiveEmbeddedRuns();
 
     try {
       runsA.setActiveEmbeddedRun("session-shared", handle);
@@ -933,8 +1025,7 @@ describe("embedded-agent runner run registry", () => {
       runsB.clearActiveEmbeddedRun("session-shared", handle);
       expect(runsA.isEmbeddedAgentRunActive("session-shared")).toBe(false);
     } finally {
-      runsA.testing.resetActiveEmbeddedRuns();
-      runsB.testing.resetActiveEmbeddedRuns();
+      testing.resetActiveEmbeddedRuns();
     }
   });
 
@@ -961,29 +1052,37 @@ describe("embedded-agent runner run registry", () => {
     const sessionFile = "/tmp/openclaw-abandoned-session.jsonl";
     const handle = createRunHandle();
 
-    markEmbeddedRunAbandoned({
-      sessionId: "session-timeout",
-      sessionKey: "agent:main:main",
-      sessionFile,
-      reason: "timeout",
-    });
+    setActiveEmbeddedRun("session-timeout", handle, "agent:main:main", sessionFile);
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-timeout",
+        handle,
+        sessionKey: "agent:main:main",
+        sessionFile,
+        reason: "timeout",
+      }),
+    ).toBe(true);
 
     expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(true);
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(true);
     expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(true);
 
-    setActiveEmbeddedRun("session-next", handle, "agent:main:main", sessionFile);
+    const nextHandle = createRunHandle();
+    setActiveEmbeddedRun("session-next", nextHandle, "agent:main:main", sessionFile);
 
     expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(false);
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
     expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(false);
 
-    markEmbeddedRunAbandoned({
-      sessionId: "session-next",
-      sessionKey: "agent:main:main",
-      reason: "timeout",
-    });
-    clearEmbeddedRunAbandonment({ sessionId: "session-next" });
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-next",
+        handle: nextHandle,
+        sessionKey: "agent:main:main",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    setActiveEmbeddedRun("session-third", createRunHandle(), "agent:main:main");
 
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
   });

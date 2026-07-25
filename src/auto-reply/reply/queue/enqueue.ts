@@ -222,6 +222,12 @@ export function getFollowupQueueDepth(key: string): number {
   return countPendingQueueItems(queue.items, queue.inFlight);
 }
 
-export function resetRecentQueuedMessageIdDedupe(): void {
+function resetRecentQueuedMessageIdDedupe(): void {
   RECENT_QUEUE_MESSAGE_IDS.clear();
+}
+
+if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.queueEnqueueTestApi")] = {
+    resetRecentQueuedMessageIdDedupe,
+  };
 }

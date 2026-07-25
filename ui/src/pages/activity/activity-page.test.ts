@@ -18,8 +18,8 @@ type TestActivityPage = HTMLElement & {
 function gateway(): ApplicationContext["gateway"] {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
-    connected: false,
-    reconnecting: false,
+    phase: "stopped",
+    offlineStable: false,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -40,6 +40,7 @@ function staleEntry(): ActivityEntry {
     toolCallId: "stale",
     runId: "stale",
     toolName: "stale",
+    entryKind: "tool",
     status: "done",
     startedAt: 0,
     updatedAt: 0,

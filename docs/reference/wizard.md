@@ -133,7 +133,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
       - Onboarding attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
       - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
     - Native Windows: Scheduled Task first; if task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the Gateway immediately.
-    - **Runtime selection:** Node (recommended; required for WhatsApp/Telegram - Bun can corrupt memory on reconnect). Only Node is offered interactively; `--daemon-runtime bun` is CLI-only.
+    - **Runtime selection:** Node is required because the canonical runtime state store uses `node:sqlite`. Legacy Bun services are migrated to Node during repair.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist resolved plaintext token values into supervisor service environment metadata.
     - If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, daemon install is blocked until mode is set explicitly.
@@ -207,7 +207,7 @@ Use this reference page for flag semantics and step ordering.
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.5 \
+  --model openai/gpt-5.6-sol \
   --bind whatsapp:biz \
   --non-interactive \
   --json
@@ -227,7 +227,7 @@ Onboarding detects whether `signal-cli` is on `PATH` and, if missing, offers to 
 - Linux x86-64: downloads the official native GraalVM build from the `signal-cli` GitHub releases and stores it under `~/.openclaw/tools/signal-cli/<version>/`.
 - macOS and other architectures: installs via Homebrew instead.
 - Native Windows: not supported yet; run onboarding inside WSL2 to get the Linux install path.
-- Writes `channels.signal.cliPath` to your config either way.
+- Writes `channels.signal.transport.cliPath` with `kind: "managed-native"` either way.
 
 ## What the wizard writes
 
@@ -238,7 +238,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
-- `session.dmScope` (local onboarding defaults this to `"per-channel-peer"` when unset; existing explicit values are preserved. Details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals))
+- `session.dmScope` (onboarding preserves explicit values and otherwise leaves it unset, so the `"main"` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `"per-channel-peer"`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic. Details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals))
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel DM allowlists when you opt in during the channel prompts. Discord, Matrix, Microsoft Teams, and Slack resolve names to IDs when possible; other channels take IDs directly (for example numeric Telegram sender IDs or WhatsApp phone numbers).
 - `skills.install.nodeManager`
@@ -251,10 +251,13 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunMode`
 - `wizard.securityAcknowledgedAt`
 
-`openclaw agents add` writes `agents.list[]` and optional `bindings`.
+`openclaw agents add` writes `agents.entries.*` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
-Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
+Active sessions and transcripts are stored in
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. The
+`~/.openclaw/agents/<agentId>/sessions/` directory is used for legacy migration
+inputs and archive/support artifacts.
 
 Some channels are delivered as plugins. When you pick one during setup, onboarding
 will prompt to install it (npm or a local path) before it can be configured.

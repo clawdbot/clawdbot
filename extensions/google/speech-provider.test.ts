@@ -18,12 +18,11 @@ const {
 } = getProviderHttpMocks();
 
 let buildGoogleSpeechProvider: typeof import("./speech-provider.js").buildGoogleSpeechProvider;
-let testing: typeof import("./speech-provider.js").testing;
 
 const GOOGLE_TTS_JSON_CAP_BYTES = 16 * 1024 * 1024;
 
 beforeAll(async () => {
-  ({ buildGoogleSpeechProvider, testing } = await import("./speech-provider.js"));
+  ({ buildGoogleSpeechProvider } = await import("./speech-provider.js"));
 });
 
 installProviderHttpMockCleanup();
@@ -166,7 +165,7 @@ describe("Google speech provider", () => {
     expect(result.voiceCompatible).toBe(false);
     expect(result.audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
     expect(result.audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
-    expect(result.audioBuffer.readUInt32LE(24)).toBe(testing.GOOGLE_TTS_SAMPLE_RATE);
+    expect(result.audioBuffer.readUInt32LE(24)).toBe(24_000);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
     expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
   });
@@ -242,7 +241,11 @@ describe("Google speech provider", () => {
   it("advertises all documented Gemini TTS-capable models", () => {
     const provider = buildGoogleSpeechProvider();
 
-    expect(provider.models).toEqual(testing.GOOGLE_TTS_MODELS);
+    expect(provider.models).toEqual([
+      "gemini-3.1-flash-tts-preview",
+      "gemini-2.5-flash-preview-tts",
+      "gemini-2.5-pro-preview-tts",
+    ]);
   });
 
   it("renders deterministic audio-profile-v1 prompts without generating tags", async () => {
@@ -258,15 +261,6 @@ describe("Google speech provider", () => {
       persona: {
         id: "alfred",
         label: "Alfred",
-        prompt: {
-          profile: "A brilliant British butler.",
-          scene: "A quiet late-night study.",
-          sampleContext: "The speaker is answering a trusted operator.",
-          style: "Refined and lightly amused.",
-          accent: "British English.",
-          pacing: "Measured.",
-          constraints: ["Do not read configuration values aloud."],
-        },
       },
       target: "audio-file",
       timeoutMs: 1_000,
@@ -279,22 +273,10 @@ describe("Google speech provider", () => {
         "configuration aloud.",
         "",
         "# AUDIO PROFILE: Alfred",
-        "A brilliant British butler.",
-        "",
-        "## THE SCENE",
-        "A quiet late-night study.",
         "",
         "### DIRECTOR'S NOTES",
-        "Style: Refined and lightly amused.",
-        "Accent: British English.",
-        "Pacing: Measured.",
-        "Constraints:",
-        "- Do not read configuration values aloud.",
         "Provider notes:",
         "Keep a close-mic feel.",
-        "",
-        "### SAMPLE CONTEXT",
-        "The speaker is answering a trusted operator.",
         "",
         "### TRANSCRIPT",
         "[whispers] The door is open.",
@@ -325,9 +307,6 @@ describe("Google speech provider", () => {
       persona: {
         id: "alfred",
         label: "Alfred",
-        prompt: {
-          profile: "A brilliant British butler.",
-        },
       },
       target: "audio-file",
       timeoutMs: 1_000,

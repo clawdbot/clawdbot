@@ -23,6 +23,7 @@ type ClawHubDispatchTarget = {
 };
 
 type OpenClawReleaseClawHubPlanArgs = {
+  bootstrapWorkflowRef: string;
   bootstrapWorkflowSha: string;
   releaseTag: string;
   releaseSha: string;
@@ -96,6 +97,14 @@ function requireCommitSha(value: string | undefined, label: string): string {
     throw new Error(`${label} must be a full 40-character lowercase commit SHA.`);
   }
   return sha;
+}
+
+function requireBootstrapWorkflowRef(value: string | undefined): string {
+  const ref = requireArg(value, "--bootstrap-workflow-ref");
+  if (ref !== "main" && !/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(ref)) {
+    throw new Error("--bootstrap-workflow-ref must be main or a SHA-pinned release-publish tag.");
+  }
+  return ref;
 }
 
 function requirePositiveInteger(value: string | undefined, label: string): string {
@@ -227,6 +236,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
 
   let releaseTag: string | undefined;
   let releaseSha: string | undefined;
+  let bootstrapWorkflowRef: string | undefined;
   let bootstrapWorkflowSha: string | undefined;
   let releasePublishBranch: string | undefined;
   let releasePublishRunAttempt: string | undefined;
@@ -247,6 +257,9 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     };
 
     switch (arg) {
+      case "--bootstrap-workflow-ref":
+        bootstrapWorkflowRef = next();
+        break;
       case "--bootstrap-workflow-sha":
         bootstrapWorkflowSha = next();
         break;
@@ -289,6 +302,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
   }
 
   return {
+    bootstrapWorkflowRef: requireBootstrapWorkflowRef(bootstrapWorkflowRef),
     bootstrapWorkflowSha: requireCommitSha(bootstrapWorkflowSha, "--bootstrap-workflow-sha"),
     releaseTag: requireArg(releaseTag, "--release-tag"),
     releaseSha: requireCommitSha(releaseSha, "--release-sha"),
@@ -311,6 +325,7 @@ export async function buildOpenClawReleaseClawHubPlan(
     registryBaseUrl?: string;
   } = {},
 ): Promise<OpenClawReleaseClawHubPlan> {
+  const bootstrapWorkflowRef = requireBootstrapWorkflowRef(args.bootstrapWorkflowRef);
   const bootstrapWorkflowSha = requireCommitSha(args.bootstrapWorkflowSha, "bootstrapWorkflowSha");
   const releaseTag = requireArg(args.releaseTag, "releaseTag");
   const releaseSha = requireCommitSha(args.releaseSha, "releaseSha");
@@ -350,7 +365,7 @@ export async function buildOpenClawReleaseClawHubPlan(
     }),
     bootstrap: createDispatchTarget({
       workflow: "plugin-clawhub-new.yml",
-      ref: "main",
+      ref: bootstrapWorkflowRef,
       packages: bootstrapPackages,
       releasePublishRunId,
       releasePublishBranch,

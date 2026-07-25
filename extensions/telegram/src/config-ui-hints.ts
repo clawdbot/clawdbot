@@ -1,3 +1,4 @@
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 // Telegram helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
@@ -14,38 +15,17 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Bot Token",
     help: "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
   },
-  dmPolicy: {
-    label: "Telegram DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
-  },
-  configWrites: {
-    label: "Telegram Config Writes",
-    help: "Allow Telegram to write config in response to channel events/commands (default: true).",
-  },
-  mentionPatterns: {
-    label: "Telegram Mention Pattern Policy",
-    help: "Scopes configured groupChat mentionPatterns to selected Telegram group chat IDs or chatId:topic:threadId topic IDs. Native Telegram bot mentions still trigger even when regex patterns are denied.",
-  },
-  "mentionPatterns.mode": {
-    label: "Telegram Mention Pattern Mode",
-    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
-  },
-  "mentionPatterns.allowIn": {
-    label: "Telegram Mention Pattern Allowlist",
-    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are enabled when mode is deny.",
-  },
-  "mentionPatterns.denyIn": {
-    label: "Telegram Mention Pattern Denylist",
-    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are disabled. Native bot mentions still trigger.",
-  },
-  "commands.native": {
-    label: "Telegram Native Commands",
-    help: 'Override native commands for Telegram (bool or "auto").',
-  },
-  "commands.nativeSkills": {
-    label: "Telegram Native Skill Commands",
-    help: 'Override native skill commands for Telegram (bool or "auto").',
-  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Telegram",
+    dmPolicy: { channelKey: "telegram" },
+    configWrites: true,
+    mentionPatterns: {
+      targetDescription: "Telegram group chat IDs or chatId:topic:threadId topic IDs",
+      policyNote: "Native Telegram bot mentions still trigger even when regex patterns are denied.",
+      denyNote: "Native bot mentions still trigger.",
+    },
+    nativeCommands: true,
+  }),
   streaming: {
     label: "Telegram Streaming Mode",
     help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
@@ -90,50 +70,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Draft Command Text",
     help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
-  "streaming.progress.label": {
-    label: "Telegram Progress Label",
-    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
-  },
-  "streaming.progress.labels": {
-    label: "Telegram Progress Label Pool",
-    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
-  },
-  "streaming.progress.maxLines": {
-    label: "Telegram Progress Max Lines",
-    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
-  },
-  "streaming.progress.maxLineChars": {
-    label: "Telegram Progress Max Line Chars",
-    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
-  },
-  "streaming.progress.toolProgress": {
-    label: "Telegram Progress Tool Lines",
-    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
-  },
-  "streaming.progress.commandText": {
-    label: "Telegram Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
-  },
-  "streaming.progress.commentary": {
-    label: "Telegram Progress Commentary",
-    help: "Show assistant commentary/preamble text in the temporary progress draft. Final answer delivery is unchanged.",
-  },
-  "retry.attempts": {
-    label: "Telegram Retry Attempts",
-    help: "Max retry attempts for outbound Telegram API calls (default: 3).",
-  },
-  "retry.minDelayMs": {
-    label: "Telegram Retry Min Delay (ms)",
-    help: "Minimum retry delay in ms for Telegram outbound calls.",
-  },
-  "retry.maxDelayMs": {
-    label: "Telegram Retry Max Delay (ms)",
-    help: "Maximum retry delay cap in ms for Telegram outbound calls.",
-  },
-  "retry.jitter": {
-    label: "Telegram Retry Jitter",
-    help: "Jitter factor (0-1) applied to Telegram retry delays.",
-  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Telegram",
+    progress: { includeCommentary: true, commentaryOrder: "after-command" },
+  }),
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",
     help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
@@ -141,18 +81,6 @@ export const telegramChannelConfigUiHints = {
   "network.dangerouslyAllowPrivateNetwork": {
     label: "Telegram Dangerously Allow Private Network",
     help: "Dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve api.telegram.org to private/internal/special-use addresses.",
-  },
-  timeoutSeconds: {
-    label: "Telegram API Timeout (seconds)",
-    help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
-  },
-  mediaGroupFlushMs: {
-    label: "Telegram Media Group Flush (ms)",
-    help: "Milliseconds to buffer Telegram albums/media groups before dispatching them as one inbound message. Default: 500.",
-  },
-  pollingStallThresholdMs: {
-    label: "Telegram Polling Stall Threshold (ms)",
-    help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
   },
   silentErrorReplies: {
     label: "Telegram Silent Error Replies",

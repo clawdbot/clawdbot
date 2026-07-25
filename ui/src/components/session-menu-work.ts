@@ -7,11 +7,11 @@ import type {
 // Shared by the app sidebar and the Sessions page: both hosts resolve the
 // same worktree-session extras (PR link, checkout path) when opening the
 // session context menu, after the menu is already visible.
-export type SessionMenuWorkClient = {
+type SessionMenuWorkClient = {
   request: <T>(method: string, params?: unknown) => Promise<T>;
 };
 
-export type SessionMenuWorkParams = {
+type SessionMenuWorkParams = {
   client: SessionMenuWorkClient;
   /** controlUi.sessionPullRequests is optional gateway surface; skip when absent. */
   pullRequestsAvailable: boolean;
@@ -20,10 +20,12 @@ export type SessionMenuWorkParams = {
   worktreeId?: string;
 };
 
-export type SessionMenuWorkResult = {
+type SessionMenuWorkResult = {
   pullRequestUrl: string | null;
   worktreePath: string | null;
 };
+
+export type SessionPullRequestIndicatorState = "none" | "open" | "merged";
 
 // Menu offers a single Open PR action; prefer the PR a maintainer most
 // likely wants: active first, merged history next, closed last.
@@ -34,7 +36,7 @@ const PR_STATE_ORDER: ReadonlyArray<ControlUiSessionPullRequest["state"]> = [
   "closed",
 ];
 
-export function pickSessionMenuPullRequestUrl(
+function pickSessionMenuPullRequestUrl(
   pullRequests: readonly ControlUiSessionPullRequest[],
 ): string | null {
   for (const state of PR_STATE_ORDER) {
@@ -46,15 +48,44 @@ export function pickSessionMenuPullRequestUrl(
   return null;
 }
 
+function resolveSessionPullRequestIndicatorState(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+): SessionPullRequestIndicatorState {
+  if (
+    pullRequests.some(
+      (pullRequest) => pullRequest.state === "open" || pullRequest.state === "draft",
+    )
+  ) {
+    return "open";
+  }
+  return pullRequests.some((pullRequest) => pullRequest.state === "merged") ? "merged" : "none";
+}
+
+async function loadSessionPullRequests(
+  params: Omit<SessionMenuWorkParams, "worktreeId">,
+): Promise<ControlUiSessionPullRequests> {
+  return params.client.request<ControlUiSessionPullRequests>("controlUi.sessionPullRequests", {
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+}
+
+export async function fetchSessionPullRequestIndicatorState(
+  params: Omit<SessionMenuWorkParams, "worktreeId">,
+): Promise<SessionPullRequestIndicatorState | null> {
+  if (!params.pullRequestsAvailable) {
+    return "none";
+  }
+  const result = await loadSessionPullRequests(params);
+  return result.rateLimited ? null : resolveSessionPullRequestIndicatorState(result.pullRequests);
+}
+
 async function loadPullRequestUrl(params: SessionMenuWorkParams): Promise<string | null> {
   if (!params.pullRequestsAvailable) {
     return null;
   }
   try {
-    const result = await params.client.request<ControlUiSessionPullRequests>(
-      "controlUi.sessionPullRequests",
-      { sessionKey: params.sessionKey, ...(params.agentId ? { agentId: params.agentId } : {}) },
-    );
+    const result = await loadSessionPullRequests(params);
     return pickSessionMenuPullRequestUrl(result.pullRequests);
   } catch {
     // Optional affordance: a GitHub or gateway hiccup just leaves Open PR disabled.

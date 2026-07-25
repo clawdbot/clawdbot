@@ -1,12 +1,9 @@
 // Matrix tests cover client plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
-import {
-  backfillMatrixAuthDeviceIdAfterStartup,
-  resolveMatrixAuth,
-  setMatrixAuthClientDepsForTest,
-} from "./client/config.js";
+import { backfillMatrixAuthDeviceIdAfterStartup, resolveMatrixAuth } from "./client/config.js";
 import * as credentialsReadModule from "./credentials-read.js";
 
 const saveMatrixCredentialsMock = vi.hoisted(() => vi.fn());
@@ -38,14 +35,23 @@ vi.mock("./client/config-secret-input.runtime.js", () => ({
   resolveConfiguredSecretInputString: resolveConfiguredSecretInputStringMock,
 }));
 
-const ensureMatrixSdkLoggingConfiguredMock = vi.fn();
-const matrixDoRequestMock = vi.fn();
-
-class MockMatrixClient {
-  async doRequest(...args: unknown[]) {
-    return await matrixDoRequestMock(...args);
+const authClientMocks = vi.hoisted(() => {
+  const ensureMatrixSdkLoggingConfigured = vi.fn();
+  const matrixDoRequest = vi.fn();
+  class MatrixClient {
+    async doRequest(...args: unknown[]) {
+      return await matrixDoRequest(...args);
+    }
   }
-}
+  return { ensureMatrixSdkLoggingConfigured, matrixDoRequest, MatrixClient };
+});
+const ensureMatrixSdkLoggingConfiguredMock = authClientMocks.ensureMatrixSdkLoggingConfigured;
+const matrixDoRequestMock = authClientMocks.matrixDoRequest;
+
+vi.mock("./sdk.js", () => ({ MatrixClient: authClientMocks.MatrixClient }));
+vi.mock("./client/logging.js", () => ({
+  ensureMatrixSdkLoggingConfigured: authClientMocks.ensureMatrixSdkLoggingConfigured,
+}));
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
@@ -104,17 +110,11 @@ describe("resolveMatrixAuth", () => {
     resolveConfiguredSecretInputStringMock.mockReset().mockResolvedValue({});
     ensureMatrixSdkLoggingConfiguredMock.mockReset();
     matrixDoRequestMock.mockReset();
-    setMatrixAuthClientDepsForTest({
-      MatrixClient: MockMatrixClient as unknown as typeof import("./sdk.js").MatrixClient,
-      ensureMatrixSdkLoggingConfigured: ensureMatrixSdkLoggingConfiguredMock,
-      retryMinDelayMs: 0,
-    });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    setMatrixAuthClientDepsForTest(undefined);
   });
 
   it("uses the hardened client request path for password login and persists deviceId", async () => {
@@ -589,8 +589,16 @@ describe("resolveMatrixAuth", () => {
       deviceId: "DEVICE123",
     });
     requireRecord(repairMeta.env, "repair env");
-    expect(repairCurrentTokenStorageMetaDeviceIdMock.mock.invocationCallOrder[0]).toBeLessThan(
-      saveBackfilledMatrixDeviceIdMock.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(
+        repairCurrentTokenStorageMetaDeviceIdMock.mock.invocationCallOrder[0],
+        "Matrix token repair invocation",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        saveBackfilledMatrixDeviceIdMock.mock.invocationCallOrder[0],
+        "Matrix device save invocation",
+      ),
     );
     expect(deviceId).toBe("DEVICE123");
   });

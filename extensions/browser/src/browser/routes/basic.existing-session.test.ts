@@ -8,6 +8,7 @@ const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
 
 vi.mock("../chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
+  takeChromeMcpSnapshot: vi.fn(async () => ({})),
 }));
 
 vi.mock("../chrome.graphics.js", async (importOriginal) => {
@@ -19,6 +20,8 @@ vi.mock("../chrome.graphics.js", async (importOriginal) => {
 });
 
 const { BrowserProfileUnavailableError } = await import("../errors.js");
+const { getProfileLifecycle, ProfileRestartRequiredError } =
+  await import("../server-context.lifecycle.js");
 const { registerBrowserBasicRoutes } = await import("./basic.js");
 
 function createExistingSessionProfileState(params?: {
@@ -180,6 +183,41 @@ describe("basic browser routes", () => {
     inspectChromeGraphicsDiagnosticsMock.mockReset();
   });
 
+  it("releases the doctor transaction, restarts once, and retries the live probe", async () => {
+    const ensureBrowserAvailable = vi.fn(async () => {});
+    const ensureTabAvailable = vi
+      .fn()
+      .mockRejectedValueOnce(new ProfileRestartRequiredError())
+      .mockResolvedValueOnce({
+        targetId: "7",
+        title: "",
+        url: "https://example.com",
+        type: "page",
+      });
+    const state = createExistingSessionProfileState();
+    const profileCtx = {
+      ...(state.forProfile() as unknown as Record<string, unknown>),
+      ensureBrowserAvailable,
+      ensureTabAvailable,
+    };
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserBasicRoutes(app, {
+      state: () => state,
+      forProfile: () => profileCtx,
+      mapTabError: vi.fn(() => null),
+    } as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/doctor")?.(
+      { params: {}, query: { profile: "chrome-live", deep: "true" } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(ensureBrowserAvailable).toHaveBeenCalledOnce();
+    expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
+  });
+
   it("reports Linux no-display headless fallback for local managed profiles", async () => {
     const originalPlatform = process.platform;
     const originalDisplay = process.env.DISPLAY;
@@ -301,7 +339,30 @@ describe("basic browser routes", () => {
     );
   });
 
-  it("does not inspect graphics while the managed process is pending reconcile", async () => {
+  it("retries unavailable graphics diagnostics and caches the first available result", async () => {
+    const unavailable = {
+      status: "unavailable",
+      observedAt: 123,
+      reason: "SystemInfo.getInfo timed out",
+    } as const;
+    const available = {
+      status: "available",
+      observedAt: 456,
+      acceleration: "hardware",
+      renderer: "ANGLE (Intel)",
+      vendor: "Intel",
+      version: "OpenGL ES 3.0",
+      backend: "(gl=angle,angle=metal)",
+      devices: [],
+      featureStatus: { webgl: "enabled" },
+      disabledFeatures: [],
+      driverBugWorkarounds: [],
+      videoDecoding: [],
+      videoEncoding: [],
+    } as const;
+    inspectChromeGraphicsDiagnosticsMock
+      .mockResolvedValueOnce(unavailable)
+      .mockResolvedValue(available);
     const state = createManagedProfileState(
       {},
       {
@@ -320,11 +381,40 @@ describe("basic browser routes", () => {
         startedAt: Date.now(),
         proc: {} as never,
       },
-      reconcile: {
-        previousProfile: profile,
-        reason: "cdp-port-changed",
-      },
     });
+
+    const first = await callBasicRouteWithState({ query: { profile: "openclaw" }, state });
+    const second = await callBasicRouteWithState({ query: { profile: "openclaw" }, state });
+    const third = await callBasicRouteWithState({ query: { profile: "openclaw" }, state });
+
+    expect(responseBodyRecord(first).graphics).toEqual(unavailable);
+    expect(responseBodyRecord(second).graphics).toEqual(available);
+    expect(responseBodyRecord(third).graphics).toEqual(available);
+    expect(inspectChromeGraphicsDiagnosticsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not inspect graphics while the managed process is pending reconcile", async () => {
+    const state = createManagedProfileState(
+      {},
+      {
+        isHttpReachable: async () => true,
+        isTransportAvailable: async () => true,
+      },
+    );
+    const profile = (state.forProfile() as { profile: unknown }).profile as never;
+    const runtime = {
+      profile,
+      running: {
+        pid: 222,
+        exe: { kind: "chromium", path: "/usr/bin/chromium" },
+        userDataDir: "/tmp/openclaw-profile",
+        cdpPort: 18800,
+        startedAt: Date.now(),
+        proc: {} as never,
+      },
+    };
+    state.profiles.set("openclaw", runtime);
+    getProfileLifecycle(runtime as never).transitionReason = "cdp-port-changed";
 
     const response = await callBasicRouteWithState({
       query: { profile: "openclaw" },

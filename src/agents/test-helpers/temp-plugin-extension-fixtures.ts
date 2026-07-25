@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { clearPluginLoaderCache } from "../../plugins/loader.js";
+import { clearPluginLoaderCache } from "../../plugins/loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 

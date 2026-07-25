@@ -1,4 +1,3 @@
-// Hooks CLI for listing, checking, toggling, installing, and updating hook integrations.
 import type { Command } from "commander";
 import {
   decorativeEmoji,
@@ -150,7 +149,8 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
 
 function exitHooksCliWithError(err: unknown): never {
   defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
-  process.exit(1);
+  defaultRuntime.exit(1);
+  throw new Error("unreachable");
 }
 
 function writeHooksOutput(value: string, json: boolean | undefined): void {
@@ -161,19 +161,20 @@ function writeHooksOutput(value: string, json: boolean | undefined): void {
   defaultRuntime.log(value);
 }
 
-async function runHooksCliAction(action: () => Promise<void> | void): Promise<void> {
+async function runHooksCliAction<T>(action: () => Promise<T> | T): Promise<T> {
   try {
-    await action();
+    return await action();
   } catch (err) {
-    exitHooksCliWithError(err);
+    return exitHooksCliWithError(err);
   }
 }
 
-async function runOneShotHooksCliAction(action: () => Promise<void> | void): Promise<void> {
-  await runHooksCliAction(action);
-  // Plugin registration can leave ref'd handles behind. Defer exit until runCli
-  // finishes shared teardown and drains both output streams.
-  requestExitAfterOneShotOutput();
+async function runOneShotHooksCliAction(action: () => Promise<number | void>): Promise<void> {
+  const result = await runHooksCliAction(action);
+  const exitCode = typeof result === "number" ? result : 0;
+  // CLI setup and handlers can leave ref'd handles behind. Defer exit until
+  // runCli finishes shared teardown and drains both output streams.
+  requestExitAfterOneShotOutput(defaultRuntime, exitCode);
 }
 
 /**
@@ -546,6 +547,7 @@ export function registerHooksCli(program: Command): void {
     .description("Internal native harness hook relay")
     .requiredOption("--provider <provider>", "Native harness provider")
     .requiredOption("--relay-id <id>", "Native hook relay id")
+    .option("--state-db <path>", "Shared state database path")
     .option("--generation <generation>", "Native hook relay registration generation")
     .requiredOption("--event <event>", "Native hook event")
     .option(
@@ -554,9 +556,7 @@ export function registerHooksCli(program: Command): void {
     )
     .option("--timeout <ms>", "Gateway timeout in ms", "5000")
     .action(async (opts: NativeHookRelayCliOptions) =>
-      runHooksCliAction(async () => {
-        process.exitCode = await runNativeHookRelayCli(opts);
-      }),
+      runOneShotHooksCliAction(() => runNativeHookRelayCli(opts)),
     );
 
   hooks
@@ -565,7 +565,8 @@ export function registerHooksCli(program: Command): void {
     .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
+    .option("--force", "Confirm non-ClawHub sources and overwrite an existing hook pack", false)
+    .action(async (raw: string, opts: { force?: boolean; link?: boolean; pin?: boolean }) => {
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
       );

@@ -1,25 +1,20 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
 import { CONNECTOR_SUGGESTIONS } from "./presentation.ts";
-import {
-  clawHubRowKey,
-  discoverShelves,
-  groupInstalledByCategory,
-  installedPlugins,
-  pluginRowKey,
-  renderPlugins,
-  type PluginsViewProps,
-} from "./view.ts";
+import { pluginRowKey, renderPlugins } from "./view.ts";
+
+type PluginsViewProps = Parameters<typeof renderPlugins>[0];
 
 function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalogItem {
   return {
     id: "workboard",
     name: "Workboard",
-    description: "Agent work queue and session handoff.",
+    description: "Agent work queue and thread handoff.",
     version: "1.0.0",
     kind: ["productivity"],
     origin: "bundled",
@@ -53,8 +48,8 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     busy: {},
     messages: {},
     pendingRemoval: {},
-    openMenuKey: null,
     detailPluginId: null,
+    iconUrls: {},
     canMutate: true,
     mutationBlockedReason: null,
     pageNotice: null,
@@ -63,11 +58,10 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     mcpMessage: null,
     mcpBusy: false,
     mcpFormOpen: false,
-    onTabChange: () => undefined,
     onQueryChange: () => undefined,
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
-    onToggleMenu: () => undefined,
+    onIconError: () => undefined,
     onShowDetails: () => undefined,
     onSetEnabled: () => undefined,
     onInstall: () => undefined,
@@ -95,12 +89,16 @@ function normalizedText(element: Element | null): string {
   return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
-function menuItem(container: Element, label: string): HTMLButtonElement | null {
+function actionButton(container: Element, label: string): HTMLButtonElement | null {
   return (
-    [...container.querySelectorAll<HTMLButtonElement>(".plugins-menu__item")].find((item) =>
-      item.textContent?.includes(label),
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      (button.getAttribute("aria-label") ?? normalizedText(button)).includes(label),
     ) ?? null
   );
+}
+
+function clawHubKey(packageName: string): string {
+  return `clawhub:${packageName}`;
 }
 
 describe("renderPlugins", () => {
@@ -116,7 +114,7 @@ describe("renderPlugins", () => {
     vi.restoreAllMocks();
   });
 
-  it("groups installed plugins by category with overview counts", () => {
+  it("renders grouped inventory counts", () => {
     const plugins = [
       createPlugin(),
       createPlugin({
@@ -136,18 +134,83 @@ describe("renderPlugins", () => {
         featured: false,
       }),
     ];
-    const groups = groupInstalledByCategory(installedPlugins(plugins));
-    expect(groups.map((group) => group.label)).toEqual(["Channels", "Tools"]);
-
     const container = mount(createProps({ result: createResult(plugins) }));
-    const pulse = container.querySelector(".plugins-pulse");
-    expect(normalizedText(pulse)).toContain("All 3");
-    expect(normalizedText(pulse)).toContain("Enabled 1");
-    expect(normalizedText(pulse)).toContain("Issues 1");
-    expect(pulse?.querySelectorAll(".plugins-pulse__segment")).toHaveLength(3);
+    const filterBar = container.querySelector(".settings-segmented");
+    expect(normalizedText(filterBar?.querySelector('[slot="label"]') ?? null)).toBeTruthy();
+    expect(
+      container.querySelector('[data-plugin-id="telegram"] h3.settings-row__title')?.textContent,
+    ).toContain("Telegram");
+    expect(normalizedText(filterBar)).toContain("All 3");
+    expect(normalizedText(filterBar)).toContain("Enabled 1");
+    expect(normalizedText(filterBar)).toContain("Issues 1");
     expect(
       container.querySelector('[data-plugin-id="broken"] [role="alert"]')?.textContent,
     ).toContain("manifest invalid");
+  });
+
+  it("keeps plugin fallback monograms on complete grapheme clusters", () => {
+    const cases = [
+      { id: "emoji-tools", name: "😀 Tools", expected: "😀T" },
+      { id: "mixed-emoji", name: "A😀", expected: "A😀" },
+      { id: "heart-tools", name: "❤️ Tools", expected: "❤️T" },
+      { id: "flag-tools", name: "🇺🇸 Tools", expected: "🇺🇸T" },
+      { id: "developer-tools", name: "👩‍💻 Tools", expected: "👩‍💻T" },
+      { id: "developer-name", name: "👩‍💻Dev", expected: "👩‍💻D" },
+      { id: "combining-mark", name: "é Tools", expected: "ÉT" },
+    ];
+    const plugins = cases.map(({ id, name }) => createPlugin({ id, name, origin: "global" }));
+    const container = mount(createProps({ result: createResult(plugins) }));
+
+    for (const { id, expected } of cases) {
+      expect(
+        container.querySelector(`[data-plugin-id="${id}"] .plugins-tile--fallback > span`)
+          ?.textContent,
+      ).toBe(expected);
+    }
+  });
+
+  it("renders proxied plugin icons and falls back after an image error", () => {
+    const plugin = createPlugin({
+      id: "remote-icon",
+      name: "FireCrawl",
+      origin: "official",
+      hasIcon: true,
+    });
+    const onIconError = vi.fn();
+    const first = mount(
+      createProps({
+        result: createResult([plugin]),
+        iconUrls: { "remote-icon": "blob:firecrawl-icon" },
+        onIconError,
+      }),
+    );
+    const image = first.querySelector<HTMLImageElement>(
+      '[data-plugin-id="remote-icon"] .plugins-tile img.plugins-icon',
+    );
+    expect(image?.getAttribute("src")).toBe("blob:firecrawl-icon");
+    image?.dispatchEvent(new Event("error"));
+    expect(onIconError).toHaveBeenCalledWith("remote-icon");
+
+    const fallback = mount(createProps({ result: createResult([plugin]) }));
+    expect(
+      fallback.querySelector('[data-plugin-id="remote-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("FI");
+  });
+
+  it("keeps plugin monograms usable when Intl.Segmenter is unavailable", async () => {
+    const originalSegmenter = Intl.Segmenter;
+    Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
+    vi.resetModules();
+
+    try {
+      const freshModulePath = "./presentation.ts?without-intl-segmenter";
+      const { pluginMonogram } = await import(/* @vite-ignore */ freshModulePath);
+      expect(pluginMonogram("😀 Tools")).toBe("😀T");
+      expect(pluginMonogram("👩‍💻 Tools")).toBe("👩T");
+    } finally {
+      Object.defineProperty(Intl, "Segmenter", { configurable: true, value: originalSegmenter });
+      vi.resetModules();
+    }
   });
 
   it("filters the installed inventory by state", () => {
@@ -156,22 +219,25 @@ describe("renderPlugins", () => {
       createPlugin({ id: "off", name: "Off" }),
       createPlugin({ id: "broken", name: "Broken", state: "error" }),
     ];
-    expect(installedPlugins(plugins, "", "enabled").map((plugin) => plugin.id)).toEqual(["on"]);
-    expect(installedPlugins(plugins, "", "disabled").map((plugin) => plugin.id)).toEqual(["off"]);
-    expect(installedPlugins(plugins, "", "issues").map((plugin) => plugin.id)).toEqual(["broken"]);
-
     const onFilterChange = vi.fn();
     const container = mount(createProps({ result: createResult(plugins), onFilterChange }));
-    const chips = container.querySelectorAll<HTMLButtonElement>(".plugins-filters button");
+    const chips = container.querySelectorAll<HTMLElement>(
+      ".settings-segmented .settings-segmented__btn",
+    );
     expect(chips).toHaveLength(4);
-    chips[3].click();
+    const issues = expectDefined(chips[3], "issues filter chip");
+    const group = issues.closest<HTMLElement & { value: string }>("wa-radio-group");
+    expect(group).not.toBeNull();
+    if (group) {
+      group.value = "issues";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     expect(onFilterChange).toHaveBeenCalledWith("issues");
   });
 
-  it("offers enable and remove through the row actions menu", () => {
+  it("offers enable and remove through direct row actions", () => {
     const onSetEnabled = vi.fn();
     const onRequestUninstall = vi.fn();
-    const onToggleMenu = vi.fn();
     const removableKey = pluginRowKey("community-thing");
     const plugins = [
       createPlugin(),
@@ -183,37 +249,19 @@ describe("renderPlugins", () => {
         featured: false,
       }),
     ];
-    const closedMenus = mount(createProps({ result: createResult(plugins), onToggleMenu }));
-    const kebab = closedMenus.querySelector<HTMLButtonElement>(
-      '[data-plugin-id="community-thing"] .plugins-kebab',
-    );
-    expect(kebab?.getAttribute("aria-expanded")).toBe("false");
-    kebab?.click();
-    expect(onToggleMenu).toHaveBeenCalledWith(removableKey);
-
     const container = mount(
-      createProps({
-        result: createResult(plugins),
-        openMenuKey: removableKey,
-        onSetEnabled,
-        onRequestUninstall,
-      }),
+      createProps({ result: createResult(plugins), onSetEnabled, onRequestUninstall }),
     );
     const row = container.querySelector<HTMLElement>('[data-plugin-id="community-thing"]')!;
-    expect(normalizedText(row.querySelector(".plugins-state"))).toBe("Disabled");
-    menuItem(row, "Enable")?.click();
+    actionButton(row, "Enable")?.click();
     expect(onSetEnabled).toHaveBeenCalledWith("community-thing", true, removableKey);
-    menuItem(row, "Remove")?.click();
+    actionButton(row, "Remove Community Thing")?.click();
     expect(onRequestUninstall).toHaveBeenCalledWith(removableKey);
 
-    // Bundled plugins expose no Remove item, only enable/disable and details.
-    const bundledMenu = mount(
-      createProps({ result: createResult(plugins), openMenuKey: pluginRowKey("workboard") }),
-    );
-    const bundledRow = bundledMenu.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
-    expect(menuItem(bundledRow, "Remove")).toBeNull();
-    expect(menuItem(bundledRow, "Enable")).not.toBeNull();
-    expect(menuItem(bundledRow, "View details")).not.toBeNull();
+    // Bundled plugins cannot be removed; the row still offers enable/disable.
+    const bundledRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
+    expect(actionButton(bundledRow, "Remove")).toBeNull();
+    expect(actionButton(bundledRow, "Enable")).not.toBeNull();
   });
 
   it("confirms removal before uninstalling", () => {
@@ -261,7 +309,7 @@ describe("renderPlugins", () => {
       }),
     );
     const detail = container.querySelector<HTMLElement>(".plugins-detail")!;
-    expect(detail.getAttribute("role")).toBe("dialog");
+    expect(detail.closest("openclaw-modal-dialog")?.getAttribute("label")).toBe("Workboard");
     expect(normalizedText(detail.querySelector(".plugins-detail__title"))).toContain("Workboard");
     expect(normalizedText(detail.querySelector(".plugins-detail__meta"))).toContain("workboard");
     detail.querySelectorAll<HTMLButtonElement>(".plugins-detail__actions button")[0]?.click();
@@ -270,21 +318,23 @@ describe("renderPlugins", () => {
     expect(onShowDetails).toHaveBeenCalledWith(null);
   });
 
-  it("lists MCP servers with menu-driven toggle and remove plus the add form", () => {
+  it("lists MCP servers with direct toggle and remove plus the add form", () => {
     const onMcpToggle = vi.fn();
     const onMcpRemove = vi.fn();
     const onMcpAdd = vi.fn();
     const container = mount(
       createProps({
         mcpFormOpen: true,
-        openMenuKey: "mcp:github",
         mcpServers: [
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://api.githubcopilot.com/mcp/",
             auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
           },
         ],
         onMcpToggle,
@@ -296,23 +346,24 @@ describe("renderPlugins", () => {
     const row = container.querySelector<HTMLElement>('[data-mcp-name="github"]')!;
     expect(normalizedText(row)).toContain("github");
     expect(normalizedText(row)).toContain("OAuth");
-    menuItem(row, "Disable")?.click();
+    actionButton(row, "Disable")?.click();
     expect(onMcpToggle).toHaveBeenCalledWith("github", false);
-    menuItem(row, "Remove")?.click();
+    actionButton(row, "Remove github")?.click();
     expect(onMcpRemove).toHaveBeenCalledWith("github");
 
-    const form = container.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = container.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     expect(onMcpAdd).toHaveBeenCalledWith({
       name: "context7",
+      transport: "streamable-http",
       target: "https://mcp.context7.com/mcp",
     });
   });
 
-  it("splits discover shelves into featured, official, and connectors", () => {
+  it("renders featured and official discover shelves", () => {
     const plugins = [
       createPlugin(),
       createPlugin({
@@ -326,21 +377,15 @@ describe("renderPlugins", () => {
         install: { source: "official", pluginId: "tavily" },
       }),
     ];
-    const shelves = discoverShelves(plugins);
-    expect(shelves.featured.map((plugin) => plugin.id)).toEqual(["workboard"]);
-    expect(shelves.official.map((plugin) => plugin.id)).toEqual(["tavily"]);
-    expect(shelves.connectors.length).toBeGreaterThan(0);
-
     const onInstall = vi.fn();
     const container = mount(
       createProps({ activeTab: "discover", result: createResult(plugins), onInstall }),
     );
-    expect(
-      normalizedText(
-        container.querySelector("#plugins-shelf-featured")?.closest(".plugins-group__heading") ??
-          null,
-      ),
-    ).toBe("Featured 1");
+    const featuredHeading =
+      [...container.querySelectorAll(".settings-section__heading")].find((heading) =>
+        normalizedText(heading).startsWith("Featured"),
+      ) ?? null;
+    expect(normalizedText(featuredHeading)).toBe("Featured 1");
     container
       .querySelector<HTMLButtonElement>('[data-plugin-id="tavily"] .plugins-install')
       ?.click();
@@ -348,6 +393,41 @@ describe("renderPlugins", () => {
       source: "official",
       pluginId: "tavily",
     });
+  });
+
+  it("renders featured plugins newest-featured first", () => {
+    const plugins = [
+      createPlugin({
+        id: "not-featured",
+        name: "Not Featured",
+        featured: false,
+        origin: "official",
+        installed: false,
+        order: 0,
+      }),
+      createPlugin({
+        id: "older-popular",
+        name: "Older Popular",
+        featured: true,
+        featuredAt: 100,
+        order: 1,
+      }),
+      createPlugin({
+        id: "newest-featured",
+        name: "Newest Featured",
+        featured: true,
+        featuredAt: 200,
+        order: 99,
+      }),
+    ];
+
+    const container = mount(createProps({ activeTab: "discover", result: createResult(plugins) }));
+
+    expect(
+      [...container.querySelectorAll<HTMLElement>("[data-plugin-id]")].map(
+        (row) => row.dataset.pluginId,
+      ),
+    ).toEqual(["newest-featured", "older-popular", "not-featured"]);
   });
 
   it("adds MCP connectors and routes ClawHub connector searches", () => {
@@ -359,13 +439,13 @@ describe("renderPlugins", () => {
 
     const github = container.querySelector<HTMLElement>('[data-connector-id="github"]');
     expect(normalizedText(github)).toContain("MCP");
-    github?.querySelector<HTMLButtonElement>(".plugins-card__footer button")?.click();
+    github?.querySelector<HTMLButtonElement>(".settings-row__control button")?.click();
     expect(onAddConnector).toHaveBeenCalledWith(
       CONNECTOR_SUGGESTIONS.find((connector) => connector.id === "github"),
     );
 
     const spotify = container.querySelector<HTMLElement>('[data-connector-id="spotify"]');
-    spotify?.querySelector<HTMLButtonElement>(".plugins-card__footer button")?.click();
+    spotify?.querySelector<HTMLButtonElement>(".settings-row__control button")?.click();
     expect(onSearchClawHub).toHaveBeenCalledWith("spotify");
   });
 
@@ -374,14 +454,23 @@ describe("renderPlugins", () => {
       createProps({
         activeTab: "discover",
         mcpServers: [
-          { name: "github", enabled: true, transport: "http", target: "https://x", auth: "oauth" },
+          {
+            name: "github",
+            enabled: true,
+            transport: "streamable-http",
+            target: "https://x",
+            auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
+          },
         ],
       }),
     );
 
     const github = container.querySelector<HTMLElement>('[data-connector-id="github"]');
     expect(normalizedText(github)).toContain("Added");
-    expect(github?.querySelector(".plugins-card__footer button")).toBeNull();
+    expect(github?.querySelector(".settings-row__control button")).toBeNull();
   });
 
   it("appends live ClawHub results below the discover shelves while searching", () => {
@@ -417,11 +506,13 @@ describe("renderPlugins", () => {
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onQueryChange).toHaveBeenCalledWith("work");
 
-    const heading = container.querySelector("#plugins-shelf-clawhub");
-    expect(normalizedText(heading)).toBe("From ClawHub");
-    const link = container
-      .querySelector("#plugins-shelf-clawhub")
-      ?.closest(".plugins-group")
+    const heading =
+      [...container.querySelectorAll(".settings-section__heading")].find((candidate) =>
+        normalizedText(candidate).startsWith("From ClawHub"),
+      ) ?? null;
+    expect(normalizedText(heading)).toBe("From ClawHub 1");
+    const link = heading
+      ?.closest(".settings-section")
       ?.querySelector<HTMLAnchorElement>(".plugins-group__link");
     expect(link?.href).toBe("https://clawhub.ai/plugins");
     expect(link?.target).toBe("_blank");
@@ -435,7 +526,7 @@ describe("renderPlugins", () => {
     expect(normalizedText(result)).toContain("149.3K");
     expect(normalizedText(result)).toContain("Code plugin");
     result?.querySelector<HTMLButtonElement>('[aria-label="Install Calendar Plus"]')?.click();
-    expect(onInstall).toHaveBeenCalledWith(clawHubRowKey("@openclaw/calendar-plus"), {
+    expect(onInstall).toHaveBeenCalledWith(clawHubKey("@openclaw/calendar-plus"), {
       source: "clawhub",
       packageName: "@openclaw/calendar-plus",
     });
@@ -458,7 +549,6 @@ describe("renderPlugins", () => {
         result: createResult([createPlugin(), available]),
         canMutate: false,
         mutationBlockedReason: "Browsing only. Plugin changes require operator.admin access.",
-        openMenuKey: pluginRowKey("workboard"),
         onInstall,
         onSetEnabled,
       }),
@@ -469,7 +559,7 @@ describe("renderPlugins", () => {
       container.querySelector<HTMLButtonElement>('[aria-label="Install Lobster"]')?.disabled,
     ).toBe(true);
     const workboardRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
-    const enableItem = menuItem(workboardRow, "Enable");
+    const enableItem = actionButton(workboardRow, "Enable");
     expect(enableItem?.disabled).toBe(true);
     enableItem?.click();
     expect(onInstall).not.toHaveBeenCalled();
@@ -478,7 +568,7 @@ describe("renderPlugins", () => {
 
   it("renders row-local risk acknowledgement and busy state", () => {
     const packageName = "@openclaw/calendar-plus";
-    const key = clawHubRowKey(packageName);
+    const key = clawHubKey(packageName);
     const onInstall = vi.fn();
     const container = mount(
       createProps({
@@ -539,7 +629,6 @@ describe("renderPlugins", () => {
         activeTab: "discover",
         query: "calendar",
         result: createResult([installed]),
-        openMenuKey: clawHubRowKey(packageName),
         searchResults: [
           {
             score: 0.9,
@@ -557,32 +646,10 @@ describe("renderPlugins", () => {
     );
 
     const row = container.querySelector<HTMLElement>(`[data-package-name="${packageName}"]`)!;
-    expect(row.querySelector("h3")?.textContent).toBe("Calendar Plus");
+    expect(normalizedText(row.querySelector(".settings-row__title"))).toBe("Calendar Plus");
     expect(row.querySelector(".plugins-install")).toBeNull();
-    expect(normalizedText(row.querySelector(".plugins-state"))).toBe("Enabled");
-    menuItem(row, "Disable")?.click();
-    expect(onSetEnabled).toHaveBeenCalledWith(
-      "calendar-runtime",
-      false,
-      clawHubRowKey(packageName),
-    );
-  });
-
-  it("uses roving focus and arrow-key activation for the catalog tabs", () => {
-    const onTabChange = vi.fn();
-    const container = mount(createProps({ activeTab: "installed", onTabChange }));
-    const installed = container.querySelector<HTMLButtonElement>("#plugins-tab-installed")!;
-    const discover = container.querySelector<HTMLButtonElement>("#plugins-tab-discover")!;
-
-    expect([installed.tabIndex, discover.tabIndex]).toEqual([0, -1]);
-    installed.focus();
-    installed.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    expect(onTabChange).toHaveBeenLastCalledWith("discover");
-    expect(document.activeElement).toBe(discover);
-
-    discover.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
-    expect(onTabChange).toHaveBeenLastCalledWith("installed");
-    expect(document.activeElement).toBe(installed);
+    actionButton(row, "Disable")?.click();
+    expect(onSetEnabled).toHaveBeenCalledWith("calendar-runtime", false, clawHubKey(packageName));
   });
 
   it("does not present an empty catalog alongside an initial list failure", () => {
@@ -594,7 +661,7 @@ describe("renderPlugins", () => {
     expect(container.textContent).not.toContain("No optional plugins installed");
   });
 
-  it("renders bundled cover art in discover and gradient fallbacks elsewhere", () => {
+  it("renders bundled art tiles in discover and gradient fallbacks elsewhere", () => {
     const plugins = [
       createPlugin(),
       createPlugin({
@@ -609,12 +676,12 @@ describe("renderPlugins", () => {
     const container = mount(createProps({ activeTab: "discover", result: createResult(plugins) }));
 
     const art = container.querySelector<HTMLImageElement>(
-      '[data-plugin-id="workboard"] .plugins-cover img',
+      '[data-plugin-id="workboard"] .plugins-tile img',
     );
     expect(art?.src).toContain("plugin-art/workboard.webp");
 
     const fallback = container.querySelector<HTMLElement>(
-      '[data-plugin-id="totally-unknown"] .plugins-cover--fallback',
+      '[data-plugin-id="totally-unknown"] .plugins-tile--fallback',
     );
     expect(fallback?.getAttribute("style")).toContain("--plugins-art-a");
     expect(normalizedText(fallback)).toBe("TU");

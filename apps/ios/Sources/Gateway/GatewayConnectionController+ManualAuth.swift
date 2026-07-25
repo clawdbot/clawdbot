@@ -3,6 +3,10 @@ import OpenClawKit
 
 extension GatewayConnectionController {
     static func migrateLegacyDeviceAuth() {
+        guard
+            let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted(),
+            let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension)
+        else { return }
         let migrationGatewayID = self.legacyDeviceAuthMigrationGatewayID()
         let relay = ShareGatewayRelaySettings.loadConfig()
         let instanceID = GatewaySettingsStore.currentInstanceID()
@@ -15,8 +19,6 @@ extension GatewayConnectionController {
         } else {
             GatewaySettingsStore.discardUnscopedGatewayCredentials(instanceId: instanceID)
         }
-        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
-        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
         // The extension connects independently, so the host's last route cannot prove who
         // issued its legacy token. Require one extension re-pair instead of guessing an owner.
         DeviceAuthStore.discardUnscopedTokens(
@@ -42,9 +44,8 @@ extension GatewayConnectionController {
         }
         DeviceAuthStore.discardUnscopedTokens(deviceId: primaryIdentity.deviceId)
         guard let relay else { return }
-        let relayStableID = relay.gatewayStableID?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard relayStableID.isEmpty else { return }
+        // Stable IDs are opaque byte-exact tokens; do not trim or normalize before comparing.
+        guard GatewayStableIdentifier.exact(relay.gatewayStableID) == nil else { return }
         ShareGatewayRelaySettings.saveConfig(ShareGatewayRelayConfig(
             gatewayURLString: relay.gatewayURLString,
             gatewayStableID: migrationGatewayID,
@@ -57,9 +58,7 @@ extension GatewayConnectionController {
 
     private static func legacyDeviceAuthMigrationGatewayID() -> String? {
         guard let relay = ShareGatewayRelaySettings.loadConfig() else { return nil }
-        if let stableID = relay.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !stableID.isEmpty
-        {
+        if let stableID = GatewayStableIdentifier.exact(relay.gatewayStableID) {
             return stableID
         }
         guard let active = GatewaySettingsStore.activeGatewayEntry(),
@@ -164,7 +163,9 @@ extension GatewayConnectionController {
             guard let pendingOverride else {
                 return ManualAuthOverride.normalized(token: token, bootstrapToken: nil, password: password)
             }
-            if let pendingTarget = pendingOverride.targetStableID, pendingTarget != targetStableID {
+            if let pendingTarget = pendingOverride.targetStableID,
+               !GatewayStableIdentifier.matches(pendingTarget, targetStableID)
+            {
                 let normalizedInput = ManualAuthOverride.explicit(
                     token: token,
                     bootstrapToken: nil,

@@ -14,7 +14,7 @@ import {
 import type { GatewayStatusProbedTarget } from "./probe-run.js";
 
 /** Warning emitted when gateway status finds degraded or surprising probe state. */
-export type GatewayStatusWarning = {
+type GatewayStatusWarning = {
   code: string;
   message: string;
   details?: string[];

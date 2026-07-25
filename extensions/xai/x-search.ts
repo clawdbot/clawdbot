@@ -95,7 +95,13 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
   }
-  const [year, month, day] = trimmed.split("-").map((entry) => Number.parseInt(entry, 10));
+  const [yearText, monthText, dayText] = trimmed.split("-");
+  if (yearText === undefined || monthText === undefined || dayText === undefined) {
+    throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
+  }
+  const year = Number.parseInt(yearText, 10);
+  const month = Number.parseInt(monthText, 10);
+  const day = Number.parseInt(dayText, 10);
   const date = new Date(Date.UTC(year, month - 1, day));
   if (
     date.getUTCFullYear() !== year ||

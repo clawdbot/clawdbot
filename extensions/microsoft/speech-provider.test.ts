@@ -1,6 +1,5 @@
 // Microsoft tests cover speech provider plugin behavior.
-import { mkdtempSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -8,7 +7,8 @@ import {
   getDebugProxyCaptureStore,
   initializeDebugProxyCapture,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -30,14 +30,18 @@ vi.mock("node-edge-tts", () => ({
   },
 }));
 
-import {
-  buildMicrosoftSpeechProvider,
-  isCjkDominant,
-  listMicrosoftVoices,
-} from "./speech-provider.js";
+import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 import * as ttsModule from "./tts.js";
 
 const TEST_CFG = {} as OpenClawConfig;
+
+async function listVoicesThroughProvider() {
+  const listVoices = buildMicrosoftSpeechProvider().listVoices;
+  if (!listVoices) {
+    throw new Error("expected Microsoft voice listing support");
+  }
+  return await listVoices({ providerConfig: {} });
+}
 
 function requireFirstEdgeTtsCall(edgeSpy: ReturnType<typeof vi.spyOn>): {
   config?: unknown;
@@ -62,6 +66,21 @@ function requireFirstEdgeTtsCall(edgeSpy: ReturnType<typeof vi.spyOn>): {
 }
 
 describe("listMicrosoftVoices", () => {
+  let openClawState: OpenClawTestState;
+
+  beforeEach(async () => {
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "microsoft-voices-capture-",
+    });
+  });
+
+  afterEach(async () => {
+    await openClawState.cleanup();
+  });
+
+  // Install after local teardown so the proxy snapshot is restored before the
+  // state helper removes its directory and restores the outer environment.
   const proxyReset = installDebugProxyTestResetHooks();
 
   it("maps Microsoft voice metadata into speech voice options", async () => {
@@ -83,7 +102,7 @@ describe("listMicrosoftVoices", () => {
       ),
     ) as unknown as typeof globalThis.fetch;
 
-    const voices = await listMicrosoftVoices();
+    const voices = await listVoicesThroughProvider();
 
     expect(voices).toEqual([
       {
@@ -101,6 +120,52 @@ describe("listMicrosoftVoices", () => {
     );
   });
 
+  it("returns an empty catalog for a malformed top-level payload", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response("null", { status: 200 }),
+      ) as unknown as typeof globalThis.fetch;
+
+    await expect(listVoicesThroughProvider()).resolves.toEqual([]);
+  });
+
+  it("skips malformed rows without discarding valid voices", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          null,
+          "unexpected",
+          [],
+          { ShortName: 42 },
+          {
+            ShortName: "en-US-AvaNeural",
+            FriendlyName: "Microsoft Ava Online (Natural) - English (United States)",
+            Locale: "en-US",
+            Gender: "Female",
+            VoiceTag: {
+              ContentCategories: [null, "General"],
+              VoicePersonalities: [false, "Friendly", "Positive"],
+            },
+          },
+        ]),
+        { status: 200 },
+      ),
+    ) as unknown as typeof globalThis.fetch;
+
+    await expect(listVoicesThroughProvider()).resolves.toEqual([
+      {
+        id: "en-US-AvaNeural",
+        name: "Microsoft Ava Online (Natural) - English (United States)",
+        category: "General",
+        description: "Friendly, Positive",
+        locale: "en-US",
+        gender: "Female",
+        personalities: ["Friendly", "Positive"],
+      },
+    ]);
+  });
+
   it("throws on Microsoft voice list failures", async () => {
     globalThis.fetch = vi
       .fn()
@@ -108,7 +173,7 @@ describe("listMicrosoftVoices", () => {
         new Response("nope", { status: 503 }),
       ) as unknown as typeof globalThis.fetch;
 
-    await expect(listMicrosoftVoices()).rejects.toThrow("Microsoft voices API error (503)");
+    await expect(listVoicesThroughProvider()).rejects.toThrow("Microsoft voices API error (503)");
   });
 
   it("prefers the configured provider request timeout", async () => {
@@ -128,10 +193,8 @@ describe("listMicrosoftVoices", () => {
   });
 
   it("records voice discovery exchanges in debug proxy capture mode", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-capture-"));
     proxyReset.captureProxyEnv();
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
-    process.env.OPENCLAW_STATE_DIR = tempDir;
     process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-session";
 
     globalThis.fetch = vi
@@ -149,7 +212,7 @@ describe("listMicrosoftVoices", () => {
       sourceProcess: "openclaw",
     });
 
-    await listMicrosoftVoices();
+    await listVoicesThroughProvider();
 
     await vi.waitFor(() => {
       const events = store.getSessionEvents("ms-voices-session", 10);
@@ -167,10 +230,8 @@ describe("listMicrosoftVoices", () => {
   });
 
   it("does not double-capture voice discovery when the global fetch patch is installed", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-global-"));
     proxyReset.captureProxyEnv();
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
-    process.env.OPENCLAW_STATE_DIR = tempDir;
     process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-global-session";
 
     globalThis.fetch = vi.fn(
@@ -188,7 +249,7 @@ describe("listMicrosoftVoices", () => {
     initializeDebugProxyCapture("test");
 
     try {
-      await listMicrosoftVoices();
+      await listVoicesThroughProvider();
 
       let events: Array<Record<string, unknown>> = [];
       await vi.waitFor(() => {
@@ -203,28 +264,6 @@ describe("listMicrosoftVoices", () => {
       globalThis.fetch = proxyReset.originalFetch;
       finalizeDebugProxyCapture();
     }
-  });
-});
-
-describe("isCjkDominant", () => {
-  it("returns true for Chinese text", () => {
-    expect(isCjkDominant("你好世界")).toBe(true);
-  });
-
-  it("returns true for mixed text with majority CJK", () => {
-    expect(isCjkDominant("你好，这是一个测试 hello")).toBe(true);
-  });
-
-  it("returns false for English text", () => {
-    expect(isCjkDominant("Hello, this is a test")).toBe(false);
-  });
-
-  it("returns false for empty string", () => {
-    expect(isCjkDominant("")).toBe(false);
-  });
-
-  it("returns false for mostly English with a few CJK chars", () => {
-    expect(isCjkDominant("This is a long English sentence with one 字")).toBe(false);
   });
 });
 

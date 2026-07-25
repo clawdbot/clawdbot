@@ -5,17 +5,19 @@ import { streamSimple } from "../../../llm/stream.js";
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
+import type { LlmRuntime } from "@openclaw/ai";
+import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
+import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import type { NormalizedUsage } from "../../usage.js";
 import {
-  resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
+  resolveEmbeddedAgentStreamFn as resolveEmbeddedAgentStreamFnImpl,
 } from "../stream-resolution.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
@@ -35,6 +37,17 @@ import {
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
+
+const llmRuntime = {
+  ...defaultLlmRuntime,
+  streamSimple,
+} as LlmRuntime;
+
+function resolveEmbeddedAgentStreamFn(
+  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamFnImpl>[0], "llmRuntime">,
+) {
+  return resolveEmbeddedAgentStreamFnImpl({ ...params, llmRuntime });
+}
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
@@ -126,62 +139,7 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
 });
 
 describe("resolvePromptBuildHookResult", () => {
-  function createBeforeAgentStartOnlyHookRunner() {
-    return {
-      hasHooks: vi.fn(
-        (
-          hookName:
-            | "agent_turn_prepare"
-            | "heartbeat_prompt_contribution"
-            | "before_prompt_build"
-            | "before_agent_start",
-        ) => hookName === "before_agent_start",
-      ),
-      runBeforePromptBuild: vi.fn(async () => undefined),
-      runBeforeAgentStart: vi.fn(async () => ({ prependContext: "from-hook" })),
-    };
-  }
-
-  it("reuses precomputed before_agent_start result without invoking hook again", async () => {
-    const hookRunner = createBeforeAgentStartOnlyHookRunner();
-    const result = await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hello",
-      messages: [],
-      hookCtx: {},
-      hookRunner,
-      beforeAgentStartResult: { prependContext: "from-cache", systemPrompt: "agent-start-system" },
-    });
-
-    expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      prependContext: "from-cache",
-      appendContext: undefined,
-      systemPrompt: "agent-start-system",
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
-    });
-  });
-
-  it("calls before_agent_start hook when precomputed result is absent", async () => {
-    const hookRunner = createBeforeAgentStartOnlyHookRunner();
-    const messages = [{ role: "user", content: "ctx" }];
-    const result = await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hello",
-      messages,
-      hookCtx: {},
-      hookRunner,
-    });
-
-    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
-    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
-    expect(result.prependContext).toBe("from-hook");
-  });
-
-  it("merges prompt-build and before_agent_start context fields in deterministic order", async () => {
-    // Prompt-build hook context comes before before_agent_start context so plugin
-    // injections are replayed in stable order.
+  it("preserves prompt-build context fields", async () => {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
@@ -190,12 +148,6 @@ describe("resolvePromptBuildHookResult", () => {
         prependSystemContext: "prompt prepend",
         appendSystemContext: "prompt append",
       })),
-      runBeforeAgentStart: vi.fn(async () => ({
-        prependContext: "agent start context",
-        appendContext: "agent start append context",
-        prependSystemContext: "agent start prepend",
-        appendSystemContext: "agent start append",
-      })),
     };
 
     const result = await resolvePromptBuildHookResult({
@@ -206,14 +158,10 @@ describe("resolvePromptBuildHookResult", () => {
       hookRunner,
     });
 
-    expect(result.prependContext).toBe("prompt context\n\nagent start context");
-    expect(result.appendContext).toBe("prompt append context\n\nagent start append context");
-    expect(result.prependSystemContext).toBe(
-      `${wrappedPluginSystemContext("prompt prepend")}\n\n${wrappedPluginSystemContext("agent start prepend")}`,
-    );
-    expect(result.appendSystemContext).toBe(
-      `${wrappedPluginSystemContext("prompt append")}\n\n${wrappedPluginSystemContext("agent start append")}`,
-    );
+    expect(result.prependContext).toBe("prompt context");
+    expect(result.appendContext).toBe("prompt append context");
+    expect(result.prependSystemContext).toBe(wrappedPluginSystemContext("prompt prepend"));
+    expect(result.appendSystemContext).toBe(wrappedPluginSystemContext("prompt append"));
   });
 
   it("applies heartbeat prompt contributions only during heartbeat turns", async () => {
@@ -224,7 +172,6 @@ describe("resolvePromptBuildHookResult", () => {
         appendContext: "heartbeat append",
       })),
       runBeforePromptBuild: vi.fn(async () => undefined),
-      runBeforeAgentStart: vi.fn(async () => undefined),
     };
 
     const heartbeatResult = await resolvePromptBuildHookResult({
@@ -543,7 +490,6 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
 
 describe("resolveEmbeddedAgentStreamFn", () => {
   it("reuses the session's original base stream across later wrapper mutations", () => {
-    resetEmbeddedAgentBaseStreamFnCacheForTest();
     const baseStreamFn = vi.fn();
     const wrapperStreamFn = vi.fn();
     const session = {
@@ -3359,12 +3305,28 @@ describe("buildAfterTurnRuntimeContext", () => {
       expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
         false,
       );
+      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
     } finally {
       resetProcessRegistryForTests();
     }
   });
 
   it("uses primary model when compaction.model is not set", () => {
+    const runtimeAuthPlan = {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:p1",
+      forwardedAuthProfileSource: "user" as const,
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authRequirement: "subscription" as const,
+        requestTransportOverrides: "none" as const,
+      },
+    };
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -3372,6 +3334,8 @@ describe("buildAfterTurnRuntimeContext", () => {
         messageProvider: "slack",
         agentAccountId: "acct-1",
         authProfileId: "openai:p1",
+        authProfileIdSource: "user",
+        runtimePlan: { auth: runtimeAuthPlan } as never,
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
         provider: "openai",
@@ -3388,6 +3352,8 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
+    expect(legacy.authProfileIdSource).toBe("user");
+    expect(legacy.runtimeAuthPlan).toBe(runtimeAuthPlan);
   });
 
   it("keeps the primary model for a locked after-turn runtime context", () => {
@@ -3413,6 +3379,35 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(runtimeContext.model).toBe("gpt-5.5");
   });
 
+  it("publishes the storage-neutral session target in runtime context", () => {
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-abc",
+      sessionKey: "agent:main:session:abc",
+      storePath: "/tmp/state/agents/main/sessions/sessions.json",
+      threadId: 42,
+    };
+
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionId: "ignored-session-id",
+        sessionKey: "agent:main:fallback",
+        sessionTarget,
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+    });
+
+    expect(runtimeContext.transcriptStorage).toEqual({ kind: "sqlite" });
+    expect(runtimeContext.sessionTarget).toEqual(sessionTarget);
+  });
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
@@ -3572,3 +3567,4 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(legacy.currentMessageId).toBe("msg-42");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,13 +3,22 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  computeEffectiveSettings,
-  default as contextPruningExtension,
-  DEFAULT_CONTEXT_PRUNING_SETTINGS,
-  pruneContextMessages,
-} from "./context-pruning.js";
+import contextPruningExtension from "./context-pruning.js";
+import { pruneContextMessages } from "./context-pruning/pruner.js";
 import { getContextPruningRuntime, setContextPruningRuntime } from "./context-pruning/runtime.js";
+import { computeEffectiveSettings } from "./context-pruning/settings.js";
+
+function resolveDefaultContextPruningSettings(): NonNullable<
+  ReturnType<typeof computeEffectiveSettings>
+> {
+  const settings = computeEffectiveSettings({ mode: "cache-ttl" });
+  if (!settings) {
+    throw new Error("expected default context-pruning settings");
+  }
+  return settings;
+}
+
+const DEFAULT_CONTEXT_PRUNING_SETTINGS = resolveDefaultContextPruningSettings();
 
 function isToolResultMessage(msg: AgentMessage): msg is ToolResultMessage {
   return msg.role === "toolResult";

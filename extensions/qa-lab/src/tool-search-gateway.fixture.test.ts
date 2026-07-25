@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   countSessionLogMentions,
@@ -9,6 +10,11 @@ import {
   outputText,
   outputToolNames,
 } from "./fixture-utils.js";
+import {
+  qaMockRequestCursorUrl,
+  qaMockRequestsAfterUrl,
+  readQaMockRequestCursor,
+} from "./providers/shared/debug-request-cursor.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
   assertToolSearchLaneResults,
@@ -22,6 +28,22 @@ afterEach(() => {
 });
 
 describe("tool search gateway e2e fetch helper", () => {
+  it("builds and validates mock request cursor reads", () => {
+    expect(readQaMockRequestCursor({ cursor: 42 })).toBe(42);
+    expect(qaMockRequestCursorUrl("http://mock.test/")).toBe(
+      "http://mock.test/debug/request-cursor",
+    );
+    expect(qaMockRequestsAfterUrl("http://mock.test/", 42)).toBe(
+      "http://mock.test/debug/requests?after=42",
+    );
+    expect(() => readQaMockRequestCursor({ cursor: -1 })).toThrow(
+      "mock provider request cursor response was invalid",
+    );
+    expect(() => readQaMockRequestCursor([])).toThrow(
+      "mock provider request cursor response was invalid",
+    );
+  });
+
   it("rejects loose numeric env limits instead of parsing prefixes", () => {
     expect(() =>
       readToolSearchGatewayFetchLimits({
@@ -144,6 +166,68 @@ describe("tool search gateway e2e session log scanner", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("counts target mentions from SQLite transcript rows", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-sqlite-"));
+    const sqlitePath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+    const db = new DatabaseSync(sqlitePath);
+    try {
+      const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
+      db.exec(`
+        CREATE TABLE transcript_events (
+          session_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          event_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (session_id, seq)
+        );
+      `);
+      const insert = db.prepare(
+        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+      );
+      insert.run(
+        "sqlite-session",
+        1,
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: "tool search qa check target=fake_plugin_tool_17",
+          },
+        }),
+        1,
+      );
+      insert.run(
+        "sqlite-session",
+        2,
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: 'FAKE_PLUGIN_OK fake_plugin_tool_17 via tool_search_code quoted_call("alpha")',
+          },
+        }),
+        2,
+      );
+
+      await expect(
+        countSessionLogMentions({
+          sessionsDir,
+          needles: {
+            fake_plugin_tool_17: "fake_plugin_tool_17",
+            quoted_call: 'quoted_call("alpha")',
+            tool_search_code: "tool_search_code",
+          },
+        }),
+      ).resolves.toEqual({
+        fake_plugin_tool_17: 1,
+        quoted_call: 1,
+        tool_search_code: 1,
+      });
+    } finally {
+      db.close();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("tool search gateway e2e lane result", () => {
@@ -159,7 +243,7 @@ describe("tool search gateway e2e lane result", () => {
       });
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ cursor: 0 }))
       .mockResolvedValueOnce(jsonResponse({ output: [], status: "completed" }))
       .mockResolvedValueOnce(
         jsonResponse([
@@ -174,7 +258,7 @@ describe("tool search gateway e2e lane result", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
     const env: QaSuiteRuntimeEnv = {
-      alternateModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.6-luna",
       cfg: {},
       gateway: {
         baseUrl: "http://gateway.test",
@@ -192,7 +276,8 @@ describe("tool search gateway e2e lane result", () => {
         workspaceDir: tempRoot,
       },
       mock: { baseUrl: "http://mock-openai.test" },
-      primaryModel: "openai/gpt-5.5",
+      outputDir: path.join(tempRoot, "output"),
+      primaryModel: "openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       repoRoot: tempRoot,
       transport: {} as QaSuiteRuntimeEnv["transport"],

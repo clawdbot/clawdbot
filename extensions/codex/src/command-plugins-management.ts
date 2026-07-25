@@ -20,7 +20,7 @@ export type CodexPluginsManagementIO = {
   mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
 };
 
-export type CodexPluginConfigEntry = {
+type CodexPluginConfigEntry = {
   enabled?: boolean;
   marketplaceName?: string;
   pluginName?: string;
@@ -198,7 +198,7 @@ function buildPluginNamePickerReply(
   };
 }
 
-export function buildPluginsHelp(): string {
+function buildPluginsHelp(): string {
   return [
     "Codex sub-plugin management (writes only to ~/.openclaw/openclaw.json, never to ~/.codex/config.toml):",
     "- /codex plugins                  (alias for list)",
@@ -208,7 +208,7 @@ export function buildPluginsHelp(): string {
   ].join("\n");
 }
 
-export function formatPluginList(
+function formatPluginList(
   plugins: Record<string, CodexPluginConfigEntry>,
   options: { globalEnabled?: boolean } = {},
 ): string {

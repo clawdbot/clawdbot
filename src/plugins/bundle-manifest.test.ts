@@ -9,12 +9,16 @@ import {
   detectBundleManifestFormat,
   loadBundleManifest,
 } from "./bundle-manifest.js";
-import type { BundlePluginManifest } from "./bundle-manifest.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
   mkdirSafeDir,
 } from "./test-helpers/fs-fixtures.js";
+
+type BundlePluginManifest = Extract<
+  ReturnType<typeof loadBundleManifest>,
+  { ok: true }
+>["manifest"];
 
 type ReadonlyBundleManifestExpectation = Omit<
   BundlePluginManifest,

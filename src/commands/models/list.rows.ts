@@ -1,11 +1,21 @@
 /** Row builders used by `openclaw models list` source orchestration. */
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeProviderId,
+  normalizeProviderIdForAuth,
+} from "@openclaw/model-catalog-core/provider-id";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import {
+  projectModelCatalogEntryForRoute,
+  resolveConfiguredModelCatalogOverrides,
+} from "../../agents/model-catalog-route.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
+import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
@@ -14,7 +24,11 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { ModelListAuthIndex } from "./list.auth-index.js";
+import type {
+  ModelListAuthEvaluation,
+  ModelListAuthIndex,
+  ModelListAuthRef,
+} from "./list.auth-index.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
@@ -23,7 +37,7 @@ import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 import { modelKey } from "./shared.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
-type ModelCatalogModule = typeof import("../../agents/model-catalog.js");
+type ModelCatalogModule = typeof import("../../agents/prepared-model-catalog.js");
 type ModelResolverModule = typeof import("../../agents/embedded-agent-runner/model.js");
 type ProviderCatalogModule = typeof import("./list.provider-catalog.js");
 
@@ -35,6 +49,7 @@ type RowFilter = {
 /** Context shared by every model-list row source builder. */
 export type RowBuilderContext = {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir: string;
   authIndex: ModelListAuthIndex;
   availableKeys?: Set<string>;
@@ -47,7 +62,7 @@ export type RowBuilderContext = {
 };
 
 const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
-  () => import("../../agents/model-catalog.js"),
+  () => import("../../agents/prepared-model-catalog.js"),
 );
 const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
   () => import("../../agents/embedded-agent-runner/model.js"),
@@ -56,7 +71,7 @@ const providerCatalogModuleLoader = createLazyImportLoader<ProviderCatalogModule
   () => import("./list.provider-catalog.js"),
 );
 
-function loadModelCatalogModule(): Promise<ModelCatalogModule> {
+function loadPreparedModelCatalogModule(): Promise<ModelCatalogModule> {
   return modelCatalogModuleLoader.load();
 }
 
@@ -93,29 +108,139 @@ function matchesRowFilter(
   return true;
 }
 
+type ModelCatalogLogicalRouteIndex = ReadonlyMap<string, readonly ModelCatalogEntry[]>;
+
+function resolveCatalogLogicalKey(model: Pick<ModelCatalogEntry, "provider" | "id">): string {
+  return openAIModelCatalogRoutePolicy.resolveIdentity(model)?.key ?? modelCatalogLogicalKey(model);
+}
+
+function createModelCatalogLogicalRouteIndex(
+  catalog: readonly ModelCatalogEntry[],
+): ModelCatalogLogicalRouteIndex {
+  const index = new Map<string, ModelCatalogEntry[]>();
+  for (const entry of catalog) {
+    const key = resolveCatalogLogicalKey(entry);
+    const variants = index.get(key) ?? [];
+    variants.push(entry);
+    index.set(key, variants);
+  }
+  return index;
+}
+
+function resolveCatalogLogicalRoutes(
+  model: Pick<ModelCatalogEntry, "provider" | "id">,
+  routeIndex: ModelCatalogLogicalRouteIndex | undefined,
+): readonly ModelCatalogEntry[] | undefined {
+  return routeIndex?.get(resolveCatalogLogicalKey(model));
+}
+
+function toModelAuthRef(
+  model: ListRowModel,
+  routeIndex?: ModelCatalogLogicalRouteIndex,
+): ModelListAuthRef {
+  const identity = openAIModelCatalogRoutePolicy.resolveIdentity(model);
+  const observedRoutes = resolveCatalogLogicalRoutes(model, routeIndex)?.map((entry) => ({
+    api: entry.api,
+    baseUrl: entry.baseUrl,
+  }));
+  return {
+    modelId: identity?.id ?? model.id,
+    ...(observedRoutes && observedRoutes.length > 0
+      ? { observedRoutes }
+      : { api: model.api, baseUrl: model.baseUrl }),
+  };
+}
+
+function toCatalogProjectionEntry(model: ListRowModel): ModelCatalogEntry {
+  return {
+    id: model.id,
+    name: model.name,
+    provider: model.provider,
+    ...(typeof model.api === "string" ? { api: model.api as ModelCatalogEntry["api"] } : {}),
+    ...(model.baseUrl !== undefined ? { baseUrl: model.baseUrl } : {}),
+    ...(typeof model.contextWindow === "number" ? { contextWindow: model.contextWindow } : {}),
+    ...(typeof model.contextTokens === "number" ? { contextTokens: model.contextTokens } : {}),
+    ...(model.input !== undefined ? { input: model.input } : {}),
+  };
+}
+
+function hasSameCatalogRoute(left: ListRowModel, right: ListRowModel): boolean {
+  return left.api === right.api && left.baseUrl === right.baseUrl;
+}
+
+function projectListRowModel(params: {
+  model: ListRowModel;
+  evaluation: ModelListAuthEvaluation;
+  cfg: OpenClawConfig;
+  routeIndex?: ModelCatalogLogicalRouteIndex;
+}): ListRowModel {
+  const projection =
+    params.evaluation.routeResolution === null
+      ? ({ kind: "unmanaged" } as const)
+      : params.evaluation.selectedRoute
+        ? ({
+            kind: "selected",
+            route: params.evaluation.selectedRoute,
+            policy: openAIModelCatalogRoutePolicy,
+          } as const)
+        : ({ kind: "unresolved", policy: openAIModelCatalogRoutePolicy } as const);
+  const entry = toCatalogProjectionEntry(params.model);
+  const overrides = resolveConfiguredModelCatalogOverrides({
+    cfg: params.cfg,
+    entry,
+    policy: openAIModelCatalogRoutePolicy,
+  });
+  const routeVariants = resolveCatalogLogicalRoutes(entry, params.routeIndex);
+  const projected = projectModelCatalogEntryForRoute({
+    entry,
+    projection,
+    ...(routeVariants ? { catalog: routeVariants } : {}),
+    ...(overrides ? { overrides } : {}),
+  });
+  return {
+    ...params.model,
+    name: projected.name,
+    api: projected.api,
+    baseUrl: projected.baseUrl,
+    input: projected.input?.filter(
+      (item): item is NonNullable<ListRowModel["input"]>[number] =>
+        item === "text" || item === "image" || item === "document",
+    ),
+    contextWindow: projected.contextWindow,
+    contextTokens: projected.contextTokens,
+  };
+}
+
 async function buildRow(params: {
   model: ListRowModel;
   key: string;
   context: RowBuilderContext;
-  allowProviderAvailabilityFallback?: boolean;
+  routeIndex?: ModelCatalogLogicalRouteIndex;
+  authEvaluation?: ModelListAuthEvaluation;
+  allowAuthAvailabilityOverride?: boolean;
 }): Promise<ModelRow> {
   const configured = params.context.configuredByKey.get(params.key);
-  const allowProviderAvailabilityFallback =
-    params.allowProviderAvailabilityFallback === true ||
-    (configured !== undefined &&
-      params.context.authIndex.allowsProviderAuthAvailabilityFallback(params.model.provider));
-  const shouldResolveProviderAuth =
-    params.context.availableKeys === undefined || allowProviderAvailabilityFallback;
-  return toModelRow({
+  const authRef = toModelAuthRef(params.model, params.routeIndex);
+  const authEvaluation =
+    params.authEvaluation ??
+    params.context.authIndex.evaluateModelAuth(params.model.provider, authRef);
+  const model = projectListRowModel({
     model: params.model,
+    evaluation: authEvaluation,
+    cfg: params.context.cfg,
+    ...(params.routeIndex ? { routeIndex: params.routeIndex } : {}),
+  });
+  return toModelRow({
+    model,
     key: params.key,
     tags: configured ? Array.from(configured.tags) : [],
     aliases: configured?.aliases ?? [],
     availableKeys: params.context.availableKeys,
-    allowProviderAvailabilityFallback,
-    hasAuthForProvider: shouldResolveProviderAuth
-      ? (provider) => params.context.authIndex.hasProviderAuth(provider)
-      : undefined,
+    authAvailability: authEvaluation.availability,
+    authAvailabilityAuthoritative:
+      params.allowAuthAvailabilityOverride === true ||
+      normalizeProviderIdForAuth(params.model.provider) === "openai" ||
+      authEvaluation.routeResolution !== null,
   });
 }
 
@@ -165,7 +290,8 @@ function normalizeListRowWithProviderPlugin(params: {
     id: normalized.id,
     name: normalized.name,
     provider: normalized.provider,
-    baseUrl: normalized.baseUrl,
+    api: normalized.api ?? params.model.api,
+    baseUrl: normalized.baseUrl ?? params.model.baseUrl,
     input: toListRowInput(normalized.input),
     contextWindow: normalized.contextWindow,
     contextTokens: normalized.contextTokens,
@@ -178,14 +304,13 @@ async function appendVisibleRow(params: {
   key: string;
   context: RowBuilderContext;
   seenKeys?: Set<string>;
-  allowProviderAvailabilityFallback?: boolean;
+  authEvaluation?: ModelListAuthEvaluation;
+  routeIndex?: ModelCatalogLogicalRouteIndex;
+  allowAuthAvailabilityOverride?: boolean;
   skipSuppression?: boolean;
   normalizeWithProviderPlugin?: boolean;
 }): Promise<boolean> {
   if (params.seenKeys?.has(params.key)) {
-    return false;
-  }
-  if (!matchesRowFilter(params.context, params.model)) {
     return false;
   }
   const model = params.normalizeWithProviderPlugin
@@ -194,7 +319,25 @@ async function appendVisibleRow(params: {
         context: params.context,
       })
     : params.model;
-  if (!params.skipSuppression && shouldSuppressListModel({ model, context: params.context })) {
+  const authEvaluation =
+    params.authEvaluation ??
+    params.context.authIndex.evaluateModelAuth(
+      model.provider,
+      toModelAuthRef(model, params.routeIndex),
+    );
+  const projectedModel = projectListRowModel({
+    model,
+    evaluation: authEvaluation,
+    cfg: params.context.cfg,
+    ...(params.routeIndex ? { routeIndex: params.routeIndex } : {}),
+  });
+  if (!matchesRowFilter(params.context, projectedModel)) {
+    return false;
+  }
+  if (
+    !params.skipSuppression &&
+    shouldSuppressListModel({ model: projectedModel, context: params.context })
+  ) {
     return false;
   }
   params.rows.push(
@@ -202,7 +345,9 @@ async function appendVisibleRow(params: {
       model,
       key: params.key,
       context: params.context,
-      allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback,
+      ...(params.routeIndex ? { routeIndex: params.routeIndex } : {}),
+      authEvaluation,
+      allowAuthAvailabilityOverride: params.allowAuthAvailabilityOverride,
     }),
   );
   params.seenKeys?.add(params.key);
@@ -229,6 +374,7 @@ function toConfiguredProviderListModel(params: {
     provider: params.provider,
     id: params.model.id,
     name: params.model.name ?? params.model.id,
+    api: params.model.api ?? params.providerConfig.api,
     baseUrl: params.model.baseUrl ?? params.providerConfig.baseUrl,
     input: resolveConfiguredModelInput({ model: params.model }),
     contextWindow: params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
@@ -238,14 +384,17 @@ function toConfiguredProviderListModel(params: {
 
 function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
   const parsed = input?.filter(
-    (item): item is ListRowModel["input"][number] =>
+    (item): item is NonNullable<ListRowModel["input"]>[number] =>
       item === "text" || item === "image" || item === "document",
   );
   return parsed?.length ? parsed : ["text"];
 }
 
 function toManifestCatalogListModel(
-  row: Pick<NormalizedModelCatalogRow, "provider" | "id" | "name" | "baseUrl" | "contextWindow"> & {
+  row: Pick<
+    NormalizedModelCatalogRow,
+    "provider" | "id" | "name" | "api" | "baseUrl" | "contextWindow" | "contextTokens"
+  > & {
     input?: readonly string[];
   },
 ): ListRowModel {
@@ -253,9 +402,11 @@ function toManifestCatalogListModel(
     provider: row.provider,
     id: row.id,
     name: row.name,
+    api: row.api,
     baseUrl: row.baseUrl,
     input: toListRowInput(row.input),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: row.contextTokens,
   };
 }
 
@@ -320,8 +471,7 @@ export async function appendDiscoveredRows(params: {
     }
     return a.id.localeCompare(b.id);
   });
-
-  for (const model of sorted) {
+  const preparedModels = sorted.map((model) => {
     const key = modelKey(model.provider, model.id);
     const resolvedModel =
       params.modelRegistry && modelResolver
@@ -337,12 +487,23 @@ export async function appendDiscoveredRows(params: {
       resolvedModel && modelKey(resolvedModel.provider, resolvedModel.id) === key
         ? resolvedModel
         : model;
+    return { key, model, rowModel };
+  });
+  const projectionCatalog = preparedModels.map(({ model, rowModel }) =>
+    toCatalogProjectionEntry(
+      hasSameCatalogRoute(model as ListRowModel, rowModel) ? rowModel : (model as ListRowModel),
+    ),
+  );
+  const routeIndex = createModelCatalogLogicalRouteIndex(projectionCatalog);
+
+  for (const { key, rowModel } of preparedModels) {
     await appendVisibleRow({
       rows: params.rows,
       model: rowModel,
       key,
       context: params.context,
       seenKeys,
+      routeIndex,
       skipSuppression: params.skipSuppression,
     });
   }
@@ -375,7 +536,7 @@ export async function appendConfiguredProviderRows(params: {
         key,
         context: params.context,
         seenKeys: params.seenKeys,
-        allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+        allowAuthAvailabilityOverride: true,
         normalizeWithProviderPlugin: true,
       });
     }
@@ -388,24 +549,42 @@ export async function appendAuthenticatedCatalogRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
-  const { loadModelCatalog } = await loadModelCatalogModule();
-  const catalog = await loadModelCatalog({
+  const { loadPreparedModelCatalogSnapshot } = await loadPreparedModelCatalogModule();
+  const { entries: catalog, routeVariants } = await loadPreparedModelCatalogSnapshot({
     config: params.context.cfg,
+    ...(params.context.agentId ? { agentId: params.context.agentId } : {}),
+    agentDir: params.context.agentDir,
+    ...((params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir)
+      ? {
+          workspaceDir:
+            params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir,
+        }
+      : {}),
     readOnly: true,
-    metadataSnapshot: params.context.metadataSnapshot,
   });
+  const routeIndex = createModelCatalogLogicalRouteIndex(routeVariants);
   for (const entry of catalog) {
-    if (!params.context.authIndex.hasProviderAuth(entry.provider)) {
+    const model = toManifestCatalogListModel(entry);
+    const authEvaluation = params.context.authIndex.evaluateModelAuth(
+      entry.provider,
+      toModelAuthRef(model, routeIndex),
+    );
+    const hasRunnableSyntheticAuth =
+      authEvaluation.availability === undefined && authEvaluation.evidence === "synthetic";
+    if (authEvaluation.availability !== true && !hasRunnableSyntheticAuth) {
       continue;
     }
     const key = modelKey(entry.provider, entry.id);
     await appendVisibleRow({
       rows: params.rows,
-      model: toManifestCatalogListModel(entry),
+      model,
       key,
       context: params.context,
       seenKeys: params.seenKeys,
-      allowProviderAvailabilityFallback: true,
+      routeIndex,
+      authEvaluation,
+      // Synthetic evidence admits local rows but does not override their URL-based availability.
+      allowAuthAvailabilityOverride: !hasRunnableSyntheticAuth,
     });
   }
 }
@@ -418,6 +597,10 @@ export async function appendModelCatalogRows(params: {
   catalogRows: readonly NormalizedModelCatalogRow[];
 }): Promise<number> {
   let appended = 0;
+  const projectionCatalog = params.catalogRows.map((row) =>
+    toCatalogProjectionEntry(toManifestCatalogListModel(row)),
+  );
+  const routeIndex = createModelCatalogLogicalRouteIndex(projectionCatalog);
   for (const catalogRow of params.catalogRows) {
     const key = modelKey(catalogRow.provider, catalogRow.id);
     if (
@@ -427,7 +610,8 @@ export async function appendModelCatalogRows(params: {
         key,
         context: params.context,
         seenKeys: params.seenKeys,
-        allowProviderAvailabilityFallback: true,
+        routeIndex,
+        allowAuthAvailabilityOverride: true,
       })
     ) {
       appended += 1;
@@ -456,15 +640,23 @@ export async function appendCatalogSupplementRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
-  const [{ loadModelCatalog }, { resolveModelWithRegistry }] = await Promise.all([
-    loadModelCatalogModule(),
+  const [modelCatalog, { resolveModelWithRegistry }] = await Promise.all([
+    loadPreparedModelCatalogModule(),
     loadModelResolverModule(),
   ]);
-  const catalog = await loadModelCatalog({
+  const { entries: catalog, routeVariants } = await modelCatalog.loadPreparedModelCatalogSnapshot({
     config: params.context.cfg,
+    ...(params.context.agentId ? { agentId: params.context.agentId } : {}),
+    agentDir: params.context.agentDir,
+    ...((params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir)
+      ? {
+          workspaceDir:
+            params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir,
+        }
+      : {}),
     readOnly: true,
-    metadataSnapshot: params.context.metadataSnapshot,
   });
+  const routeIndex = createModelCatalogLogicalRouteIndex(routeVariants);
   for (const entry of catalog) {
     if (!matchesProviderFilter(params.context, entry.provider)) {
       continue;
@@ -488,7 +680,8 @@ export async function appendCatalogSupplementRows(params: {
       key,
       context: params.context,
       seenKeys: params.seenKeys,
-      allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+      routeIndex,
+      allowAuthAvailabilityOverride: !params.context.discoveredKeys.has(key),
     });
   }
 
@@ -517,12 +710,17 @@ export async function appendProviderCatalogRows(params: {
     const { loadProviderCatalogModelsForList } = await loadProviderCatalogModule();
     catalogModels = await loadProviderCatalogModelsForList({
       cfg: params.context.cfg,
+      ...(params.context.agentId ? { agentId: params.context.agentId } : {}),
       agentDir: params.context.agentDir,
       providerFilter: params.context.filter.provider,
       staticOnly: params.staticOnly,
       metadataSnapshot: params.context.metadataSnapshot,
     });
   }
+  const projectionCatalog = catalogModels.map((model) =>
+    toCatalogProjectionEntry(model as ListRowModel),
+  );
+  const routeIndex = createModelCatalogLogicalRouteIndex(projectionCatalog);
   for (const model of catalogModels) {
     const key = modelKey(model.provider, model.id);
     if (
@@ -532,7 +730,8 @@ export async function appendProviderCatalogRows(params: {
         key,
         context: params.context,
         seenKeys: params.seenKeys,
-        allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+        routeIndex,
+        allowAuthAvailabilityOverride: !params.context.discoveredKeys.has(key),
       })
     ) {
       appended += 1;
@@ -567,33 +766,45 @@ export async function appendConfiguredRows(params: {
     const model = resolvedModel
       ? normalizeListRowWithProviderPlugin({ model: resolvedModel, context: params.context })
       : resolvedModel;
-    if (params.context.filter.local && model && !isLocalBaseUrl(model.baseUrl ?? "")) {
-      continue;
-    }
     if (params.context.filter.local && !model) {
       continue;
     }
-    if (model && shouldSuppressListModel({ model, context: params.context })) {
+    const authEvaluation = model
+      ? params.context.authIndex.evaluateModelAuth(model.provider, toModelAuthRef(model))
+      : undefined;
+    const projectedModel =
+      model && authEvaluation
+        ? projectListRowModel({ model, evaluation: authEvaluation, cfg: params.context.cfg })
+        : model;
+    if (
+      params.context.filter.local &&
+      projectedModel &&
+      !isLocalBaseUrl(projectedModel.baseUrl ?? "")
+    ) {
       continue;
     }
-    const allowProviderAvailabilityFallback =
-      model &&
-      (!params.context.discoveredKeys.has(modelKey(model.provider, model.id)) ||
-        params.context.authIndex.allowsProviderAuthAvailabilityFallback(model.provider));
-    const shouldResolveProviderAuth =
-      model && (params.context.availableKeys === undefined || allowProviderAvailabilityFallback);
+    if (
+      projectedModel &&
+      shouldSuppressListModel({ model: projectedModel, context: params.context })
+    ) {
+      continue;
+    }
     params.rows.push(
       toModelRow({
-        model,
+        model: projectedModel,
         key: entry.key,
         tags: Array.from(entry.tags),
         aliases: entry.aliases,
         availableKeys: params.context.availableKeys,
-        allowProviderAvailabilityFallback: allowProviderAvailabilityFallback === true,
-        hasAuthForProvider: shouldResolveProviderAuth
-          ? (provider) => params.context.authIndex.hasProviderAuth(provider)
-          : undefined,
+        authAvailability: authEvaluation?.availability,
+        authAvailabilityAuthoritative:
+          Boolean(
+            model && !params.context.discoveredKeys.has(modelKey(model.provider, model.id)),
+          ) ||
+          normalizeProviderIdForAuth(model?.provider ?? entry.ref.provider) === "openai" ||
+          (authEvaluation !== undefined && authEvaluation.routeResolution !== null),
       }),
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

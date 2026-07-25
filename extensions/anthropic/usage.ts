@@ -7,6 +7,7 @@ import {
   readClaudeCliCredentialsCached,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   buildUsageHttpErrorSnapshot,
   fetchClaudeUsage,
@@ -14,7 +15,6 @@ import {
   type ProviderUsageModelBreakdown,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
@@ -134,14 +134,13 @@ function resolveDailyRange(now: number, periodDays: number) {
 }
 
 async function readPage(response: Response, timeoutMs: number): Promise<AnthropicUsagePage> {
-  const buffer = await readResponseWithLimit(response, ANTHROPIC_USAGE_RESPONSE_MAX_BYTES, {
+  const payload = await readProviderJsonObjectResponse(response, "Anthropic usage", {
+    maxBytes: ANTHROPIC_USAGE_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ maxBytes }) => new Error(`Anthropic usage response exceeds ${maxBytes} bytes`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Anthropic usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  const payload = objectRecord(JSON.parse(new TextDecoder().decode(buffer)));
-  if (!payload || !Array.isArray(payload.data)) {
+  if (!Array.isArray(payload.data)) {
     throw new Error("Anthropic usage response is not an object with data");
   }
   const nextPage =
@@ -371,7 +370,7 @@ function aggregateHistory(params: {
   };
 }
 
-export async function fetchAnthropicAdminUsage(params: {
+async function fetchAnthropicAdminUsage(params: {
   apiKey: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
@@ -462,7 +461,7 @@ export async function resolveAnthropicUsageAuth(
 }
 
 /** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */
-export function formatClaudePlanLabel(
+function formatClaudePlanLabel(
   subscriptionType?: string,
   rateLimitTier?: string,
 ): string | undefined {
@@ -509,9 +508,19 @@ export async function fetchAnthropicUsage(
     });
   }
   const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
-  if (snapshot.error || snapshot.plan || snapshot.windows.length === 0) {
+  if (snapshot.error) {
     return snapshot;
   }
-  const plan = resolveClaudePlanLabel(ctx);
-  return plan ? { ...snapshot, plan } : snapshot;
+  // Identity is captured on the credential (profile store or the CLI-sync
+  // read), so a fetch-time ambient config read can never mislabel an account.
+  const accountEmail = ctx.email;
+  // Plan labels stay window-gated: a windowless response has no plan quota to
+  // label, while the account identity is still worth surfacing.
+  const plan =
+    snapshot.plan ?? (snapshot.windows.length > 0 ? resolveClaudePlanLabel(ctx) : undefined);
+  return {
+    ...snapshot,
+    ...(plan ? { plan } : {}),
+    ...(accountEmail ? { accountEmail } : {}),
+  };
 }

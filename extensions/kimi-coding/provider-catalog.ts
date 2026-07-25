@@ -3,10 +3,14 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
 
 const KIMI_BASE_URL = "https://api.kimi.com/coding/";
 const KIMI_CODING_USER_AGENT = "claude-code/0.1.0";
 const KIMI_DEFAULT_MODEL_ID = "kimi-for-coding";
+const KIMI_HIGHSPEED_MODEL_ID = "kimi-for-coding-highspeed";
+// Kimi's Claude Code endpoint uses k3[1m] as the wire id for the 1M plan;
+// normalizing it to k3 would lose the server-side context entitlement signal.
 const KIMI_LEGACY_MODEL_IDS = ["kimi-code", "k2p5"] as const;
 const KIMI_CODING_DEFAULT_CONTEXT_WINDOW = 262144;
 const KIMI_CODING_DEFAULT_MAX_TOKENS = 32768;
@@ -35,13 +39,31 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
         contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
       },
-      ...KIMI_LEGACY_MODEL_IDS.map((id) => ({
-        id,
-        name: `Kimi Code (legacy ${id})`,
+      {
+        id: KIMI_HIGHSPEED_MODEL_ID,
+        name: "Kimi K2.7 Code HighSpeed",
         reasoning: true,
         input: [...KIMI_CODING_INPUT],
         cost: KIMI_CODING_DEFAULT_COST,
         contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
+      },
+      ...KIMI_K3_MODEL_IDS.map((id) => ({
+        id,
+        name: id === "k3" ? "Kimi K3" : "Kimi K3 (1M)",
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: "max" as const,
+          max: "max" as const,
+        },
+        input: [...KIMI_CODING_INPUT],
+        cost: KIMI_CODING_DEFAULT_COST,
+        contextWindow: id === "k3" ? KIMI_CODING_DEFAULT_CONTEXT_WINDOW : 1_048_576,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
       })),
     ],

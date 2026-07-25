@@ -25,15 +25,6 @@ export async function editWebhookMessage(
     : await rest.patch(Routes.webhookMessage(applicationId, token, messageId), data);
 }
 
-export async function deleteWebhookMessage(
-  rest: RequestClient,
-  applicationId: string,
-  token: string,
-  messageId: string,
-): Promise<unknown> {
-  return await rest.delete(Routes.webhookMessage(applicationId, token, messageId));
-}
-
 export async function getWebhookMessage(
   rest: RequestClient,
   applicationId: string,

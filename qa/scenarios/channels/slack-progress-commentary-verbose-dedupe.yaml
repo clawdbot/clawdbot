@@ -1,0 +1,18 @@
+title: Slack explicit commentary yields to durable verbose progress
+scenario:
+  id: slack-progress-commentary-verbose-dedupe
+  surface: channels
+  coverage:
+    primary:
+      - agent-runtime.streaming-replies
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { slackScenarioId: slack-progress-commentary-verbose-dedupe }
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackProgressCommentaryVerboseDedupeScenario
+  args: [{ expr: slackScenarioContext }]

@@ -11,7 +11,7 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 
-export type DispatchDiscordCommandInteractionParams = {
+type DispatchDiscordCommandInteractionParams = {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   prompt: string;
   command: ChatCommandDefinition;

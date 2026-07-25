@@ -18,10 +18,10 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 export type PluginCatalogItem = PluginCatalogEntry;
 export type PluginListResult = ProtocolPluginsListResult;
 export type PluginSearchResult = ProtocolPluginsSearchResult["results"][number];
-export type PluginSearchResponse = ProtocolPluginsSearchResult;
+type PluginSearchResponse = ProtocolPluginsSearchResult;
 export type PluginInstallRequest = PluginsInstallParams;
 export type PluginMutationResult = PluginsInstallResult | PluginsSetEnabledResult;
-export type PluginUninstallResult = PluginsUninstallResult;
+type PluginUninstallResult = PluginsUninstallResult;
 
 export const CLAWHUB_BROWSE_URL = "https://clawhub.ai/plugins";
 

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -27,10 +27,10 @@ import {
   loadSessionEntryMock,
   makeCronSession,
   mockRunCronFallbackPassthrough,
+  patchSessionEntryMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
-  updateSessionStoreMock,
 } from "./isolated-agent/run.test-harness.js";
 import { normalizeCronJobCreate } from "./normalize.js";
 import type { CronJob } from "./types.js";
@@ -38,21 +38,22 @@ import type { CronJob } from "./types.js";
 setupRunCronIsolatedAgentTurnSuite();
 
 async function useRealCronSessionState(): Promise<void> {
-  const [sessionRuntime, storeRuntime] = await Promise.all([
+  const [sessionRuntime, sessionAccessor] = await Promise.all([
     vi.importActual<typeof import("./isolated-agent/session.js")>("./isolated-agent/session.js"),
-    vi.importActual<typeof import("../config/sessions/store.runtime.js")>(
-      "../config/sessions/store.runtime.js",
+    vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
+      "../config/sessions/session-accessor.js",
     ),
   ]);
   resolveCronSessionMock.mockImplementation(sessionRuntime.resolveCronSession);
   loadSessionEntryMock.mockImplementation(sessionRuntime.loadCronSessionEntryLatest);
-  updateSessionStoreMock.mockImplementation(storeRuntime.updateSessionStore);
+  patchSessionEntryMock.mockImplementation(sessionAccessor.patchSessionEntry);
 }
 
 function lastEmbeddedAgentCall(): {
   agentDir?: string;
   bootstrapContextMode?: "full" | "lightweight";
   prompt?: string;
+  sessionId?: string;
   sessionKey?: string;
   workspaceDir?: string;
   sessionFile?: string;
@@ -70,6 +71,7 @@ function lastEmbeddedAgentCall(): {
     agentDir?: string;
     bootstrapContextMode?: "full" | "lightweight";
     prompt?: string;
+    sessionId?: string;
     sessionKey?: string;
     workspaceDir?: string;
     sessionFile?: string;
@@ -172,10 +174,14 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
       const call = lastEmbeddedAgentCall();
 
-      expect(call.sessionFile).toContain(
-        path.join(home, ".openclaw", "agents", "main", "sessions"),
+      expect(call.sessionFile).toBe(
+        `sqlite:main:${call.sessionId}:${path.join(
+          home,
+          ".openclaw",
+          "sessions",
+          "sessions.json",
+        )}`,
       );
-      expect(String(call.sessionFile).endsWith(".jsonl")).toBe(true);
     });
   });
 
@@ -185,6 +191,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const boundSessionKey = "agent:main:telegram:direct:42";
       const originalSessionFile = path.join(home, "bound-session.jsonl");
       const rotatedSessionFile = path.join(home, "bound-session-rotated.jsonl");
+      await fs.writeFile(rotatedSessionFile, "");
       const storePath = await writeSessionStoreEntries(home, {
         [boundSessionKey]: {
           sessionId: "bound-session",
@@ -208,12 +215,6 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           },
         },
       });
-      updateSessionStoreMock.mockImplementation(async (targetStorePath, update) => {
-        const raw = await fs.readFile(targetStorePath, "utf-8");
-        const store = JSON.parse(raw) as Record<string, SessionEntry>;
-        update(store);
-        await fs.writeFile(targetStorePath, JSON.stringify(store, null, 2), "utf-8");
-      });
       const currentBoundJob = normalizeCronJobCreate(
         {
           ...makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
@@ -222,6 +223,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         },
         { sessionContext: { sessionKey: boundSessionKey } },
       ) as CronJob;
+      const executionSessionKey = `agent:main:cron:${currentBoundJob.id}`;
 
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath),
@@ -238,28 +240,16 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         expect.objectContaining({ sessionId: "bound-session-rotated" }),
       );
 
-      const finalPersist = updateSessionStoreMock.mock.calls.at(-1);
-      expect(finalPersist?.[0]).toBe(storePath);
-      // Replay the final persist against the real post-run store: the claim
-      // guard rejects writes into a store that never held the session.
-      const persistedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { [key: string]: unknown }
-      >;
-      (finalPersist![1] as (store: typeof persistedStore) => void)(persistedStore);
-      expect(persistedStore[boundSessionKey]).toEqual(
+      await expect(readSessionEntry(storePath, executionSessionKey)).resolves.toEqual(
         expect.objectContaining({
           sessionId: "bound-session-rotated",
           sessionFile: rotatedSessionFile,
-          usageFamilyKey: boundSessionKey,
-          usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
         }),
       );
-
       await expect(readSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
         expect.objectContaining({
-          sessionId: "bound-session-rotated",
-          sessionFile: rotatedSessionFile,
+          sessionId: "bound-session",
+          sessionFile: originalSessionFile,
         }),
       );
     });
@@ -332,14 +322,14 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     await useRealCronSessionState();
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      const raw = await fs.readFile(storePath, "utf-8");
-      const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-      store["agent:main:cron:job-1"] = {
-        sessionId: "old",
-        updatedAt: Date.now(),
-        label: "Nightly digest",
-      };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await upsertSessionEntry(
+        { storePath, sessionKey: "agent:main:cron:job-1" },
+        {
+          sessionId: "old",
+          updatedAt: Date.now(),
+          label: "Nightly digest",
+        },
+      );
 
       await runCronTurn(home, {
         jobPayload: { kind: "agentTurn", message: "ping" },

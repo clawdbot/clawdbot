@@ -65,7 +65,29 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("openclaw");
   });
 
-  it("resolves residual auto through a registered Codex harness", () => {
+  it("uses static auto-selection facts before resolving provider routes", () => {
+    const supports = vi.fn<AgentHarness["supports"]>(() => ({ supported: true, priority: 100 }));
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      autoSelection: { providerIds: ["openai", "codex"] },
+      supports,
+      runAttempt: async () => {
+        throw new Error("not exercised");
+      },
+    });
+
+    expect(
+      resolveEffectiveAgentRuntime({
+        cfg: {},
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+      }),
+    ).toBe("openclaw");
+    expect(supports).not.toHaveBeenCalled();
+  });
+
+  it("keeps an authored custom route on OpenClaw before registered harness selection", () => {
     const supports = vi.fn<AgentHarness["supports"]>(({ provider }) =>
       provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
     );
@@ -94,16 +116,11 @@ describe("resolveEffectiveAgentRuntime", () => {
         provider: "openai",
         modelId: "gpt-5.6-luna",
       }),
-    ).toBe("codex");
-    expect(supports).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        providerOwnerStatus: expect.anything(),
-        providerOwnerPluginIds: expect.anything(),
-      }),
-    );
+    ).toBe("openclaw");
+    expect(supports).not.toHaveBeenCalled();
   });
 
-  it("prefers explicit session overrides and treats legacy harness ids as observational", () => {
+  it("prefers explicit session overrides", () => {
     const cfg = openAIConfig("openclaw");
     expect(
       resolveEffectiveAgentRuntime({
@@ -113,6 +130,10 @@ describe("resolveEffectiveAgentRuntime", () => {
         sessionEntry: { agentRuntimeOverride: "codex", agentHarnessId: "openclaw" },
       }),
     ).toBe("codex");
+  });
+
+  it("ignores legacy harness ids when choosing a runtime", () => {
+    const cfg = openAIConfig("openclaw");
     expect(
       resolveEffectiveAgentRuntime({
         cfg,
@@ -121,6 +142,10 @@ describe("resolveEffectiveAgentRuntime", () => {
         sessionEntry: { agentHarnessId: "codex" },
       }),
     ).toBe("openclaw");
+  });
+
+  it("uses configured runtime policy without session hints", () => {
+    const cfg = openAIConfig("openclaw");
     expect(
       resolveEffectiveAgentRuntime({
         cfg,

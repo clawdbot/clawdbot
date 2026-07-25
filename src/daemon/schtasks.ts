@@ -3,17 +3,22 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage, type PortListener } from "../infra/ports.js";
-import { parseTcpPort } from "../infra/tcp-port.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
+import {
+  decodeWindowsLauncherScript,
+  encodeWindowsLauncherScript,
+} from "../infra/windows-launcher-encoding.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -27,6 +32,7 @@ import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayTaskScriptPath } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -248,7 +254,7 @@ export async function readScheduledTaskCommand(
 ): Promise<GatewayServiceCommandConfig | null> {
   const scriptPath = resolveTaskScriptPath(env);
   try {
-    const content = await fs.readFile(scriptPath, "utf8");
+    const content = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
     let workingDirectory = "";
     let commandLine = "";
     const environment: Record<string, string> = {};
@@ -300,13 +306,13 @@ export async function readScheduledTaskCommand(
   }
 }
 
-export type ScheduledTaskInfo = {
+type ScheduledTaskInfo = {
   status?: string;
   lastRunTime?: string;
   lastRunResult?: string;
 };
 
-export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
+function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
   const status = entries.status;
@@ -526,7 +532,7 @@ async function launchFallbackTaskScript(
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
   if (command?.programArguments.length) {
     const [executable, ...args] = command.programArguments;
-    const child = spawn(executable, args, {
+    const child = spawn(expectDefined(executable, "schtasks executable"), args, {
       cwd: command.workingDirectory || undefined,
       detached: true,
       env: {
@@ -554,26 +560,6 @@ function resolveConfiguredGatewayPort(env: GatewayServiceEnv): number | null {
 
 function parsePositivePort(raw: string | undefined): number | null {
   return parseTcpPort(raw);
-}
-
-function parsePortFromProgramArguments(programArguments?: string[]): number | null {
-  if (!programArguments?.length) {
-    return null;
-  }
-  for (let i = 0; i < programArguments.length; i += 1) {
-    const arg = programArguments[i];
-    if (!arg) {
-      continue;
-    }
-    const inlineMatch = arg.match(/^--port=(\d+)$/);
-    if (inlineMatch) {
-      return parsePositivePort(inlineMatch[1]);
-    }
-    if (arg === "--port") {
-      return parsePositivePort(programArguments[i + 1]);
-    }
-  }
-  return null;
 }
 
 function isNodeHostArgv(programArguments: string[]): boolean {
@@ -617,7 +603,7 @@ function findInstalledProcessPid(
     const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
     if (
       !matchesProcess(argv) ||
-      parsePortFromProgramArguments(argv) !== port ||
+      parseTcpPortFromArgs(argv) !== port ||
       !matchesInstalledProgramArguments(argv, installedArguments)
     ) {
       continue;
@@ -643,7 +629,7 @@ async function resolveScheduledTaskProcess(
     return null;
   }
   const port =
-    parsePortFromProgramArguments(installedArguments) ??
+    parseTcpPortFromArgs(installedArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(env);
   if (!port) {
@@ -685,7 +671,7 @@ function shouldManageGatewayListenerPort(env: GatewayServiceEnv): boolean {
 async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
   return (
-    parsePortFromProgramArguments(command?.programArguments) ??
+    parseTcpPortFromArgs(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(env)
   );
@@ -833,6 +819,9 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
 
 async function terminateGatewayProcessTree(pid: number, graceMs: number): Promise<void> {
   if (process.platform !== "win32") {
+    // Use leader-checked default: gateway/listener termination paths resolve PIDs by argv
+    // or port ownership rather than spawn-time process-group creation, so we rely on the
+    // helper's process-group leader verification to avoid signaling the gateway's own group.
     killProcessTree(pid, { graceMs });
     return;
   }
@@ -943,7 +932,7 @@ async function resolveFallbackRuntime(
   if (!shouldManageGatewayListenerPort(env)) {
     const installedArguments = command?.programArguments;
     const port =
-      parsePortFromProgramArguments(installedArguments) ??
+      parseTcpPortFromArgs(installedArguments) ??
       parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
       resolveConfiguredGatewayPort(env);
     if (!port) {
@@ -975,7 +964,7 @@ async function resolveFallbackRuntime(
     };
   }
   const port =
-    parsePortFromProgramArguments(command?.programArguments) ??
+    parseTcpPortFromArgs(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(env);
   if (!port) {
@@ -1073,7 +1062,7 @@ async function assertReplacementPortAvailableForTakeover(params: {
     return;
   }
   const port =
-    parsePortFromProgramArguments(params.programArguments) ??
+    parseTcpPortFromArgs(params.programArguments) ??
     parsePositivePort(params.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(params.env);
   if (!port) {
@@ -1179,11 +1168,13 @@ async function resolveControllableFallbackRuntime(
 async function stopStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
+  onMutation?: () => void,
 ): Promise<void> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
+  onMutation?.();
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
 }
 
@@ -1200,14 +1191,27 @@ async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise
 async function restartStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
+  onMutation?: (kind: "stop" | "restart") => void,
 ): Promise<GatewayServiceRestartResult> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
+    onMutation?.("stop");
   }
   await launchFallbackTaskScript(env);
+  onMutation?.("restart");
   stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };
+}
+
+async function startStartupEntry(
+  env: GatewayServiceEnv,
+  stdout: NodeJS.WritableStream,
+  onMutation?: () => void,
+): Promise<void> {
+  await launchFallbackTaskScript(env);
+  onMutation?.();
+  stdout.write(`${formatLine("Started Windows login item", resolveTaskName(env))}\n`);
 }
 
 const CALLER_OWNED_SERVICE_IDENTITY_KEYS = [
@@ -1303,13 +1307,16 @@ async function writeScheduledTaskScript({
     workingDirectory,
     environment: scriptEnvironment,
   });
-  await fs.writeFile(scriptPath, script, "utf8");
+  await fs.writeFile(scriptPath, encodeWindowsLauncherScript({ format: "cmd", content: script }));
   if (taskLaunchPath !== scriptPath) {
     const launcher = buildHiddenLauncherScript({
       description: taskDescription,
       scriptPath,
     });
-    await fs.writeFile(taskLaunchPath, launcher, "utf8");
+    await fs.writeFile(
+      taskLaunchPath,
+      encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
+    );
   }
   return { scriptPath, taskLaunchPath, taskDescription, taskEnv };
 }
@@ -1426,7 +1433,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     const command = await readScheduledTaskCommand(params.env).catch(() => null);
     const installedArguments = command?.programArguments;
     const taskPort =
-      parsePortFromProgramArguments(installedArguments) ??
+      parseTcpPortFromArgs(installedArguments) ??
       parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
       resolveConfiguredGatewayPort(params.env);
     const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
@@ -1474,8 +1481,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       }
       const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
       return (
-        isGatewayArgv(argv, { allowGatewayBinary: true }) &&
-        parsePortFromProgramArguments(argv) === taskPort
+        isGatewayArgv(argv, { allowGatewayBinary: true }) && parseTcpPortFromArgs(argv) === taskPort
       );
     });
   };
@@ -1518,11 +1524,13 @@ async function runScheduledTaskOrThrow(params: {
   taskName: string;
   env: GatewayServiceEnv;
   scriptPath: string;
+  onMutation?: () => void;
 }): Promise<ScheduledTaskActivation> {
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
+  params.onMutation?.();
   if (
     !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
   ) {
@@ -1585,7 +1593,8 @@ async function activateScheduledTask(params: {
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
       const startupEntryPath = resolveStartupEntryPath(params.env);
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-      const launcher = shouldUseHiddenWindowsTaskLauncher(params.env)
+      const useHiddenLauncher = shouldUseHiddenWindowsTaskLauncher(params.env);
+      const launcher = useHiddenLauncher
         ? buildHiddenLauncherScript({
             description: taskDescription,
             scriptPath: params.scriptPath,
@@ -1594,7 +1603,13 @@ async function activateScheduledTask(params: {
             description: taskDescription,
             scriptPath: params.scriptPath,
           });
-      await fs.writeFile(startupEntryPath, launcher, "utf8");
+      await fs.writeFile(
+        startupEntryPath,
+        encodeWindowsLauncherScript({
+          format: useHiddenLauncher ? "vbs" : "cmd",
+          content: launcher,
+        }),
+      );
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(
         params.stdout,
@@ -1858,20 +1873,25 @@ export async function resumeScheduledTaskAutoStartAfterUpdate(
   return await changeScheduledTaskEnabledState({ env, enabled: true });
 }
 
-export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+export async function stopScheduledTask({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<void> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   try {
     await assertSchtasksAvailable();
   } catch (err) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      await stopStartupEntry(effectiveEnv, stdout);
+      await stopStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-stop"));
       return;
     }
     throw err;
   }
   if (!(await isRegisteredScheduledTask(effectiveEnv))) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      await stopStartupEntry(effectiveEnv, stdout);
+      await stopStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-stop"));
       return;
     }
   }
@@ -1880,6 +1900,7 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   if (res.code !== 0 && !isTaskNotRunning(res)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
   }
+  reportMutation("schtasks-stop");
   const manageGatewayPort = shouldManageGatewayListenerPort(effectiveEnv);
   const stopPort = manageGatewayPort ? await resolveScheduledTaskPort(effectiveEnv) : null;
   if (manageGatewayPort) {
@@ -1901,13 +1922,50 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
 }
 
+export async function startScheduledTask({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<void> {
+  const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
+  try {
+    await assertSchtasksAvailable();
+  } catch (err) {
+    if (await isStartupEntryInstalled(effectiveEnv)) {
+      await startStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-start"));
+      return;
+    }
+    throw err;
+  }
+  if (!(await isRegisteredScheduledTask(effectiveEnv))) {
+    if (await isStartupEntryInstalled(effectiveEnv)) {
+      await startStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-start"));
+      return;
+    }
+  }
+  const taskName = resolveTaskName(effectiveEnv);
+  await runScheduledTaskOrThrow({
+    taskName,
+    env: effectiveEnv,
+    scriptPath: resolveTaskScriptPath(effectiveEnv),
+    onMutation: () => reportMutation("schtasks-start"),
+  });
+  stdout.write(`${formatLine("Started Scheduled Task", taskName)}\n`);
+}
+
 async function restartRegisteredScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   mode: { kind: "standard" } | { kind: "fallback-takeover" };
+  onEndMutation?: () => void;
+  onRunMutation?: () => void;
 }): Promise<GatewayServiceRestartResult> {
   const taskName = resolveTaskName(params.env);
-  await execSchtasks(["/End", "/TN", taskName]);
+  const end = await execSchtasks(["/End", "/TN", taskName]);
+  if (end.code === 0) {
+    params.onEndMutation?.();
+  }
   const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
   const restartPort = manageGatewayPort ? await resolveScheduledTaskPort(params.env) : null;
   if (params.mode.kind === "standard") {
@@ -1948,6 +2006,7 @@ async function restartRegisteredScheduledTask(params: {
     taskName,
     env: params.env,
     scriptPath: resolveTaskScriptPath(params.env),
+    ...(params.onRunMutation ? { onMutation: params.onRunMutation } : {}),
   });
   const startupEntryInstalled = await isStartupEntryInstalled(params.env);
   const hasRunningEvidence = startupEntryInstalled
@@ -1980,26 +2039,37 @@ async function restartRegisteredScheduledTask(params: {
 export async function restartScheduledTask({
   stdout,
   env,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   try {
     await assertSchtasksAvailable();
   } catch (err) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      return await restartStartupEntry(effectiveEnv, stdout);
+      const result = await restartStartupEntry(effectiveEnv, stdout, (kind) =>
+        reportMutation(kind === "stop" ? "startup-entry-stop" : "startup-entry-restart"),
+      );
+      return result;
     }
     throw err;
   }
   if (!(await isRegisteredScheduledTask(effectiveEnv))) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      return await restartStartupEntry(effectiveEnv, stdout);
+      const result = await restartStartupEntry(effectiveEnv, stdout, (kind) =>
+        reportMutation(kind === "stop" ? "startup-entry-stop" : "startup-entry-restart"),
+      );
+      return result;
     }
   }
-  return await restartRegisteredScheduledTask({
+  const result = await restartRegisteredScheduledTask({
     env: effectiveEnv,
     stdout,
     mode: { kind: "standard" },
+    onEndMutation: () => reportMutation("schtasks-end"),
+    onRunMutation: () => reportMutation("schtasks-restart"),
   });
+  return result;
 }
 
 export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {
@@ -2059,3 +2129,4 @@ export async function readScheduledTaskRuntime(
     ...(derived.detail ? { detail: derived.detail } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

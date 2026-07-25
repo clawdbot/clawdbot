@@ -4,14 +4,23 @@ import path from "node:path";
 import { describe, it, expect } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
-import {
-  buildBareSessionResetPrompt,
-  resolveBareSessionResetPromptState,
-} from "./session-reset-prompt.js";
+import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 
-describe("buildBareSessionResetPrompt", () => {
-  it("includes the explicit Session Startup instruction for bare /new and /reset", () => {
-    const prompt = buildBareSessionResetPrompt();
+type ResetPromptParams = Parameters<typeof resolveBareSessionResetPromptState>[0];
+
+async function resolveResetPrompt(params: ResetPromptParams = {}): Promise<string> {
+  return (await resolveBareSessionResetPromptState(params)).prompt;
+}
+
+async function makeBootstrapPendingWorkspace(): Promise<string> {
+  const workspaceDir = await makeTempWorkspace("openclaw-reset-bootstrap-");
+  await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
+  return workspaceDir;
+}
+
+describe("resolveBareSessionResetPromptState", () => {
+  it("includes the explicit Session Startup instruction for bare /new and /reset", async () => {
+    const prompt = await resolveResetPrompt();
     expect(prompt).toContain("Execute your Session Startup sequence now");
     expect(prompt).toContain("read the required files before responding to the user");
     expect(prompt).toContain("If BOOTSTRAP.md exists in the provided Project Context");
@@ -21,55 +30,56 @@ describe("buildBareSessionResetPrompt", () => {
     );
   });
 
-  it("uses bootstrap-specific wording when bootstrap is still pending", () => {
-    const prompt = buildBareSessionResetPrompt(undefined, undefined, "full");
+  it("uses bootstrap-specific wording when bootstrap is still pending", async () => {
+    const workspaceDir = await makeBootstrapPendingWorkspace();
+    const prompt = await resolveResetPrompt({ workspaceDir });
 
     expect(prompt).toContain("while bootstrap is still pending for this workspace");
     expect(prompt).toContain("Please read BOOTSTRAP.md from the workspace now");
-    expect(prompt).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
-    expect(prompt).toContain("explain the blocker briefly");
-    expect(prompt).toContain("offer the simplest next step");
-    expect(prompt).toContain("Do not pretend bootstrap is complete when it is not.");
+    expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
+    expect(prompt).toContain("brief blocker");
+    expect(prompt).toContain("simplest next step");
+    expect(prompt).toContain("Never claim completion early");
     expect(prompt).toContain("Your first user-visible reply must follow BOOTSTRAP.md");
     expect(prompt).not.toContain("Then greet the user in your configured persona");
   });
 
-  it("uses limited bootstrap wording for constrained reset runs", () => {
-    const prompt = buildBareSessionResetPrompt(undefined, undefined, "limited");
+  it("uses limited bootstrap wording for constrained reset runs", async () => {
+    const workspaceDir = await makeBootstrapPendingWorkspace();
+    const prompt = await resolveResetPrompt({ workspaceDir, hasBootstrapFileAccess: false });
 
     expect(prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
-    expect(prompt).toContain("Do not claim bootstrap is complete");
-    expect(prompt).toContain("do not use a generic first greeting");
+    expect(prompt).toContain("Never claim complete");
+    expect(prompt).toContain("no generic first greeting");
     expect(prompt).toContain("switching to a primary interactive run with normal workspace access");
     expect(prompt).not.toContain("Please read BOOTSTRAP.md from the workspace now");
   });
 
-  it("appends current time line so agents know the date", () => {
+  it("appends current time line so agents know the date", async () => {
     const cfg = {
       agents: { defaults: { userTimezone: "America/New_York", timeFormat: "12" } },
     } as OpenClawConfig;
     // 2026-03-03 14:00 UTC = 2026-03-03 09:00 EST
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
-    const prompt = buildBareSessionResetPrompt(cfg, nowMs);
+    const prompt = await resolveResetPrompt({ cfg, nowMs });
     expect(prompt).toContain("Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York)");
     expect(prompt).toContain("Reference UTC: 2026-03-03 14:00 UTC");
   });
 
-  it("does not append a duplicate current time line", () => {
+  it("does not append a duplicate current time line", async () => {
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
-    const prompt = buildBareSessionResetPrompt(undefined, nowMs);
+    const prompt = await resolveResetPrompt({ nowMs });
     expect((prompt.match(/Current time:/g) ?? []).length).toBe(1);
   });
 
-  it("falls back to UTC when no timezone configured", () => {
+  it("falls back to UTC when no timezone configured", async () => {
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
-    const prompt = buildBareSessionResetPrompt(undefined, nowMs);
+    const prompt = await resolveResetPrompt({ nowMs });
     expect(prompt).toContain("Current time:");
   });
 
   it("resolves shared bare reset prompt state from workspace bootstrap truth", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-reset-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
+    const workspaceDir = await makeBootstrapPendingWorkspace();
 
     const pending = await resolveBareSessionResetPromptState({ workspaceDir });
     expect(pending.bootstrapMode).toBe("full");

@@ -313,13 +313,13 @@ function findOpenInlineCodeStart(text: string): number {
   let openTicks = 0;
   let index = 0;
   while (index < text.length) {
-    if (text[index] !== "`") {
+    if (text.charAt(index) !== "`") {
       index += 1;
       continue;
     }
     const runStart = index;
     let runLength = 0;
-    while (index < text.length && text[index] === "`") {
+    while (index < text.length && text.charAt(index) === "`") {
       runLength += 1;
       index += 1;
     }
@@ -338,8 +338,12 @@ function findOpenFenceStart(text: string): number {
   const fenceRe = /(^|\n)(```|~~~)[^\n]*(?:\n|$)/g;
   let open: { marker: string; index: number } | null = null;
   for (const match of text.matchAll(fenceRe)) {
-    const index = (match.index ?? 0) + match[1].length;
-    const marker = match[2] ?? "";
+    const prefix = match.at(1);
+    const marker = match.at(2);
+    if (prefix === undefined || marker === undefined) {
+      continue;
+    }
+    const index = (match.index ?? 0) + prefix.length;
     if (open !== null && open.marker === marker) {
       open = null;
     } else if (!open) {

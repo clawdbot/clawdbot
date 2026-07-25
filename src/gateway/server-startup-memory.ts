@@ -9,6 +9,7 @@ import {
 } from "../memory-host-sdk/host/backend-config.js";
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 
 /** True when qmd memory config opts into Gateway startup manager work. */
 function shouldRunQmdStartupManager(qmd: ResolvedQmdConfig): boolean {
@@ -25,7 +26,7 @@ function shouldKeepQmdStartupManagerAlive(qmd: ResolvedQmdConfig): boolean {
 /** Check whether an agent overrides memory search instead of inheriting defaults. */
 function hasExplicitAgentMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   return listAgentEntries(cfg).some(
-    (entry) => normalizeAgentId(entry.id) === agentId && entry.memorySearch != null,
+    (entry) => normalizeAgentId(entry.id) === agentId && entry.memory?.search != null,
   );
 }
 
@@ -41,7 +42,7 @@ function shouldEagerlyStartAgentMemory(params: {
   if (params.agentId === resolveDefaultAgentId(params.cfg)) {
     return true;
   }
-  if (params.cfg.agents?.defaults?.memorySearch?.enabled === true) {
+  if (params.cfg.memory?.search?.enabled === true) {
     return true;
   }
   return hasExplicitAgentMemorySearchConfig(params.cfg, params.agentId);
@@ -57,7 +58,17 @@ export async function startGatewayMemoryBackend(params: {
   const initializedAgentIds: string[] = [];
   const deferredAgentIds: string[] = [];
   for (const agentId of agentIds) {
-    if (!resolveMemorySearchConfig(params.cfg, agentId)) {
+    try {
+      if (!resolveMemorySearchConfig(params.cfg, agentId)) {
+        continue;
+      }
+    } catch (error) {
+      if (!(error instanceof SecretSurfaceUnavailableError)) {
+        throw error;
+      }
+      // One isolated provider must not prevent healthy agents from completing
+      // Gateway-owned boot sync and background manager initialization.
+      params.log.warn(`memory startup unavailable for agent "${agentId}": ${error.message}`);
       continue;
     }
     const resolved = resolveMemoryBackendConfig({ cfg: params.cfg, agentId });

@@ -20,10 +20,6 @@ vi.mock("../../agents/sandbox.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
 }));
 
-vi.mock("../../config/sessions/store.js", () => ({
-  updateSessionStore: vi.fn(async () => {}),
-}));
-
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));

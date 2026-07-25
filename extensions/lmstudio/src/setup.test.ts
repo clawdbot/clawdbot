@@ -19,6 +19,7 @@ import {
 import {
   configureLmstudioNonInteractive,
   discoverLmstudioProvider,
+  prepareAppGuidedLmstudioSetup,
   promptAndConfigureLmstudioInteractive,
 } from "./setup.js";
 
@@ -347,6 +348,137 @@ describe("lmstudio setup", () => {
     );
   });
 
+  it("prepares an existing tool-capable LLM without a credential profile", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        { type: "embedding", key: "nomic-embed" },
+        { type: "llm", key: "chat-only", display_name: "Chat only" },
+        {
+          type: "llm",
+          key: "qwen3-8b-instruct",
+          display_name: "Qwen3 8B",
+          max_context_length: 65536,
+          capabilities: { trained_for_tool_use: true },
+        },
+      ],
+    });
+
+    const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
+
+    expect(result).toMatchObject({
+      profiles: [],
+      defaultModel: "lmstudio/qwen3-8b-instruct",
+      configPatch: {
+        models: {
+          mode: "merge",
+          providers: {
+            lmstudio: {
+              baseUrl: LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
+              api: "openai-completions",
+              models: [
+                expect.objectContaining({ id: "chat-only" }),
+                expect.objectContaining({ id: "qwen3-8b-instruct" }),
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(result?.configPatch?.models?.providers?.lmstudio?.apiKey).toBe(
+      LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+    );
+    await expect(
+      prepareAppGuidedLmstudioSetup({
+        config: {},
+        env: {},
+        modelRef: "lmstudio/chat-only",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      prepareAppGuidedLmstudioSetup({
+        config: {},
+        env: {},
+        modelRef: "lmstudio/not-installed",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("prefers the strongest tool-calling family among installed models", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "llama3.3-70b-instruct",
+          max_context_length: 65_536,
+          capabilities: { trained_for_tool_use: true },
+        },
+        {
+          type: "llm",
+          key: "qwen3.5-4b-instruct",
+          max_context_length: 65_536,
+          capabilities: { trained_for_tool_use: true },
+        },
+        {
+          type: "llm",
+          key: "nomic-embed-text",
+          max_context_length: 65_536,
+          capabilities: { trained_for_tool_use: true },
+        },
+      ],
+    });
+
+    const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
+
+    expect(result?.defaultModel).toBe("lmstudio/qwen3.5-4b-instruct");
+  });
+
+  it("skips a preferred model loaded with less than 16k context", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "llama3.3-70b-instruct",
+          max_context_length: 65_536,
+          loaded_instances: [{ id: "llama", config: { context_length: 32_768 } }],
+          capabilities: { trained_for_tool_use: true },
+        },
+        {
+          type: "llm",
+          key: "qwen3.5-4b-instruct",
+          max_context_length: 65_536,
+          loaded_instances: [{ id: "qwen", config: { context_length: 8_192 } }],
+          capabilities: { trained_for_tool_use: true },
+        },
+      ],
+    });
+
+    const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
+
+    expect(result?.defaultModel).toBe("lmstudio/llama3.3-70b-instruct");
+  });
+
+  it("does not auto-detect a model without measured or advertised context", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "qwen3.5-4b-instruct",
+          capabilities: { trained_for_tool_use: true },
+        },
+      ],
+    });
+
+    await expect(prepareAppGuidedLmstudioSetup({ config: {}, env: {} })).resolves.toBeNull();
+  });
+
   it("non-interactive setup discovers catalog and writes LM Studio provider config", async () => {
     const ctx = buildNonInteractiveContext({
       customBaseUrl: "http://localhost:1234/api/v1/",
@@ -429,7 +561,7 @@ describe("lmstudio setup", () => {
     });
   });
 
-  it("non-interactive setup auto-selects a discovered LM Studio model when none is provided", async () => {
+  it("non-interactive setup selects the preferred discovered model when none is provided", async () => {
     const ctx = buildNonInteractiveContext({
       customBaseUrl: "http://localhost:1234/api/v1/",
     });
@@ -458,9 +590,11 @@ describe("lmstudio setup", () => {
     );
     const setupCtx = requireRecord(setupCall.ctx, "self-hosted setup context");
     expectRecordFields(setupCtx.opts, "self-hosted setup opts", {
-      customModelId: "phi-4",
+      customModelId: "qwen3-8b-instruct",
     });
-    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe("lmstudio/phi-4");
+    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
+      "lmstudio/qwen3-8b-instruct",
+    );
     const models = requireProviderModels(requireNonInteractiveLmstudioProvider(result));
     expect(models).toHaveLength(2);
     expectModelFields(models[0], {
@@ -1627,3 +1761,4 @@ describe("lmstudio setup", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -35,7 +35,7 @@ import {
   upsertCanonicalModelConfigEntry,
 } from "../models/shared.js";
 
-export type PromosClaimOptions = {
+type PromosClaimOptions = {
   apiKey?: string;
   setDefault?: boolean;
 };

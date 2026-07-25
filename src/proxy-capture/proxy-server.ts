@@ -36,7 +36,7 @@ function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.en
   return isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE]);
 }
 
-export function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
+function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
   if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
     return;
   }
@@ -71,7 +71,7 @@ function createProxyCaptureRecorder(params: {
   };
 }
 
-export function parseConnectTarget(rawTarget: string | undefined): {
+function parseConnectTarget(rawTarget: string | undefined): {
   hostname: string;
   port: number;
 } {

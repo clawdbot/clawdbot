@@ -28,6 +28,7 @@ function buildParams(commandBody: string) {
 
   const ctx = {
     CommandBody: commandBody,
+    commandText: commandBody,
     SessionKey: "session-key",
   } as MsgContext;
 
@@ -122,6 +123,15 @@ describe("handleBashChatCommand stop", () => {
 
     expect(result.text).toContain("No running bash job found");
     expect(killProcessTreeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not split boundary emoji in missing session snippets", async () => {
+    getSessionMock.mockReturnValue(undefined);
+    getFinishedSessionMock.mockReturnValue(undefined);
+
+    const result = await handleBashChatCommand(buildParams("/bash stop 1234567😀tail"));
+
+    expect(result.text).toBe("⚙️ No running bash job found for 1234567….");
   });
 
   it("fails stop when session has no pid", async () => {

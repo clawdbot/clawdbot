@@ -1,8 +1,8 @@
 // Formats terminal-safe strings for TUI messages and status surfaces.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionGoal } from "../config/sessions/types.js";
-import { isLoopbackHost } from "../gateway/net.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
@@ -29,6 +29,16 @@ const RTL_ISOLATE_END = "\u2069";
 const FENCED_CODE_RE = /(```|~~~)[^\n]*\n[\s\S]*?\n\1[^\n]*/g;
 // Inline code spans with balanced backtick run (`code`, ``co`de``, ...).
 const INLINE_CODE_RE = /(`+)(?:(?!\1).)+?\1/g;
+
+/** Keep routing/provider/profile details in session state, not the compact footer. */
+export function formatModelFooter(params: {
+  model?: string | null;
+  thinkingLevel?: string | null;
+}): string {
+  const model = splitTrailingAuthProfile(params.model ?? "").model || "unknown";
+  const thinkingLevel = params.thinkingLevel?.trim();
+  return thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model;
+}
 
 function hasControlChars(text: string): boolean {
   for (const char of text) {
@@ -465,15 +475,6 @@ export function formatTokens(total?: number | null, context?: number | null) {
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
-}
-
-export function formatRemoteConnectionHostFooter(connectionUrl: string): string | null {
-  try {
-    const hostname = new URL(connectionUrl.trim()).hostname.trim();
-    return hostname && !isLoopbackHost(hostname) ? `host ${hostname}` : null;
-  } catch {
-    return null;
-  }
 }
 
 function formatGoalUsage(goal: SessionGoal): string | null {

@@ -1,9 +1,9 @@
 // Policy doctor fix metadata classifies findings before patch builders exist.
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./metadata.js";
+import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 
 type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "validateOnly" | "unsupported";
 
-export type PolicyFixMetadata = {
+type PolicyFixMetadata = {
   readonly checkId: (typeof POLICY_CHECK_IDS)[number];
   readonly fixClass: PolicyFixClass;
   readonly policyPath?: readonly string[];
@@ -23,7 +23,7 @@ const m = (
   ...options,
 });
 
-export const POLICY_FIX_METADATA = [
+const POLICY_FIX_METADATA = [
   m(CHECK_IDS.policyMissingFile, "manual", "Restore or author the approved policy artifact."),
   m(CHECK_IDS.policyInvalidFile, "manual", "Repair the policy JSONC syntax or schema."),
   m(
@@ -71,6 +71,33 @@ export const POLICY_FIX_METADATA = [
     "reviewRequired",
     "Disable the concrete private-network access opt-in.",
     { policyPath: ["network", "privateNetwork", "allow"], configTargets: ["network"] },
+  ),
+  m(
+    CHECK_IDS.policyRoutingBindingsRequired,
+    "reviewRequired",
+    "Add an intentional channel route binding or revise the policy after review.",
+    { policyPath: ["routing", "requireBindings"], configTargets: ["bindings"] },
+  ),
+  m(
+    CHECK_IDS.policyRoutingBindingChannelUnconfigured,
+    "reviewRequired",
+    "Correct the binding channel or configure the intended channel after review.",
+    {
+      policyPath: ["routing", "requireConfiguredChannels"],
+      configTargets: ["bindings", "channels"],
+    },
+  ),
+  m(
+    CHECK_IDS.policyRoutingAgentMismatch,
+    "reviewRequired",
+    "Review binding precedence and the expected agent before changing message delivery.",
+    { policyPath: ["routing", "probes"], configTargets: ["bindings"] },
+  ),
+  m(
+    CHECK_IDS.policyRoutingMatchKindMismatch,
+    "reviewRequired",
+    "Restore the intended binding specificity or approve the new match kind.",
+    { policyPath: ["routing", "probes"], configTargets: ["bindings"] },
   ),
   m(
     CHECK_IDS.policyIngressDmPolicyUnapproved,
@@ -156,7 +183,7 @@ export const POLICY_FIX_METADATA = [
     "Add the command to gateway node denyCommands or update policy after review.",
     {
       policyPath: ["gateway", "nodes", "denyCommands"],
-      configTargets: ["gateway.nodes.denyCommands"],
+      configTargets: ["gateway.nodes.commands.deny"],
     },
   ),
   m(

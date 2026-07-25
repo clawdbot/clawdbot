@@ -1,8 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
-export type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
+type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
 type TaskTimestamp = number | string;
 
 export type TaskSummary = {
@@ -20,22 +21,26 @@ export type TaskSummary = {
   updatedAt?: TaskTimestamp;
   startedAt?: TaskTimestamp;
   endedAt?: TaskTimestamp;
+  toolUseCount?: number;
+  lastToolName?: string;
   progressSummary?: string;
   terminalSummary?: string;
   error?: string;
+  /** Bounded task input returned by tasks.get, not tasks.list. */
+  prompt?: string;
 };
 
-export type TaskEventPayload =
+type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function normalizeTaskStatus(value: unknown): TaskStatus | null {
@@ -74,7 +79,7 @@ function normalizeTimestamp(value: unknown): TaskTimestamp | undefined {
   return undefined;
 }
 
-export function normalizeTaskSummary(value: unknown): TaskSummary | null {
+function normalizeTaskSummary(value: unknown): TaskSummary | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -95,9 +100,12 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
   const updatedAt = normalizeTimestamp(value.updatedAt);
   const startedAt = normalizeTimestamp(value.startedAt);
   const endedAt = normalizeTimestamp(value.endedAt);
+  const toolUseCount = optionalCount(value.toolUseCount);
+  const lastToolName = optionalString(value.lastToolName);
   const progressSummary = optionalString(value.progressSummary);
   const terminalSummary = optionalString(value.terminalSummary);
   const error = optionalString(value.error);
+  const prompt = optionalString(value.prompt);
   return {
     id,
     taskId,
@@ -113,9 +121,12 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
     ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
     ...(endedAt !== undefined ? { endedAt } : {}),
+    ...(toolUseCount !== undefined ? { toolUseCount } : {}),
+    ...(lastToolName ? { lastToolName } : {}),
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    ...(prompt ? { prompt } : {}),
   };
 }
 
@@ -221,6 +232,13 @@ export function normalizeTasksListResult(value: unknown): TaskSummary[] | null {
   return sortTasks(
     value.tasks.map(normalizeTaskSummary).filter((task): task is TaskSummary => task !== null),
   );
+}
+
+export function normalizeTasksGetResult(value: unknown): TaskSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return normalizeTaskSummary(value.task);
 }
 
 // The ledger pages newest-first, so one page can hide long-running tasks behind

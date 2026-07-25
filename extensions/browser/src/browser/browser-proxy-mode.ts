@@ -36,7 +36,7 @@ export function hasChromeProxyControlArg(args: readonly string[]): boolean {
 }
 
 /** Return true when Chrome args route traffic through an explicit proxy. */
-export function hasExplicitChromeProxyRoutingArg(args: readonly string[]): boolean {
+function hasExplicitChromeProxyRoutingArg(args: readonly string[]): boolean {
   return args.some((arg) => PROXY_ROUTING_CHROME_ARGS.has(chromeArgName(arg)));
 }
 
@@ -52,11 +52,12 @@ export function omitChromeProxyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 /** Resolve the navigation proxy mode used by SSRF/navigation guards. */
 export function resolveBrowserNavigationProxyMode(params: {
   resolved: Pick<ResolvedBrowserConfig, "extraArgs">;
-  profile: Pick<ResolvedBrowserProfile, "cdpIsLoopback" | "driver">;
+  profile: Pick<ResolvedBrowserProfile, "attachOnly" | "cdpIsLoopback" | "driver">;
 }): BrowserNavigationProxyMode {
   if (
     params.profile.driver === "openclaw" &&
     params.profile.cdpIsLoopback &&
+    !params.profile.attachOnly &&
     hasExplicitChromeProxyRoutingArg(params.resolved.extraArgs)
   ) {
     return "explicit-browser-proxy";

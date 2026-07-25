@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => {
     startOptions: vi.fn(async ({ startOptions }) => startOptions),
   };
   const managedBinary = {
+    nativeCommand: vi.fn(() => undefined),
     startOptions: vi.fn(async (startOptions) => startOptions),
   };
   const providerAuth = {
@@ -24,10 +25,12 @@ vi.mock("./auth-bridge.js", () => ({
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
   resolveCodexAppServerAuthProfileIdForAgent: mocks.authBridge.authProfileId,
+  resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
 }));
 
 vi.mock("./managed-binary.js", () => ({
   resolveManagedCodexAppServerStartOptions: mocks.managedBinary.startOptions,
+  resolveManagedCodexNativeCommand: mocks.managedBinary.nativeCommand,
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
@@ -58,6 +61,8 @@ describe("listCodexAppServerModels", () => {
     mocks.authBridge.startOptions.mockClear();
     mocks.managedBinary.startOptions.mockClear();
     mocks.managedBinary.startOptions.mockImplementation(async (startOptions) => startOptions);
+    mocks.managedBinary.nativeCommand.mockClear();
+    mocks.managedBinary.nativeCommand.mockReturnValue(undefined);
     mocks.providerAuth.agentDir.mockClear();
   });
 

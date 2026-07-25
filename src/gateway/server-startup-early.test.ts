@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   registerSkillsChangeListener: vi.fn(),
   skillsChangeUnsub: vi.fn(),
   ensureContextWindowCacheLoaded: vi.fn(),
+  ensureTaskRuntimeStateReady: vi.fn(),
   configureTaskRegistryMaintenance: vi.fn(),
   startTaskRegistryMaintenance: vi.fn(),
   getInspectableActiveTaskRestartBlockers: vi.fn(),
@@ -40,6 +41,10 @@ vi.mock("../skills/runtime/refresh.js", () => ({
 
 vi.mock("../agents/context.js", () => ({
   ensureContextWindowCacheLoaded: mocks.ensureContextWindowCacheLoaded,
+}));
+
+vi.mock("../tasks/runtime-internal.js", () => ({
+  ensureTaskRuntimeStateReady: mocks.ensureTaskRuntimeStateReady,
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
@@ -97,6 +102,7 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.skillsChangeUnsub.mockReset();
     mocks.ensureContextWindowCacheLoaded.mockReset();
     mocks.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
+    mocks.ensureTaskRuntimeStateReady.mockReset();
     mocks.configureTaskRegistryMaintenance.mockReset();
     mocks.startTaskRegistryMaintenance.mockReset();
     mocks.getInspectableActiveTaskRestartBlockers.mockReset();
@@ -122,10 +128,17 @@ describe("startGatewayEarlyRuntime", () => {
 
     expect(mocks.setSkillsRemoteRegistry).toHaveBeenCalledWith(nodeRegistry);
     await Promise.resolve();
-    expect(mocks.ensureContextWindowCacheLoaded).toHaveBeenCalledWith({});
+    expect(mocks.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
     expect(mocks.primeRemoteSkillsCache).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureTaskRuntimeStateReady).toHaveBeenCalledTimes(1);
     expect(mocks.configureTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     expect(mocks.startTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureTaskRuntimeStateReady.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+      mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity,
+    );
+    expect(mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+      mocks.startTaskRegistryMaintenance.mock.invocationCallOrder[0] ?? Infinity,
+    );
     expect(mocks.registerSkillsChangeListener).toHaveBeenCalledTimes(1);
     expect(earlyRuntime.getActiveTaskCount()).toBe(1);
 
@@ -133,20 +146,22 @@ describe("startGatewayEarlyRuntime", () => {
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
   });
 
-  it("does not block gateway early runtime on context-window cache warmup", async () => {
-    const pendingWarmup = new Promise<void>(() => {});
-    mocks.ensureContextWindowCacheLoaded.mockReturnValueOnce(pendingWarmup);
+  it("fails before discovery and task maintenance when task state cannot restore", async () => {
+    mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(() => {
+      throw new Error("task-flow registry restore failed");
+    });
 
-    const earlyRuntime = await startGatewayEarlyRuntime(
-      earlyRuntimeInput({
-        minimalTestGateway: false,
-        cfgAtStart: { agents: { defaults: { model: "openai/gpt-5.5" } } } as never,
-      }),
-    );
+    await expect(
+      startGatewayEarlyRuntime(
+        earlyRuntimeInput({
+          minimalTestGateway: false,
+        }),
+      ),
+    ).rejects.toThrow("task-flow registry restore failed");
 
-    await Promise.resolve();
-    expect(mocks.ensureContextWindowCacheLoaded).toHaveBeenCalledTimes(1);
-    expect(earlyRuntime).toHaveProperty("startMaintenance");
+    expect(mocks.startGatewayDiscovery).not.toHaveBeenCalled();
+    expect(mocks.configureTaskRegistryMaintenance).not.toHaveBeenCalled();
+    expect(mocks.startTaskRegistryMaintenance).not.toHaveBeenCalled();
   });
 
   it("starts discovery with the current plugin registry services", async () => {

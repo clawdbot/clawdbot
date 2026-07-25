@@ -1,26 +1,23 @@
 // Control UI component renders a copyable gateway connection command.
 import { html } from "lit";
 import { t } from "../i18n/index.ts";
+import { copyToClipboard } from "../lib/clipboard.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import "./tooltip.ts";
 
 async function copyCommand(command: string) {
-  try {
-    await navigator.clipboard.writeText(command);
-  } catch {
-    // Best effort only; the explicit copy button provides visible feedback.
-  }
+  await copyToClipboard(command);
 }
 
 export function renderConnectCommand(command: string) {
-  const copyLabel = t("overview.connection.copyCommand");
+  const copyLabel = t("connection.help.copyCommand");
   return html`
     <openclaw-tooltip .content=${copyLabel}>
       <div
         class="login-gate__command"
         role="button"
         tabindex="0"
-        aria-label=${t("overview.connection.copyCommandAria", { command })}
+        aria-label=${t("connection.help.copyCommandAria", { command })}
         @click=${async (event: Event) => {
           if ((event.target as HTMLElement | null)?.closest(".chat-copy-btn")) {
             return;

@@ -12,7 +12,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { resolveIMessageAccount } from "./accounts.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
-import { clearIMessagePrivateApiCache, probeIMessage, probeIMessagePrivateApi } from "./probe.js";
+import { probeIMessage, probeIMessagePrivateApi } from "./probe.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 import { probeIMessageStatusAccount } from "./status-core.js";
@@ -104,8 +104,7 @@ describe("createIMessageRpcClient", () => {
   });
 
   it("promotes Full Disk Access rpc banners to the public probe error", async () => {
-    const { IMessageRpcClient, PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR } =
-      await import("./client.js");
+    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient();
     const internals = client as unknown as {
       handleLine: (line: string) => void;
@@ -116,7 +115,9 @@ describe("createIMessageRpcClient", () => {
       "imsg cannot access /Users/alice/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
 
-    expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
+    expect(internals.buildCloseError(1, null).message).toBe(
+      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
   });
 
   it.each([
@@ -517,7 +518,6 @@ describe("imessage setup status", () => {
 describe("probeIMessage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    clearIMessagePrivateApiCache();
     spawnMock.mockClear();
     vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(true);
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({

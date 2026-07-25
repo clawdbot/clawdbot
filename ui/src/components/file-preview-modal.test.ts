@@ -1,11 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
-import "./file-preview-modal.ts";
+import { i18n } from "../i18n/index.ts";
+import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
+
+type FilePreviewModalElement = HTMLElement & {
+  files: typeof files;
+  activePath: string;
+  query: string;
+  contextLabel: string;
+  updateComplete: Promise<boolean>;
+};
 
 let container: HTMLDivElement;
+
+const FILE_PREVIEW_MODAL_ELEMENT_NAME = `test-openclaw-file-preview-modal-${crypto.randomUUID()}`;
+
+customElements.define(FILE_PREVIEW_MODAL_ELEMENT_NAME, class extends OpenClawFilePreviewModal {});
 
 const files = [
   {
@@ -30,29 +41,19 @@ async function renderPreview(options: RenderPreviewOptions = {}) {
   const query = options.query ?? "";
   const activePath = options.activePath ?? "templates/digest.md";
   const previewFiles = options.previewFiles ?? files;
-  render(
-    html`
-      <openclaw-file-preview-modal
-        .files=${previewFiles}
-        .activePath=${activePath}
-        .query=${query}
-        .contextLabel=${"in morning-catchup"}
-      ></openclaw-file-preview-modal>
-    `,
-    container,
-  );
+  const modal = document.createElement(FILE_PREVIEW_MODAL_ELEMENT_NAME) as FilePreviewModalElement;
+  modal.files = previewFiles;
+  modal.activePath = activePath;
+  modal.query = query;
+  modal.contextLabel = "in morning-catchup";
+  container.append(modal);
 
-  const modal = container.querySelector<OpenClawFilePreviewModal>("openclaw-file-preview-modal");
-  expect(modal).toBeInstanceOf(HTMLElement);
-  if (!modal) {
-    throw new Error("expected file preview modal");
-  }
   await modal.updateComplete;
   await modal.updateComplete;
   return modal;
 }
 
-function shadowText(modal: OpenClawFilePreviewModal): string {
+function shadowText(modal: FilePreviewModalElement): string {
   return modal.shadowRoot?.textContent ?? "";
 }
 
@@ -62,8 +63,9 @@ describe("openclaw-file-preview-modal", () => {
     document.body.append(container);
   });
 
-  afterEach(() => {
-    render(nothing, container);
+  afterEach(async () => {
+    await i18n.setLocale("en");
+    container.replaceChildren();
     container.remove();
     vi.restoreAllMocks();
   });
@@ -136,6 +138,24 @@ describe("openclaw-file-preview-modal", () => {
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onDocumentKeydown).not.toHaveBeenCalled();
+    expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
+  });
+
+  it("handles file navigation from the modal dialog event path", async () => {
+    const modal = await renderPreview();
+    const onSelect = vi.fn();
+    modal.addEventListener("file-preview-select", onSelect);
+
+    const dialog = modal.shadowRoot?.querySelector<HTMLElement>("openclaw-modal-dialog");
+    const arrowDown = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    dialog?.dispatchEvent(arrowDown);
+
+    expect(arrowDown.defaultPrevented).toBe(true);
     expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
   });
 
@@ -219,5 +239,35 @@ describe("openclaw-file-preview-modal", () => {
       expect(writeText).toHaveBeenCalledWith(contents);
       expect(copyButton?.dataset.copied).toBe("1");
     });
+  });
+
+  it("rerenders default copy when the locale changes", async () => {
+    const modal = await renderPreview();
+    i18n.registerTranslation("pt-BR", {
+      common: { close: "Fechar" },
+      filePreview: {
+        label: "Arquivos de suporte",
+        listLabel: "Arquivos",
+        searchPlaceholder: "Buscar arquivos…",
+        readOnly: "somente leitura",
+        emptyTitle: "Nenhum arquivo corresponde",
+        emptySubtitle: "Tente outro nome ou conteúdo.",
+        copyFile: "Copiar arquivo",
+        fileCount: "{count} arquivos",
+        filteredFileCount: "{count}/{total} arquivos",
+        noMatches: "Nenhum arquivo corresponde.",
+        navigate: "navegar",
+      },
+    });
+
+    await i18n.setLocale("pt-BR");
+    await modal.updateComplete;
+
+    expect(
+      modal.shadowRoot?.querySelector<HTMLElement & { label: string }>("openclaw-modal-dialog")
+        ?.label,
+    ).toBe("Arquivos de suporte");
+    expect(shadowText(modal)).toContain("2 arquivos");
+    expect(shadowText(modal)).toContain("Fechar");
   });
 });

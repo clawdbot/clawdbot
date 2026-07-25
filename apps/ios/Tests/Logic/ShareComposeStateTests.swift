@@ -25,4 +25,9 @@ struct ShareComposeStateTests {
         let controls = ShareComposeControlState.resolve(status: .failed("offline"), hasDraftText: true)
         #expect(controls == ShareComposeControlState(isSendEnabled: true, isCancelEnabled: true, isEditable: true))
     }
+
+    @Test func `keeps send blocked when an attachment cannot be prepared`() {
+        let controls = ShareComposeControlState.resolve(status: .blocked("invalid image"), hasDraftText: true)
+        #expect(controls == ShareComposeControlState(isSendEnabled: false, isCancelEnabled: true, isEditable: true))
+    }
 }

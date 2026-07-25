@@ -34,7 +34,7 @@ export type ConfigHealthState = {
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
-export type ConfigHealthStateDeps = {
+type ConfigHealthStateDeps = {
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   logger: Pick<typeof console, "warn">;

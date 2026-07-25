@@ -9,6 +9,8 @@ import {
   type ClawHubRiskAcknowledgementRequest,
 } from "../../infra/clawhub-install-trust.js";
 import {
+  CLAWHUB_SKILLS_SH_TRUST_LABEL,
+  CLAWHUB_SKILLS_SH_TRUST_STATE,
   downloadClawHubGitHubSkillArchive,
   downloadClawHubSkillArchive,
   downloadClawHubSkillArchiveUrl,
@@ -16,6 +18,7 @@ import {
   fetchClawHubSkillInstallResolution,
   fetchClawHubSkillVerification,
   isDefaultClawHubBaseUrl,
+  normalizeClawHubSha256Integrity,
   reportClawHubSkillInstallTelemetry,
   resolveClawHubBaseUrl,
   searchClawHubSkills,
@@ -24,12 +27,15 @@ import {
   type ClawHubSkillInstallResolutionResponse,
   type ClawHubSkillSearchResult,
   type ClawHubSkillVerificationResponse,
+  type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { readJsonIfExists, tryReadJson, writeJson } from "../../infra/json-files.js";
+import { markClawPackageIndependentlyOwned } from "../../state/claw-package-adoption.js";
+import { withClawPackageLifecycleLease } from "../../state/claw-package-lifecycle-lease.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   installExtractedSkillRoot,
@@ -37,6 +43,7 @@ import {
   resolveWorkspaceSkillInstallDir,
   validateRequestedSkillSlug,
 } from "./archive-install.js";
+import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 const DOT_DIR = ".clawhub";
 const LEGACY_DOT_DIR = ".clawdhub";
@@ -72,9 +79,12 @@ type ClawHubSkillLockEntry = {
   installedAt: number;
   registry?: string;
   ownerHandle?: string;
+  requestedReference?: string;
+  trustState?: ClawHubSkillsShTrustState;
   sourceUrl?: string;
   artifact?: ClawHubSkillDownloadedArtifactLock;
   skillFile?: ClawHubSkillFileLock;
+  fileTreeSha256?: string;
   verification?: ClawHubSkillVerificationLock;
 };
 
@@ -83,11 +93,14 @@ type ClawHubSkillOrigin = {
   registry: string;
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
+  trustState?: ClawHubSkillsShTrustState;
   installedVersion: string;
   installedAt: number;
   sourceUrl?: string;
   artifact?: ClawHubSkillDownloadedArtifactLock;
   skillFile?: ClawHubSkillFileLock;
+  fileTreeSha256?: string;
 };
 
 type ClawHubSkillsLockfile = {
@@ -107,6 +120,8 @@ export type ClawHubSkillStatusLink =
       registry: string;
       slug: string;
       ownerHandle?: string;
+      requestedReference?: string;
+      trustState?: ClawHubSkillsShTrustState;
       installedVersion: string;
       installedAt: number;
       originPath: string;
@@ -114,6 +129,7 @@ export type ClawHubSkillStatusLink =
       sourceUrl?: string;
       artifact?: ClawHubSkillDownloadedArtifactLock;
       skillFile?: ClawHubSkillFileLock;
+      fileTreeSha256?: string;
     }
   | {
       status: "invalid";
@@ -169,9 +185,13 @@ type Logger = {
 type ClawHubSkillRef = {
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
+  trustState?: ClawHubSkillsShTrustState;
 };
 
 const CLAWHUB_OWNER_HANDLE_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,38}[a-z0-9])?$/;
+const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+const GITHUB_REPO_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 
 function normalizeClawHubOwnerHandle(raw: string): string {
   const ownerHandle = raw.trim().toLowerCase();
@@ -183,6 +203,32 @@ function normalizeClawHubOwnerHandle(raw: string): string {
 
 function parseRequestedClawHubSkillRef(raw: string): ClawHubSkillRef {
   const value = raw.trim();
+  if (value.startsWith("skills-sh/")) {
+    throw new Error(`Invalid skills.sh skill reference: ${raw}`);
+  }
+  if (value.startsWith("skills-sh:")) {
+    const parts = value.slice("skills-sh:".length).split("/");
+    if (parts.length !== 3) {
+      throw new Error(`Invalid skills.sh skill reference: ${raw}`);
+    }
+    const [owner, repo, slug] = parts;
+    if (
+      !owner ||
+      !repo ||
+      !slug ||
+      !GITHUB_OWNER_PATTERN.test(owner) ||
+      !GITHUB_REPO_PATTERN.test(repo) ||
+      repo === "." ||
+      repo === ".."
+    ) {
+      throw new Error(`Invalid skills.sh skill reference: ${raw}`);
+    }
+    return {
+      slug: validateRequestedSkillSlug(slug),
+      requestedReference: value,
+      trustState: CLAWHUB_SKILLS_SH_TRUST_STATE,
+    };
+  }
   if (!value.startsWith("@")) {
     return { slug: validateRequestedSkillSlug(value) };
   }
@@ -210,9 +256,10 @@ async function resolveRequestedUpdateSlug(params: {
   lock: ClawHubSkillsLockfile;
 }): Promise<string> {
   const requested = params.requestedSlug.trim();
-  const requestedRef = requested.startsWith("@")
-    ? parseRequestedClawHubSkillRef(requested)
-    : { slug: normalizeTrackedSkillSlug(requested) };
+  const requestedRef =
+    requested.startsWith("@") || requested.startsWith("skills-sh:")
+      ? parseRequestedClawHubSkillRef(requested)
+      : { slug: normalizeTrackedSkillSlug(requested) };
   const trackedSlug = requestedRef.slug;
   const trackedTargetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug);
   const trackedOrigin = await readClawHubSkillOrigin(trackedTargetDir);
@@ -225,6 +272,16 @@ async function resolveRequestedUpdateSlug(params: {
         `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
       );
     }
+    const trackedRequestedReference =
+      trackedOrigin?.requestedReference ?? trackedLockEntry?.requestedReference;
+    if (
+      requestedRef.requestedReference &&
+      trackedRequestedReference !== requestedRef.requestedReference
+    ) {
+      throw new Error(
+        `Skill "${trackedSlug}" is not tracked from ${requestedRef.requestedReference}.`,
+      );
+    }
     return trackedSlug;
   }
   return validateRequestedSkillSlug(requestedRef.slug);
@@ -234,7 +291,10 @@ type ClawHubInstallParams = {
   workspaceDir: string;
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
+  trustState?: ClawHubSkillsShTrustState;
   version?: string;
+  expectedIntegrity?: string;
   baseUrl?: string;
   force?: boolean;
   forceInstall?: boolean;
@@ -242,7 +302,38 @@ type ClawHubInstallParams = {
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  clawManaged?: boolean;
 };
+
+function normalizeExpectedArtifactIntegrity(expectedIntegrity: string): string;
+function normalizeExpectedArtifactIntegrity(expectedIntegrity: undefined): undefined;
+function normalizeExpectedArtifactIntegrity(
+  expectedIntegrity: string | undefined,
+): string | undefined;
+function normalizeExpectedArtifactIntegrity(
+  expectedIntegrity: string | undefined,
+): string | undefined {
+  if (expectedIntegrity === undefined) {
+    return undefined;
+  }
+  const normalized = normalizeClawHubSha256Integrity(expectedIntegrity);
+  if (!normalized) {
+    throw new Error(`Invalid expected ClawHub archive integrity: ${expectedIntegrity}`);
+  }
+  return normalized;
+}
+
+function assertDownloadedArtifactIntegrity(
+  archive: ClawHubDownloadResult,
+  expectedIntegrity: string | undefined,
+): void {
+  const normalizedExpected = normalizeExpectedArtifactIntegrity(expectedIntegrity);
+  if (normalizedExpected && archive.integrity !== normalizedExpected) {
+    throw new Error(
+      `ClawHub archive integrity mismatch: expected ${normalizedExpected}, got ${archive.integrity}.`,
+    );
+  }
+}
 
 type ClawHubOfficialFlagContainer = {
   channel?: unknown;
@@ -298,6 +389,8 @@ type TrackedUpdateTarget =
       ok: true;
       slug: string;
       ownerHandle?: string;
+      requestedReference?: string;
+      trustState?: ClawHubSkillsShTrustState;
       baseUrl?: string;
       previousVersion: string | null;
     }
@@ -315,6 +408,8 @@ type ClawHubSkillVerificationTargetResult =
       ok: true;
       slug: string;
       ownerHandle?: string;
+      requestedReference?: string;
+      trustState?: ClawHubSkillsShTrustState;
       baseUrl: string;
       version: string | undefined;
       tag: string | undefined;
@@ -485,18 +580,24 @@ function snapshotClawHubSkillVerification(
 async function fetchInstallVerificationLock(params: {
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
   version?: string;
   baseUrl?: string;
+  logger?: Logger;
 }): Promise<ClawHubSkillVerificationLock | undefined> {
   try {
     const verification = await fetchClawHubSkillVerification({
       slug: params.slug,
       ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+      ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
       version: params.version,
       baseUrl: params.baseUrl,
     });
     return snapshotClawHubSkillVerification(verification);
-  } catch {
+  } catch (err) {
+    params.logger?.warn?.(
+      `Skill verification for ${formatClawHubSkillRef(params)} failed: ${formatErrorMessage(err)}`,
+    );
     return undefined;
   }
 }
@@ -626,18 +727,49 @@ function normalizeClawHubSkillOrigin(
         return null;
       }
     }
+    const requestedReferenceRaw = normalizeOptionalStringValue(
+      (raw as { requestedReference?: unknown }).requestedReference,
+    );
+    let requestedReference: string | undefined;
+    let trustState: ClawHubSkillsShTrustState | undefined;
+    if (requestedReferenceRaw) {
+      try {
+        const parsed = parseRequestedClawHubSkillRef(requestedReferenceRaw);
+        if (!parsed.requestedReference || parsed.slug !== raw.slug) {
+          return null;
+        }
+        requestedReference = parsed.requestedReference;
+        const rawTrustState = normalizeOptionalStringValue(
+          (raw as { trustState?: unknown }).trustState,
+        );
+        if (rawTrustState !== CLAWHUB_SKILLS_SH_TRUST_STATE) {
+          return null;
+        }
+        trustState = CLAWHUB_SKILLS_SH_TRUST_STATE;
+      } catch {
+        return null;
+      }
+    } else if ((raw as { trustState?: unknown }).trustState !== undefined) {
+      return null;
+    }
     const artifact = normalizeDownloadedArtifactLock((raw as { artifact?: unknown }).artifact);
     const skillFile = normalizeSkillFileLock((raw as { skillFile?: unknown }).skillFile);
+    const fileTreeSha256 = normalizeOptionalStringValue(
+      (raw as { fileTreeSha256?: unknown }).fileTreeSha256,
+    );
     return {
       version: 1,
       registry: normalizeStoredRegistry(raw.registry),
       slug: raw.slug,
       ...(ownerHandle ? { ownerHandle } : {}),
+      ...(requestedReference ? { requestedReference } : {}),
+      ...(trustState ? { trustState } : {}),
       installedVersion: raw.installedVersion,
       installedAt: raw.installedAt,
       ...(sourceUrl ? { sourceUrl } : {}),
       ...(artifact ? { artifact } : {}),
       ...(skillFile ? { skillFile } : {}),
+      ...(fileTreeSha256 ? { fileTreeSha256 } : {}),
     };
   }
   return null;
@@ -737,10 +869,11 @@ export function resolveClawHubSkillStatusLinkSync(params: {
   skillDir: string;
   skillKey: string;
   lockRead?: ClawHubSkillsLockfileStatusRead;
+  lockfileScope?: "workspace" | "managed";
 }): ClawHubSkillStatusLink | undefined {
   const originRead = readClawHubSkillOriginStatusSync(params.skillDir);
   const lockRead = params.lockRead ?? readClawHubSkillsLockfileStatusSync(params.workspaceDir);
-
+  const lockfileLabel = `${params.lockfileScope ?? "workspace"} ClawHub lockfile`;
   if (originRead.kind === "missing") {
     let trackedSlug: string;
     try {
@@ -755,7 +888,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" is tracked by the workspace ClawHub lockfile but is missing local ClawHub origin metadata.`,
+      reason: `Skill "${trackedSlug}" is tracked by the ${lockfileLabel} but is missing local ClawHub origin metadata.`,
       slug: trackedSlug,
       installedVersion: locked.version,
       installedAt: locked.installedAt,
@@ -763,7 +896,6 @@ export function resolveClawHubSkillStatusLinkSync(params: {
       lockPath: lockRead.kind === "found" ? lockRead.path : undefined,
     };
   }
-
   if (originRead.kind === "malformed") {
     return {
       status: "invalid",
@@ -795,7 +927,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the workspace ClawHub lockfile.`,
+      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileLabel}.`,
       registry: originRead.origin.registry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -807,7 +939,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Malformed workspace ClawHub lockfile at ${lockRead.path}: ${lockRead.error}`,
+      reason: `Malformed ${lockfileLabel} at ${lockRead.path}: ${lockRead.error}`,
       registry: originRead.origin.registry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -821,7 +953,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the workspace ClawHub lockfile.`,
+      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileLabel}.`,
       registry: originRead.origin.registry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -851,16 +983,23 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
   const lockedSourceUrl = normalizeOptionalStringValue(locked.sourceUrl);
   const lockedOwnerHandle = normalizeOptionalStringValue(locked.ownerHandle);
+  const lockedRequestedReference = normalizeOptionalStringValue(locked.requestedReference);
+  const lockedTrustState =
+    locked.trustState === CLAWHUB_SKILLS_SH_TRUST_STATE ? CLAWHUB_SKILLS_SH_TRUST_STATE : undefined;
   const lockedArtifact = normalizeDownloadedArtifactLock(locked.artifact);
   const lockedSkillFile = normalizeSkillFileLock(locked.skillFile);
+  const lockedFileTreeSha256 = normalizeOptionalStringValue(locked.fileTreeSha256);
   const provenanceMatches =
     originRead.origin.ownerHandle === lockedOwnerHandle &&
+    originRead.origin.requestedReference === lockedRequestedReference &&
+    originRead.origin.trustState === lockedTrustState &&
     originRead.origin.sourceUrl === lockedSourceUrl &&
     originRead.origin.artifact?.kind === lockedArtifact?.kind &&
     originRead.origin.artifact?.sha256 === lockedArtifact?.sha256 &&
     originRead.origin.artifact?.integrity === lockedArtifact?.integrity &&
     originRead.origin.skillFile?.path === lockedSkillFile?.path &&
-    originRead.origin.skillFile?.sha256 === lockedSkillFile?.sha256;
+    originRead.origin.skillFile?.sha256 === lockedSkillFile?.sha256 &&
+    originRead.origin.fileTreeSha256 === lockedFileTreeSha256;
   // A linked status is a trust signal. Only expose provenance when both
   // install records agree, so a one-sided origin edit cannot become trusted.
   if (
@@ -872,7 +1011,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" ClawHub origin metadata does not match the workspace ClawHub lockfile.`,
+      reason: `Skill "${trackedSlug}" ClawHub origin metadata does not match the ${lockfileLabel}.`,
       registry: lockedRegistry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -887,6 +1026,8 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     registry: lockedRegistry,
     slug: trackedSlug,
     ...(lockedOwnerHandle ? { ownerHandle: lockedOwnerHandle } : {}),
+    ...(lockedRequestedReference ? { requestedReference: lockedRequestedReference } : {}),
+    ...(lockedTrustState ? { trustState: lockedTrustState } : {}),
     installedVersion: locked.version,
     installedAt: locked.installedAt,
     originPath: originRead.path,
@@ -894,6 +1035,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     ...(lockedSourceUrl ? { sourceUrl: lockedSourceUrl } : {}),
     ...(lockedArtifact ? { artifact: lockedArtifact } : {}),
     ...(lockedSkillFile ? { skillFile: lockedSkillFile } : {}),
+    ...(lockedFileTreeSha256 ? { fileTreeSha256: lockedFileTreeSha256 } : {}),
   };
 }
 
@@ -1002,6 +1144,12 @@ export async function resolveClawHubSkillVerificationTarget(params: {
     }
 
     const requestedRef = parseRequestedClawHubSkillRef(params.slug);
+    if (requestedRef.requestedReference && (version || tag)) {
+      return {
+        ok: false,
+        error: "--version and --tag are not supported for skills-sh references.",
+      };
+    }
     const trackedSlug = requestedRef.slug;
     const skillDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug);
     const originRead = await readClawHubSkillOriginStrict(skillDir);
@@ -1032,15 +1180,28 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       const lockedRegistry =
         locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
       const lockedOwnerHandle = normalizeOptionalStringValue(locked.ownerHandle);
+      const lockedRequestedReference = normalizeOptionalStringValue(locked.requestedReference);
+      const lockedTrustState =
+        locked.trustState === CLAWHUB_SKILLS_SH_TRUST_STATE
+          ? CLAWHUB_SKILLS_SH_TRUST_STATE
+          : undefined;
       if (
         locked.version !== originRead.origin.installedVersion ||
         locked.installedAt !== originRead.origin.installedAt ||
         lockedRegistry !== originRegistry ||
-        originRead.origin.ownerHandle !== lockedOwnerHandle
+        originRead.origin.ownerHandle !== lockedOwnerHandle ||
+        originRead.origin.requestedReference !== lockedRequestedReference ||
+        originRead.origin.trustState !== lockedTrustState
       ) {
         return {
           ok: false,
           error: `Skill "${trackedSlug}" ClawHub origin metadata does not match the workspace ClawHub lockfile. Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
+        };
+      }
+      if (lockedRequestedReference && (version || tag)) {
+        return {
+          ok: false,
+          error: "--version and --tag are not supported for skills-sh references.",
         };
       }
       if (requestedRef.ownerHandle && lockedOwnerHandle !== requestedRef.ownerHandle) {
@@ -1050,18 +1211,34 @@ export async function resolveClawHubSkillVerificationTarget(params: {
           error: `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
         };
       }
+      if (
+        requestedRef.requestedReference &&
+        lockedRequestedReference !== requestedRef.requestedReference
+      ) {
+        return {
+          ok: false,
+          error: `Skill "${trackedSlug}" is not tracked from ${requestedRef.requestedReference}.`,
+        };
+      }
       const selector: ClawHubSkillVerificationSelector = version
         ? "version"
         : tag
           ? "tag"
           : "installed-version";
+      // ClawHub's skills.sh verify route accepts the catalog reference as its sole selector.
+      // It rejects version/tag; the stored commit remains local installed provenance.
+      const verificationVersion = lockedRequestedReference
+        ? undefined
+        : (version ?? (tag ? undefined : locked.version));
       return {
         ok: true,
         slug: trackedSlug,
         ...(lockedOwnerHandle ? { ownerHandle: lockedOwnerHandle } : {}),
+        ...(lockedRequestedReference ? { requestedReference: lockedRequestedReference } : {}),
+        ...(lockedTrustState ? { trustState: lockedTrustState } : {}),
         baseUrl: lockedRegistry,
-        version: version ?? (tag ? undefined : locked.version),
-        tag,
+        version: verificationVersion,
+        tag: lockedRequestedReference ? undefined : tag,
         resolution: {
           source: "installed",
           selector,
@@ -1092,6 +1269,10 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       ok: true,
       slug: requestedRef.slug,
       ...(requestedRef.ownerHandle ? { ownerHandle: requestedRef.ownerHandle } : {}),
+      ...(requestedRef.requestedReference
+        ? { requestedReference: requestedRef.requestedReference }
+        : {}),
+      ...(requestedRef.trustState ? { trustState: requestedRef.trustState } : {}),
       baseUrl: registry,
       version,
       tag,
@@ -1202,10 +1383,14 @@ async function installGitHubResolution(params: {
   authority: "official" | "third-party";
   repo: string;
   commit: string;
+  requestedReference?: string;
+  trustState?: ClawHubSkillsShTrustState;
   force?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
 }) {
+  // Preserve the repository root for sourcePath selection. Root markers validate
+  // the selected skill directory afterward, so nested paths are not applied twice.
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
     tempDirPrefix: "openclaw-skill-clawhub-github-",
@@ -1229,6 +1414,8 @@ async function installGitHubResolution(params: {
             repo: params.repo,
             path: params.sourcePath,
             commit: params.commit,
+            ...(params.requestedReference ? { reference: params.requestedReference } : {}),
+            ...(params.trustState ? { trustState: params.trustState } : {}),
           },
           source: {
             kind: "git",
@@ -1236,7 +1423,9 @@ async function installGitHubResolution(params: {
             mutable: false,
             network: true,
           },
-          requestedSpecifier: `clawhub:${formatClawHubSkillRef(params)}@${params.commit}`,
+          requestedSpecifier:
+            params.requestedReference ??
+            `clawhub:${formatClawHubSkillRef(params)}@${params.commit}`,
         },
         rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
       }),
@@ -1246,16 +1435,25 @@ async function installGitHubResolution(params: {
 function assertInstallResolutionAllowed(
   resolution: ClawHubSkillInstallResolutionResponse,
 ): Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> {
-  if (resolution.ok) {
+  if (!resolution.ok) {
+    if (resolution.reason === "ambiguous_slug") {
+      const message = resolution.message ? ` ${resolution.message}` : "";
+      throw new Error(
+        `Skill "${resolution.slug}" is ambiguous on ClawHub. Install an owner-qualified skill, for example: openclaw skills install @owner/${resolution.slug}.${message}`,
+      );
+    }
+    throw new Error(resolution.message || `Skill "${resolution.slug}" is not installable.`);
+  }
+  if (resolution.installKind !== "github") {
     return resolution;
   }
-  if (resolution.reason === "ambiguous_slug") {
-    const message = resolution.message ? ` ${resolution.message}` : "";
+  const commit = normalizeGitHubCommitSegment(resolution.github.commit)?.toLowerCase();
+  if (!commit) {
     throw new Error(
-      `Skill "${resolution.slug}" is ambiguous on ClawHub. Install an owner-qualified skill, for example: openclaw skills install @owner/${resolution.slug}.${message}`,
+      `Skill "${resolution.slug}" resolved to a mutable or invalid GitHub source ref; expected a full 40-character commit SHA.`,
     );
   }
-  throw new Error(resolution.message || `Skill "${resolution.slug}" is not installable.`);
+  return { ...resolution, github: { ...resolution.github, commit } };
 }
 
 async function ensureClawHubSkillTrustAcknowledged(
@@ -1297,6 +1495,7 @@ async function performClawHubSkillInstall(
   params: ClawHubInstallParams,
 ): Promise<InstallClawHubSkillResult> {
   try {
+    normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
     const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
     const registry = resolveClawHubBaseUrl(params.baseUrl);
     const clawhubAuthority = isDefaultClawHubBaseUrl(params.baseUrl) ? "openclaw" : "third-party";
@@ -1349,10 +1548,23 @@ async function performClawHubSkillInstall(
         await fetchClawHubSkillInstallResolution({
           slug: params.slug,
           ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+          ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
           baseUrl: params.baseUrl,
           ...(params.forceInstall ? { forceInstall: true } : {}),
         }),
       );
+      if (params.requestedReference) {
+        if (
+          latestResolution.installKind !== "github" ||
+          latestResolution.trust?.state !== CLAWHUB_SKILLS_SH_TRUST_STATE
+        ) {
+          throw new Error(
+            `Skill "${params.slug}" did not resolve to an unscanned, commit-pinned GitHub source.`,
+          );
+        }
+        trustWarning = CLAWHUB_SKILLS_SH_TRUST_LABEL;
+        params.logger?.warn?.(CLAWHUB_SKILLS_SH_TRUST_LABEL);
+      }
       const resolutionOfficialClawHubSkill = isDefaultOfficialClawHubSkillSource({
         baseUrl: params.baseUrl,
         resolution: latestResolution,
@@ -1402,6 +1614,7 @@ async function performClawHubSkillInstall(
       }
     }
     try {
+      assertDownloadedArtifactIntegrity(archive, params.expectedIntegrity);
       if (!params.version) {
         if (!latestResolution) {
           throw new Error(`Skill "${params.slug}" has no install resolution.`);
@@ -1418,6 +1631,8 @@ async function performClawHubSkillInstall(
                 authority: officialClawHubSkill ? "official" : "third-party",
                 repo: latestResolution.github.repo,
                 commit: latestResolution.github.commit,
+                requestedReference: params.requestedReference,
+                trustState: params.trustState,
                 force: params.force,
                 logger: params.logger,
                 config: params.config,
@@ -1454,6 +1669,7 @@ async function performClawHubSkillInstall(
 
       const installedAt = Date.now();
       const artifact = buildDownloadedArtifactLock(archive);
+      const fileTreeSha256 = await digestClawHubSkillTree(install.targetDir);
       const verificationVersion =
         latestResolution?.installKind === "github" && !params.version ? undefined : version;
       const [skillFile, verification] = await Promise.all([
@@ -1461,8 +1677,10 @@ async function performClawHubSkillInstall(
         fetchInstallVerificationLock({
           slug: params.slug,
           ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+          ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
           version: verificationVersion,
           baseUrl: params.baseUrl,
+          logger: params.logger,
         }),
       ]);
       const sourceUrl =
@@ -1473,11 +1691,14 @@ async function performClawHubSkillInstall(
         registry: resolveClawHubBaseUrl(params.baseUrl),
         slug: params.slug,
         ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+        ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
+        ...(params.trustState ? { trustState: params.trustState } : {}),
         installedVersion: version,
         installedAt,
         ...(sourceUrl ? { sourceUrl } : {}),
         artifact,
         ...(skillFile ? { skillFile } : {}),
+        fileTreeSha256,
       });
       const lock = await readClawHubSkillsLockfile(params.workspaceDir);
       lock.skills[params.slug] = {
@@ -1485,17 +1706,31 @@ async function performClawHubSkillInstall(
         installedAt,
         registry: resolveClawHubBaseUrl(params.baseUrl),
         ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+        ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
+        ...(params.trustState ? { trustState: params.trustState } : {}),
         ...(sourceUrl ? { sourceUrl } : {}),
         artifact,
         ...(skillFile ? { skillFile } : {}),
+        fileTreeSha256,
         ...(verification ? { verification } : {}),
       };
       await writeClawHubSkillsLockfile(params.workspaceDir, lock);
+      if (!params.clawManaged) {
+        markClawPackageIndependentlyOwned({
+          kind: "skill",
+          source: "clawhub",
+          ref: params.slug,
+          version,
+          workspace: params.workspaceDir,
+        });
+      }
       await reportClawHubSkillInstallTelemetry({
         baseUrl: params.baseUrl,
         slug: params.slug,
         ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
         version,
+        ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
+        ...(params.trustState ? { trustState: params.trustState } : {}),
       }).catch(() => undefined);
 
       return {
@@ -1522,10 +1757,15 @@ async function installRequestedSkillFromClawHub(
 ): Promise<InstallClawHubSkillResult> {
   try {
     const ref = parseRequestedClawHubSkillRef(params.slug);
+    if (ref.requestedReference && params.version) {
+      throw new Error("--version is not supported for skills-sh references.");
+    }
     return await performClawHubSkillInstall({
       ...params,
       slug: ref.slug,
       ...(ref.ownerHandle ? { ownerHandle: ref.ownerHandle } : {}),
+      ...(ref.requestedReference ? { requestedReference: ref.requestedReference } : {}),
+      ...(ref.trustState ? { trustState: ref.trustState } : {}),
     });
   } catch (err) {
     return {
@@ -1551,6 +1791,132 @@ async function installTrackedSkillFromClawHub(
   }
 }
 
+type ClawHubSkillInstallPreflightResult =
+  | { ok: true; action: "install" | "reuse"; integrity: string; warning?: string }
+  | { ok: false; code: string; error: string };
+
+async function preflightSkillOwnerState(params: {
+  workspaceDir: string;
+  requested: ClawHubSkillRef;
+  requestedLabel: string;
+  version: string;
+  integrity: string;
+}): Promise<ClawHubSkillInstallPreflightResult> {
+  const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.requested.slug);
+  if (!(await pathExists(targetDir))) {
+    return { ok: true, action: "install", integrity: params.integrity };
+  }
+  const status = resolveClawHubSkillStatusLinkSync({
+    workspaceDir: params.workspaceDir,
+    skillDir: targetDir,
+    skillKey: params.requested.slug,
+  });
+  if (
+    status?.status === "linked" &&
+    status.installedVersion === params.version &&
+    status.ownerHandle === params.requested.ownerHandle &&
+    status.artifact?.integrity === params.integrity
+  ) {
+    return { ok: true, action: "reuse", integrity: params.integrity };
+  }
+  return {
+    ok: false,
+    code: "skill_version_conflict",
+    error: `Skill ${params.requestedLabel}@${params.version} conflicts with the existing workspace skill at ${targetDir}.`,
+  };
+}
+
+export async function preflightSkillFromClawHub(params: {
+  workspaceDir: string;
+  slug: string;
+  version: string;
+  expectedIntegrity?: string;
+  baseUrl?: string;
+  acknowledgeClawHubRisk?: boolean;
+  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  logger?: Logger;
+}): Promise<ClawHubSkillInstallPreflightResult> {
+  try {
+    const requested = parseRequestedClawHubSkillRef(params.slug);
+    const resolved = await resolveInstallVersion({
+      slug: requested.slug,
+      ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
+      version: params.version,
+      baseUrl: params.baseUrl,
+    });
+    if (resolved.version !== params.version) {
+      return {
+        ok: false,
+        code: "skill_version_resolution_mismatch",
+        error: `Skill ${params.slug}@${params.version} resolved to ${resolved.version}.`,
+      };
+    }
+    const official = isDefaultOfficialClawHubSkillSource({
+      baseUrl: params.baseUrl,
+      detail: resolved.detail,
+    });
+    const trust = await ensureClawHubSkillTrustAcknowledged({
+      workspaceDir: params.workspaceDir,
+      slug: requested.slug,
+      ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
+      version: resolved.version,
+      baseUrl: params.baseUrl,
+      acknowledgeClawHubRisk: params.acknowledgeClawHubRisk,
+      onClawHubRisk: params.onClawHubRisk,
+      logger: params.logger,
+      skipClawHubTrustCheck: official,
+    });
+    if (!trust.ok) {
+      return {
+        ok: false,
+        code: trust.code ?? "skill_trust_required",
+        error: trust.error,
+      };
+    }
+
+    if (params.expectedIntegrity) {
+      const integrity = normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
+      const owner = await preflightSkillOwnerState({
+        workspaceDir: params.workspaceDir,
+        requested,
+        requestedLabel: params.slug,
+        version: resolved.version,
+        integrity,
+      });
+      return owner.ok && trust.warning ? { ...owner, warning: trust.warning } : owner;
+    }
+
+    const archive = await downloadClawHubSkillArchive({
+      slug: requested.slug,
+      ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
+      version: resolved.version,
+      baseUrl: params.baseUrl,
+    });
+    try {
+      const integrity = normalizeClawHubSha256Integrity(archive.integrity);
+      if (!integrity) {
+        return {
+          ok: false,
+          code: "skill_integrity_unavailable",
+          error: `Skill ${params.slug}@${params.version} did not resolve a valid artifact integrity.`,
+        };
+      }
+      const owner = await preflightSkillOwnerState({
+        workspaceDir: params.workspaceDir,
+        requested,
+        requestedLabel: params.slug,
+        version: resolved.version,
+        integrity,
+      });
+      return owner.ok && trust.warning ? { ...owner, warning: trust.warning } : owner;
+    } finally {
+      await archive.cleanup().catch(() => undefined);
+    }
+  } catch (err) {
+    return { ok: false, code: "skill_preflight_failed", error: formatErrorMessage(err) };
+  }
+}
+
 async function resolveTrackedUpdateTarget(params: {
   workspaceDir: string;
   slug: string;
@@ -1568,10 +1934,14 @@ async function resolveTrackedUpdateTarget(params: {
   }
   const lockEntry = params.lock.skills[params.slug];
   const ownerHandle = origin?.ownerHandle ?? lockEntry?.ownerHandle;
+  const requestedReference = origin?.requestedReference ?? lockEntry?.requestedReference;
+  const trustState = origin?.trustState ?? lockEntry?.trustState;
   return {
     ok: true,
     slug: params.slug,
     ...(ownerHandle ? { ownerHandle } : {}),
+    ...(requestedReference ? { requestedReference } : {}),
+    ...(trustState ? { trustState } : {}),
     baseUrl: origin?.registry ?? params.baseUrl,
     previousVersion: origin?.installedVersion ?? lockEntry?.version ?? null,
   };
@@ -1581,6 +1951,7 @@ export async function installSkillFromClawHub(params: {
   workspaceDir: string;
   slug: string;
   version?: string;
+  expectedIntegrity?: string;
   baseUrl?: string;
   force?: boolean;
   forceInstall?: boolean;
@@ -1588,8 +1959,21 @@ export async function installSkillFromClawHub(params: {
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  /** True when a Claw lifecycle caller already owns package coordination. */
+  clawManaged?: boolean;
 }): Promise<InstallClawHubSkillResult> {
-  return await installRequestedSkillFromClawHub(params);
+  if (params.clawManaged) {
+    return await installRequestedSkillFromClawHub(params);
+  }
+  return await withClawPackageLifecycleLease(
+    {
+      kind: "skill",
+      source: "clawhub",
+      ref: params.slug,
+      workspace: params.workspaceDir,
+    },
+    () => installRequestedSkillFromClawHub(params),
+  );
 }
 
 export async function updateSkillsFromClawHub(params: {
@@ -1627,18 +2011,30 @@ export async function updateSkillsFromClawHub(params: {
       });
       continue;
     }
-    const install = await installTrackedSkillFromClawHub({
-      workspaceDir: params.workspaceDir,
-      slug: tracked.slug,
-      ...(tracked.ownerHandle ? { ownerHandle: tracked.ownerHandle } : {}),
-      baseUrl: tracked.baseUrl,
-      force: true,
-      forceInstall: params.forceInstall,
-      acknowledgeClawHubRisk: params.acknowledgeClawHubRisk,
-      onClawHubRisk: params.onClawHubRisk,
-      logger: params.logger,
-      config: params.config,
-    });
+    const install = await withClawPackageLifecycleLease(
+      {
+        kind: "skill",
+        source: "clawhub",
+        ref: tracked.slug,
+        workspace: params.workspaceDir,
+      },
+      () =>
+        installTrackedSkillFromClawHub({
+          workspaceDir: params.workspaceDir,
+          slug: tracked.slug,
+          ...(tracked.ownerHandle ? { ownerHandle: tracked.ownerHandle } : {}),
+          ...(tracked.requestedReference ? { requestedReference: tracked.requestedReference } : {}),
+          ...(tracked.trustState ? { trustState: tracked.trustState } : {}),
+          baseUrl: tracked.baseUrl,
+          force: true,
+          forceInstall: params.forceInstall,
+          acknowledgeClawHubRisk: params.acknowledgeClawHubRisk,
+          onClawHubRisk: params.onClawHubRisk,
+          logger: params.logger,
+          config: params.config,
+        }),
+      { required: true },
+    );
     if (!install.ok) {
       results.push(install);
       continue;
@@ -1661,12 +2057,25 @@ export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promis
   return Object.keys(lock.skills).toSorted();
 }
 
-export async function untrackClawHubSkill(workspaceDir: string, slug: string): Promise<void> {
+export async function untrackClawHubSkill(
+  workspaceDir: string,
+  slug: string,
+): Promise<() => Promise<void>> {
   const trackedSlug = normalizeTrackedSkillSlug(slug);
   const lock = await readClawHubSkillsLockfile(workspaceDir);
-  if (!lock.skills[trackedSlug]) {
-    return;
+  const previous = lock.skills[trackedSlug];
+  if (!previous) {
+    return async () => undefined;
   }
   delete lock.skills[trackedSlug];
   await writeClawHubSkillsLockfile(workspaceDir, lock);
+  return async () => {
+    const current = await readClawHubSkillsLockfile(workspaceDir);
+    if (current.skills[trackedSlug]) {
+      throw new Error(`Skill ${JSON.stringify(trackedSlug)} was retracked during rollback.`);
+    }
+    current.skills[trackedSlug] = previous;
+    await writeClawHubSkillsLockfile(workspaceDir, current);
+  };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Shared queue overflow, debounce, and collection helpers.
  *
@@ -5,6 +6,7 @@
  * debounce drains, and force individual collection when cross-channel ordering matters.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 
 /** Mutable summary state for a capped queue. */
 type QueueSummaryState = {
@@ -22,12 +24,6 @@ type QueueState<T> = QueueSummaryState & {
   cap: number;
 };
 
-/** Clear accumulated overflow summary state after it has been emitted. */
-export function clearQueueSummaryState(state: QueueSummaryState): void {
-  state.droppedCount = 0;
-  state.summaryLines = [];
-}
-
 /** Build a summary prompt preview without mutating the source queue state. */
 export function previewQueueSummaryPrompt(params: {
   state: QueueSummaryState;
@@ -35,11 +31,7 @@ export function previewQueueSummaryPrompt(params: {
   title?: string;
 }): string | undefined {
   return buildQueueSummaryPrompt({
-    state: {
-      dropPolicy: params.state.dropPolicy,
-      droppedCount: params.state.droppedCount,
-      summaryLines: [...params.state.summaryLines],
-    },
+    state: params.state,
     noun: params.noun,
     title: params.title,
   });
@@ -135,23 +127,23 @@ export function applyQueueDropPolicy<T>(params: {
   // Only mutate the queue when enough victims exist so a partial drop cannot
   // admit overflow when the queue is full of in-flight/protected work.
   const victimIndices: number[] = [];
-  for (
-    let index = 0;
-    index < params.queue.items.length && victimIndices.length < dropCount;
-    index += 1
-  ) {
-    const item = params.queue.items[index];
+  for (const [index, item] of params.queue.items.entries()) {
     if (params.inFlight?.has(item) || params.isProtected?.(item) === true) {
       continue;
     }
     victimIndices.push(index);
+    if (victimIndices.length === dropCount) {
+      break;
+    }
   }
   if (victimIndices.length < dropCount) {
     return false;
   }
   const dropped: T[] = [];
   for (let i = victimIndices.length - 1; i >= 0; i -= 1) {
-    dropped.unshift(...params.queue.items.splice(victimIndices[i], 1));
+    dropped.unshift(
+      ...params.queue.items.splice(expectDefined(victimIndices[i], "victim indices entry at i"), 1),
+    );
   }
   params.onDrop?.(dropped);
   if (params.queue.dropPolicy === "summarize") {
@@ -176,7 +168,7 @@ export function waitForQueueDebounce(
   },
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  if (process.env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv()) {
     // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
     return Promise.resolve();
   }
@@ -309,7 +301,7 @@ export async function drainCollectQueueStep<T>(params: {
   });
 }
 
-/** Build and consume the queue overflow summary prompt. */
+/** Build the queue overflow summary prompt. */
 function buildQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
@@ -329,7 +321,6 @@ function buildQueueSummaryPrompt(params: {
       lines.push(`- ${line}`);
     }
   }
-  clearQueueSummaryState(params.state);
   return lines.join("\n");
 }
 

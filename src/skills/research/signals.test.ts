@@ -1,9 +1,23 @@
 // Signal extraction tests cover reactive/prospective patterns, grouping, and skill routing.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { extractDurableInstructionProposals } from "./signals.js";
+import { extractDurableInstructions, groupDurableInstructionProposals } from "./signals.js";
 
 function userMessage(content: string): { role: string; content: string } {
   return { role: "user", content };
+}
+
+function extractDurableInstructionProposals(params: {
+  messages: unknown[];
+  existingSkills?: Array<{ name: string; description?: string }>;
+  maxProposals?: number;
+}) {
+  return groupDurableInstructionProposals({
+    instructions: extractDurableInstructions(params.messages),
+    existingSkills: params.existingSkills,
+    maxProposals: params.maxProposals,
+  });
 }
 
 describe("extractDurableInstructionProposals", () => {
@@ -20,7 +34,9 @@ describe("extractDurableInstructionProposals", () => {
   ])("captures: %s", (content) => {
     const proposals = extractDurableInstructionProposals({ messages: [userMessage(content)] });
     expect(proposals).toHaveLength(1);
-    expect(proposals[0].evidence).toContain(content.slice(20, 40).trim());
+    expect(expectDefined(proposals[0], "proposals[0] test invariant").evidence).toContain(
+      content.slice(20, 40).trim(),
+    );
   });
 
   it.each([
@@ -42,9 +58,15 @@ describe("extractDurableInstructionProposals", () => {
       ],
     });
     expect(proposals).toHaveLength(1);
-    expect(proposals[0].skillName).toBe("github-pr-workflow");
-    expect(proposals[0].content).toContain("always check CI");
-    expect(proposals[0].content).toContain("link the issue");
+    expect(expectDefined(proposals[0], "proposals[0] test invariant").skillName).toBe(
+      "github-pr-workflow",
+    );
+    expect(expectDefined(proposals[0], "proposals[0] test invariant").content).toContain(
+      "always check CI",
+    );
+    expect(expectDefined(proposals[0], "proposals[0] test invariant").content).toContain(
+      "link the issue",
+    );
   });
 
   it("routes corrections to an existing skill by shared vocabulary", () => {
@@ -60,7 +82,9 @@ describe("extractDurableInstructionProposals", () => {
       ],
     });
     expect(proposals).toHaveLength(1);
-    expect(proposals[0].skillName).toBe("signal-scout");
+    expect(expectDefined(proposals[0], "proposals[0] test invariant").skillName).toBe(
+      "signal-scout",
+    );
   });
 
   it("falls back to inferred topics when no existing skill matches", () => {
@@ -73,7 +97,9 @@ describe("extractDurableInstructionProposals", () => {
       ],
     });
     expect(proposals).toHaveLength(1);
-    expect(proposals[0].skillName).toBe("screenshot-asset-workflow");
+    expect(expectDefined(proposals[0], "proposals[0] test invariant").skillName).toBe(
+      "screenshot-asset-workflow",
+    );
   });
 
   it("caps the number of proposals, keeping the most recent topics", () => {

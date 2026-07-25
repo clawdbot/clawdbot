@@ -47,6 +47,7 @@ type PromptDecisionParams = {
   aborted: boolean;
   externalAbort: boolean;
   fallbackConfigured: boolean;
+  failoverCode?: string;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
   harnessOwnsTransport?: boolean;
@@ -100,6 +101,7 @@ function shouldRotatePrompt(params: PromptDecisionParams): boolean {
   return (
     params.failoverFailure &&
     params.failoverReason !== "timeout" &&
+    params.failoverReason !== "tls_certificate" &&
     !isTerminalFormatFailure(params)
   );
 }
@@ -177,6 +179,14 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   }
 
   if (params.stage === "prompt") {
+    if (params.failoverCode === "cli_max_turns") {
+      // A CLI may have completed tool actions before reaching this terminal
+      // limit. Replaying against another profile/model could repeat effects.
+      return {
+        action: "surface_error",
+        reason: params.failoverReason,
+      };
+    }
     if (params.externalAbort) {
       return {
         action: "surface_error",
@@ -232,6 +242,17 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       action: "surface_error",
       reason: params.failoverReason,
     };
+  }
+  if (params.failoverFailure && params.failoverReason === "tls_certificate") {
+    return params.fallbackConfigured
+      ? {
+          action: "fallback_model",
+          reason: "tls_certificate",
+        }
+      : {
+          action: "surface_error",
+          reason: "tls_certificate",
+        };
   }
   const assistantShouldRotate = shouldRotateAssistant(params);
   if (!params.profileRotated && assistantShouldRotate) {

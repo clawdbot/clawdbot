@@ -121,7 +121,7 @@ OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm.t
 
 Flow shape:
 
-1. start Anthropic setup-token or paste-token from OpenClaw
+1. create the token by running `claude setup-token` on any machine with Claude Code, then start Anthropic setup-token or paste-token from OpenClaw
 2. OpenClaw stores the resulting Anthropic credential in an auth profile
 3. model selection stays on `anthropic/...`
 4. existing Anthropic auth profiles remain available for rollback/order control

@@ -10,8 +10,8 @@ import {
 import { pathExists, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 
-export type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
-export type BackupSkipReason = "covered" | "missing";
+type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
+type BackupSkipReason = "covered" | "missing";
 
 export type BackupAsset = {
   kind: BackupAssetKind;
@@ -20,7 +20,7 @@ export type BackupAsset = {
   archivePath: string;
 };
 
-export type SkippedBackupAsset = {
+type SkippedBackupAsset = {
   kind: BackupAssetKind;
   sourcePath: string;
   displayPath: string;
@@ -28,7 +28,7 @@ export type SkippedBackupAsset = {
   coveredBy?: string;
 };
 
-export type BackupPlan = {
+type BackupPlan = {
   stateDir: string;
   configPath: string;
   oauthDir: string;
@@ -59,7 +59,7 @@ function backupAssetPriority(kind: BackupAssetKind): number {
 }
 
 /** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
-export function formatBackupArchiveTimestamp(
+function formatBackupArchiveTimestamp(
   nowMs = Date.now(),
   offsetMinutes = -new Date(nowMs).getTimezoneOffset(),
 ): string {
@@ -90,7 +90,7 @@ export function buildBackupArchiveBasename(nowMs = Date.now()): string {
 }
 
 /** Encode an absolute or relative source path into a traversal-safe archive payload path. */
-export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
+function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   const normalized = sourcePath.replaceAll("\\", "/");
   const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
   if (windowsMatch) {
@@ -110,7 +110,7 @@ export function buildBackupArchivePath(archiveRoot: string, sourcePath: string):
 }
 
 /** Resolve a backup plan from explicit paths, deduplicating assets already covered by parents. */
-export async function resolveBackupPlanFromPaths(params: {
+async function resolveBackupPlanFromPaths(params: {
   stateDir: string;
   configPath: string;
   oauthDir: string;
@@ -250,6 +250,12 @@ export async function resolveBackupPlanFromPaths(params: {
   };
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.backupPlanTestApi")] = {
+    resolveBackupPlanFromPaths,
+  };
+}
+
 function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
   const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
   if (depthDelta !== 0) {
@@ -284,7 +290,8 @@ export async function resolveBackupPlanFromDisk(
   const configPath = resolveConfigPath();
   const oauthDir = resolveOAuthDir();
 
-  const configSnapshot = await readConfigFileSnapshot();
+  // Backup discovery must not initialize or migrate the state DB before snapshot validation.
+  const configSnapshot = await readConfigFileSnapshot({ observe: false });
   if (includeWorkspace && configSnapshot.exists && !configSnapshot.valid) {
     throw new Error(
       `Config invalid at ${shortenHomePath(configSnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,

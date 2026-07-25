@@ -49,6 +49,7 @@ describe("format-duration", () => {
         { input: 90000, expected: "1m30s" },
         { input: 3600000, expected: "1h" },
         { input: 3660000, expected: "1h1m" },
+        { input: 3630000, expected: "1h30s" },
         { input: 5400000, expected: "1h30m" },
         { input: 86400000, expected: "1d" },
         { input: 90000000, expected: "1d1h" },

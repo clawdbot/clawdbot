@@ -46,7 +46,7 @@ type PendingExec = {
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
-export function buildOpenShellDirectoryUploadArgs(params: {
+function buildOpenShellDirectoryUploadArgs(params: {
   sandboxName: string;
   localPath: string;
   remotePath: string;
@@ -61,7 +61,7 @@ export function buildOpenShellDirectoryUploadArgs(params: {
   ];
 }
 
-export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
+const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "set -eu",
   'die() { echo "$1" >&2; exit 1; }',
   "validate_basename() {",
@@ -162,7 +162,7 @@ export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "    ;;",
   "esac",
 ].join("\n");
-export const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
+const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "set -e",
   'target="$1"',
   'root="${2:-$1}"',
@@ -203,11 +203,9 @@ export const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "done",
 ].join("\n");
 
-export function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
+function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
   return sanitizeEnvVars(process.env).allowed;
 }
-
-export type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 
 export function createOpenShellSandboxBackendFactory(
   params: CreateOpenShellSandboxBackendFactoryParams,
@@ -893,7 +891,7 @@ function resolveOpenShellPluginConfigFromConfig(
   return resolveOpenShellPluginConfig(pluginConfig);
 }
 
-export function buildOpenShellSandboxName(scopeKey: string): string {
+function buildOpenShellSandboxName(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
   const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9-]+/g, "-")
@@ -1003,3 +1001,4 @@ function isRemotePathInside(root: string, candidate: string): boolean {
     (relative !== ".." && !relative.startsWith("../") && !path.posix.isAbsolute(relative))
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

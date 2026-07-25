@@ -1,5 +1,6 @@
 // Control UI module implements icons behavior.
 import { html, type TemplateResult } from "lit";
+import { toolIcons } from "./icons-tools.ts";
 
 // Lucide-style SVG icons
 // All icons use currentColor for stroke
@@ -11,11 +12,35 @@ export const icons = {
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
     </svg>
   `,
+  layoutGrid: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="7" height="7" x="3" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="14" rx="1" />
+      <rect width="7" height="7" x="3" y="14" rx="1" />
+    </svg>
+  `,
   barChart: html`
     <svg viewBox="0 0 24 24">
       <line x1="12" x2="12" y1="20" y2="10" />
       <line x1="18" x2="18" y1="20" y2="4" />
       <line x1="6" x2="6" y1="20" y2="16" />
+    </svg>
+  `,
+  layoutDashboard: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="7" height="9" x="3" y="3" rx="1" />
+      <rect width="7" height="5" x="14" y="3" rx="1" />
+      <rect width="7" height="9" x="14" y="12" rx="1" />
+      <rect width="7" height="5" x="3" y="16" rx="1" />
+    </svg>
+  `,
+  coins: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M18.09 10.37A6 6 0 1 1 10.34 18" />
+      <path d="M7 6h1v4" />
+      <path d="m16.71 13.88.7.71-2.82 2.82" />
     </svg>
   `,
   activity: html`
@@ -60,6 +85,22 @@ export const icons = {
       <rect width="20" height="14" x="2" y="3" rx="2" />
       <line x1="8" x2="16" y1="21" y2="21" />
       <line x1="12" x2="12" y1="17" y2="21" />
+    </svg>
+  `,
+  monitorSmartphone: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8" />
+      <path d="M10 19v-3.96 3.15" />
+      <path d="M7 19h5" />
+      <rect width="6" height="10" x="16" y="12" rx="2" />
+    </svg>
+  `,
+  server: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="20" height="8" x="2" y="2" rx="2" ry="2" />
+      <rect width="20" height="8" x="2" y="14" rx="2" ry="2" />
+      <line x1="6" x2="6.01" y1="6" y2="6" />
+      <line x1="6" x2="6.01" y1="18" y2="18" />
     </svg>
   `,
   sun: html`
@@ -118,13 +159,6 @@ export const icons = {
       />
     </svg>
   `,
-  folderOpen: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"
-      />
-    </svg>
-  `,
   kanban: html`
     <svg viewBox="0 0 24 24">
       <rect width="18" height="18" x="3" y="3" rx="2" />
@@ -149,6 +183,12 @@ export const icons = {
       <circle cx="9" cy="7" r="4" />
       <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
       <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  `,
+  shieldCheck: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z" />
+      <path d="m9 12 2 2 4-4" />
     </svg>
   `,
 
@@ -181,6 +221,14 @@ export const icons = {
       <circle cx="12" cy="12" r="2" />
     </svg>
   `,
+  switchCamera: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M11 19H6.5a4.5 4.5 0 0 1 0-9H8" />
+      <path d="m8 16 3 3-3 3" />
+      <path d="M13 5h4.5a4.5 4.5 0 0 1 0 9H16" />
+      <path d="m16 8-3-3 3-3" />
+    </svg>
+  `,
   archive: html`
     <svg viewBox="0 0 24 24">
       <rect width="20" height="5" x="2" y="3" rx="1" />
@@ -201,6 +249,41 @@ export const icons = {
       <path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
       <path d="M12 9v4" />
       <path d="M12 17h.01" />
+    </svg>
+  `,
+  hand: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M18 11V6a2 2 0 0 0-4 0v5" />
+      <path d="M14 10V4a2 2 0 0 0-4 0v6" />
+      <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
+      <path d="M6 14v-2a2 2 0 0 0-4 0v4c0 4.4 3.6 8 8 8h2c4.4 0 8-3.6 8-8v-5a2 2 0 0 0-4 0v2" />
+    </svg>
+  `,
+  key: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="7.5" cy="15.5" r="5.5" />
+      <path d="m21 2-9.6 9.6" />
+      <path d="m15.5 7.5 3 3L22 7l-3-3" />
+    </svg>
+  `,
+  flag: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M5 22V4" />
+      <path d="M5 4c5-4 9 4 14 0v11c-5 4-9-4-14 0" />
+    </svg>
+  `,
+  lock: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="18" height="11" x="3" y="11" rx="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  `,
+  hourglass: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M5 22h14" />
+      <path d="M5 2h14" />
+      <path d="M17 22v-4.2a4 4 0 0 0-1.2-2.8L12 11l-3.8 4A4 4 0 0 0 7 17.8V22" />
+      <path d="M7 2v4.2A4 4 0 0 0 8.2 9l3.8 4 3.8-4A4 4 0 0 0 17 6.2V2" />
     </svg>
   `,
   layoutComfortable: html`
@@ -226,16 +309,19 @@ export const icons = {
       <path d="M10 18h4" />
     </svg>
   `,
-  arrowDown: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M12 5v14" />
-      <path d="m19 12-7 7-7-7" />
-    </svg>
-  `,
+  arrowDown: html` <svg viewBox="0 0 24 24"><path d="M12 5v14m7-7-7 7-7-7" /></svg> `,
+  arrowUp: html` <svg viewBox="0 0 24 24"><path d="M12 19V5m-7 7 7-7 7 7" /></svg> `,
+  chevronUp: html` <svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6" /></svg> `,
   arrowLeft: html`
     <svg viewBox="0 0 24 24">
       <path d="m12 19-7-7 7-7" />
       <path d="M19 12H5" />
+    </svg>
+  `,
+  cornerDownLeft: html`
+    <svg viewBox="0 0 24 24">
+      <polyline points="9 10 4 15 9 20" />
+      <path d="M20 4v7a4 4 0 0 1-4 4H4" />
     </svg>
   `,
   cornerDownRight: html`
@@ -310,358 +396,7 @@ export const icons = {
     </svg>
   `,
 
-  // Tool icons
-  wrench: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
-      />
-    </svg>
-  `,
-  fileCode: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-      <polyline points="14 2 14 8 20 8" />
-      <path d="m10 13-2 2 2 2" />
-      <path d="m14 17 2-2-2-2" />
-    </svg>
-  `,
-  edit: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-    </svg>
-  `,
-  penLine: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-    </svg>
-  `,
-  paperclip: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
-      />
-    </svg>
-  `,
-  globe: html`
-    <svg viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="10" />
-      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
-      <path d="M2 12h20" />
-    </svg>
-  `,
-  image: html`
-    <svg viewBox="0 0 24 24">
-      <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-      <circle cx="9" cy="9" r="2" />
-      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-    </svg>
-  `,
-  camera: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3z"
-      />
-      <circle cx="12" cy="13" r="3" />
-    </svg>
-  `,
-  smartphone: html`
-    <svg viewBox="0 0 24 24">
-      <rect width="14" height="20" x="5" y="2" rx="2" ry="2" />
-      <path d="M12 18h.01" />
-    </svg>
-  `,
-  plug: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M12 22v-5" />
-      <path d="M9 8V2" />
-      <path d="M15 8V2" />
-      <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
-    </svg>
-  `,
-  circle: html` <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /></svg> `,
-  puzzle: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.076.874.54 1.02 1.02a2.5 2.5 0 1 0 3.237-3.237c-.48-.146-.944-.505-1.02-1.02a.98.98 0 0 1 .303-.917l1.526-1.526A2.402 2.402 0 0 1 11.998 2c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.236 3.236c-.464.18-.894.527-.967 1.02Z"
-      />
-    </svg>
-  `,
-  panelLeft: html`
-    <svg viewBox="0 0 24 24">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M9 3v18" stroke-linecap="round" />
-    </svg>
-  `,
-  panelLeftClose: html`
-    <svg viewBox="0 0 24 24">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M9 3v18" stroke-linecap="round" />
-      <path d="M16 10l-3 2 3 2" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  panelLeftOpen: html`
-    <svg viewBox="0 0 24 24">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M9 3v18" stroke-linecap="round" />
-      <path d="M14 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  chevronDown: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  chevronRight: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M9 18l6-6-6-6" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  externalLink: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-      <path d="M15 3h6v6M10 14L21 3" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  send: html`
-    <svg viewBox="0 0 24 24">
-      <path d="m22 2-7 20-4-9-9-4Z" />
-      <path d="M22 2 11 13" />
-    </svg>
-  `,
-  stop: html` <svg viewBox="0 0 24 24"><rect width="14" height="14" x="5" y="5" rx="1" /></svg> `,
-  pin: html`
-    <svg viewBox="0 0 24 24">
-      <line x1="12" x2="12" y1="17" y2="22" />
-      <path
-        d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"
-      />
-    </svg>
-  `,
-  pinOff: html`
-    <svg viewBox="0 0 24 24">
-      <line x1="2" x2="22" y1="2" y2="22" />
-      <line x1="12" x2="12" y1="17" y2="22" />
-      <path
-        d="M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0-.39.04"
-      />
-    </svg>
-  `,
-  download: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" x2="12" y1="15" y2="3" />
-    </svg>
-  `,
-  mic: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-      <line x1="12" x2="12" y1="19" y2="22" />
-    </svg>
-  `,
-  micOff: html`
-    <svg viewBox="0 0 24 24">
-      <line x1="2" x2="22" y1="2" y2="22" />
-      <path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2" />
-      <path d="M5 10v2a7 7 0 0 0 12 5" />
-      <path d="M15 9.34V5a3 3 0 0 0-5.68-1.33" />
-      <path d="M9 9v3a3 3 0 0 0 5.12 2.12" />
-      <line x1="12" x2="12" y1="19" y2="22" />
-    </svg>
-  `,
-  volume2: html`
-    <svg viewBox="0 0 24 24">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-    </svg>
-  `,
-  volumeOff: html`
-    <svg viewBox="0 0 24 24">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <line x1="22" x2="16" y1="9" y2="15" />
-      <line x1="16" x2="22" y1="9" y2="15" />
-    </svg>
-  `,
-  bookmark: html`
-    <svg viewBox="0 0 24 24"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" /></svg>
-  `,
-  plus: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M5 12h14" />
-      <path d="M12 5v14" />
-    </svg>
-  `,
-  gitBranch: html`
-    <svg viewBox="0 0 24 24">
-      <circle cx="6" cy="5" r="2" />
-      <circle cx="18" cy="6" r="2" />
-      <circle cx="6" cy="19" r="2" />
-      <path d="M6 7v10" />
-      <path d="M8 9h5a5 5 0 0 0 5-5" />
-    </svg>
-  `,
-  gitPullRequest: html`
-    <svg viewBox="0 0 24 24">
-      <circle cx="6" cy="6" r="3" />
-      <circle cx="18" cy="18" r="3" />
-      <path d="M13 6h3a2 2 0 0 1 2 2v7" />
-      <path d="M6 9v12" />
-    </svg>
-  `,
-  gitMerge: html`
-    <svg viewBox="0 0 24 24">
-      <circle cx="6" cy="6" r="3" />
-      <circle cx="18" cy="18" r="3" />
-      <path d="M6 21V9a9 9 0 0 0 9 9" />
-    </svg>
-  `,
-  terminal: html`
-    <svg viewBox="0 0 24 24">
-      <polyline points="4 17 10 11 4 5" />
-      <line x1="12" x2="20" y1="19" y2="19" />
-    </svg>
-  `,
-  spark: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
-      />
-    </svg>
-  `,
-  lobster: html`
-    <svg viewBox="0 0 120 120" fill="none">
-      <defs>
-        <linearGradient id="lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#ff4d4d" />
-          <stop offset="100%" stop-color="#991b1b" />
-        </linearGradient>
-      </defs>
-      <path
-        d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z"
-        fill="url(#lob-g)"
-      />
-      <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#lob-g)" />
-      <path
-        d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"
-        fill="url(#lob-g)"
-      />
-      <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-      <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-      <circle cx="45" cy="35" r="6" fill="#050810" />
-      <circle cx="75" cy="35" r="6" fill="#050810" />
-      <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
-      <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
-    </svg>
-  `,
-  refresh: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
-      <path d="M21 3v5h-5" />
-    </svg>
-  `,
-  trash: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M3 6h18" />
-      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-      <line x1="10" x2="10" y1="11" y2="17" />
-      <line x1="14" x2="14" y1="11" y2="17" />
-    </svg>
-  `,
-  eye: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"
-      />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  `,
-  eyeOff: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"
-      />
-      <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" />
-      <path
-        d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"
-      />
-      <path d="m2 2 20 20" />
-    </svg>
-  `,
-  moreHorizontal: html`
-    <svg viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="1.5" />
-      <circle cx="6" cy="12" r="1.5" />
-      <circle cx="18" cy="12" r="1.5" />
-    </svg>
-  `,
-  arrowUpDown: html`
-    <svg viewBox="0 0 24 24">
-      <path d="m21 16-4 4-4-4" />
-      <path d="M17 20V4" />
-      <path d="m3 8 4-4 4 4" />
-      <path d="M7 4v16" />
-    </svg>
-  `,
-  panelRightOpen: html`
-    <svg viewBox="0 0 24 24">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M15 3v18" stroke-linecap="round" />
-      <path d="M10 10l-3 2 3 2" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  panelRightClose: html`
-    <svg viewBox="0 0 24 24">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M15 3v18" stroke-linecap="round" />
-      <path d="M8 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  columns2: html`
-    <svg viewBox="0 0 24 24">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M12 3v18" stroke-linecap="round" />
-    </svg>
-  `,
-  panelBottomOpen: html`
-    <svg viewBox="0 0 24 24">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M3 15h18" stroke-linecap="round" />
-      <path d="m10 8 2 3 2-3" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  panelBottomClose: html`
-    <svg viewBox="0 0 24 24">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M3 15h18" stroke-linecap="round" />
-      <path d="m10 11 2-3 2 3" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  maximize: html`
-    <svg viewBox="0 0 24 24">
-      <polyline points="15 3 21 3 21 9" />
-      <polyline points="9 21 3 21 3 15" />
-      <line x1="21" x2="14" y1="3" y2="10" />
-      <line x1="3" x2="10" y1="21" y2="14" />
-    </svg>
-  `,
-  minimize: html`
-    <svg viewBox="0 0 24 24">
-      <polyline points="4 14 10 14 10 20" />
-      <polyline points="20 10 14 10 14 4" />
-      <line x1="14" x2="21" y1="10" y2="3" />
-      <line x1="3" x2="10" y1="21" y2="14" />
-    </svg>
-  `,
+  ...toolIcons,
 } as const;
 
 export type IconName = keyof typeof icons;

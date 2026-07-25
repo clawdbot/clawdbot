@@ -23,6 +23,7 @@ AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
 LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
 ATTACH_ONLY=1
+BACKGROUND_ONLY=0
 TARGET_ONLY=0
 TARGET_APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
 TARGET_EXECUTABLE="${TARGET_APP_BUNDLE}/${APP_EXECUTABLE_RELATIVE_PATH}"
@@ -113,14 +114,16 @@ for arg in "$@"; do
     --sign) SIGN=1; AUTO_DETECT_SIGNING=0 ;;
     --attach-only) ATTACH_ONLY=1 ;;
     --no-attach-only) ATTACH_ONLY=0 ;;
+    --background-only) BACKGROUND_ONLY=1 ;;
     --target-only) TARGET_ONLY=1 ;;
     --help|-h)
-      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only] [--target-only]"
+      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only] [--background-only] [--target-only]"
       log "  --wait    Wait for other restart to complete instead of exiting"
       log "  --no-sign Force no code signing (fastest for development)"
       log "  --sign    Force code signing (will fail if no signing key available)"
       log "  --attach-only    Launch app with --attach-only (skip launchd install)"
       log "  --no-attach-only Launch app without attach-only override"
+      log "  --background-only Launch app without automatic windows or prompts"
       log "  --target-only    Restart only this checkout's dist app; fail if another OpenClaw app is active"
       log ""
       log "Env:"
@@ -161,6 +164,9 @@ if [[ "$NO_SIGN" -eq 1 ]]; then
 fi
 if [[ "$ATTACH_ONLY" -eq 1 ]]; then
   log "==> Using --attach-only (skip launchd install)"
+fi
+if [[ "$BACKGROUND_ONLY" -eq 1 ]]; then
+  log "==> Using --background-only (suppress automatic presentation)"
 fi
 
 acquire_lock
@@ -246,6 +252,77 @@ managed_openclaw_process_pids() {
   } | sort -u
 }
 
+launch_domain_jobs() {
+  local domain="$1"
+  local snapshot=""
+  if ! snapshot="$(/bin/launchctl print "${domain}" 2>/dev/null)"; then
+    return 1
+  fi
+  printf '%s\n' "${snapshot}" | /usr/bin/awk -v domain="${domain}" '
+    /^[[:space:]]*services = \{$/ { services = 1; next }
+    services && /^[[:space:]]*\}$/ { services = 0; next }
+    services && NF >= 3 { print domain "|" $NF }
+  '
+}
+
+loaded_launch_jobs() {
+  local uid=""
+  uid="$(/usr/bin/id -u)"
+  local domain=""
+  for domain in "gui/${uid}" "user/${uid}" system; do
+    launch_domain_jobs "${domain}" || return 1
+  done
+}
+
+launch_job_snapshot() {
+  local domain="$1"
+  local label="$2"
+  /bin/launchctl print "${domain}/${label}" 2>/dev/null
+}
+
+# A launchd-owned app will immediately respawn after target-only cleanup. Find
+# exact managed executables before the expensive Swift build so the operator
+# can stop the owning job instead of waiting for an inevitable switch failure.
+print_managed_openclaw_supervisor_label() {
+  local domain="$1"
+  local label="$2"
+  local job=""
+  if ! job="$(launch_job_snapshot "${domain}" "${label}")"; then
+    return 0
+  fi
+  local executable=""
+  executable="$(/usr/bin/awk -F ' = ' '/^[[:space:]]*program = / { print $2; exit }' <<<"${job}")"
+  local properties=""
+  properties="$(/usr/bin/awk -F ' = ' '/^[[:space:]]*properties = / { print $2; exit }' <<<"${job}")"
+  local is_managed_executable=0
+  if [[ "${executable}" == "${TARGET_EXECUTABLE}" || "${executable}" == "${INSTALLED_EXECUTABLE}" ]]; then
+    is_managed_executable=1
+  fi
+  if [[ "${is_managed_executable}" -eq 1 && " ${properties} " == *" keepalive "* ]]; then
+    printf '%s\n' "${label}"
+  fi
+}
+
+managed_openclaw_supervisor_labels() {
+  local jobs=""
+  if ! jobs="$(loaded_launch_jobs)"; then
+    return 1
+  fi
+  local batch_size=0
+  local domain=""
+  local label=""
+  while IFS='|' read -r domain label; do
+    [[ -n "${domain}" && -n "${label}" ]] || continue
+    print_managed_openclaw_supervisor_label "${domain}" "${label}" &
+    batch_size=$((batch_size + 1))
+    if [[ "${batch_size}" -ge 16 ]]; then
+      wait
+      batch_size=0
+    fi
+  done <<< "${jobs}"
+  wait
+}
+
 kill_managed_openclaw() {
   for _ in {1..10}; do
     local pids=""
@@ -277,6 +354,12 @@ stop_launch_agent() {
 # 1) Validate the process set selected by the requested mode. Target-only keeps
 # the current managed app alive while the replacement builds and signs.
 if [[ "$TARGET_ONLY" -eq 1 ]]; then
+  if ! managed_supervisors="$(managed_openclaw_supervisor_labels | sort -u | /usr/bin/paste -sd, -)"; then
+    fail "Unable to inspect loaded launchd jobs before target-only restart"
+  fi
+  if [[ -n "${managed_supervisors}" ]]; then
+    fail "Managed OpenClaw app is supervised by launchd job(s): ${managed_supervisors}; stop those jobs before a target-only restart"
+  fi
   if [[ -n "$(foreign_openclaw_process_pids)" ]]; then
     fail "Another OpenClaw app or test process is active; target-only restart deferred"
   fi
@@ -290,11 +373,7 @@ else
 fi
 
 # Bundle Gateway-hosted plugin assets.
-run_step "bundle plugin assets" bash -lc "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
-
-# 2) Rebuild into the same path the packager consumes (.build).
-run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
-run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product OpenClaw"
+run_step "bundle plugin assets" bash -c "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
 
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
   if check_signing_keys; then
@@ -372,8 +451,8 @@ fi
 # When unsigned, ensure the gateway LaunchAgent targets the repo CLI (before the app launches).
 # This reduces noisy "could not connect" errors during app startup.
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node openclaw.mjs daemon install --force --runtime node"
-  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node openclaw.mjs daemon restart"
+  run_step "install gateway launch agent (unsigned)" bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon install --force --runtime node"
+  run_step "restart gateway daemon (unsigned)" bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon restart"
   if [[ "${GATEWAY_WAIT_SECONDS}" -gt 0 ]]; then
     run_step "wait for gateway (unsigned)" sleep "${GATEWAY_WAIT_SECONDS}"
   fi
@@ -394,9 +473,12 @@ if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
   run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" verify_gateway_port_listening "${GATEWAY_PORT}"
 fi
 
-ATTACH_ONLY_ARGS=()
+APP_LAUNCH_ARGS=()
 if [[ "$ATTACH_ONLY" -eq 1 ]]; then
-  ATTACH_ONLY_ARGS+=(--args --attach-only)
+  APP_LAUNCH_ARGS+=(--attach-only)
+fi
+if [[ "$BACKGROUND_ONLY" -eq 1 ]]; then
+  APP_LAUNCH_ARGS+=(--background-only)
 fi
 
 if [[ "$TARGET_ONLY" -eq 1 ]]; then
@@ -411,6 +493,10 @@ fi
 
 run_step "install packaged app" install_staged_app
 choose_app_bundle
+OPEN_ARGS=(-n "${APP_BUNDLE}")
+if [[ "$ATTACH_ONLY" -eq 1 || "$BACKGROUND_ONLY" -eq 1 ]]; then
+  OPEN_ARGS+=(--args "${APP_LAUNCH_ARGS[@]}")
+fi
 
 # 4) Launch the installed app in the foreground so the menu bar extra appears.
 # LaunchServices can inherit a huge environment from this shell (secrets, prompt vars, etc.).
@@ -422,7 +508,7 @@ run_step "launch app" env -i \
   TMPDIR="${TMPDIR:-/tmp}" \
   PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
   LANG="${LANG:-en_US.UTF-8}" \
-  /usr/bin/open -n "${APP_BUNDLE}" ${ATTACH_ONLY_ARGS[@]:+"${ATTACH_ONLY_ARGS[@]}"}
+  /usr/bin/open "${OPEN_ARGS[@]}"
 
 # 5) Verify the app is alive.
 sleep 1.5
@@ -433,5 +519,5 @@ else
 fi
 
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "show gateway launch agent args (unsigned)" bash -lc "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist' | head -n 40 || true"
+  run_step "show gateway launch agent args (unsigned)" bash -c "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist' | head -n 40 || true"
 fi

@@ -8,6 +8,7 @@ import {
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isKimiK3ModelId } from "./provider-policy-api.js";
 
 const TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
@@ -187,11 +188,15 @@ function resolveKimiThinkingConfig(params: {
     : { type: "enabled", budget_tokens: levelBudgetTokens };
 }
 
-export function resolveKimiThinkingType(params: {
+function resolveKimiK3ThinkingType(params: {
   configuredThinking: unknown;
   thinkingLevel?: KimiThinkingLevel;
 }): KimiThinkingType {
-  return resolveKimiThinkingConfig(params).type;
+  const configured = normalizeKimiThinkingConfig(params.configuredThinking);
+  if (configured) {
+    return configured.type;
+  }
+  return params.thinkingLevel === "off" ? "disabled" : "enabled";
 }
 
 function stripTaggedToolCallCounter(value: string): string {
@@ -361,7 +366,7 @@ function wrapStreamMessageObjects(
   return stream;
 }
 
-export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const maybeStream = underlying(model, context, options);
@@ -374,13 +379,44 @@ export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefin
   };
 }
 
-export function createKimiThinkingWrapper(
+function createKimiThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingConfig: KimiThinkingConfig | KimiThinkingType,
+  k3ThinkingType: KimiThinkingType,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (model.api === "anthropic-messages" && isKimiK3ModelId(model.id)) {
+        const outputConfig = payloadObj.output_config;
+        if (k3ThinkingType === "disabled") {
+          payloadObj.thinking = { type: "disabled" };
+          if (outputConfig && typeof outputConfig === "object" && !Array.isArray(outputConfig)) {
+            const nextOutputConfig = { ...outputConfig } as Record<string, unknown>;
+            delete nextOutputConfig.effort;
+            if (Object.keys(nextOutputConfig).length > 0) {
+              payloadObj.output_config = nextOutputConfig;
+            } else {
+              delete payloadObj.output_config;
+            }
+          } else {
+            delete payloadObj.output_config;
+          }
+        } else {
+          // Kimi Code's Anthropic endpoint uses adaptive thinking plus max effort for K3.
+          payloadObj.thinking = { type: "adaptive", display: "summarized" };
+          payloadObj.output_config =
+            outputConfig && typeof outputConfig === "object" && !Array.isArray(outputConfig)
+              ? { ...outputConfig, effort: "max" }
+              : { effort: "max" };
+        }
+        delete payloadObj.reasoning;
+        delete payloadObj.reasoning_effort;
+        delete payloadObj.reasoningEffort;
+        stripAnthropicCacheControlMarkers(payloadObj);
+        return;
+      }
+
       const normalized =
         typeof thinkingConfig === "string" ? { type: thinkingConfig } : thinkingConfig;
       payloadObj.thinking =
@@ -445,5 +481,11 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
     configuredThinking: ctx.extraParams?.thinking,
     thinkingLevel: ctx.thinkingLevel,
   });
-  return createKimiToolCallMarkupWrapper(createKimiThinkingWrapper(ctx.streamFn, thinkingConfig));
+  const k3ThinkingType = resolveKimiK3ThinkingType({
+    configuredThinking: ctx.extraParams?.thinking,
+    thinkingLevel: ctx.thinkingLevel,
+  });
+  return createKimiToolCallMarkupWrapper(
+    createKimiThinkingWrapper(ctx.streamFn, thinkingConfig, k3ThinkingType),
+  );
 }

@@ -38,7 +38,7 @@ type NativeAliasEntry = {
 };
 
 /** Resolver install options for CJS `_resolveFilename` and modern ESM loader hooks. */
-export type InstallOpenClawPluginSdkNativeResolverOptions = {
+type InstallOpenClawPluginSdkNativeResolverOptions = {
   modulePath?: string;
   pluginModulePath?: string;
   allowedParentRoots?: readonly string[];
@@ -68,20 +68,6 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     ],
   },
   {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpaths: [
-      ["", "index.ts"],
-      ["boolean-coercion", "boolean-coercion.ts"],
-      ["error-coercion", "error-coercion.ts"],
-      ["number-coercion", "number-coercion.ts"],
-      ["record-coerce", "record-coerce.ts"],
-      ["string-coerce", "string-coerce.ts"],
-      ["string-normalization", "string-normalization.ts"],
-      ["utf16-slice", "utf16-slice.ts"],
-    ],
-  },
-  {
     // Mirrors packages/ai/package.json exports; dist file names do not follow
     // the src layout (dist/diagnostics.mjs <- src/utils/diagnostics.ts), so the
     // generic export-map derivation cannot be used here.
@@ -90,6 +76,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     subpaths: [
       ["", "index.ts"],
       ["providers", "providers.ts"],
+      ["transports", "transports.ts"],
       ["diagnostics", path.join("utils", "diagnostics.ts")],
       ["event-stream", path.join("utils", "event-stream.ts")],
       ["types", "types.ts"],
@@ -132,16 +119,13 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
 const pluginSdkNativeAliases = new Map<string, NativeAliasEntry[]>();
 let installed = false;
 let previousResolveFilename: ResolveFilename | undefined;
-let esmHooks: { deregister: () => void } | undefined;
 
 function resolveLoaderModulePath(options: InstallOpenClawPluginSdkNativeResolverOptions): string {
   return options.modulePath ?? fileURLToPath(options.moduleUrl ?? import.meta.url);
 }
 
 function isPluginSdkAliasSpecifier(specifier: string): boolean {
-  return PLUGIN_SDK_PACKAGE_PREFIXES.some(
-    (prefix) => specifier === prefix || specifier.startsWith(`${prefix}/`),
-  );
+  return PLUGIN_SDK_PACKAGE_PREFIXES.some((prefix) => specifier.startsWith(`${prefix}/`));
 }
 
 function isNativeLoadableSdkTarget(targetPath: string): boolean {
@@ -331,15 +315,15 @@ function listInternalCorePackageNativeAliases(
   }> = [];
   const internalCorePackageAliases = [
     ...INTERNAL_CORE_PACKAGE_ALIASES,
-    {
-      packageName: "@openclaw/acp-core",
-      packageDir: "acp-core",
+    ...["normalization-core", "acp-core"].map((packageDir) => ({
+      packageName: `@openclaw/${packageDir}`,
+      packageDir,
       subpaths: listWorkspacePackageExportAliasEntries({
         packageRoot,
-        packageName: "@openclaw/acp-core",
-        packageDir: "acp-core",
+        packageName: `@openclaw/${packageDir}`,
+        packageDir,
       }).map((entry) => [entry.subpath, entry.srcFile] as const),
-    },
+    })),
   ];
   for (const entry of internalCorePackageAliases) {
     for (const [subpath, srcFile] of entry.subpaths) {
@@ -365,7 +349,7 @@ function installResolver(): void {
     }
     return previousResolveFilename?.(request, parent, isMain, options) ?? request;
   }) satisfies ResolveFilename;
-  esmHooks = moduleWithResolver.registerHooks?.({
+  moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
       const aliasTarget = resolveAliasTargetForParentUrl(specifier, context.parentURL);
       if (aliasTarget) {
@@ -437,15 +421,4 @@ export function installOpenClawInternalCorePackageNativeResolver(
   }
   installResolver();
   return [...pluginSdkNativeAliases.keys()].toSorted();
-}
-
-export function resetOpenClawPluginSdkNativeResolverForTest(): void {
-  pluginSdkNativeAliases.clear();
-  esmHooks?.deregister();
-  esmHooks = undefined;
-  if (installed && previousResolveFilename) {
-    moduleWithResolver[nodeResolveFilenameProperty] = previousResolveFilename;
-  }
-  previousResolveFilename = undefined;
-  installed = false;
 }

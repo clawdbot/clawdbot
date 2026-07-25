@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-  isToolResultMediaTrusted,
 } from "./embedded-agent-subscribe.tools.js";
+import { isToolResultMediaTrusted } from "./embedded-agent-subscribe.tools.test-support.js";
 
 describe("extractToolResultMediaArtifact", () => {
   it("returns undefined for null/undefined", () => {

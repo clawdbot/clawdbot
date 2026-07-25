@@ -90,7 +90,7 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
 
-export function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
+function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
   return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
 }
 
@@ -102,12 +102,6 @@ export function isRetryableMemoryEmbeddingError(message: string): boolean {
   return (
     RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message) ||
     isRetryableMemoryEmbeddingTransportError(message)
-  );
-}
-
-export function isStructuredInputTooLargeMemoryEmbeddingError(message: string): boolean {
-  return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
-    message,
   );
 }
 

@@ -1,0 +1,35 @@
+title: Matrix E2EE decrypted payloads stay out of default event artifacts
+scenario:
+  id: matrix-e2ee-artifact-redaction
+  surface: channels
+  coverage:
+    primary:
+      - security.redaction-artifact-safety
+  execution:
+    profiles: { "matrix:all": 64, "matrix:e2ee-smoke": 6 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 150000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-artifact-redaction
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Artifact Redaction Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js
+  call: runMatrixQaE2eeArtifactRedactionScenario
+  args:
+    - expr: "scenarioContext"

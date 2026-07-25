@@ -1,7 +1,6 @@
 // Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
@@ -69,10 +68,6 @@ describe("registerMaintenanceCommands doctor action", () => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("exits with code 0 after successful doctor run", async () => {
     doctorCommand.mockResolvedValue(undefined);
 
@@ -106,28 +101,125 @@ describe("registerMaintenanceCommands doctor action", () => {
     const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.repair).toBe(true);
-    expect(options.crossStateDirImports).toBe(true);
   });
 
-  it("denies cross-state imports when an automation parent disables them", async () => {
+  it("passes session sqlite options to doctor command", async () => {
     doctorCommand.mockResolvedValue(undefined);
-    vi.stubEnv(DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV, "1");
 
-    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
+    await runMaintenanceCli([
+      "doctor",
+      "--session-sqlite",
+      "import",
+      "--session-sqlite-store",
+      "/tmp/openclaw/sessions.json",
+      "--json",
+    ]);
 
-    const [, options] = commandCall(doctorCommand);
-    expect(options.repair).toBe(true);
-    expect(options.crossStateDirImports).toBe(false);
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(doctorCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.sessionSqlite).toBe("import");
+    expect(options.sessionSqliteStore).toBe("/tmp/openclaw/sessions.json");
+    expect(options.json).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
-  it("denies cross-state imports for older update parents", async () => {
+  it("passes session sqlite recover GitHub issue option to doctor command", async () => {
     doctorCommand.mockResolvedValue(undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
 
-    await runMaintenanceCli(["doctor", "--fix", "--non-interactive"]);
+    await runMaintenanceCli(["doctor", "--session-sqlite", "recover", "--github-issue", "--yes"]);
 
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
     const [, options] = commandCall(doctorCommand);
-    expect(options.crossStateDirImports).toBe(false);
+    expect(options.sessionSqlite).toBe("recover");
+    expect(options.sessionSqliteGithubIssue).toBe(true);
+    expect(options.yes).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("passes session sqlite compact mode to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--session-sqlite",
+      "compact",
+      "--session-sqlite-agent",
+      "main",
+    ]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.sessionSqlite).toBe("compact");
+    expect(options.sessionSqliteAgent).toBe("main");
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("passes shared-state sqlite compact mode and JSON output to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--json"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.stateSqlite).toBe("compact");
+    expect(options.json).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("rejects simultaneous shared-state and session SQLite modes", async () => {
+    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--session-sqlite", "compact"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor shared-state SQLite maintenance can only be combined with --json.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects shared-state SQLite maintenance combined with lint mode", async () => {
+    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--lint"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor shared-state SQLite maintenance can only be combined with --json.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each([
+    ["workspace suggestions", ["--no-workspace-suggestions"]],
+    ["yes mode", ["--yes"]],
+    ["repair mode", ["--repair"]],
+    ["fix mode", ["--fix"]],
+    ["force mode", ["--force"]],
+    ["non-interactive mode", ["--non-interactive"]],
+    ["gateway token generation", ["--generate-gateway-token"]],
+    ["exec secret resolution", ["--allow-exec"]],
+    ["deep scans", ["--deep"]],
+    ["post-upgrade mode", ["--post-upgrade"]],
+    ["session SQLite selectors", ["--session-sqlite-agent", "main"]],
+    ["lint selectors", ["--only", "core/example"]],
+  ])("rejects shared-state SQLite maintenance combined with %s", async (_label, args) => {
+    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", ...args]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor shared-state SQLite maintenance can only be combined with --json.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects session sqlite selectors without session sqlite mode", async () => {
+    await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
   it("runs doctor lint mode without invoking repair doctor", async () => {
@@ -201,15 +293,16 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("passes noOpen to dashboard command", async () => {
+  it("passes output options to dashboard command", async () => {
     dashboardCommand.mockResolvedValue(undefined);
 
-    await runMaintenanceCli(["dashboard", "--no-open"]);
+    await runMaintenanceCli(["dashboard", "--no-open", "--json"]);
 
     expect(dashboardCommand).toHaveBeenCalledTimes(1);
     const [runtimeArg, options] = commandCall(dashboardCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.noOpen).toBe(true);
+    expect(options.json).toBe(true);
   });
 
   it("passes reset options to reset command", async () => {

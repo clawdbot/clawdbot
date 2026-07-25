@@ -85,6 +85,11 @@ describe("npm extended-stable publication boundary", () => {
     expect(() => validateNpmPublishBoundary("2026.6.11", "extended-stable")).toThrow(
       /patch 33 or above/u,
     );
+    expect(() =>
+      validateNpmPublishBoundary("2026.6.11-1", "extended-stable", {
+        bypassExtendedStableGuard: true,
+      }),
+    ).toThrow(/does not allow correction suffixes/u);
   });
 
   it.each(["alpha", "beta", "latest"])(
@@ -443,7 +448,7 @@ describe("extended-stable selector capture", () => {
 describe("extended-stable registry readback", () => {
   it("accepts eventual convergence and sleeps 10 seconds between attempts", async () => {
     let attempt = 0;
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_delay: number) => {});
     const result = await verifyExtendedStableRegistryReadback({
       expectedVersion: "2026.6.33",
       query: async (target: string) => {
@@ -465,7 +470,7 @@ describe("extended-stable registry readback", () => {
 
   it("exhausts exactly 12 dual-query attempts on mismatch or failure", async () => {
     const query = vi.fn(async () => ({ status: 1, stdout: "" }));
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_delay: number) => {});
     await expect(
       verifyExtendedStableRegistryReadback({ expectedVersion: "2026.6.33", query, sleep }),
     ).rejects.toThrow(/after 12 attempts/u);

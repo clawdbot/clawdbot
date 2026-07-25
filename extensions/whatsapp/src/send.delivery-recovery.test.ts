@@ -1,9 +1,9 @@
 // Whatsapp tests cover the durable outbound handoff across startup recovery.
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createEmptyPluginRegistry,
   createOutboundTestPlugin,
   createTestRegistry,
-  deliverOutboundPayloads,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -13,23 +13,20 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappChannelOutbound } from "./channel-outbound.js";
-import {
-  getRegisteredWhatsAppConnectionController,
-  registerWhatsAppConnectionController,
-  unregisterWhatsAppConnectionController,
-} from "./connection-controller-registry.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
 
+const runtimeContextMocks = vi.hoisted(() => ({
+  controllers: new Map<string, unknown>(),
+}));
+
+vi.mock("./connection-controller-runtime-context.js", () => ({
+  getWhatsAppConnectionController: (accountId: string) =>
+    runtimeContextMocks.controllers.get(accountId) ?? null,
+}));
+
 const cfg = { channels: { whatsapp: {} } } as OpenClawConfig;
 const accountId = "default";
-
-function clearDefaultController(): void {
-  const controller = getRegisteredWhatsAppConnectionController(accountId);
-  if (controller) {
-    unregisterWhatsAppConnectionController(accountId, controller);
-  }
-}
 
 async function drainDefaultWhatsAppDeliveries(stateDir: string) {
   const log = {
@@ -56,7 +53,7 @@ async function drainDefaultWhatsAppDeliveries(stateDir: string) {
 
 describe("WhatsApp delivery recovery", () => {
   beforeEach(() => {
-    clearDefaultController();
+    runtimeContextMocks.controllers.clear();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -72,22 +69,25 @@ describe("WhatsApp delivery recovery", () => {
   });
 
   afterEach(() => {
-    clearDefaultController();
+    runtimeContextMocks.controllers.clear();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("keeps pre-connect recovery replayable, then sends exactly once after connect", async () => {
     await withStateDirEnv("openclaw-whatsapp-delivery-recovery-", async ({ stateDir }) => {
-      const initialError = await deliverOutboundPayloads({
+      const initialResult = await sendDurableMessageBatch({
         cfg,
         channel: "whatsapp",
         to: "+1555",
         payloads: [{ text: "queued before listener startup" }],
-        queuePolicy: "required",
-      }).catch((err: unknown) => err);
-      expect(initialError).toMatchObject({
-        cause: expect.any(PlatformMessageNotDispatchedError),
+        durability: "required",
+      });
+      expect(initialResult).toMatchObject({
+        status: "failed",
+        error: {
+          cause: expect.any(PlatformMessageNotDispatchedError),
+        },
       });
 
       const preConnectLog = await drainDefaultWhatsAppDeliveries(stateDir);
@@ -109,7 +109,7 @@ describe("WhatsApp delivery recovery", () => {
         getCurrentSock: () => null,
         getSelfIdentity: () => null,
       };
-      registerWhatsAppConnectionController(accountId, controller);
+      runtimeContextMocks.controllers.set(accountId, controller);
 
       await drainDefaultWhatsAppDeliveries(stateDir);
       await drainDefaultWhatsAppDeliveries(stateDir);

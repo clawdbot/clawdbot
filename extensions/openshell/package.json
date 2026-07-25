@@ -8,6 +8,7 @@
   },
   "type": "module",
   "dependencies": {
+    "p-limit": "7.3.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

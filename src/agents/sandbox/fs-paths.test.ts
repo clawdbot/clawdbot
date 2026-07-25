@@ -7,7 +7,6 @@ import {
   buildSandboxFsMounts,
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,
-  parseSandboxBindMount,
   resolveSandboxFsPathWithMounts,
   resolveWritableSandboxBindHostRoots,
 } from "./fs-paths.js";
@@ -18,41 +17,7 @@ function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({ overrides });
 }
 
-describe("parseSandboxBindMount", () => {
-  it("parses bind mode and writeability", () => {
-    expect(parseSandboxBindMount("/tmp/a:/workspace-a:ro")).toEqual({
-      hostRoot: path.resolve("/tmp/a"),
-      containerRoot: "/workspace-a",
-      writable: false,
-    });
-    expect(parseSandboxBindMount("/tmp/b:/workspace-b:rw")).toEqual({
-      hostRoot: path.resolve("/tmp/b"),
-      containerRoot: "/workspace-b",
-      writable: true,
-    });
-  });
-
-  it("parses Windows drive-letter host paths", () => {
-    expect(parseSandboxBindMount("C:\\Users\\kai\\workspace:/workspace:ro")).toEqual({
-      hostRoot: path.resolve("C:\\Users\\kai\\workspace"),
-      containerRoot: "/workspace",
-      writable: false,
-    });
-    expect(parseSandboxBindMount("D:/data:/workspace-data:rw")).toEqual({
-      hostRoot: path.resolve("D:/data"),
-      containerRoot: "/workspace-data",
-      writable: true,
-    });
-  });
-
-  it("parses UNC-style host paths", () => {
-    expect(parseSandboxBindMount("//server/share:/workspace:ro")).toEqual({
-      hostRoot: path.resolve("//server/share"),
-      containerRoot: "/workspace",
-      writable: false,
-    });
-  });
-
+describe("sandbox bind mounts", () => {
   it("returns only unique writable bind host roots", () => {
     expect(
       resolveWritableSandboxBindHostRoots([
@@ -60,9 +25,17 @@ describe("parseSandboxBindMount", () => {
         "/tmp/read-only:/read-only:ro",
         "/tmp/default-write:/default-write",
         "/tmp/data:/data-two:rw",
+        "C:\\Users\\kai\\workspace:/windows-read-only:ro",
+        "D:/data:/windows-data:rw",
+        "//server/share:/unc-share:rw",
         "invalid-bind",
       ]),
-    ).toEqual([path.resolve("/tmp/data"), path.resolve("/tmp/default-write")]);
+    ).toEqual([
+      path.resolve("/tmp/data"),
+      path.resolve("/tmp/default-write"),
+      path.resolve("D:/data"),
+      path.resolve("//server/share"),
+    ]);
   });
 
   it("omits writable bind roots that contain read-only host shadows", () => {

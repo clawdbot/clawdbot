@@ -15,7 +15,7 @@ type PluginCommandSpecOptions = {
   config?: OpenClawConfig;
 };
 
-export type PluginCommandEntrySpec = {
+type PluginCommandEntrySpec = {
   name: string;
   description: string;
   acceptsArgs: boolean;

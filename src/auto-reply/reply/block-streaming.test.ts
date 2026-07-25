@@ -49,7 +49,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     const cfg = {
       channels: {
         imessage: {
-          chunkMode: "newline",
+          streaming: { chunkMode: "newline" },
         },
       },
       agents: {
@@ -107,29 +107,6 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
           accounts: {
             personal: {
               streaming: { block: { coalesce: { idleMs: 2 } } },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolveEffectiveBlockStreamingConfig({
-        cfg,
-        provider: "imessage",
-        accountId: "personal",
-      }).coalescing,
-    ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });
-  });
-
-  it("merges legacy account block coalescing over channel nested config", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          streaming: { block: { coalesce: { minChars: 25, maxChars: 80, idleMs: 5 } } },
-          accounts: {
-            personal: {
-              blockStreamingCoalesce: { idleMs: 2 },
             },
           },
         },

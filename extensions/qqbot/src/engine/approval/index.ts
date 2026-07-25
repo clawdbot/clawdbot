@@ -48,6 +48,7 @@ export interface PluginApprovalRequest {
 }
 
 type ApprovalDecision = "allow-once" | "allow-always" | "deny";
+type ApprovalKind = "exec" | "plugin";
 
 interface ApprovalTarget {
   type: ChatScope;
@@ -56,6 +57,7 @@ interface ApprovalTarget {
 
 interface ParsedApprovalAction {
   approvalId: string;
+  approvalKind: ApprovalKind;
   decision: ApprovalDecision;
 }
 
@@ -177,8 +179,10 @@ export function buildPluginApprovalText(
  */
 export function buildApprovalKeyboard(
   approvalId: string,
+  approvalKind: ApprovalKind,
   allowedDecisions: readonly ApprovalDecision[] = ["allow-once", "allow-always", "deny"],
 ): InlineKeyboard {
+  const actionPrefix = `approve:v2:${approvalKind}:${encodeURIComponent(approvalId)}`;
   const makeBtn = (
     id: string,
     label: string,
@@ -203,8 +207,8 @@ export function buildApprovalKeyboard(
       makeBtn(
         "allow",
         "\u2705 \u5141\u8bb8\u4e00\u6b21",
-        "\u5df2\u5141\u8bb8",
-        `approve:${approvalId}:allow-once`,
+        "\u5df2\u5904\u7406",
+        `${actionPrefix}:allow-once`,
         1,
       ),
     );
@@ -214,15 +218,15 @@ export function buildApprovalKeyboard(
       makeBtn(
         "always",
         "\u2b50 \u59cb\u7ec8\u5141\u8bb8",
-        "\u5df2\u59cb\u7ec8\u5141\u8bb8",
-        `approve:${approvalId}:allow-always`,
+        "\u5df2\u5904\u7406",
+        `${actionPrefix}:allow-always`,
         1,
       ),
     );
   }
   if (allowedDecisions.includes("deny")) {
     buttons.push(
-      makeBtn("deny", "\u274c \u62d2\u7edd", "\u5df2\u62d2\u7edd", `approve:${approvalId}:deny`, 0),
+      makeBtn("deny", "\u274c \u62d2\u7edd", "\u5df2\u5904\u7406", `${actionPrefix}:deny`, 0),
     );
   }
 
@@ -261,8 +265,13 @@ export function resolveApprovalTarget(
   if (!m) {
     return null;
   }
-  const type: ChatScope = m[1].toLowerCase() === "group" ? "group" : "c2c";
-  return { type, id: m[2] };
+  const scope = m[1];
+  const id = m[2];
+  if (scope === undefined || id === undefined) {
+    return null;
+  }
+  const type: ChatScope = scope.toLowerCase() === "group" ? "group" : "c2c";
+  return { type, id };
 }
 
 // ============ Interaction Parser ============
@@ -270,20 +279,37 @@ export function resolveApprovalTarget(
 /**
  * Parse the button_data string from an INTERACTION_CREATE event.
  *
- * Expected format: `approve:<approvalId>:<decision>`
- * where approvalId may be prefixed with "exec:" or "plugin:".
+ * Expected format: `approve:v2:<approvalKind>:<encodedApprovalId>:<decision>`.
  *
  * Returns null if the data does not match the approval button format.
  */
 export function parseApprovalButtonData(buttonData: string): ParsedApprovalAction | null {
-  const m = buttonData.match(
-    /^approve:((?:(?:exec|plugin):)?[0-9a-f-]+):(allow-once|allow-always|deny)$/i,
-  );
-  if (!m) {
+  const m = buttonData.match(/^approve:v2:(exec|plugin):([^:]+):(allow-once|allow-always|deny)$/);
+  if (!m || m[0] !== buttonData) {
+    return null;
+  }
+  let approvalId: string;
+  const kind = m[1];
+  const encodedId = m[2];
+  const decision = m[3];
+  if (
+    (kind !== "exec" && kind !== "plugin") ||
+    encodedId === undefined ||
+    (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny")
+  ) {
+    return null;
+  }
+  try {
+    approvalId = decodeURIComponent(encodedId);
+  } catch {
+    return null;
+  }
+  if (!approvalId) {
     return null;
   }
   return {
-    approvalId: m[1],
-    decision: m[2] as ApprovalDecision,
+    approvalId,
+    approvalKind: kind,
+    decision,
   };
 }

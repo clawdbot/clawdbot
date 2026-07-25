@@ -58,31 +58,29 @@ describe("shouldAttemptTtsPayload", () => {
 
   it("honors session auto state before prefs and config", () => {
     writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
-    const cfg = { messages: { tts: { auto: "off" } } } as OpenClawConfig;
+    const cfg = { tts: { auto: "off" } } as OpenClawConfig;
 
     expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "always" })).toBe(true);
     expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "off" })).toBe(false);
   });
 
   it("uses local prefs before config auto mode", () => {
-    const cfg = { messages: { tts: { auto: "off" } } } as OpenClawConfig;
+    const cfg = { tts: { auto: "off" } } as OpenClawConfig;
 
     writeFileSync(prefsPath, JSON.stringify({ tts: { enabled: true } }));
     expect(shouldAttemptTtsPayload({ cfg })).toBe(true);
 
     writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
-    expect(
-      shouldAttemptTtsPayload({ cfg: { messages: { tts: { enabled: true } } } as OpenClawConfig }),
-    ).toBe(false);
+    expect(shouldAttemptTtsPayload({ cfg: { tts: { enabled: true } } as OpenClawConfig })).toBe(
+      false,
+    );
   });
 
   it("uses per-agent TTS auto and mode overrides", () => {
     const cfg = {
-      messages: {
-        tts: {
-          auto: "off",
-          mode: "final",
-        },
+      tts: {
+        auto: "off",
+        mode: "final",
       },
       agents: {
         list: [
@@ -103,18 +101,30 @@ describe("shouldAttemptTtsPayload", () => {
     expect(resolveConfiguredTtsMode(cfg, "main")).toBe("final");
   });
 
+  it("uses a per-agent preference path before the global environment path", () => {
+    const voicePrefsPath = path.join(dir, "voice-tts.json");
+    writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
+    writeFileSync(voicePrefsPath, JSON.stringify({ tts: { auto: "always" } }));
+    const cfg = {
+      agents: {
+        list: [{ id: "voice", tts: { prefsPath: voicePrefsPath } }],
+      },
+    } as OpenClawConfig;
+
+    expect(shouldAttemptTtsPayload({ cfg, agentId: "voice" })).toBe(true);
+    expect(shouldAttemptTtsPayload({ cfg, agentId: "main" })).toBe(false);
+  });
+
   it("merges channel and account TTS overrides after agent overrides", () => {
     const cfg = {
-      messages: {
-        tts: {
-          auto: "off",
-          mode: "final",
-          provider: "openai",
-          providers: {
-            openai: {
-              model: "gpt-4o-mini-tts",
-              voice: "alloy",
-            },
+      tts: {
+        auto: "off",
+        mode: "final",
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-4o-mini-tts",
+            voice: "alloy",
           },
         },
       },
@@ -164,5 +174,30 @@ describe("shouldAttemptTtsPayload", () => {
     expect(resolved.provider).toBe("openai");
     expect(resolved.providers?.openai?.model).toBe("gpt-4o-mini-tts");
     expect(resolved.providers?.openai?.voice).toBe("shimmer");
+  });
+
+  it("preserves null and array override semantics while blocking prototype keys", () => {
+    const agentTts = JSON.parse(
+      '{"providers":{"custom":{"nullable":null,"voices":["override"],"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}}}',
+    );
+    const cfg = {
+      tts: {
+        providers: {
+          custom: {
+            model: "base",
+            nullable: "base",
+            voices: ["base"],
+          },
+        },
+      },
+      agents: { list: [{ id: "reader", tts: agentTts }] },
+    } as OpenClawConfig;
+
+    expect(resolveEffectiveTtsConfig(cfg, "reader").providers?.custom).toEqual({
+      model: "base",
+      nullable: null,
+      voices: ["override"],
+    });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 });

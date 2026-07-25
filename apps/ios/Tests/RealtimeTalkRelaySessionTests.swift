@@ -81,6 +81,52 @@ struct RealtimeTalkRelaySessionTests {
         #expect(session._test_outputStartedAtMs() == 500)
     }
 
+    @Test func `playback mark is acknowledged after output finishes`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
+        let transport = RealtimeTalkRelaySession.StartupTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, paramsJSON, _ in
+                await requests.record(method: method, paramsJSON: paramsJSON)
+                return Data("{\"ok\":true}".utf8)
+            })
+        let session = RealtimeTalkRelaySession(
+            gateway: GatewayNodeSession(),
+            options: .init(sessionKey: "main", provider: "xai", model: nil, voice: nil),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in },
+            startupTransport: transport)
+        session._test_setRelaySessionId("relay-1")
+        session._test_markOutputAudioStarted(nowMs: 100)
+
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "mark",
+                "markName": "audio-1",
+            ]),
+            seq: nil,
+            stateversion: nil))
+        await Task.yield()
+        #expect(await requests.snapshot().isEmpty)
+
+        session._test_markOutputPlaybackFinished()
+        for _ in 0..<10 {
+            if !(await requests.snapshot()).isEmpty { break }
+            await Task.yield()
+        }
+
+        let recorded = await requests.snapshot()
+        #expect(recorded.count == 1)
+        let request = try #require(recorded.first)
+        #expect(request.method == "talk.session.acknowledgeMark")
+        let paramsData = try #require(request.paramsJSON?.data(using: .utf8))
+        let params = try #require(JSONSerialization.jsonObject(with: paramsData) as? [String: String])
+        #expect(params == ["sessionId": "relay-1", "markName": "audio-1"])
+    }
+
     @Test func `close after classified error does not replace issue`() async {
         var issues: [TalkRuntimeIssue] = []
         var statuses: [String] = []

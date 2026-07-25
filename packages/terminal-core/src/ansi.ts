@@ -1,15 +1,11 @@
-// Full CSI: ESC [ <params> <final byte> covers cursor movement, erase, and SGR.
-const ESC_ANSI_CSI_PATTERN = "\\x1b\\[[\\x20-\\x3f]*[\\x40-\\x7e]";
-const C1_ANSI_CSI_PATTERN = "\\x9b[\\x20-\\x3f]*[\\x40-\\x7e]";
-const ANSI_CSI_PATTERN = `(?:${ESC_ANSI_CSI_PATTERN}|${C1_ANSI_CSI_PATTERN})`;
-// OSC: ESC ] or C1 OSC, then <payload> ST. Covers hyperlinks and clipboard/title escapes.
-// ST can be ESC \, BEL, or its C1 form.
-const ANSI_OSC_INTRODUCER_PATTERN = "(?:\\x1b\\]|\\x9d)";
-const ANSI_STRING_TERMINATOR_PATTERN = "(?:\\x1b\\\\|\\x07|\\x9c)";
-const ANSI_OSC_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[^\\x07\\x1b\\x9c]*${ANSI_STRING_TERMINATOR_PATTERN}`;
-
-const ANSI_OSC_AT_INDEX_REGEX = new RegExp(ANSI_OSC_PATTERN, "y");
-const ANSI_SEQUENCE_REGEX = new RegExp(`${ANSI_OSC_PATTERN}|${ANSI_CSI_PATTERN}`, "g");
+import {
+  ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN,
+  ANSI_OSC_INTRODUCER_PATTERN,
+  ANSI_STRING_TERMINATOR_PATTERN,
+  matchAnsiOscAt,
+  scanAnsiCsiAt,
+  splitAnsiSegments,
+} from "./ansi-sequences.js";
 
 /*
  * The following compatibility grammar is derived from ansi-regex and strip-ansi.
@@ -37,24 +33,14 @@ const ANSI_SEQUENCE_REGEX = new RegExp(`${ANSI_OSC_PATTERN}|${ANSI_CSI_PATTERN}`
  * SOFTWARE.
  */
 const ANSI_OSC_SEQUENCE_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[\\s\\S]*?${ANSI_STRING_TERMINATOR_PATTERN}`;
-const ANSI_CONTROL_SEQUENCE_PATTERN =
-  "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]";
 const ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX = new RegExp(
-  `${ANSI_OSC_SEQUENCE_PATTERN}|${ANSI_CONTROL_SEQUENCE_PATTERN}`,
+  `${ANSI_OSC_SEQUENCE_PATTERN}|${ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN}`,
   "y",
 );
 const graphemeSegmenter =
   typeof Intl !== "undefined" && "Segmenter" in Intl
     ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
     : null;
-
-function csiIntroducerLength(input: string, index: number): number {
-  const code = input.charCodeAt(index);
-  if (code === 0x9b) {
-    return 1;
-  }
-  return code === 0x1b && input.charCodeAt(index + 1) === 0x5b ? 2 : 0;
-}
 
 function hasAnsiIntroducer(input: string): boolean {
   return input.includes("\u001B") || input.includes("\u009B") || input.includes("\u009D");
@@ -80,17 +66,16 @@ function stripAnsiInternal(
       continue;
     }
 
-    ANSI_OSC_AT_INDEX_REGEX.lastIndex = index;
-    const oscMatch = ANSI_OSC_AT_INDEX_REGEX.exec(input);
-    if (oscMatch) {
+    const osc = matchAnsiOscAt(input, index);
+    if (osc) {
       output.push(input.slice(copyStart, index));
-      index += oscMatch[0].length;
+      index += osc.length;
       copyStart = index;
       continue;
     }
 
-    const introducerLength = csiIntroducerLength(input, index);
-    if (introducerLength === 0) {
+    const csi = scanAnsiCsiAt(input, index);
+    if (!csi) {
       ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
       const compatibilityMatch = options.compatibilityGrammar
         ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
@@ -109,52 +94,21 @@ function stripAnsiInternal(
     const compatibilityMatch = options.compatibilityGrammar
       ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
       : null;
-    let cursor = index + introducerLength;
-    const controls: string[] = [];
-    let ended = false;
-    while (cursor < input.length) {
-      const code = input.charCodeAt(cursor);
-      if (code === 0x18 || code === 0x1a) {
-        cursor += 1;
-        ended = true;
-        break;
-      }
-      if (code === 0x1b || code === 0x9b) {
-        ended = true;
-        break;
-      }
-      if (code <= 0x1f || code === 0x7f) {
-        // These controls execute independently; the caller still owns whether
-        // to retain, remove, or escape them in its output format.
-        controls.push(input[cursor]);
-        cursor += 1;
-        continue;
-      }
-      if (code >= 0x20 && code <= 0x3f) {
-        cursor += 1;
-        continue;
-      }
-      if (code >= 0x40 && code <= 0x7e) {
-        cursor += 1;
-      }
-      ended = true;
+    if (!csi.ended && options.preserveIncompleteCsi) {
       break;
     }
 
-    if (!ended && options.preserveIncompleteCsi) {
-      break;
-    }
-
-    const canonicalLength = cursor - index;
+    let cursor = index + csi.value.length;
+    const canonicalLength = csi.value.length;
     if (
-      controls.length === 0 &&
+      csi.controls.length === 0 &&
       compatibilityMatch &&
       compatibilityMatch[0].length > canonicalLength
     ) {
       cursor = index + compatibilityMatch[0].length;
     }
 
-    output.push(input.slice(copyStart, index), ...controls);
+    output.push(input.slice(copyStart, index), ...csi.controls);
     index = cursor;
     copyStart = cursor;
   }
@@ -227,6 +181,8 @@ export function sanitizeForLog(v: string): string {
 
 function isZeroWidthCodePoint(codePoint: number): boolean {
   return (
+    (codePoint <= 0x1f && codePoint !== 0x09) ||
+    (codePoint >= 0x7f && codePoint <= 0x9f) ||
     (codePoint >= 0x0300 && codePoint <= 0x036f) ||
     (codePoint >= 0x1ab0 && codePoint <= 0x1aff) ||
     (codePoint >= 0x1dc0 && codePoint <= 0x1dff) ||
@@ -323,11 +279,10 @@ export function visibleWidth(input: string): number {
 
 /**
  * Truncate to at most `maxWidth` visible columns, dropping whole grapheme
- * clusters that would overflow while preserving ANSI sequences verbatim
- * (they have zero visible width). A single wide grapheme that cannot fit the
- * remaining budget is dropped rather than emitted partially, so the result is
- * always `visibleWidth(result) <= maxWidth`. Callers that need a fixed width
- * pad the (possibly short) remainder themselves.
+ * clusters that would overflow while preserving zero-width ANSI sequences
+ * verbatim. Independently executed controls inside CSI count toward the budget
+ * while the containing sequence stays atomic. A single wide grapheme that
+ * cannot fit is dropped whole, so `visibleWidth(result) <= maxWidth`.
  */
 export function truncateToVisibleWidth(input: string, maxWidth: number): string {
   if (maxWidth <= 0) {
@@ -336,13 +291,11 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
   if (visibleWidth(input) <= maxWidth) {
     return input;
   }
-  ANSI_SEQUENCE_REGEX.lastIndex = 0;
   let out = "";
   let used = 0;
-  let pos = 0;
   // Once the visible budget is spent we stop emitting graphemes but keep
-  // copying ANSI sequences, so trailing resets/link-closes still land and the
-  // truncated cell does not bleed styling into the padding or border.
+  // copying zero-width ANSI sequences, so trailing resets/link-closes still
+  // land without letting embedded executable controls exceed the budget.
   let budgetSpent = false;
   const appendVisible = (segment: string): void => {
     if (budgetSpent) {
@@ -358,12 +311,25 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
       used += width;
     }
   };
-  let match: RegExpExecArray | null;
-  while ((match = ANSI_SEQUENCE_REGEX.exec(input)) !== null) {
-    appendVisible(input.slice(pos, match.index));
-    out += match[0];
-    pos = match.index + match[0].length;
+  for (const segment of splitAnsiSegments(input)) {
+    if (segment.kind === "ansi") {
+      const widthControls = segment.controls.filter((control) => graphemeWidth(control) > 0);
+      const controlWidth = widthControls.reduce((sum, control) => sum + graphemeWidth(control), 0);
+      if (!budgetSpent && used + controlWidth <= maxWidth) {
+        out += segment.value;
+        used += controlWidth;
+      } else if (controlWidth > 0) {
+        out += widthControls.reduce(
+          (value, control) => value.replaceAll(control, ""),
+          segment.value,
+        );
+        budgetSpent = true;
+      } else {
+        out += segment.value;
+      }
+    } else {
+      appendVisible(segment.value);
+    }
   }
-  appendVisible(input.slice(pos));
   return out;
 }

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
@@ -101,6 +102,58 @@ function getSummaryCards(container: HTMLElement): Array<{
 }
 
 describe("renderUsageInsights", () => {
+  it("renders overview hints as focusable tooltip anchors", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderUsageInsights(
+        totals,
+        aggregates,
+        {
+          durationSumMs: 0,
+          durationCount: 0,
+          avgDurationMs: 0,
+          errorRate: 0,
+        },
+        false,
+        true,
+        [],
+        1,
+        1,
+      ),
+      container,
+    );
+
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
+    const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
+    expect(buttons).toHaveLength(9);
+    expect(tooltips).toHaveLength(9);
+    expect(
+      buttons.every(
+        (button) =>
+          button.type === "button" &&
+          !button.hasAttribute("title") &&
+          Boolean(button.getAttribute("aria-label")),
+      ),
+    ).toBe(true);
+    expect(
+      tooltips.every((tooltip) => {
+        const button = tooltip.querySelector<HTMLButtonElement>("button.usage-summary-hint");
+        const content = tooltip.querySelector('[slot="content"]');
+        return Boolean(
+          button &&
+          buttons.includes(button) &&
+          content &&
+          button.getAttribute("aria-label") !== content.textContent,
+        );
+      }),
+    ).toBe(true);
+
+    buttons[0]?.click();
+    expect(document.activeElement).toBe(buttons[0]);
+  });
+
   it("includes cache writes in cache-hit-rate denominator", () => {
     const container = document.createElement("div");
 
@@ -211,11 +264,12 @@ describe("renderUsageInsights", () => {
 describe("renderDailyChartCompact", () => {
   it("keeps day selection operable with mouse and keyboard", () => {
     const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)]);
+    const bar = expectDefined(bars[0], "daily usage bar");
 
-    bars[0].dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
 
-    bars[0].dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false);
 
     const space = new KeyboardEvent("keydown", {
@@ -224,7 +278,7 @@ describe("renderDailyChartCompact", () => {
       key: " ",
       shiftKey: true,
     });
-    bars[0].dispatchEvent(space);
+    bar.dispatchEvent(space);
     expect(space.defaultPrevented).toBe(true);
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
   });

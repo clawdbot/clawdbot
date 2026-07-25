@@ -13,19 +13,20 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { mergeDeep as mergeDeepValues } from "../infra/deep-merge.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
-export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
 /** Maximum length for $include path and resolved path (CWE-22 hardening). */
-export const MAX_INCLUDE_PATH_LENGTH = 4096;
+const MAX_INCLUDE_PATH_LENGTH = 4096;
 
 export function hashConfigIncludeRaw(raw: string | null): string {
   const hash = crypto.createHash("sha256");
@@ -74,6 +75,10 @@ export type IncludeResolver = {
   readFile: (path: string) => string;
   readFileWithGuards?: (params: IncludeFileReadParams) => string;
   parseJson: (raw: string) => unknown;
+  /** Reports lexically contained paths before canonical/open checks for watcher repair flows. */
+  onLexicalPath?: (resolvedPath: string) => void;
+  /** Reports the resolved value contributed by an include at its logical config path. */
+  onIncludeResolved?: (event: { path: readonly string[]; value: unknown }) => void;
 };
 
 type IncludeFileReadParams = {
@@ -122,7 +127,10 @@ export class ConfigIncludeError extends Error {
 
 export class CircularIncludeError extends ConfigIncludeError {
   constructor(public readonly chain: string[]) {
-    super(`Circular include detected: ${chain.join(" -> ")}`, chain[chain.length - 1]);
+    super(
+      `Circular include detected: ${chain.join(" -> ")}`,
+      expectDefined(chain[chain.length - 1], "chain entry at chain.length 1"),
+    );
     this.name = "CircularIncludeError";
   }
 }
@@ -132,21 +140,8 @@ export class CircularIncludeError extends ConfigIncludeError {
 // ============================================================================
 
 /** Deep merge: arrays concatenate, objects merge recursively, primitives: source wins */
-export function deepMerge(target: unknown, source: unknown): unknown {
-  if (Array.isArray(target) && Array.isArray(source)) {
-    return [...target, ...source];
-  }
-  if (isPlainObject(target) && isPlainObject(source)) {
-    const result: Record<string, unknown> = { ...target };
-    for (const key of Object.keys(source)) {
-      if (isBlockedObjectKey(key)) {
-        continue;
-      }
-      result[key] = key in result ? deepMerge(result[key], source[key]) : source[key];
-    }
-    return result;
-  }
-  return source;
+function deepMerge(target: unknown, source: unknown): unknown {
+  return mergeDeepValues(target, source, { arrays: "concat", undefinedValues: "replace" });
 }
 
 // ============================================================================
@@ -169,9 +164,9 @@ class IncludeProcessor {
     return this.boundary.configRoot.rootDir;
   }
 
-  process(obj: unknown): unknown {
+  process(obj: unknown, logicalPath: readonly string[] = []): unknown {
     if (Array.isArray(obj)) {
-      return obj.map((item) => this.process(item));
+      return obj.map((item) => this.process(item, logicalPath));
     }
 
     if (!isPlainObject(obj)) {
@@ -179,24 +174,28 @@ class IncludeProcessor {
     }
 
     if (!(INCLUDE_KEY in obj)) {
-      return this.processObject(obj);
+      return this.processObject(obj, logicalPath);
     }
 
-    return this.processInclude(obj);
+    return this.processInclude(obj, logicalPath);
   }
 
-  private processObject(obj: Record<string, unknown>): Record<string, unknown> {
+  private processObject(
+    obj: Record<string, unknown>,
+    logicalPath: readonly string[],
+  ): Record<string, unknown> {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
-      result[key] = this.process(value);
+      result[key] = this.process(value, [...logicalPath, key]);
     }
     return result;
   }
 
-  private processInclude(obj: Record<string, unknown>): unknown {
+  private processInclude(obj: Record<string, unknown>, logicalPath: readonly string[]): unknown {
     const includeValue = obj[INCLUDE_KEY];
     const otherKeys = Object.keys(obj).filter((k) => k !== INCLUDE_KEY);
-    const included = this.resolveInclude(includeValue);
+    const included = this.resolveInclude(includeValue, logicalPath);
+    this.resolver.onIncludeResolved?.({ path: [...logicalPath], value: included });
 
     if (otherKeys.length === 0) {
       return included;
@@ -212,14 +211,14 @@ class IncludeProcessor {
     // Merge included content with sibling keys
     const rest: Record<string, unknown> = {};
     for (const key of otherKeys) {
-      rest[key] = this.process(obj[key]);
+      rest[key] = this.process(obj[key], [...logicalPath, key]);
     }
     return deepMerge(included, rest);
   }
 
-  private resolveInclude(value: unknown): unknown {
+  private resolveInclude(value: unknown, logicalPath: readonly string[]): unknown {
     if (typeof value === "string") {
-      return this.loadFile(value);
+      return this.loadFile(value, logicalPath);
     }
 
     if (Array.isArray(value)) {
@@ -230,7 +229,7 @@ class IncludeProcessor {
             String(item),
           );
         }
-        return deepMerge(merged, this.loadFile(item));
+        return deepMerge(merged, this.loadFile(item, logicalPath));
       }, {});
     }
 
@@ -240,7 +239,7 @@ class IncludeProcessor {
     );
   }
 
-  private loadFile(includePath: string): unknown {
+  private loadFile(includePath: string, logicalPath: readonly string[]): unknown {
     const { resolvedPath, root } = this.resolvePath(includePath);
 
     this.checkCircular(resolvedPath);
@@ -249,7 +248,7 @@ class IncludeProcessor {
     const raw = this.readFile(includePath, resolvedPath, root);
     const parsed = this.parseFile(includePath, resolvedPath, raw);
 
-    return this.processNested(resolvedPath, parsed);
+    return this.processNested(resolvedPath, parsed, logicalPath);
   }
 
   private resolvePath(includePath: string): { resolvedPath: string; root: IncludeRoot } {
@@ -287,6 +286,7 @@ class IncludeProcessor {
         includePath,
       );
     }
+    this.resolver.onLexicalPath?.(normalized);
 
     // SECURITY: Resolve symlinks and re-validate to prevent symlink bypass.
     // The realpath may legitimately land in a different allowed root than the
@@ -384,11 +384,15 @@ class IncludeProcessor {
     }
   }
 
-  private processNested(resolvedPath: string, parsed: unknown): unknown {
+  private processNested(
+    resolvedPath: string,
+    parsed: unknown,
+    logicalPath: readonly string[],
+  ): unknown {
     const nested = new IncludeProcessor(resolvedPath, this.resolver, this.boundary);
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
-    return nested.process(parsed);
+    return nested.process(parsed, logicalPath);
   }
 }
 

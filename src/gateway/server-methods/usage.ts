@@ -1,6 +1,7 @@
 // Usage gateway methods aggregate provider and session cost/token metrics from
 // caches, logs, session stores, and discovered transcript files.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -8,7 +9,7 @@ import {
   formatValidationErrors,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -56,13 +57,17 @@ import type {
   SessionsUsageAggregates,
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadCombinedSessionStoreForGateway, loadSessionEntry } from "../session-utils.js";
+import { loadCombinedSessionStoreForGateway, loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
@@ -83,10 +88,14 @@ async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[
   return result.results;
 }
 
-type DateRange = { startMs: number; endMs: number };
+type DateRange = { startMs: number; endMs: number; includeUntimestamped?: boolean };
 // Keep validation and parsed timestamps in one result so handlers cannot forward
 // an invalid or backwards window to the usage loaders.
 type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: string };
+// 100 years: callers requesting unbounded history should use `range: "all"`.
+// Larger explicit day counts would overflow ECMAScript Date arithmetic and
+// surface as a misleading "calendar day does not exist" error from the resolver.
+const MAX_USAGE_DAYS = 366 * 100;
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
   | { mode: "utc-offset"; utcOffsetMinutes: number }
@@ -135,15 +144,15 @@ function resolveSessionUsageFileOrRespond(
 ): {
   config: OpenClawConfig;
   entry: SessionEntry | undefined;
-  agentId: string | undefined;
+  agentId: string;
   sessionId: string;
   sessionFile: string;
 } | null {
-  const { entry, storePath } = loadSessionEntry(key);
+  const { entry, storePath } = loadSessionEntryReadOnly(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
   const parsed = parseAgentSessionKey(key);
-  const agentId = parsed?.agentId;
+  const agentId = parsed?.agentId ?? resolveDefaultAgentId(config);
   const rawSessionId = parsed?.rest ?? key;
   const sessionId = entry?.sessionId ?? rawSessionId;
   let sessionFile: string;
@@ -387,14 +396,17 @@ const formatDateParts = (year: number, monthIndex: number, day: number): string 
   `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
 const parseDays = (raw: unknown): number | undefined => {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.floor(raw);
+  const fromFinite = (n: number): number | undefined => {
+    if (!Number.isFinite(n)) {
+      return undefined;
+    }
+    return Math.min(Math.floor(n), MAX_USAGE_DAYS);
+  };
+  if (typeof raw === "number") {
+    return fromFinite(raw);
   }
   if (typeof raw === "string" && raw.trim() !== "") {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) {
-      return Math.floor(parsed);
-    }
+    return fromFinite(Number(raw));
   }
   return undefined;
 };
@@ -471,6 +483,11 @@ const resolveDateRange = (
 
   const startDateParts = parseDateParts(params.startDate);
   const endDateParts = parseDateParts(params.endDate);
+  // Explicit date windows are atomic. A single boundary must not silently
+  // fall through to the unrelated default 30-day range.
+  if ((startDateParts === undefined) !== (endDateParts === undefined)) {
+    return { ok: false, error: "startDate and endDate must be provided together" };
+  }
 
   if (startDateParts && endDateParts) {
     const startMs = datePartsToStartMs(startDateParts, interpretation);
@@ -487,7 +504,10 @@ const resolveDateRange = (
 
   const rangeDays = resolveRangeDays(params.range);
   if (rangeDays === "all") {
-    return { ok: true, value: { startMs: 0, endMs: todayEndMs } };
+    return {
+      ok: true,
+      value: { startMs: 0, endMs: todayEndMs, includeUntimestamped: true },
+    };
   }
   if (rangeDays !== undefined) {
     return resolveTrailingDays(todayDateParts, rangeDays, interpretation);
@@ -886,20 +906,19 @@ async function loadCostUsageSummaryCached(params: {
   agentId?: string;
   agentScope?: "all";
 }): Promise<CostUsageSummary> {
+  const allAgents = params.agentScope === "all";
+  const agentId = allAgents
+    ? undefined
+    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
   const dayBucketKey = params.dayBucket
     ? params.dayBucket.mode === "time-zone"
       ? `time-zone:${params.dayBucket.timeZone}`
       : `utc-offset:${params.dayBucket.utcOffsetMinutes}`
     : "gateway";
-  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
+  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
-  if (
-    cached?.summary &&
-    cached.updatedAt &&
-    now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS &&
-    cached.summary.cacheStatus?.status !== "refreshing"
-  ) {
+  if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
     return cached.summary;
   }
 
@@ -912,7 +931,7 @@ async function loadCostUsageSummaryCached(params: {
 
   const entry: CostUsageCacheEntry = cached ?? {};
   const inFlight = (
-    params.agentScope === "all"
+    allAgents
       ? loadAllAgentCostUsageSummary({
           startMs: params.startMs,
           endMs: params.endMs,
@@ -924,15 +943,17 @@ async function loadCostUsageSummaryCached(params: {
           endMs: params.endMs,
           dayBucket: params.dayBucket,
           config: params.config,
-          agentId: params.agentId,
+          agentId: expectDefined(agentId, "non-aggregate usage agent id"),
           requestRefresh: true,
           refreshMode: "background",
         })
   )
     .then((summary) => {
+      // Refresh work is independent; retaining freshness prevents fleet rescans while it runs.
+      // The short TTL still picks up a completed refresh promptly.
       setCostUsageCache(cacheKey, {
         summary,
-        updatedAt: summary.cacheStatus?.status === "refreshing" ? undefined : Date.now(),
+        updatedAt: Date.now(),
       });
       return summary;
     })
@@ -966,9 +987,7 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
-    normalizeAgentId(agent.id),
-  );
+  const agentIds = listAgentIds(params.config).map((agentId) => normalizeAgentId(agentId));
   const summaries = await runUsageAgentTasks(
     agentIds.map(
       (agentId) => () =>
@@ -1145,7 +1164,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       return;
     }
     const config = context.getRuntimeConfig();
-    const { startMs, endMs } = dateRange.value;
+    const { startMs, endMs, includeUntimestamped } = dateRange.value;
     const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
@@ -1380,7 +1399,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     // individually re-reads and re-parses the whole cache file, so RSS spikes
     // in proportion to `limit` on every dashboard connect (issue #100041).
     const sessionsByAgent = new Map<
-      string | undefined,
+      string,
       Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
     >();
     for (const [entryIndex, merged] of mergedEntries.entries()) {
@@ -1414,6 +1433,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           startMs,
           endMs,
+          includeUntimestamped,
           dayBucket,
         }),
       })),
@@ -1424,8 +1444,11 @@ export const usageHandlers: GatewayRequestHandlers = {
         if (!summary) {
           continue;
         }
-        const session = agentSessions[index];
-        const merged = mergedEntries[session.entryIndex];
+        const session = expectDefined(agentSessions[index], "agent sessions entry at index");
+        const merged = expectDefined(
+          mergedEntries[session.entryIndex],
+          "merged entries entry at session.entry index",
+        );
         const usage = usageByEntryIndex[session.entryIndex] ?? createEmptySessionCostSummary();
         usage.sessionId = merged.sessionId;
         usage.sessionFile = merged.sessionFile;
@@ -1441,7 +1464,8 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
-      const usage = usageByEntryIndex[entryIndex];
+      // A cold or stale cache intentionally yields null until its background refresh completes.
+      const usage = usageByEntryIndex[entryIndex] ?? null;
 
       if (usage) {
         addCostUsageTotals(aggregateTotals, usage);
@@ -1453,8 +1477,9 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
-      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
+      const channel = sessionDeliveryChannel(merged.storeEntry);
+      const chatType =
+        merged.storeEntry?.chatType ?? sessionDeliveryOrigin(merged.storeEntry)?.chatType;
 
       if (usage) {
         if (usage.messageCounts) {
@@ -1585,7 +1610,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           channel,
           chatType,
-          origin: merged.storeEntry?.origin,
+          origin: sessionDeliveryOrigin(merged.storeEntry),
           modelOverride: merged.storeEntry?.modelOverride,
           providerOverride: merged.storeEntry?.providerOverride,
           modelProvider: merged.storeEntry?.modelProvider,
@@ -1716,3 +1741,4 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, { logs: logs ?? [] }, undefined);
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

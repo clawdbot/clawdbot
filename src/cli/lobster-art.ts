@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // The Control UI lobster pet has a CLI cousin: on roughly one day in sixteen
 // the interactive banner gains a tiny ASCII lobster. The day comes from the
 // shared lobster-day hash (the sidebar pet dresses up on the same days), so
@@ -22,5 +23,8 @@ export function pickCliLobsterArt(now: Date, env: NodeJS.ProcessEnv = process.en
   if (!isLobsterDay(now)) {
     return null;
   }
-  return LOBSTER_ARTS[(lobsterDayHash(now) >>> 8) % LOBSTER_ARTS.length];
+  return expectDefined(
+    LOBSTER_ARTS[(lobsterDayHash(now) >>> 8) % LOBSTER_ARTS.length],
+    "lobster arts entry at (lobster day hash(now) >>> 8) % lobster arts.length",
+  );
 }

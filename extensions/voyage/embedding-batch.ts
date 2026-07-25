@@ -1,18 +1,19 @@
 // Voyage plugin module implements embedding batch behavior.
-import { createInterface } from "node:readline";
-import { Readable } from "node:stream";
 import {
   applyEmbeddingBatchOutputLine,
   buildBatchHeaders,
   buildEmbeddingBatchGroupOptions,
   EMBEDDING_BATCH_ENDPOINT,
   extractBatchErrorMessage,
+  formatBatchErrorDetail,
   formatUnavailableBatchError,
   normalizeBatchBaseUrl,
   postJsonWithRetry,
+  readEmbeddingBatchJsonl,
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
   runEmbeddingBatchGroups,
+  throwIfBatchCompletionError,
   throwIfBatchTerminalFailure,
   type EmbeddingBatchExecutionParams,
   type EmbeddingBatchStatus,
@@ -21,7 +22,10 @@ import {
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoyageEmbeddingClient } from "./embedding-provider.js";
@@ -43,15 +47,14 @@ type VoyageBatchOutputLine = ProviderBatchOutputLine;
 const VOYAGE_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const VOYAGE_BATCH_COMPLETION_WINDOW = "12h";
 const VOYAGE_BATCH_MAX_REQUESTS = 50000;
-// Voyage batch status/error responses are untrusted external bodies. Cap them
-// the same way other bundled providers do (16 MiB) so a misbehaving or hostile
-// endpoint cannot stream an unbounded body into memory before we parse it.
+// Successful status/error-file responses are untrusted external bodies. Cap
+// them at 16 MiB; non-OK diagnostics use the shared bounded provider prefix.
 const VOYAGE_BATCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 type VoyageBatchDeps = {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  postJsonWithRetry: typeof postJsonWithRetry;
+  postJsonWithRetry: typeof postJsonWithRetry<VoyageBatchStatus>;
   uploadBatchJsonlFile: typeof uploadBatchJsonlFile;
   withRemoteHttpResponse: typeof withRemoteHttpResponse;
 };
@@ -69,27 +72,6 @@ function resolveVoyageBatchDeps(overrides: Partial<VoyageBatchDeps> | undefined)
     uploadBatchJsonlFile: overrides?.uploadBatchJsonlFile ?? uploadBatchJsonlFile,
     withRemoteHttpResponse: overrides?.withRemoteHttpResponse ?? withRemoteHttpResponse,
   };
-}
-
-async function assertVoyageResponseOk(
-  res: Response,
-  context: string,
-  maxBytes: number = VOYAGE_BATCH_RESPONSE_MAX_BYTES,
-): Promise<void> {
-  if (!res.ok) {
-    // The non-OK diagnostic body is just as untrusted as the success body: a
-    // misbehaving or hostile endpoint can return a 4xx/5xx with an unbounded
-    // body, and the old `await res.text()` buffered it whole before we threw.
-    // Read it through the same bounded reader (16 MiB cap, stream cancelled on
-    // overflow) while preserving the original `${context}: ${status} ${text}`
-    // diagnostic shape for backward compatibility.
-    const bytes = await readResponseWithLimit(res, maxBytes, {
-      onOverflow: ({ maxBytes: maxBytesLocal }) =>
-        new Error(`${context}: ${res.status} (error body exceeds ${maxBytesLocal} bytes)`),
-    });
-    const text = new TextDecoder().decode(bytes);
-    throw new Error(`${context}: ${res.status} ${text}`);
-  }
 }
 
 function buildVoyageBatchRequest<T>(params: {
@@ -122,7 +104,7 @@ async function submitVoyageBatch(params: {
   });
 
   // 2. Create batch job using Voyage Batches API
-  return await params.deps.postJsonWithRetry<VoyageBatchStatus>({
+  return await params.deps.postJsonWithRetry({
     url: `${baseUrl}/batches`,
     headers: buildBatchHeaders(params.client, { json: true }),
     ssrfPolicy: params.client.ssrfPolicy,
@@ -155,7 +137,7 @@ async function fetchVoyageBatchStatus(params: {
       client: params.client,
       path: `batches/${params.batchId}`,
       onResponse: async (res) => {
-        await assertVoyageResponseOk(res, "voyage batch status failed", maxBytes);
+        await assertOkOrThrowProviderError(res, "voyage.batch-status");
         return await readProviderJsonResponse<VoyageBatchStatus>(res, "voyage-batch-status", {
           maxBytes,
         });
@@ -177,7 +159,7 @@ async function readVoyageBatchError(params: {
         client: params.client,
         path: `files/${params.errorFileId}/content`,
         onResponse: async (res) => {
-          await assertVoyageResponseOk(res, "voyage batch error file content failed", maxBytes);
+          await assertOkOrThrowProviderError(res, "voyage.batch-error-file-content");
           const bytes = await readResponseWithLimit(res, maxBytes, {
             onOverflow: ({ maxBytes: maxBytesLocal }) =>
               new Error(`voyage batch error file content exceeds ${maxBytesLocal} bytes`),
@@ -189,7 +171,7 @@ async function readVoyageBatchError(params: {
           const lines = normalizeStringEntries(text.split("\n")).map(
             (line) => JSON.parse(line) as VoyageBatchOutputLine,
           );
-          return extractBatchErrorMessage(lines);
+          return formatBatchErrorDetail(extractBatchErrorMessage(lines));
         },
       }),
     );
@@ -219,6 +201,16 @@ async function waitForVoyageBatch(params: {
         deps: params.deps,
       }));
     const state = status.status ?? "unknown";
+    await throwIfBatchCompletionError({
+      provider: "voyage",
+      status: { ...status, id: params.batchId },
+      readError: async (errorFileId) =>
+        await readVoyageBatchError({
+          client: params.client,
+          errorFileId,
+          deps: params.deps,
+        }),
+    });
     if (state === "completed") {
       return resolveBatchCompletionFromStatus({
         provider: "voyage",
@@ -282,6 +274,13 @@ export async function runVoyageEmbeddingBatches(
         requests: group.length,
       });
 
+      await throwIfBatchCompletionError({
+        provider: "voyage",
+        status: batchInfo,
+        readError: async (errorFileId) =>
+          await readVoyageBatchError({ client: params.client, errorFileId, deps }),
+      });
+
       const completed = await resolveCompletedBatchResult({
         provider: "voyage",
         status: batchInfo,
@@ -310,19 +309,26 @@ export async function runVoyageEmbeddingBatches(
           headers: buildBatchHeaders(params.client, { json: true }),
         },
         onResponse: async (contentRes) => {
-          // Same bounded non-OK diagnostic read as the status/error-file paths:
-          // the failure body is untrusted, so cap it instead of `await text()`.
-          await assertVoyageResponseOk(contentRes, "voyage batch file content failed");
+          await assertOkOrThrowProviderError(contentRes, "voyage.batch-file-content");
 
-          if (!contentRes.body) {
-            return;
-          }
-          await readBatchOutputContent(contentRes, remaining, errors, byCustomId);
+          await readEmbeddingBatchJsonl<VoyageBatchOutputLine>(contentRes, {
+            label: "voyage.batch-file-content",
+            maxRecords: group.length,
+            onRecord: (line) => {
+              // Only the first response for a submitted id may mutate results.
+              if (line.custom_id && remaining.has(line.custom_id)) {
+                applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+              }
+              return errors.length === 0 && remaining.size > 0;
+            },
+          });
         },
       });
 
       if (errors.length > 0) {
-        throw new Error(`voyage batch ${batchInfo.id} failed: ${errors.join("; ")}`);
+        throw new Error(
+          `voyage batch ${batchInfo.id} failed: ${formatBatchErrorDetail(errors[0]) ?? "unknown error"}`,
+        );
       }
       if (remaining.size > 0) {
         throw new Error(
@@ -333,45 +339,12 @@ export async function runVoyageEmbeddingBatches(
   });
 }
 
-/**
- * Stream-read a Voyage batch output file response body line by line, applying
- * each parsed output line through `applyEmbeddingBatchOutputLine`.
- *
- * The response body is an untrusted external stream. This helper wraps the
- * readline iteration in a try-finally so the readline interface and underlying
- * Node.js Readable are always closed / destroyed, even when JSON.parse or
- * applyEmbeddingBatchOutputLine throws.
- */
-async function readBatchOutputContent(
-  contentRes: Response,
-  remaining: Set<string>,
-  errors: string[],
-  byCustomId: Map<string, number[]>,
-): Promise<void> {
-  if (!contentRes.body) {
-    return;
-  }
-  const inputStream = Readable.fromWeb(
-    contentRes.body as unknown as import("stream/web").ReadableStream,
-  );
-  const reader = createInterface({ input: inputStream, terminal: false });
-  try {
-    for await (const rawLine of reader) {
-      if (!rawLine.trim()) {
-        continue;
-      }
-      const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
-      applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
-    }
-  } finally {
-    reader.close();
-    inputStream.destroy();
-  }
-}
-
-export const testing = {
+const testing = {
   fetchVoyageBatchStatus,
   readVoyageBatchError,
-  readBatchOutputContent,
   VOYAGE_BATCH_RESPONSE_MAX_BYTES,
 } as const;
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.voyageEmbeddingBatchTestApi"), testing);
+}

@@ -1,7 +1,7 @@
 import Foundation
-import OpenClawKit
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 private actor GatewayHandshakeGate {
     private var started = false
@@ -74,7 +74,7 @@ struct GatewayChannelShutdownTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
             let identity = DeviceIdentityStore.loadOrCreate()
             let responseGate = GatewayHandshakeGate()
             let snapshots = GatewaySnapshotProbe()

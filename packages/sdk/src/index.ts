@@ -63,4 +63,5 @@ export type {
   WorkspaceSelection,
   WorkerEnvironmentMetadata,
   WorkerEnvironmentState,
+  WorkerTunnelStatus,
 } from "./types.js";

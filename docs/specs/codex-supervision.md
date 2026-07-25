@@ -3,7 +3,7 @@ title: Codex supervision
 summary: "Architecture and product boundary for supervising native Codex sessions from OpenClaw."
 read_when:
   - Designing Codex session discovery, continuation, or archive behavior
-  - Changing the Codex Sessions Control UI or Gateway RPCs
+  - Changing the native session catalog UI or Gateway RPCs
   - Extending Codex supervision across paired nodes
 ---
 
@@ -21,7 +21,14 @@ Supervisor plugin or second Codex protocol implementation.
 
 ## Product boundary
 
-Enable the feature with:
+The catalog registers whenever the Codex plugin is active unless native session
+discovery is explicitly disabled with:
+
+```text
+plugins.entries.codex.config.sessionCatalog.enabled = false
+```
+
+Enable agent-facing supervision tools with:
 
 ```text
 plugins.entries.codex.config.supervision.enabled = true
@@ -39,18 +46,23 @@ plan:
   no-other-runner confirmation.
 - Show active local sources without new-branch or archive controls while still
   allowing an existing supervised Chat to open.
-- Show paired-node rows as read-only metadata.
+- Show the newest rows per host in the main sidebar, keep the full catalog on
+  the sessions page, and provide bounded, cursor-paginated transcript reads for
+  local and paired-node rows.
 - Isolate catalog failures by host.
 
 The catalog is the non-archived collection. A row within it can still have an
 idle, active, `notLoaded`, or error turn status.
 
-Supervision remains opt-in. Guided onboarding attempts to install and enable it
+Agent-facing supervision remains opt-in. Guided onboarding attempts to install and enable it
 after native Codex installation detection succeeds and the selected inference
 backend passes its live check, independently of which primary backend the user
 selects. Supervision activates only when that opportunistic plugin setup
 succeeds. An explicit disabled plugin, policy block, or
-`supervision.enabled: false` remains authoritative.
+`supervision.enabled: false` remains authoritative for supervision tools, but
+does not disable the operator session catalog. `sessionCatalog.enabled: false`
+disables operator discovery and paired-node catalog commands; the Codex
+provider and harness remain active.
 
 ## Ownership
 
@@ -88,7 +100,7 @@ stored threads. Explicit `appServer` connection settings are honored. When
 `homeScope` is unset, the supervision connection resolves it to `"user"` for stdio
 or Unix and `"agent"` for WebSocket. Set `appServer.homeScope: "user"`
 explicitly only when the ordinary harness should also share the native Codex
-home. A Chat created through Codex Sessions is the exception: its private
+home. A Chat adopted from the Codex sidebar group is the exception: its private
 supervision binding keeps source reads, canonical branch creation, and later
 turns on the supervision connection. Live status and ownership remain
 process-local; a thread unknown to OpenClaw's supervision process is `notLoaded`
@@ -100,12 +112,22 @@ or assume that daemon implicitly.
 
 ## Catalog flow
 
-The Gateway method `codex.sessions.list` always requests `archived: false` and
-the interactive `cli` and `vscode` source kinds. It combines:
+The generic Gateway method `sessions.catalog.list` dispatches to the `codex`
+catalog provider, which always requests `archived: false` and lets App Server
+apply its interactive-source default: `cli`, `vscode`, Atlas, and ChatGPT. It
+combines:
 
 1. Gateway-local `thread/list` results from the supervision App Server,
    which defaults to managed user-home stdio.
 2. `codex.appServer.threads.list.v1` results from each connected, opted-in node.
+
+Transcript selection uses `thread/turns/list` with `itemsView: "full"` locally or
+the versioned `codex.appServer.thread.turns.list.v1` command on the selected
+node. Every response contains at most 20 persisted turns plus opaque
+forward/backward cursors. The Control UI requests newest-first pages, renders each page in
+chronological order, and prepends older pages. It never falls back to an
+unbounded `thread/read`. OpenClaw also rejects any serialized item page above
+20 MiB before it can cross the node or Gateway transport.
 
 The native macOS paired-node implementation supports only an unset/default or
 explicit `appServer.transport: "stdio"` with unset/default supervision scope or
@@ -116,15 +138,24 @@ nor command; direct invocation also fails closed. It must never expose the user
 Codex home for an agent-scoped configuration or substitute local stdio for an
 explicit endpoint.
 
-The projection normalizes identifiers, title, cwd, status, active wait flags,
-timestamps, source, model provider, Codex version, and Git branch. Paired nodes
-do not return transcript previews, turns, rollout paths, Codex home paths, Git
-remotes, commit SHAs, raw endpoints, or raw App Server errors.
+The catalog projection normalizes identifiers, title, cwd, status, active wait
+flags, timestamps, source, model provider, Codex version, and Git branch. It
+does not return transcript previews, turns, rollout paths, Codex home paths,
+Git remotes, commit SHAs, raw endpoints, or raw App Server errors. Transcript
+responses contain only the explicitly requested App Server item page and its
+opaque cursors.
 
 Host failures remain local to each host result. An offline node or unavailable
 local App Server does not erase healthy hosts from the page. Connectivity is a
 host property, not a thread status: a failed host result contains no fresh
 session rows and does not project `offline` onto native threads.
+
+The Control UI requests progressive catalog updates. Each local or paired host
+appears when its own App Server listing settles; the aggregate response remains
+the compatibility and recovery snapshot. The visible page reconciles after
+connectivity changes, on focus, and at most every 30 seconds, with a faster pass
+after changes. Native Codex sessions created in another client are therefore
+eventually discovered without importing them into OpenClaw storage.
 
 Catalog discovery is passive. Listing or reading metadata must not call
 `thread/resume`, subscribe the OpenClaw client to live thread requests, or
@@ -161,13 +192,14 @@ The shell namespace is not the in-chat `/codex` runtime namespace. In
 particular, `/codex sessions --host <node>` lists Codex CLI session files on one
 node, `/codex threads` lists App Server threads for the current conversation
 connection, and `/codex resume` or `/codex bind` mutates that conversation's
-binding. Those commands do not replace `codex.sessions.continue`, and there is
+binding. Those commands do not replace `sessions.catalog.continue`, and there is
 no `/codex continue` or `/codex archive` runtime command.
 
 ## Local continuation
 
 For a stored or idle Gateway-local row, the UI calls
-`codex.sessions.continue` with the host and thread ids. The plugin:
+`sessions.catalog.continue` with `catalogId: "codex"` plus the host and thread
+ids. The plugin:
 
 1. Reuses the existing supervised Chat when the source already has one.
 2. Otherwise projects bounded user and assistant history through the source's
@@ -240,15 +272,16 @@ snapshot; it is not the durable continuation thread. Starting a distinct
 canonical harness thread on the first turn prevents OpenClaw from becoming a
 competing source writer merely because process-local status failed to see a
 Desktop-owned turn. The visible-history mirror and pinned snapshot may omit work
-that has not yet completed in an active source. The original CLI or VS Code
-source remains eligible for both native and OpenClaw catalogs. The canonical
-branch remains a native Codex thread in the supervision store, but native clients
-may filter its `appServer` source kind, so Codex Desktop visibility is not a
-contract.
+that has not yet completed in an active source. The original CLI, VS Code,
+Atlas, or ChatGPT source remains eligible for both native and OpenClaw catalogs.
+The canonical branch remains a native Codex thread in the supervision store,
+but native clients may filter its `appServer` source kind, so Codex Desktop
+visibility is not a contract.
 
 ## Archive behavior
 
-For a stored or idle Gateway-local row, `codex.sessions.archive` requires
+For a stored or idle Gateway-local row, `sessions.catalog.archive` with
+`catalogId: "codex"` requires
 explicit `confirmNoOtherRunner: true`, freshly reads current process-local
 status, proceeds only for `idle` or `notLoaded`, calls native `thread/archive`,
 and returns success only after Codex accepts the operation. The row then leaves
@@ -268,7 +301,7 @@ An independent client can still own or start work on a row that appears idle or
 that race until Codex has a conditional archive or cross-process lease.
 Paired-node archive is prohibited.
 
-There is no archived view in Codex Sessions. A thread restored with
+There is no archived view in the Codex catalog. A thread restored with
 `thread/unarchive` in another owner-authorized Codex surface becomes eligible
 for the non-archived catalog again.
 
@@ -297,12 +330,12 @@ implied by showing an active row.
 ## Paired-node boundary
 
 Node invoke is currently request/response only. It can safely return bounded
-catalog metadata, but it cannot carry the long-lived event stream, approval
+catalog metadata and transcript turn pages, but it cannot carry the long-lived event stream, approval
 requests, tool calls, cancellation, and assistant deltas required by a Codex
 harness run.
 
-The initial node contract is therefore listing only. Remote rows stay visible
-but **Continue** and **Archive** are unavailable, regardless of idle status. A
+The node contract therefore supports list and transcript-turn pages. Remote
+rows stay readable, but **Continue** and **Archive** are unavailable, regardless of idle status. A
 real remote continuation requires a node-side runner and streaming bridge that
 preserves the same approval and binding invariants as the local harness.
 
@@ -312,9 +345,9 @@ Each computer opts in locally. Enabling the Gateway does not authorize another
 node to read its Codex metadata. The node capability must pass normal pairing
 and command-policy approval.
 
-Fleet listing uses the `operator.write` Gateway scope because it invokes paired
-nodes. Local continuation and archive are authenticated operator actions and
-remain subject to host and status checks.
+Fleet listing and transcript viewing use the `operator.write` Gateway scope
+because they invoke paired nodes. Local continuation and archive are
+authenticated operator actions and remain subject to host and status checks.
 
 Autonomous agent and standalone MCP access is separate. The shipped
 `codex_endpoint_probe`, `codex_sessions_list`, `codex_session_read`,
@@ -346,7 +379,7 @@ setting. Transcript-derived fields and reads remain gated by
 Compatibility send never starts or resumes an idle thread. `mode: "start"` is
 always refused; `"auto"` and `"steer"` steer only a readable active turn.
 Interrupt likewise requires an active readable turn. Idle continuation routes
-to Codex Sessions so the full harness owns approvals, tools, and the binding.
+to the native Codex catalog so the full harness owns approvals, tools, and the binding.
 The standalone legacy MCP adapter resolves these same tools from the official
 plugin and is the only path that honors the retained legacy policy environment
 variables.

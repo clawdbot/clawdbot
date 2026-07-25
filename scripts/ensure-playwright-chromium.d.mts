@@ -1,29 +1,32 @@
-import type { spawnSync, SpawnSyncOptions } from "node:child_process";
-import type { existsSync } from "node:fs";
 import type { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 type Getuid = typeof process.getuid;
+type SpawnSyncLike = (
+  command: string,
+  args: string[],
+  options?: Record<string, unknown>,
+) => { error?: Error; status: number | null };
 type ChromiumInstallOptions = {
   comSpec?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   executablePath?: string;
-  existsSync?: typeof existsSync;
+  existsSync?: (path: string) => boolean;
   getuid?: Getuid;
   log?: (message: string) => void;
   platform?: NodeJS.Platform;
-  spawnSync?: typeof spawnSync;
-  stdio?: SpawnSyncOptions["stdio"];
+  spawnSync?: SpawnSyncLike;
+  stdio?: "ignore" | "inherit" | "pipe";
 };
 
 export const systemChromiumExecutableCandidates: readonly string[];
 export function canRunChromiumExecutable(
   executablePath: string,
-  spawnSync?: typeof spawnSync,
+  spawnSync?: SpawnSyncLike,
 ): boolean;
 export function resolveSystemChromiumExecutablePath(
-  existsSync?: typeof existsSync,
-  spawnSync?: typeof spawnSync,
+  existsSync?: (path: string) => boolean,
+  spawnSync?: SpawnSyncLike,
 ): string;
 export function resolvePlaywrightInstallRunner(options?: {
   comSpec?: string;

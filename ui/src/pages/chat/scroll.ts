@@ -1,9 +1,9 @@
 // Control UI module implements app scroll behavior.
-import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../../app/settings.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
+const LATEST_MESSAGE_THRESHOLD = 1;
 const FOLLOW_REACQUIRE_THRESHOLD = 8;
 
 type ChatScrollHost = {
@@ -12,7 +12,6 @@ type ChatScrollHost = {
   chatScrollCommitCleanup: (() => void) | null;
   chatScrollFrame: number | null;
   chatScrollGuardFrame: number | null;
-  chatScrollTimeout: number | null;
   chatScrollGeneration: number;
   chatLastScrollTop: number;
   chatLastScrollHeight?: number;
@@ -22,9 +21,7 @@ type ChatScrollHost = {
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll: boolean;
   chatProgrammaticScrollTarget: number;
-  settings?: {
-    chatAutoScroll?: ChatAutoScrollMode;
-  };
+  chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
 };
 
 function queryHost(host: Partial<ChatScrollHost>, selectors: string): Element | null {
@@ -44,10 +41,6 @@ function cancelCommittedChatScroll(host: ChatScrollHost): void {
   if (host.chatScrollGuardFrame != null) {
     cancelAnimationFrame(host.chatScrollGuardFrame);
     host.chatScrollGuardFrame = null;
-  }
-  if (host.chatScrollTimeout != null) {
-    clearTimeout(host.chatScrollTimeout);
-    host.chatScrollTimeout = null;
   }
   host.chatIsProgrammaticScroll = false;
 }
@@ -69,31 +62,32 @@ function setNewMessagesBelow(host: ChatScrollHost, next: boolean): void {
   host.renderLifecycle.invalidate();
 }
 
-function scheduleProgrammaticScrollGuardClear(host: ChatScrollHost, generation: number): void {
+function scheduleProgrammaticScrollGuardClear(
+  host: ChatScrollHost,
+  generation: number,
+  target: HTMLElement,
+  waitForTarget: boolean,
+): void {
   if (host.chatScrollGuardFrame != null) {
     cancelAnimationFrame(host.chatScrollGuardFrame);
   }
-  host.chatScrollGuardFrame = requestAnimationFrame(() => {
+  const check = () => {
     host.chatScrollGuardFrame = null;
-    if (generation === host.chatScrollGeneration) {
-      host.chatIsProgrammaticScroll = false;
+    if (generation !== host.chatScrollGeneration) {
+      return;
     }
-  });
+    const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+    if (waitForTarget && distanceFromBottom > LATEST_MESSAGE_THRESHOLD) {
+      host.chatScrollGuardFrame = requestAnimationFrame(check);
+      return;
+    }
+    host.chatIsProgrammaticScroll = false;
+  };
+  host.chatScrollGuardFrame = requestAnimationFrame(check);
 }
 
 function pickScrollTarget(host: ChatScrollHost): HTMLElement | null {
-  const container = queryHost(host, ".chat-thread") as HTMLElement | null;
-  if (container) {
-    const overflowY = getComputedStyle(container).overflowY;
-    const canScroll =
-      overflowY === "auto" ||
-      overflowY === "scroll" ||
-      container.scrollHeight - container.clientHeight > 1;
-    if (canScroll) {
-      return container;
-    }
-  }
-  return (document.scrollingElement ?? document.documentElement) as HTMLElement | null;
+  return queryHost(host, ".chat-thread") as HTMLElement | null;
 }
 
 /** Schedule layout work when the caller already runs after the DOM commit. */
@@ -118,7 +112,6 @@ export function scheduleCommittedChatScroll(
     const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
     host.chatLastScrollHeight = target.scrollHeight;
     const contentChanged = options.contentChanged ?? options.source !== "resize";
-    const autoScrollMode = normalizeChatAutoScrollMode(host.settings?.chatAutoScroll);
     const manualScroll = options.source === "manual";
 
     // force=true only overrides when we haven't auto-scrolled yet (initial load).
@@ -126,11 +119,9 @@ export function scheduleCommittedChatScroll(
     const effectiveForce = force && !host.chatHasAutoScrolled;
     const shouldStick =
       manualScroll ||
-      autoScrollMode === "always" ||
-      (autoScrollMode === "near-bottom" &&
-        (effectiveForce ||
-          (!host.chatFollowLocked &&
-            (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
+      effectiveForce ||
+      (!host.chatFollowLocked &&
+        (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
 
     if (!shouldStick) {
       if (contentChanged || (options.source === "resize" && contentGrew)) {
@@ -150,43 +141,21 @@ export function scheduleCommittedChatScroll(
     const scrollTop = target.scrollHeight;
     host.chatProgrammaticScrollTarget = scrollTop;
     host.chatIsProgrammaticScroll = true;
-    if (typeof target.scrollTo === "function") {
+    if (host.chatScrollToEnd) {
+      host.chatScrollToEnd({ behavior: smoothEnabled ? "smooth" : "auto" });
+    } else if (typeof target.scrollTo === "function") {
       target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
     } else {
       target.scrollTop = scrollTop;
     }
-    scheduleProgrammaticScrollGuardClear(host, generation);
+    scheduleProgrammaticScrollGuardClear(
+      host,
+      generation,
+      target,
+      smoothEnabled || Boolean(host.chatScrollToEnd),
+    );
     host.chatUserNearBottom = true;
     setNewMessagesBelow(host, false);
-
-    // Markdown, images, and mobile controls can grow after the first layout.
-    const retryDelay = effectiveForce ? 150 : 120;
-    host.chatScrollTimeout = window.setTimeout(() => {
-      host.chatScrollTimeout = null;
-      if (generation !== host.chatScrollGeneration) {
-        return;
-      }
-      const latest = pickScrollTarget(host);
-      if (!latest) {
-        return;
-      }
-      const latestDistanceFromBottom = latest.scrollHeight - latest.scrollTop - latest.clientHeight;
-      const shouldStickRetry =
-        manualScroll ||
-        autoScrollMode === "always" ||
-        (autoScrollMode === "near-bottom" &&
-          (effectiveForce ||
-            (!host.chatFollowLocked &&
-              (host.chatUserNearBottom || latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
-      if (!shouldStickRetry) {
-        return;
-      }
-      host.chatProgrammaticScrollTarget = latest.scrollHeight;
-      host.chatIsProgrammaticScroll = true;
-      latest.scrollTop = latest.scrollHeight;
-      scheduleProgrammaticScrollGuardClear(host, generation);
-      host.chatUserNearBottom = true;
-    }, retryDelay);
   });
 }
 
@@ -221,18 +190,19 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
   const delta = scrollTop - host.chatLastScrollTop;
   host.chatLastScrollTop = scrollTop;
   host.chatLastScrollHeight = container.scrollHeight;
-  // Ignore scroll events that we ourselves triggered — they must not flip
-  // chatUserNearBottom to false while streaming content grows the page.
-  // Only suppress if scrollTop is still at or above the position we scrolled to;
-  // if it dropped below, the user scrolled up during the guard window and we must
-  // process the event so streaming stops pinning them back to the bottom.
+  // Ignore downward scroll events that we triggered, including intermediate
+  // smooth-scroll frames. A real user scroll-up must still pass through so
+  // streaming stops pinning them back to the bottom.
   const isUserScrollUp = delta < 0;
-  if (
-    host.chatIsProgrammaticScroll &&
-    !isUserScrollUp &&
-    container.scrollTop >= host.chatProgrammaticScrollTarget - container.clientHeight
-  ) {
-    return;
+  if (host.chatIsProgrammaticScroll) {
+    if (!isUserScrollUp) {
+      return;
+    }
+    if (host.chatScrollGuardFrame != null) {
+      cancelAnimationFrame(host.chatScrollGuardFrame);
+      host.chatScrollGuardFrame = null;
+    }
+    host.chatIsProgrammaticScroll = false;
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   if (isUserScrollUp && distanceFromBottom > FOLLOW_REACQUIRE_THRESHOLD) {
@@ -242,9 +212,11 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
   }
   host.chatUserNearBottom = !host.chatFollowLocked && distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
 
-  if (host.chatUserNearBottom) {
-    setNewMessagesBelow(host, false);
-  }
+  setNewMessagesBelow(
+    host,
+    container.scrollHeight - container.clientHeight > LATEST_MESSAGE_THRESHOLD &&
+      distanceFromBottom > LATEST_MESSAGE_THRESHOLD,
+  );
 }
 
 export function resetChatScroll(host: ChatScrollHost): void {

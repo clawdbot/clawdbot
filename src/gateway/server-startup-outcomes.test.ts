@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   createGatewayStartupOutcomeRecorder,
   formatGatewayStartupOutcomes,
-  type GatewayStartupOutcome,
-  type GatewayStartupOutcomeRecorderParams,
 } from "./server-startup-outcomes.js";
+
+type GatewayStartupOutcomeRecorderParams = Parameters<
+  typeof createGatewayStartupOutcomeRecorder
+>[0];
+type GatewayStartupOutcome = Parameters<typeof formatGatewayStartupOutcomes>[0][number];
 
 const inactiveParams: GatewayStartupOutcomeRecorderParams = {
   cfg: {},
@@ -66,7 +69,7 @@ describe("gateway startup outcomes", () => {
             internal: { enabled: true },
             gmail: { account: "operator@example.com", model: "openai/gpt-5.5" },
           },
-          memory: { backend: "qmd", qmd: { update: { startup: "immediate" } } },
+          memory: { backend: "qmd" },
         },
         gatewayStartHooks: true,
         memoryStartupMode: "immediate",

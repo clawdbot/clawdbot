@@ -2,12 +2,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 const approvalResolutionFailure = vi.hoisted(() => ({ error: null as Error | null }));
 type ExecApprovalsUpdate = Parameters<
@@ -147,6 +156,88 @@ describe("node host invoke", () => {
     execApprovalsStoreMock.hasUpdateResult = false;
     execApprovalsStoreMock.updateCalls = 0;
     execApprovalsStoreMock.updateParams = undefined;
+  });
+
+  it("passes the owning agent session to plugin node commands", async () => {
+    const handle = vi.fn(async () => '{"ok":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "canvas",
+        pluginName: "Canvas",
+        command: { command: "canvas.present", cap: "canvas", handle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    const sendNodeEvent = vi.fn(async () => undefined);
+
+    await handleInvoke(
+      {
+        id: "invoke-canvas",
+        nodeId: "node-1",
+        command: "canvas.present",
+        paramsJSON: "{}",
+        sessionKey: "agent:main:canvas",
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+      undefined,
+      { pluginCommandContext: { sendNodeEvent } },
+    );
+
+    expect(handle).toHaveBeenCalledWith("{}", undefined, {
+      sendNodeEvent,
+      sessionKey: "agent:main:canvas",
+    });
+  });
+
+  it("lists node-host directories for the folder browser", async () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
+    fs.mkdirSync(path.join(root, "Projects"));
+    fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+
+    await handleInvoke(
+      {
+        id: "invoke-fs-listdir",
+        nodeId: "node-1",
+        command: "fs.listDir",
+        paramsJSON: JSON.stringify({ path: root }),
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+    );
+
+    const result = request.mock.calls[0]?.[1] as InvokeResult | undefined;
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toMatchObject({
+      path: root,
+      entries: [{ name: "Projects", path: path.join(root, "Projects") }],
+    });
+  });
+
+  it("stages terminal uploads on the node host", async () => {
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    await handleInvoke(
+      {
+        id: "invoke-terminal-upload",
+        nodeId: "node-1",
+        command: "terminal.upload",
+        paramsJSON: JSON.stringify({
+          name: "node report.pdf",
+          contentBase64: Buffer.from("node bytes").toString("base64"),
+        }),
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+    );
+
+    const result = request.mock.calls[0]?.[1] as InvokeResult | undefined;
+    const payload = JSON.parse(result?.payloadJSON ?? "{}") as { path: string; size: number };
+    expect(payload.size).toBe(10);
+    expect(fs.readFileSync(payload.path, "utf8")).toBe("node bytes");
+    fs.rmSync(path.dirname(payload.path), { recursive: true, force: true });
   });
 
   it("returns a redacted exec approvals snapshot", async () => {
@@ -397,6 +488,43 @@ describe("node host invoke", () => {
       expect(payload.allowAlwaysCoverage?.patterns?.[0]?.pattern).toBe(
         fs.realpathSync("/bin/echo"),
       );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "resolves node skill cwd locators before preparing system.run",
+    async () => {
+      const stateDir = fs.realpathSync(tempDirs.make("openclaw-node-skill-cwd-"));
+      const skillDir = path.join(stateDir, "skills", "cwd-skill");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: cwd-skill\ndescription: Cwd skill\n---\n",
+      );
+
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+        const skillBins: SkillBinsProvider = { current: async () => [] };
+        await handleInvoke(
+          {
+            id: "invoke-skill-cwd",
+            nodeId: "node-1",
+            command: "system.run.prepare",
+            paramsJSON: JSON.stringify({
+              command: ["/bin/pwd"],
+              cwd: "node://node-1/skills/cwd-skill",
+            }),
+          },
+          { request } as unknown as GatewayClient,
+          skillBins,
+        );
+
+        const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
+        const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
+          plan?: { cwd?: string };
+        };
+        expect(payload.plan?.cwd).toBe(fs.realpathSync(skillDir));
+      });
     },
   );
 

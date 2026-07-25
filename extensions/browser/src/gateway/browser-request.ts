@@ -4,7 +4,9 @@
  */
 import crypto from "node:crypto";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isBrowserControlHostUnavailableError } from "../browser-node-fallback.js";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
   parseBrowserProxyFailure,
@@ -20,7 +22,6 @@ import {
   errorShape,
   getRuntimeConfig,
   isBrowserHostLocalRoute,
-  isBrowserSystemProfileImport,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
   persistBrowserProxyFiles,
@@ -35,6 +36,8 @@ import {
   type NodeSession,
   type OpenClawConfig,
 } from "../core-api.js";
+
+const logger = createSubsystemLogger("browser");
 
 type BrowserRequestParams = {
   method?: string;
@@ -130,6 +133,7 @@ export async function handleBrowserGatewayRequest({
     return;
   }
   const cfg = getRuntimeConfig();
+  const configuredNode = normalizeOptionalString(cfg.gateway?.nodes?.browser?.node);
   // System-profile listing and import can only run where the local Keychain and
   // Chrome profiles live, so they must never route to a browser node. Force
   // host-local dispatch even when gateway.nodes.browser auto-selects a node.
@@ -194,47 +198,43 @@ export async function handleBrowserGatewayRequest({
       timeoutMs,
       idempotencyKey: crypto.randomUUID(),
     });
-    if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+    const allowAutomaticHostFallback =
+      !configuredNode && isBrowserControlHostUnavailableError(res.error);
+    if (allowAutomaticHostFallback && !res.ok) {
+      // This node-host error is raised before route dispatch. Other failures
+      // stay on the node path because retrying could duplicate an action.
+      logger.warn(
+        `browser node ${nodeTarget.displayName ?? nodeTarget.nodeId} control host unavailable; falling back to Gateway host`,
+      );
+    } else {
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+        return;
+      }
+      const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
+      const failure = parseBrowserProxyFailure(payload);
+      if (failure) {
+        const { status, body: errorBody } = failure.error;
+        const code = status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
+        respond(false, undefined, errorShape(code, errorBody.error, { details: errorBody }));
+        return;
+      }
+      const proxy =
+        payload && typeof payload === "object" ? (payload as BrowserProxyEnvelope) : null;
+      if (!proxy || !("result" in proxy)) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
+        return;
+      }
+      const success = proxy as BrowserProxySuccess;
+      const mapping = await persistProxyFiles(success.files);
+      applyProxyPaths(success.result, mapping);
+      respond(true, success.result);
       return;
     }
-    const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
-    const failure = parseBrowserProxyFailure(payload);
-    if (failure) {
-      const { status, body: errorBody } = failure.error;
-      const code = status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
-      respond(false, undefined, errorShape(code, errorBody.error, { details: errorBody }));
-      return;
-    }
-    const proxy = payload && typeof payload === "object" ? (payload as BrowserProxyEnvelope) : null;
-    if (!proxy || !("result" in proxy)) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
-      return;
-    }
-    const success = proxy as BrowserProxySuccess;
-    const mapping = await persistProxyFiles(success.files);
-    applyProxyPaths(success.result, mapping);
-    respond(true, success.result);
-    return;
   }
 
-  // Host-local dispatch: persistent profile mutations stay blocked here as on a
-  // node proxy, except system-profile import, which must run where the user's
-  // Keychain lives and cannot be proxied to a node.
-  if (
-    isPersistentBrowserProfileMutation(methodRaw, path) &&
-    !isBrowserSystemProfileImport(methodRaw, path)
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "browser.request cannot mutate persistent browser profiles",
-      ),
-    );
-    return;
-  }
-
+  // `browser.request` already requires operator.admin. The owning host may run
+  // profile administration; the node-proxy branch above stays denied because
+  // `browser.proxy` is a separate remote-host authority.
   const ready = await startBrowserControlServiceFromConfig();
   if (!ready) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));

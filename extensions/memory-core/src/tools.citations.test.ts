@@ -18,8 +18,10 @@ import {
   setMemoryWorkspaceDir,
   type MemoryReadParams,
 } from "./memory-tool-manager.test-mocks.js";
-import { testing as shortTermPromotionTesting } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import {
+  createMemoryCoreTestHarness,
+  shortTermTestState as shortTermPromotionTesting,
+} from "./test-helpers.js";
 import {
   createMemoryGetTool,
   createMemorySearchTool,
@@ -526,6 +528,63 @@ describe("memory tools", () => {
     expect(corpora).toContain("wiki");
     expect(details.results).toHaveLength(5);
     expect(collectWikiResultPaths(details.results)).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
+  });
+
+  it("preserves memory rank within balanced corpus results", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/z/foo.md",
+        startLine: 1,
+        endLine: 2,
+        score: 1,
+        snippet: "exact filename",
+        source: "memory" as const,
+      },
+      {
+        path: "memory/a/semantic.md",
+        startLine: 1,
+        endLine: 2,
+        score: 2,
+        snippet: "non-exact semantic match",
+        source: "memory" as const,
+      },
+    ]);
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "w1.md",
+          title: "W1",
+          kind: "entity",
+          score: 10,
+          snippet: "wiki 1",
+        },
+        {
+          corpus: "wiki",
+          path: "w2.md",
+          title: "W2",
+          kind: "entity",
+          score: 9,
+          snippet: "wiki 2",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_all_ranked_stream", {
+      query: "foo.md",
+      corpus: "all",
+      maxResults: 4,
+    });
+    const details = result.details as { results: Array<{ corpus: string; path: string }> };
+
+    expect(details.results.map((entry) => entry.path)).toEqual([
+      "w1.md",
+      "w2.md",
+      "memory/z/foo.md",
+      "memory/a/semantic.md",
+    ]);
   });
 
   it("merges memory and wiki corpus search results for corpus=all", async () => {

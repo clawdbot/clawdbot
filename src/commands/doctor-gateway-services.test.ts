@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => ({
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   readWindowsProcessArgsSync: vi.fn(),
   readWindowsStartupFallbackRuntimeForUpdate: vi.fn(),
+  runExec: vi.fn(),
   note: vi.fn(),
 }));
 
@@ -111,6 +112,10 @@ vi.mock("../infra/windows-port-pids.js", () => ({
   readWindowsProcessArgsSync: mocks.readWindowsProcessArgsSync,
 }));
 
+vi.mock("../process/exec.js", () => ({
+  runExec: mocks.runExec,
+}));
+
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
@@ -172,6 +177,70 @@ function mockProcessPlatform(platform: NodeJS.Platform) {
     value: platform,
     configurable: true,
   });
+}
+
+const LEGACY_MAC_LABEL = "com.openclaw.gateway";
+const LEGACY_MAC_PLIST = "/Users/test/Library/LaunchAgents/com.openclaw.gateway.plist";
+
+function setupLegacyMacService() {
+  mockProcessPlatform("darwin");
+  mocks.findExtraGatewayServices.mockResolvedValue([
+    {
+      platform: "darwin",
+      label: LEGACY_MAC_LABEL,
+      detail: `plist: ${LEGACY_MAC_PLIST}`,
+      scope: "user",
+      legacy: true,
+    },
+  ]);
+}
+
+function launchctlFailure(
+  params: {
+    message?: string;
+    stderr?: string;
+    stdout?: string;
+    timedOut?: boolean;
+  } = {},
+) {
+  return Object.assign(new Error(params.message ?? "launchctl failed"), {
+    stderr: params.stderr ?? "",
+    stdout: params.stdout ?? "",
+    ...(params.timedOut ? { timedOut: true } : {}),
+  });
+}
+
+function expectBoundedLaunchctlCleanup() {
+  const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+  expect(mocks.runExec).toHaveBeenNthCalledWith(
+    1,
+    "launchctl",
+    ["bootout", domain, LEGACY_MAC_PLIST],
+    { logOutput: false, timeoutMs: 5_000 },
+  );
+  expect(mocks.runExec).toHaveBeenNthCalledWith(2, "launchctl", ["unload", LEGACY_MAC_PLIST], {
+    logOutput: false,
+    timeoutMs: 5_000,
+  });
+  expect(mocks.runExec).toHaveBeenNthCalledWith(
+    3,
+    "launchctl",
+    ["print", `${domain}/${LEGACY_MAC_LABEL}`],
+    {
+      logOutput: false,
+      timeoutMs: expect.any(Number),
+    },
+  );
+  const probeTimeout = mocks.runExec.mock.calls[2]?.[2]?.timeoutMs;
+  expect(probeTimeout).toBeGreaterThan(0);
+  expect(probeTimeout).toBeLessThanOrEqual(5_000);
+}
+
+function mockConfirmedUnloaded(stderr = "Could not find service") {
+  mocks.runExec
+    .mockResolvedValueOnce({ stdout: "", stderr: "" })
+    .mockResolvedValueOnce({ stdout: "", stderr: "" })
+    .mockRejectedValueOnce(launchctlFailure({ stderr }));
 }
 
 async function runRepair(cfg: OpenClawConfig, options: { allowExecSecretRefs?: boolean } = {}) {
@@ -404,6 +473,19 @@ describe("maybeRepairGatewayServiceConfig", () => {
     }
   });
 
+  it("reports the installed Gateway heap limit and derivation", async () => {
+    const command = createGatewayCommand("/opt/openclaw/dist/index.js");
+    command.environment = { NODE_OPTIONS: "--max-old-space-size=6144" };
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+
+    await runRepair({ gateway: {} });
+
+    expectNoteContaining("6144 MiB", "Gateway heap");
+    expectNoteContaining("adaptive default", "Gateway heap");
+  });
+
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
     setupGatewayTokenRepairScenario();
 
@@ -457,14 +539,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
-    const nvmNode = "/home/orin/.nvm/versions/node/v22.22.2/bin/node";
+    const nvmNode = "/home/test/.nvm/versions/node/v22.22.3/bin/node";
     mocks.readCommand.mockResolvedValue({
       programArguments: [nvmNode, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
     mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
       warn?.(
-        "System Node 20.20.2 at /usr/bin/node is outside the supported range. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
+        "System Node 20.20.2 at /usr/bin/node is outside the supported range. Using /home/test/.nvm/versions/node/v22.22.3/bin/node for the daemon.",
         "Gateway runtime",
       );
       return {
@@ -492,7 +574,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
     expect(runtimeMessages.map((message) => String(message)).join("\n")).not.toContain("not found");
     expect(runtimeMessages.map((message) => String(message)).join("\n")).toContain(
-      "Using /home/orin/.nvm/versions/node/v22.22.2/bin/node",
+      "Using /home/test/.nvm/versions/node/v22.22.3/bin/node",
     );
   });
 
@@ -1580,9 +1662,11 @@ describe("maybeScanExtraGatewayServices", () => {
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
     mocks.isSystemdUnitActive.mockResolvedValue(false);
     mocks.uninstallLegacySystemdUnits.mockResolvedValue([]);
+    mocks.runExec.mockResolvedValue({ stdout: "", stderr: "" });
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     mockProcessPlatform(originalPlatform);
   });
 
@@ -1760,6 +1844,184 @@ describe("maybeScanExtraGatewayServices", () => {
     );
   });
 
+  it.each(["Could not find service", "No such process"])(
+    "moves a legacy macOS plist only after print reports '%s'",
+    async (stderr) => {
+      setupLegacyMacService();
+      mockConfirmedUnloaded(stderr);
+      const runtime = makeDoctorIo();
+      const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+      vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+      vi.spyOn(fs, "access").mockResolvedValue(undefined);
+
+      await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
+
+      expectBoundedLaunchctlCleanup();
+      expect(rename).toHaveBeenCalledTimes(1);
+      expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+      expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
+      expect(runtime.log).toHaveBeenCalledWith(
+        "Legacy gateway services removed. Installing OpenClaw gateway next.",
+      );
+    },
+  );
+
+  it.each([
+    ["timeouts", launchctlFailure({ timedOut: true })],
+    ["unknown failures", launchctlFailure({ stderr: "Permission denied" })],
+  ])("keeps the plist when both launchctl calls end in %s", async (_, failure) => {
+    setupLegacyMacService();
+    mocks.runExec.mockRejectedValue(failure);
+    const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+    const runtime = makeDoctorIo();
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
+
+    expectBoundedLaunchctlCleanup();
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(access).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled();
+    expectNoteContaining(
+      `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
+      "Legacy gateway cleanup skipped",
+    );
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "Legacy gateway services removed. Installing OpenClaw gateway next.",
+    );
+  });
+
+  it("keeps the plist when a successful cleanup command is followed by a loaded probe", async () => {
+    setupLegacyMacService();
+    mocks.runExec
+      .mockRejectedValueOnce(launchctlFailure({ timedOut: true }))
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "state = waiting\npid = 0\n", stderr: "" })
+      .mockRejectedValueOnce(launchctlFailure({ stderr: "Permission denied" }));
+    const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+    const runtime = makeDoctorIo();
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
+
+    expect(mocks.runExec).toHaveBeenCalledTimes(4);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(access).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled();
+    expectNoteContaining(
+      `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
+      "Legacy gateway cleanup skipped",
+    );
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+  });
+
+  it("keeps the plist when the postcondition probe times out", async () => {
+    setupLegacyMacService();
+    mocks.runExec
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockRejectedValueOnce(
+        launchctlFailure({
+          message: "Command timed out after 5000 milliseconds",
+          stderr: "Could not find service",
+        }),
+      );
+    const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+    const runtime = makeDoctorIo();
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
+
+    expectBoundedLaunchctlCleanup();
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(access).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled();
+    expectNoteContaining(
+      `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
+      "Legacy gateway cleanup skipped",
+    );
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+  });
+
+  it("polls a still-registered stopped label until launchd reports it gone", async () => {
+    setupLegacyMacService();
+    mocks.runExec
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "state = waiting\npid = 0\n", stderr: "" })
+      .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.runExec).toHaveBeenCalledTimes(4);
+    expect(rename).toHaveBeenCalledTimes(1);
+    expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+  });
+
+  it("reports removal when launchctl confirms unload and the plist is already absent", async () => {
+    setupLegacyMacService();
+    mockConfirmedUnloaded();
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
+    vi.spyOn(fs, "access").mockRejectedValue(missing);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+    expectBoundedLaunchctlCleanup();
+    expect(rename).not.toHaveBeenCalled();
+    expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
+  });
+
+  it("does not report removal when the plist cannot be inspected", async () => {
+    setupLegacyMacService();
+    mockConfirmedUnloaded();
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockRejectedValue(
+      Object.assign(new Error("permission denied"), { code: "EACCES" }),
+    );
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+    expectBoundedLaunchctlCleanup();
+    expect(rename).not.toHaveBeenCalled();
+    expectNoteContaining(
+      `${LEGACY_MAC_LABEL} (could not inspect plist)`,
+      "Legacy gateway cleanup skipped",
+    );
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+  });
+
+  it("does not report removal when the confirmed-unloaded plist cannot be moved", async () => {
+    setupLegacyMacService();
+    mockConfirmedUnloaded();
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    vi.spyOn(fs, "rename").mockRejectedValue(new Error("permission denied"));
+    const runtime = makeDoctorIo();
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
+
+    expectBoundedLaunchctlCleanup();
+    expectNoteContaining(
+      `${LEGACY_MAC_LABEL} (could not move plist)`,
+      "Legacy gateway cleanup skipped",
+    );
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "Legacy gateway services removed. Installing OpenClaw gateway next.",
+    );
+  });
+
   it("reports legacy services but skips cleanup when service repair policy is external", async () => {
     await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
       mocks.findExtraGatewayServices.mockResolvedValue([
@@ -1787,3 +2049,4 @@ describe("maybeScanExtraGatewayServices", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

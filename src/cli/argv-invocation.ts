@@ -6,7 +6,7 @@ import {
   isRootHelpInvocation,
 } from "./argv.js";
 
-export type CliArgvInvocation = {
+type CliArgvInvocation = {
   argv: string[];
   commandPath: string[];
   primary: string | null;

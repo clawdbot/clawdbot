@@ -116,10 +116,6 @@ function readNonNegativeInteger(value: unknown): number | undefined {
   return parseStrictNonNegativeInteger(value);
 }
 
-function formatDurationMs(ms: number): string {
-  return formatDurationSeconds(ms, { decimals: ms >= 1000 ? 1 : 0 });
-}
-
 function isAbortLikeError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
@@ -176,10 +172,14 @@ export function formatDiscordDeployErrorMessage(err: unknown): string {
   }
   const timing: string[] = [];
   if (timeoutMs !== undefined) {
-    timing.push(`timeout=${formatDurationMs(timeoutMs)}`);
+    timing.push(
+      `timeout=${formatDurationSeconds(timeoutMs, { decimals: timeoutMs >= 1000 ? 1 : 0 })}`,
+    );
   }
   if (requestMs !== undefined) {
-    timing.push(`observed=${formatDurationMs(requestMs)}`);
+    timing.push(
+      `observed=${formatDurationSeconds(requestMs, { decimals: requestMs >= 1000 ? 1 : 0 })}`,
+    );
   }
   const timingText = timing.length > 0 ? ` (${timing.join(", ")})` : "";
   if (timeoutMs !== undefined && requestMs !== undefined && requestMs >= timeoutMs) {

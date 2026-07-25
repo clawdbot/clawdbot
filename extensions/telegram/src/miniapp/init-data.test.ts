@@ -24,6 +24,13 @@ describe("validateTelegramMiniAppInitData", () => {
   it("rejects tampered, expired, and missing-user init data", () => {
     expect(
       validateTelegramMiniAppInitData({
+        initData: INIT_DATA.replace(/hash=[^&]+/, "hash=short"),
+        botToken: BOT_TOKEN,
+        nowMs: AUTH_DATE * 1000 + 10_000,
+      }),
+    ).toBeNull();
+    expect(
+      validateTelegramMiniAppInitData({
         initData: INIT_DATA.replace("Ayaan", "Mallory"),
         botToken: BOT_TOKEN,
         nowMs: AUTH_DATE * 1000 + 10_000,

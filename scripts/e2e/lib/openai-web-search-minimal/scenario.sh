@@ -22,6 +22,13 @@ GATEWAY_LOG="$scenario_tmp/gateway.log"
 MOCK_LOG="$scenario_tmp/mock.log"
 CLIENT_SUCCESS_LOG="$scenario_tmp/client-success.log"
 CLIENT_REJECT_LOG="$scenario_tmp/client-reject.log"
+TLS_DIR="$scenario_tmp/tls"
+TLS_CA_CERT="$TLS_DIR/ca.crt"
+TLS_CA_KEY="$TLS_DIR/ca.key"
+TLS_SERVER_CERT="$TLS_DIR/server.crt"
+TLS_SERVER_CSR="$TLS_DIR/server.csr"
+TLS_SERVER_EXT="$TLS_DIR/server.ext"
+TLS_SERVER_KEY="$TLS_DIR/server.key"
 mock_pid=""
 gateway_pid=""
 
@@ -51,20 +58,47 @@ dump_debug_logs() {
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
 entry="$(openclaw_e2e_resolve_entrypoint)"
-mkdir -p "$OPENCLAW_STATE_DIR"
-
-node scripts/e2e/lib/openai-web-search-minimal/assertions.mjs assert-patch-behavior
+mkdir -p "$OPENCLAW_STATE_DIR" "$TLS_DIR"
 
 node scripts/e2e/lib/fixture.mjs openai-web-search-minimal-config
 
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
+  -subj "/CN=OpenClaw E2E CA" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -keyout "$TLS_CA_KEY" \
+  -out "$TLS_CA_CERT" >/dev/null 2>&1
+openssl req -newkey rsa:2048 -nodes -sha256 \
+  -subj "/CN=api.openai.com" \
+  -keyout "$TLS_SERVER_KEY" \
+  -out "$TLS_SERVER_CSR" >/dev/null 2>&1
+cat >"$TLS_SERVER_EXT" <<'EOF'
+basicConstraints=critical,CA:FALSE
+subjectAltName=DNS:api.openai.com
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+EOF
+openssl x509 -req \
+  -in "$TLS_SERVER_CSR" \
+  -CA "$TLS_CA_CERT" \
+  -CAkey "$TLS_CA_KEY" \
+  -CAcreateserial \
+  -days 1 \
+  -sha256 \
+  -extfile "$TLS_SERVER_EXT" \
+  -out "$TLS_SERVER_CERT" >/dev/null 2>&1
+export NODE_EXTRA_CA_CERTS="$TLS_CA_CERT"
+
 MOCK_PORT="$MOCK_PORT" \
   MOCK_REQUEST_LOG="$MOCK_REQUEST_LOG" \
+  MOCK_TLS_CERT="$TLS_SERVER_CERT" \
+  MOCK_TLS_KEY="$TLS_SERVER_KEY" \
   SUCCESS_MARKER="$SUCCESS_MARKER" \
   RAW_SCHEMA_ERROR="$RAW_SCHEMA_ERROR" \
   node scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs >"$MOCK_LOG" 2>&1 &
 mock_pid="$!"
 
-openclaw_e2e_wait_mock_openai "$MOCK_PORT"
+openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "https://api.openai.com:$MOCK_PORT"
 
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"
 openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$PORT"

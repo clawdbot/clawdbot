@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   MAX_DIFF_RENDER_LINES,
   type DiffLine,
@@ -28,18 +29,12 @@ type HunkState = {
   newLeft?: number;
 };
 
-export type PatchViewData = {
+type PatchViewData = {
   paths: string[];
   lines: DiffLine[];
   stat: DiffStat;
   move?: { from: string; to: string };
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -100,9 +95,9 @@ function parseHunkHeader(raw: string): HunkState {
     return {};
   }
   return {
-    oldLine: Number.parseInt(match[1], 10),
+    oldLine: Number.parseInt(match[1] ?? "", 10),
     oldLeft: match[2] === undefined ? 1 : Number.parseInt(match[2], 10),
-    newLine: Number.parseInt(match[3], 10),
+    newLine: Number.parseInt(match[3] ?? "", 10),
     newLeft: match[4] === undefined ? 1 : Number.parseInt(match[4], 10),
   };
 }
@@ -194,7 +189,7 @@ function finish(collector: PatchCollector): PatchViewData | null {
   if (clipped && lines.at(-1)?.kind !== "skip") {
     lines.push({ kind: "skip", text: "" });
   }
-  const only = collector.sections.length === 1 ? collector.sections[0] : undefined;
+  const only = collector.sections.length === 1 ? collector.sections.at(0) : undefined;
   const move =
     only && only.operation === "update" && only.sourcePath !== only.path
       ? { from: only.sourcePath, to: only.path }
@@ -211,14 +206,19 @@ function parseCodexPatch(text: string): PatchViewData | null {
     const structural = mode === "update" ? raw.trimEnd() : raw.trim();
     const fileMatch = structural.match(/^\*\*\* (Update|Add|Delete) File: (.+)$/);
     if (fileMatch) {
-      mode = fileMatch[1].toLowerCase() as PatchOperation;
-      current = startSection(collector, mode, fileMatch[2]);
+      const operation = fileMatch[1];
+      const path = fileMatch[2];
+      if (!operation || !path) {
+        continue;
+      }
+      mode = operation.toLowerCase() as PatchOperation;
+      current = startSection(collector, mode, path);
       hunk = null;
       continue;
     }
     const moveMatch = mode === "update" ? structural.match(/^\*\*\* Move to: (.+)$/) : null;
     if (moveMatch && current) {
-      current.path = moveMatch[1].trim();
+      current.path = moveMatch[1]?.trim() ?? current.path;
       continue;
     }
     if (
@@ -290,10 +290,18 @@ function parseUnifiedPatch(text: string): PatchViewData | null {
   let awaitingGitHeaders = false;
   for (let index = 0; index < rawLines.length; index++) {
     const raw = rawLines[index];
+    if (raw === undefined) {
+      continue;
+    }
     const gitHeader = raw.match(/^diff --git a\/(.+) b\/(.+)$/);
     if (gitHeader) {
-      current = startSection(collector, "update", gitHeader[2]);
-      current.sourcePath = gitHeader[1];
+      const sourcePath = gitHeader[1];
+      const path = gitHeader[2];
+      if (!sourcePath || !path) {
+        continue;
+      }
+      current = startSection(collector, "update", path);
+      current.sourcePath = sourcePath;
       hunk = null;
       awaitingGitHeaders = true;
       continue;

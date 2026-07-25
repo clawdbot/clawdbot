@@ -4,13 +4,14 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createCodexSupervisionTools,
-  LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV,
-  LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV,
-  LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV,
-  type CodexSupervisionToolsOptions,
-} from "./supervision-tools.js";
+import { createCodexSupervisionTools } from "./supervision-tools.js";
+
+type CodexSupervisionToolsOptions = Parameters<typeof createCodexSupervisionTools>[0];
+
+const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
+const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
+  "OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS";
+const LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
 
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 

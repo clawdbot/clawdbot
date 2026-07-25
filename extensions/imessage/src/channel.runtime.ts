@@ -21,6 +21,7 @@ export async function sendIMessageOutbound(params: {
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string;
+  conversationReadOrigin?: "delegated" | "direct-operator";
 }) {
   const send =
     resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage", {
@@ -33,7 +34,7 @@ export async function sendIMessageOutbound(params: {
       cfg.channels?.imessage?.mediaMaxMb,
     accountId: params.accountId,
   });
-  return await send(params.to, params.text, {
+  const result = await send(params.to, params.text, {
     config: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
@@ -41,7 +42,14 @@ export async function sendIMessageOutbound(params: {
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,
+    conversationReadOrigin: params.conversationReadOrigin,
   });
+  const meta = {
+    ...(result as typeof result & { meta?: Record<string, unknown> }).meta,
+    ...(result.guid ? { imessageMessageGuid: result.guid } : {}),
+    ...(result.sentText ? { imessageVisibleText: result.sentText } : {}),
+  };
+  return Object.keys(meta).length > 0 ? { ...result, meta } : result;
 }
 
 export async function notifyIMessageApproval(params: {

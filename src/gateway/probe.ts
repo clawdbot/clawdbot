@@ -1,12 +1,14 @@
 // Gateway reachability probe client.
 // Connects to a gateway and summarizes auth, health, status, and presence.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { resolveStateDir } from "../config/paths.js";
+import {
+  readMissingScopeError,
+  type MissingScopeErrorDetails,
+} from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -51,6 +53,7 @@ export type GatewayProbeResult = {
   connectLatencyMs: number | null;
   error: string | null;
   connectErrorDetails?: unknown;
+  missingScopeErrorDetails?: MissingScopeErrorDetails;
   close: GatewayProbeClose | null;
   auth: GatewayProbeAuthSummary;
   server?: GatewayProbeServerSummary;
@@ -59,6 +62,8 @@ export type GatewayProbeResult = {
   presence: SystemPresence[] | null;
   configSnapshot: unknown;
 };
+
+type GatewayProbeDetailLevel = "none" | "presence" | "config" | "full";
 
 const MIN_PROBE_TIMEOUT_MS = 250;
 export const MAX_TIMER_DELAY_MS = MAX_SAFE_TIMEOUT_DELAY_MS;
@@ -233,7 +238,7 @@ export async function probeGateway(opts: {
   timeoutMs: number;
   preauthHandshakeTimeoutMs?: number;
   includeDetails?: boolean;
-  detailLevel?: "none" | "presence" | "full";
+  detailLevel?: GatewayProbeDetailLevel;
   tlsFingerprint?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<GatewayProbeResult> {
@@ -255,8 +260,7 @@ export async function probeGateway(opts: {
         return null;
       }
       const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-      const stateDir = resolveStateDir(opts.env);
-      const identity = loadDeviceIdentityIfPresent(path.join(stateDir, "identity", "device.json"));
+      const identity = loadDeviceIdentityIfPresent({ env: opts.env });
       if (!identity) {
         return null;
       }
@@ -331,6 +335,7 @@ export async function probeGateway(opts: {
     const settleProbe = (params: {
       ok: boolean;
       error: string | null;
+      missingScopeErrorDetails?: MissingScopeErrorDetails;
       verifiedRead?: boolean;
       health: unknown;
       status: unknown;
@@ -341,6 +346,9 @@ export async function probeGateway(opts: {
         ok: params.ok,
         connectLatencyMs,
         error: params.error,
+        ...(params.missingScopeErrorDetails
+          ? { missingScopeErrorDetails: params.missingScopeErrorDetails }
+          : {}),
         connectErrorDetails,
         close,
         auth: resolveProbeAuthSummary({
@@ -448,6 +456,19 @@ export async function probeGateway(opts: {
               });
               return;
             }
+            if (detailLevel === "config") {
+              const configSnapshot = await client.request("config.get", {});
+              settleProbe({
+                ok: true,
+                error: null,
+                verifiedRead: true,
+                health: null,
+                status: null,
+                presence: null,
+                configSnapshot,
+              });
+              return;
+            }
             const [health, status, presence, configSnapshot] = await Promise.all([
               client.request("health"),
               client.request("status"),
@@ -465,9 +486,11 @@ export async function probeGateway(opts: {
             });
           } catch (err) {
             const error = formatErrorMessage(err);
+            const missingScopeErrorDetails = readMissingScopeError(err);
             settleProbe({
               ok: false,
               error,
+              ...(missingScopeErrorDetails ? { missingScopeErrorDetails } : {}),
               health: null,
               status: null,
               presence: null,

@@ -1,5 +1,6 @@
 // Phone Control plugin entrypoint registers its OpenClaw integration.
 import { randomUUID } from "node:crypto";
+import milliseconds from "ms";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -10,13 +11,15 @@ import {
   normalizeStringEntries,
   sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import prettyMilliseconds from "pretty-ms";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
   type OpenClawPluginService,
 } from "./runtime-api.js";
 
-type ArmGroup = "camera" | "screen" | "computer" | "writes" | "all";
+const ARM_GROUPS = ["camera", "screen", "computer", "mobile-ui", "writes", "all"] as const;
+type ArmGroup = (typeof ARM_GROUPS)[number];
 
 type ArmStateFileV1 = {
   version: 1;
@@ -53,8 +56,10 @@ type StoredArmState = { key: string; state: ArmStateFile };
 type PhoneControlConfigView = {
   readonly gateway?: {
     readonly nodes?: {
-      readonly allowCommands?: readonly string[];
-      readonly denyCommands?: readonly string[];
+      readonly commands?: {
+        readonly allow?: readonly string[];
+        readonly deny?: readonly string[];
+      };
     };
   };
 };
@@ -70,6 +75,7 @@ const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
   screen: ["screen.record"],
   // Desktop pointer/keyboard control on a paired macOS node.
   computer: ["computer.act"],
+  "mobile-ui": ["mobile.ui.observe", "mobile.ui.act"],
   writes: ["calendar.add", "contacts.add", "reminders.add", "sms.send"],
 };
 const PHONE_CONTROL_COMMANDS = Object.values(GROUP_COMMANDS).flat();
@@ -89,43 +95,24 @@ function resolveCommandsForGroup(group: ArmGroup): string[] {
 }
 
 function formatGroupList(): string {
-  return ["camera", "screen", "computer", "writes", "all"].join(", ");
+  return ARM_GROUPS.join(", ");
 }
 
 function parseDurationMs(input: string | undefined): number | null {
   const raw = normalizeOptionalLowercaseString(input);
-  if (!raw) {
+  if (!raw || !/^\d+(?:\.\d+)?(?:ms|s|m|h|d)$/.test(raw)) {
     return null;
   }
-  const m = raw.match(/^(\d+)(s|m|h|d)$/);
-  if (!m) {
-    return null;
-  }
-  const n = Number.parseInt(m[1] ?? "", 10);
-  if (!Number.isFinite(n) || n <= 0) {
-    return null;
-  }
-  const unit = m[2];
-  const mult = unit === "s" ? 1000 : unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
-  const durationMs = n * mult;
-  return Number.isSafeInteger(durationMs) ? durationMs : null;
+  const durationMs = milliseconds(raw as Parameters<typeof milliseconds>[0]);
+  return Number.isSafeInteger(durationMs) && durationMs > 0 ? durationMs : null;
 }
 
 function formatDuration(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) {
-    return `${s}s`;
-  }
-  const m = Math.floor(s / 60);
-  if (m < 60) {
-    return `${m}m`;
-  }
-  const h = Math.floor(m / 60);
-  if (h < 48) {
-    return `${h}h`;
-  }
-  const d = Math.floor(h / 24);
-  return `${d}d`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
+  return prettyMilliseconds(Math.max(0, roundedMs), {
+    compact: true,
+    hideYear: true,
+  });
 }
 
 function openArmStateStore(api: OpenClawPluginApi) {
@@ -194,11 +181,11 @@ async function consumeArmState(api: OpenClawPluginApi, expected: StoredArmState)
 }
 
 function normalizeDenyList(cfg: PhoneControlConfigView): string[] {
-  return uniqSorted([...(cfg.gateway?.nodes?.denyCommands ?? [])]);
+  return uniqSorted([...(cfg.gateway?.nodes?.commands?.deny ?? [])]);
 }
 
 function normalizeAllowList(cfg: PhoneControlConfigView): string[] {
-  return uniqSorted([...(cfg.gateway?.nodes?.allowCommands ?? [])]);
+  return uniqSorted([...(cfg.gateway?.nodes?.commands?.allow ?? [])]);
 }
 
 function resolveEffectivePhoneControlAllows(params: {
@@ -277,8 +264,7 @@ function patchConfigNodeLists(
       ...cfg.gateway,
       nodes: {
         ...cfg.gateway?.nodes,
-        allowCommands: next.allowCommands,
-        denyCommands: next.denyCommands,
+        commands: { allow: next.allowCommands, deny: next.denyCommands },
       },
     },
   };
@@ -390,8 +376,8 @@ function formatHelp(): string {
     "- iOS will still ask for permissions (camera, photos, contacts, etc.) on first use.",
     "- all keeps its legacy camera/screen/writes scope; desktop control requires",
     "  an explicit /phone arm computer.",
-    "- computer: desktop pointer/keyboard control on a paired macOS node; the Mac",
-    "  app still requires Computer Control enabled plus Accessibility permission.",
+    "- computer controls macOS pointer/keyboard; mobile-ui controls Android apps.",
+    "  Both require their platform Accessibility permissions/settings.",
   ].join("\n");
 }
 
@@ -400,14 +386,8 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   if (!value) {
     return null;
   }
-  if (
-    value === "camera" ||
-    value === "screen" ||
-    value === "computer" ||
-    value === "writes" ||
-    value === "all"
-  ) {
-    return value;
+  if ((ARM_GROUPS as readonly string[]).includes(value)) {
+    return value as ArmGroup;
   }
   return null;
 }
@@ -571,10 +551,10 @@ export default definePluginEntry({
 
     // Existing phone commands remain core-owned protocol surfaces. Registering
     // policies for them would hide those commands from N-1 nodes, while the new
-    // computer surface can safely bind its temporary lease to this final
-    // pre-dispatch gate.
+    // computer and mobile UI surfaces can safely bind their temporary leases
+    // to this final pre-dispatch gate.
     api.registerNodeInvokePolicy({
-      commands: [...GROUP_COMMANDS.computer],
+      commands: [...GROUP_COMMANDS.computer, ...GROUP_COMMANDS["mobile-ui"]],
       handle: async (ctx) => {
         let allowed: boolean;
         try {
@@ -600,7 +580,7 @@ export default definePluginEntry({
             );
           });
         } catch (err) {
-          logReconcileFailure("computer dispatch", err);
+          logReconcileFailure("interactive control dispatch", err);
           return {
             ok: false,
             code: PHONE_CONTROL_POLICY_UNAVAILABLE,
@@ -624,7 +604,7 @@ export default definePluginEntry({
 
     api.registerCommand({
       name: "phone",
-      description: "Arm/disarm high-risk node commands (camera/screen/computer/writes).",
+      description: "Arm/disarm high-risk node commands (camera/screen/computer/mobile-ui/writes).",
       acceptsArgs: true,
       exposeSenderIsOwner: true,
       handler: async (ctx) => {

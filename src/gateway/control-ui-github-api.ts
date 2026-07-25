@@ -1,6 +1,7 @@
 // Shared api.github.com plumbing for Control UI GitHub surfaces (link
 // previews, session pull request chips): pinned origin, manual redirects,
 // bounded bodies, and normalized upstream error statuses.
+export { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
@@ -17,10 +18,6 @@ export class ControlUiGitHubError extends Error {
     this.name = "ControlUiGitHubError";
     this.statusCode = statusCode;
   }
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export function requiredString(record: Record<string, unknown>, key: string): string {

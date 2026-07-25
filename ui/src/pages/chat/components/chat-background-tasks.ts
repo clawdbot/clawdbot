@@ -5,7 +5,6 @@ import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
 import type { SessionScopeHost } from "../../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import {
@@ -13,35 +12,20 @@ import {
   mergeTaskLists,
   normalizeTaskEventPayload,
   normalizeTasksCancelResult,
+  normalizeTasksGetResult,
   normalizeTasksListResult,
   partitionTasks,
   sortTasks,
-  taskDetail,
-  taskRuntimeLabel,
-  taskStatusLabel,
-  taskTimestampMs,
   taskTitle,
   type TaskSummary,
 } from "../../../lib/tasks/data.ts";
+import { renderTaskDetail, renderTaskRow } from "./chat-background-task-row.ts";
+import { newestTaskSnapshot } from "./chat-background-tasks-shared.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { paneSessionAgentId } from "./chat-session-workspace.ts";
 
-export type BackgroundTasksProps = {
-  agentId: string;
-  collapsed: boolean;
-  connected: boolean;
-  canCancel: boolean;
-  loading: boolean;
-  error: string | null;
-  /** null until the first load for this agent finished. */
-  tasks: TaskSummary[] | null;
-  cancellingTaskIds: ReadonlySet<string>;
-  finishedCollapsed: boolean;
-  onToggleCollapsed: () => void;
-  onToggleFinished: () => void;
-  onRefresh: () => void;
-  onCancel: (taskId: string) => void;
-  onOpenSession: (sessionKey: string) => void;
-};
+export { STATUS_TONES } from "./chat-background-tasks-shared.ts";
+export type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 
 type BackgroundTasksState = {
   agentId: string;
@@ -55,7 +39,14 @@ type BackgroundTasksState = {
   loading: boolean;
   pendingReload: boolean;
   requestId: number;
+  // wa-tooltip anchors by document id, so the status row's id must stay unique
+  // per pane: two panes on the same agent would otherwise cross-anchor.
+  statusRowId: string;
   tasks: TaskSummary[] | null;
+  selectedTaskId: string | null;
+  taskDetails: Map<string, TaskSummary>;
+  taskDetailErrors: Map<string, string>;
+  taskDetailLoadingIds: Set<string>;
 };
 
 export type BackgroundTasksHost = {
@@ -75,12 +66,15 @@ export type BackgroundTasksHost = {
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 
+let nextStatusRowId = 0;
+
 function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksState {
   const agentId = paneSessionAgentId(host);
   const current = host.backgroundTasksState;
   if (current?.agentId === agentId) {
     return current;
   }
+  nextStatusRowId += 1;
   const next: BackgroundTasksState = {
     agentId,
     cancellingTaskIds: new Set(),
@@ -93,7 +87,12 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     loading: false,
     pendingReload: false,
     requestId: 0,
+    statusRowId: `chat-tasks-status-${nextStatusRowId}`,
     tasks: null,
+    selectedTaskId: null,
+    taskDetails: new Map(),
+    taskDetailErrors: new Map(),
+    taskDetailLoadingIds: new Set(),
   };
   host.backgroundTasksState = next;
   return next;
@@ -138,7 +137,10 @@ function loadBackgroundTasks(
       if (current !== state || current.requestId !== requestId) {
         return;
       }
-      current.tasks = mergeTaskLists(recent, active);
+      const merged = mergeTaskLists(recent, active);
+      current.tasks = sortTasks(
+        merged.map((task) => newestTaskSnapshot(task, current.taskDetails.get(task.id))),
+      );
       current.loadedClient = client;
     } catch (error) {
       const current = getBackgroundTasksState(host);
@@ -180,11 +182,17 @@ function taskMatchesAgentScope(task: TaskSummary, agentId: string): boolean {
  * agents are ignored; a registry restore forces a refetch. */
 export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: unknown) {
   const state = host.backgroundTasksState;
-  if (!state || state.tasks === null) {
+  if (!state) {
     return;
   }
   const event = normalizeTaskEventPayload(payload);
   if (!event) {
+    return;
+  }
+  if (state.tasks === null) {
+    // Activity arrived before the snapshot finished loading: fold it into a
+    // (re)load so collapsed panes still detect the new task in their badge.
+    loadBackgroundTasks(host, state, true);
     return;
   }
   if (event.action === "restored") {
@@ -196,14 +204,143 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
       return;
     }
     state.tasks = state.tasks.filter((task) => task.id !== event.taskId);
+    if (state.selectedTaskId === event.taskId) {
+      state.selectedTaskId = null;
+    }
+    state.taskDetails.delete(event.taskId);
+    state.taskDetailErrors.delete(event.taskId);
+    state.taskDetailLoadingIds.delete(event.taskId);
     host.requestUpdate?.();
     return;
   }
   if (!taskMatchesAgentScope(event.task, state.agentId)) {
     return;
   }
-  state.tasks = sortTasks([event.task, ...state.tasks.filter((task) => task.id !== event.task.id)]);
+  const current = state.tasks.find((task) => task.id === event.task.id);
+  const detail = state.taskDetails.get(event.task.id);
+  let newest = current ? newestTaskSnapshot(current, event.task) : event.task;
+  newest = newestTaskSnapshot(newest, detail);
+  state.tasks = sortTasks([newest, ...state.tasks.filter((task) => task.id !== event.task.id)]);
+  if (detail) {
+    state.taskDetails = new Map(state.taskDetails).set(event.task.id, {
+      ...newest,
+      ...(detail.prompt ? { prompt: detail.prompt } : {}),
+    });
+  }
   host.requestUpdate?.();
+}
+
+async function loadBackgroundTaskDetail(
+  host: BackgroundTasksHost,
+  state: BackgroundTasksState,
+  task: TaskSummary,
+) {
+  const rowId = task.id;
+  const client = host.client;
+  if (
+    !client ||
+    !host.connected ||
+    state.taskDetails.has(rowId) ||
+    state.taskDetailLoadingIds.has(rowId)
+  ) {
+    return;
+  }
+  state.taskDetailLoadingIds = new Set(state.taskDetailLoadingIds).add(rowId);
+  const nextErrors = new Map(state.taskDetailErrors);
+  nextErrors.delete(rowId);
+  state.taskDetailErrors = nextErrors;
+  host.requestUpdate?.();
+  try {
+    const payload = await client.request("tasks.get", { taskId: rowId });
+    if (getBackgroundTasksState(host) !== state) {
+      return;
+    }
+    const detail = normalizeTasksGetResult(payload);
+    if (!detail || detail.id !== rowId) {
+      throw new Error(t("chat.backgroundTasks.detailFailed"));
+    }
+    const current = state.tasks?.find((candidate) => candidate.id === rowId);
+    // A delete event invalidates the in-flight lookup. Do not let its late
+    // response resurrect a registry entry that no longer exists.
+    if (!current) {
+      return;
+    }
+    const newest = newestTaskSnapshot(current, detail);
+    state.taskDetails = new Map(state.taskDetails).set(rowId, {
+      ...newest,
+      ...(detail.prompt ? { prompt: detail.prompt } : {}),
+    });
+    if (state.tasks) {
+      state.tasks = sortTasks([
+        newest,
+        ...state.tasks.filter((candidate) => candidate.id !== rowId),
+      ]);
+    }
+  } catch (error) {
+    if (getBackgroundTasksState(host) === state) {
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message.trim()
+          : t("chat.backgroundTasks.detailFailed");
+      state.taskDetailErrors = new Map(state.taskDetailErrors).set(rowId, message);
+    }
+  } finally {
+    if (getBackgroundTasksState(host) === state) {
+      const next = new Set(state.taskDetailLoadingIds);
+      next.delete(rowId);
+      state.taskDetailLoadingIds = next;
+    }
+    host.requestUpdate?.();
+  }
+}
+
+function focusBackgroundTaskControl(
+  state: BackgroundTasksState,
+  target: "back" | { taskId: string },
+) {
+  window.requestAnimationFrame(() => {
+    const rail = document.getElementById(`${state.statusRowId}-rail`);
+    if (target === "back") {
+      rail?.querySelector<HTMLElement>(".chat-tasks-rail__back")?.focus();
+      return;
+    }
+    const row = [...(rail?.querySelectorAll<HTMLElement>("[data-task-id]") ?? [])].find(
+      (candidate) => candidate.dataset.taskId === target.taskId,
+    );
+    row?.querySelector<HTMLElement>(".chat-tasks-rail__task-disclosure")?.focus();
+  });
+}
+
+function selectBackgroundTaskDetail(
+  host: BackgroundTasksHost,
+  state: BackgroundTasksState,
+  task: TaskSummary,
+) {
+  state.selectedTaskId = task.id;
+  host.requestUpdate?.();
+  focusBackgroundTaskControl(state, "back");
+  void loadBackgroundTaskDetail(host, state, task);
+}
+
+function showBackgroundTaskList(host: BackgroundTasksHost, state: BackgroundTasksState) {
+  const taskId = state.selectedTaskId;
+  const listedTask = state.tasks?.find((task) => task.id === taskId);
+  const detailedTask = taskId ? state.taskDetails.get(taskId) : undefined;
+  const selectedTask = listedTask ? newestTaskSnapshot(listedTask, detailedTask) : detailedTask;
+  if (selectedTask && state.tasks) {
+    state.tasks = sortTasks([
+      selectedTask,
+      ...state.tasks.filter((task) => task.id !== selectedTask.id),
+    ]);
+    if (!isActiveTask(selectedTask)) {
+      state.finishedCollapsed = false;
+    }
+  }
+  state.selectedTaskId = null;
+  host.requestUpdate?.();
+  if (taskId) {
+    focusBackgroundTaskControl(state, { taskId });
+  }
 }
 
 async function cancelBackgroundTask(
@@ -253,7 +390,7 @@ async function cancelBackgroundTask(
   }
 }
 
-export function toggleBackgroundTasks(host: BackgroundTasksHost) {
+function toggleBackgroundTasks(host: BackgroundTasksHost) {
   const state = getBackgroundTasksState(host);
   state.collapsed = !state.collapsed;
   host.requestUpdate?.();
@@ -261,7 +398,7 @@ export function toggleBackgroundTasks(host: BackgroundTasksHost) {
 
 export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
-  opts: { onOpenSession: (sessionKey: string) => void },
+  opts: { narrowLayout?: boolean; onOpenSession: (sessionKey: string) => void },
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
   if (!host.connected) {
@@ -269,8 +406,9 @@ export function createBackgroundTasksProps(
     // the loaded marker and the next connected render refetches the snapshot.
     state.loadedClient = null;
   }
+  // Load eagerly even while collapsed: the toggle badge is how running work
+  // gets detected at all, so it cannot wait for the rail to be opened first.
   if (
-    !state.collapsed &&
     host.connected &&
     !state.loading &&
     !state.error &&
@@ -280,13 +418,19 @@ export function createBackgroundTasksProps(
   }
   return {
     agentId: state.agentId,
+    statusRowId: state.statusRowId,
     collapsed: state.collapsed,
+    narrowLayout: opts.narrowLayout === true,
     connected: host.connected,
     // tasks.cancel needs operator.write; read-only operators get no button.
     canCancel: host.connected && hasOperatorWriteAccess(host.hello?.auth ?? null),
     loading: state.loading,
     error: state.error,
     tasks: state.tasks,
+    selectedTaskId: state.selectedTaskId,
+    taskDetails: state.taskDetails,
+    taskDetailErrors: state.taskDetailErrors,
+    taskDetailLoadingIds: state.taskDetailLoadingIds,
     cancellingTaskIds: state.cancellingTaskIds,
     finishedCollapsed: state.finishedCollapsed,
     onToggleCollapsed: () => toggleBackgroundTasks(host),
@@ -296,19 +440,20 @@ export function createBackgroundTasksProps(
     },
     onRefresh: () => loadBackgroundTasks(host, state, true),
     onCancel: (taskId) => void cancelBackgroundTask(host, state, taskId),
+    onSelectTask: (task) => selectBackgroundTaskDetail(host, state, task),
+    onBackToList: () => showBackgroundTaskList(host, state),
     onOpenSession: opts.onOpenSession,
   };
 }
 
 /** Active-count badge shown on the collapsed-rail toggles; 0 until the task
  * list has loaded for the pane's agent. */
-export function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
+function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
   return props?.tasks?.filter(isActiveTask).length ?? 0;
 }
 
 export function renderBackgroundTasksToggle(
   backgroundTasks: BackgroundTasksProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!backgroundTasks) {
     return nothing;
@@ -319,9 +464,7 @@ export function renderBackgroundTasksToggle(
   return html`
     <openclaw-tooltip .content=${label}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-tasks-open"} chat-tasks-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
         type="button"
         aria-label=${label}
         aria-expanded=${String(expanded)}
@@ -333,79 +476,6 @@ export function renderBackgroundTasksToggle(
           : nothing}
       </button>
     </openclaw-tooltip>
-  `;
-}
-
-// Status tone drives the meta line's colored word and the running pulse dot;
-// pill chips read too heavy at rail width, so tone is typographic only.
-const STATUS_TONES = {
-  queued: "warn",
-  running: "warn",
-  completed: "ok",
-  failed: "danger",
-  cancelled: "muted",
-  timed_out: "danger",
-} as const satisfies Record<TaskSummary["status"], string>;
-
-function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
-  const active = isActiveTask(task);
-  const title = taskTitle(task);
-  const detail = taskDetail(task);
-  const timestamp = taskTimestampMs(
-    active ? (task.startedAt ?? task.createdAt) : (task.updatedAt ?? task.createdAt),
-  );
-  const transcriptSessionKey = task.childSessionKey ?? task.sessionKey;
-  const cancelling = props.cancellingTaskIds.has(task.id);
-  const tone = STATUS_TONES[task.status];
-  return html`
-    <div class="chat-tasks-rail__task" role="listitem" data-task-id=${task.id}>
-      <div class="chat-tasks-rail__task-head">
-        ${task.status === "running"
-          ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
-          : nothing}
-        <openclaw-tooltip .content=${title}>
-          <span class="chat-tasks-rail__task-title">${title}</span>
-        </openclaw-tooltip>
-        ${active && props.canCancel
-          ? html`
-              <openclaw-tooltip .content=${t("chat.backgroundTasks.stopTask", { title })}>
-                <button
-                  class="chat-tasks-rail__task-stop"
-                  type="button"
-                  aria-label=${t("chat.backgroundTasks.stopTask", { title })}
-                  ?disabled=${cancelling || !props.connected}
-                  @click=${() => props.onCancel(task.taskId)}
-                >
-                  ${cancelling ? icons.loader : icons.stop}
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing}
-      </div>
-      <div class="chat-tasks-rail__task-meta">
-        <span class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${tone}"
-          >${taskStatusLabel(task.status)}</span
-        >
-        <span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-        <span>${taskRuntimeLabel(task)}</span>
-        ${timestamp > 0
-          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-              <span title=${formatMs(timestamp)}>${formatRelativeTimestamp(timestamp)}</span>`
-          : nothing}
-        ${transcriptSessionKey
-          ? html`
-              <button
-                class="chat-tasks-rail__task-transcript"
-                type="button"
-                @click=${() => props.onOpenSession(transcriptSessionKey)}
-              >
-                ${t("chat.backgroundTasks.viewTranscript")}
-              </button>
-            `
-          : nothing}
-      </div>
-      ${detail ? html`<div class="chat-tasks-rail__task-detail">${detail}</div>` : nothing}
-    </div>
   `;
 }
 
@@ -432,42 +502,72 @@ export function renderBackgroundTasksRail(
   if (!backgroundTasks || backgroundTasks.collapsed) {
     return nothing;
   }
+  const selectedTask = backgroundTasks.tasks?.find(
+    (task) => task.id === backgroundTasks.selectedTaskId,
+  );
   const { active, recent } = partitionTasks(backgroundTasks.tasks ?? []);
   const loaded = backgroundTasks.tasks !== null;
   const empty = loaded && active.length === 0 && recent.length === 0;
+  const collapseButton = html`
+    <openclaw-tooltip .content=${t("chat.backgroundTasks.collapse")}>
+      <button
+        type="button"
+        class="nav-collapse-toggle chat-tasks-rail__collapse-toggle"
+        aria-label=${t("chat.backgroundTasks.collapse")}
+        aria-expanded="true"
+        @click=${backgroundTasks.onToggleCollapsed}
+      >
+        <span class="nav-collapse-toggle__icon" aria-hidden="true"
+          >${backgroundTasks.narrowLayout ? icons.panelBottomClose : icons.panelRightClose}</span
+        >
+      </button>
+    </openclaw-tooltip>
+  `;
   return html`
-    <aside class="chat-tasks-rail" aria-label=${t("chat.backgroundTasks.label")}>
+    <aside
+      id=${`${backgroundTasks.statusRowId}-rail`}
+      class="chat-tasks-rail"
+      aria-label=${t("chat.backgroundTasks.label")}
+    >
       <div class="chat-tasks-rail__header">
-        <div class="chat-tasks-rail__title">
-          <span class="chat-tasks-rail__eyebrow">${backgroundTasks.agentId}</span>
-          <strong>${t("chat.backgroundTasks.title")}</strong>
-        </div>
-        <div class="chat-tasks-rail__actions">
-          <openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
-            <button
-              class="btn btn--ghost btn--sm chat-tasks-rail__refresh"
-              type="button"
-              aria-label=${t("chat.backgroundTasks.refresh")}
-              ?disabled=${backgroundTasks.loading || !backgroundTasks.connected}
-              @click=${backgroundTasks.onRefresh}
-            >
-              ${icons.refresh}
-            </button>
-          </openclaw-tooltip>
-          <openclaw-tooltip .content=${t("chat.backgroundTasks.collapse")}>
-            <button
-              type="button"
-              class="nav-collapse-toggle chat-tasks-rail__collapse-toggle"
-              aria-label=${t("chat.backgroundTasks.collapse")}
-              aria-expanded="true"
-              @click=${backgroundTasks.onToggleCollapsed}
-            >
-              <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                >${icons.panelRightClose}</span
+        ${selectedTask
+          ? html`
+              <button
+                class="btn btn--ghost btn--sm chat-tasks-rail__back"
+                type="button"
+                aria-label=${t("chat.backgroundTasks.backToTasks")}
+                @click=${backgroundTasks.onBackToList}
               >
-            </button>
-          </openclaw-tooltip>
-        </div>
+                ${icons.arrowLeft}
+              </button>
+              <div class="chat-tasks-rail__title">
+                <span class="chat-tasks-rail__eyebrow"
+                  >${t("chat.backgroundTasks.detailTitle")}</span
+                >
+                <strong title=${taskTitle(selectedTask)}>${taskTitle(selectedTask)}</strong>
+              </div>
+              <div class="chat-tasks-rail__actions">${collapseButton}</div>
+            `
+          : html`
+              <div class="chat-tasks-rail__title">
+                <span class="chat-tasks-rail__eyebrow">${backgroundTasks.agentId}</span>
+                <strong>${t("chat.backgroundTasks.title")}</strong>
+              </div>
+              <div class="chat-tasks-rail__actions">
+                <openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
+                  <button
+                    class="btn btn--ghost btn--sm chat-tasks-rail__refresh"
+                    type="button"
+                    aria-label=${t("chat.backgroundTasks.refresh")}
+                    ?disabled=${backgroundTasks.loading || !backgroundTasks.connected}
+                    @click=${backgroundTasks.onRefresh}
+                  >
+                    ${icons.refresh}
+                  </button>
+                </openclaw-tooltip>
+                ${collapseButton}
+              </div>
+            `}
       </div>
       ${!backgroundTasks.connected
         ? html`<div class="chat-tasks-rail__state">${t("tasksPage.disconnected")}</div>`
@@ -477,46 +577,54 @@ export function renderBackgroundTasksRail(
             ${backgroundTasks.error}
           </div>`
         : nothing}
-      ${backgroundTasks.loading && !loaded
-        ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.loading")}</div>`
-        : nothing}
-      ${empty
-        ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.empty")}</div>`
-        : nothing}
-      <div class="chat-tasks-rail__scroll">
-        ${active.length > 0
-          ? html`
-              <section class="chat-tasks-rail__section" data-tasks-section="running">
-                <div class="chat-tasks-rail__section-title">
-                  ${t("chat.backgroundTasks.running", { count: String(active.length) })}
-                </div>
-                ${renderTaskRows(active, backgroundTasks)}
-              </section>
-            `
-          : nothing}
-        ${recent.length > 0
-          ? html`
-              <section class="chat-tasks-rail__section" data-tasks-section="finished">
-                <button
-                  class="chat-tasks-rail__section-toggle"
-                  type="button"
-                  aria-expanded=${String(!backgroundTasks.finishedCollapsed)}
-                  @click=${backgroundTasks.onToggleFinished}
-                >
-                  <span class="chat-tasks-rail__section-title">
-                    ${t("chat.backgroundTasks.finished", { count: String(recent.length) })}
-                  </span>
-                  <span class="chat-tasks-rail__section-chevron" aria-hidden="true">
-                    ${backgroundTasks.finishedCollapsed ? icons.chevronRight : icons.chevronDown}
-                  </span>
-                </button>
-                ${backgroundTasks.finishedCollapsed
-                  ? nothing
-                  : renderTaskRows(recent, backgroundTasks)}
-              </section>
-            `
-          : nothing}
-      </div>
+      ${selectedTask
+        ? html`<div class="chat-tasks-rail__scroll">
+            ${renderTaskDetail(selectedTask, backgroundTasks)}
+          </div>`
+        : html`
+            ${backgroundTasks.loading && !loaded
+              ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.loading")}</div>`
+              : nothing}
+            ${empty
+              ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.empty")}</div>`
+              : nothing}
+            <div class="chat-tasks-rail__scroll">
+              ${active.length > 0
+                ? html`
+                    <section class="chat-tasks-rail__section" data-tasks-section="running">
+                      <div class="chat-tasks-rail__section-title">
+                        ${t("chat.backgroundTasks.running", { count: String(active.length) })}
+                      </div>
+                      ${renderTaskRows(active, backgroundTasks)}
+                    </section>
+                  `
+                : nothing}
+              ${recent.length > 0
+                ? html`
+                    <section class="chat-tasks-rail__section" data-tasks-section="finished">
+                      <button
+                        class="chat-tasks-rail__section-toggle"
+                        type="button"
+                        aria-expanded=${String(!backgroundTasks.finishedCollapsed)}
+                        @click=${backgroundTasks.onToggleFinished}
+                      >
+                        <span class="chat-tasks-rail__section-title">
+                          ${t("chat.backgroundTasks.finished", { count: String(recent.length) })}
+                        </span>
+                        <span class="chat-tasks-rail__section-chevron" aria-hidden="true">
+                          ${backgroundTasks.finishedCollapsed
+                            ? icons.chevronRight
+                            : icons.chevronDown}
+                        </span>
+                      </button>
+                      ${backgroundTasks.finishedCollapsed
+                        ? nothing
+                        : renderTaskRows(recent, backgroundTasks)}
+                    </section>
+                  `
+                : nothing}
+            </div>
+          `}
     </aside>
   `;
 }

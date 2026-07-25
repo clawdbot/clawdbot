@@ -69,12 +69,15 @@ function compareOpenClawPackageVersions(left: string, right: string): number {
     if (!match) {
       return [0, 0, 0];
     }
-    return [Number(match[1]), Number(match[2]), Number(match[3])];
+    const [, year, month, patch] = match;
+    if (!year || !month || !patch) {
+      return [0, 0, 0];
+    }
+    return [Number(year), Number(month), Number(patch)];
   };
-  const leftParts = parse(left);
-  const rightParts = parse(right);
-  for (let index = 0; index < leftParts.length; index++) {
-    const delta = leftParts[index] - rightParts[index];
+  const [leftYear, leftMonth, leftPatch] = parse(left);
+  const [rightYear, rightMonth, rightPatch] = parse(right);
+  for (const delta of [leftYear - rightYear, leftMonth - rightMonth, leftPatch - rightPatch]) {
     if (delta !== 0) {
       return delta;
     }

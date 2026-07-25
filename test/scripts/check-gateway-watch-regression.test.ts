@@ -364,12 +364,14 @@ describe("check-gateway-watch-regression", () => {
         }),
     );
     const waitForGatewayReady = vi.fn(async () => false);
-    const spawn = vi.fn(() => {
-      process.nextTick(() => {
-        child.emit("error", new Error("spawn failed"));
-      });
-      return child;
-    });
+    const spawn = vi.fn(
+      (_command: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => {
+        process.nextTick(() => {
+          child.emit("error", new Error("spawn failed"));
+        });
+        return child;
+      },
+    );
 
     try {
       const result = await runTimedWatch(

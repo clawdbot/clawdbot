@@ -7,8 +7,6 @@ type AugmentModelCatalogWithProviderPlugins =
   ProviderRuntimeModule["augmentModelCatalogWithProviderPlugins"];
 type BuildProviderAuthDoctorHintWithPlugin =
   ProviderRuntimeModule["buildProviderAuthDoctorHintWithPlugin"];
-type BuildProviderMissingAuthMessageWithPlugin =
-  ProviderRuntimeModule["buildProviderMissingAuthMessageWithPlugin"];
 type FormatProviderAuthProfileApiKeyWithPlugin =
   ProviderRuntimeModule["formatProviderAuthProfileApiKeyWithPlugin"];
 type PrepareProviderRuntimeAuth = ProviderRuntimeModule["prepareProviderRuntimeAuth"];
@@ -39,14 +37,6 @@ export async function buildProviderAuthDoctorHintWithPlugin(
 ): Promise<Awaited<ReturnType<BuildProviderAuthDoctorHintWithPlugin>>> {
   const runtime = await loadProviderRuntime();
   return runtime.buildProviderAuthDoctorHintWithPlugin(...args);
-}
-
-/** Lazily builds missing-auth messages with provider plugin context. */
-export async function buildProviderMissingAuthMessageWithPlugin(
-  ...args: Parameters<BuildProviderMissingAuthMessageWithPlugin>
-): Promise<Awaited<ReturnType<BuildProviderMissingAuthMessageWithPlugin>>> {
-  const runtime = await loadProviderRuntime();
-  return runtime.buildProviderMissingAuthMessageWithPlugin(...args);
 }
 
 /** Lazily formats API-key auth profile display text with provider plugin rules. */

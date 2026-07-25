@@ -1,6 +1,7 @@
 // Session kind classification tests cover chat, ACP, and agent session metadata classification.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   mockSessionsConfig,
   resetMockSessionsConfig,
@@ -68,11 +69,13 @@ function buildAcpSpawnChildEntry(): SessionEntry {
     sessionId: "spawn-child-session-id",
     updatedAt: Date.now() - 2 * 60_000,
     spawnedBy: TELEGRAM_GROUP_KEY,
-    deliveryContext: {
-      channel: "telegram",
-      to: "-1003967207344",
-      threadId: 323,
-    },
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: "telegram",
+        to: "-1003967207344",
+        threadId: 323,
+      },
+    }),
     // No chatType — ACP spawn-child entries don't carry one. The classifier
     // must infer "this came from a group" from spawnedBy / deliveryContext.
   };
@@ -88,10 +91,12 @@ function buildAcpDirectEntry(): SessionEntry {
   return {
     sessionId: "dm-session-id",
     updatedAt: Date.now() - 5 * 60_000,
-    deliveryContext: {
-      channel: "telegram",
-      to: "+15555550123",
-    },
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: "telegram",
+        to: "+15555550123",
+      },
+    }),
   };
 }
 
@@ -125,7 +130,7 @@ describe("sessionsCommand kind classification (catalog #19)", () => {
     // through to `"direct"`. Operators see this session in
     // `openclaw sessions --json` as `kind: "direct"` even though it was
     // plainly spawned from a group/topic. See `src/commands/sessions.ts:136-152`.
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_SPAWN_CHILD_KEY]: buildAcpSpawnChildEntry() },
       "sessions-kind-spawn-child-red",
     );
@@ -158,7 +163,7 @@ describe("sessionsCommand kind classification (catalog #19)", () => {
     // and report `"group"`), update this assertion to match. The structural
     // point is that `entry.spawnedBy` / `entry.deliveryContext` MUST drive
     // the classification for ACP children.
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_SPAWN_CHILD_KEY]: buildAcpSpawnChildEntry() },
       "sessions-kind-spawn-child-fix-shape",
     );
@@ -183,7 +188,7 @@ describe("sessionsCommand kind classification (catalog #19)", () => {
     // This control proves the test infrastructure exercises the real
     // classification path; if it accidentally regressed to a different
     // value, that would indicate the test harness was broken.
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_DM_KEY]: buildAcpDirectEntry() },
       "sessions-kind-acp-direct-control",
     );
@@ -201,7 +206,7 @@ describe("sessionsCommand kind classification (catalog #19)", () => {
     // yielding `"group"`. This control proves the existing happy-path
     // classification still works and is not silently broken by the test
     // harness.
-    const store = writeStore(
+    const store = await writeStore(
       { [TELEGRAM_GROUP_KEY]: buildTelegramGroupEntry() },
       "sessions-kind-group-control",
     );

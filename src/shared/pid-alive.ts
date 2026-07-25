@@ -2,6 +2,8 @@
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
 
+const DARWIN_PS_TIMEOUT_MS = 1000;
+
 function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
 }
@@ -30,8 +32,13 @@ export function isPidAlive(pid: number): boolean {
   }
   try {
     process.kill(pid, 0);
-  } catch {
-    return false;
+  } catch (err) {
+    // EPERM means the PID exists but we cannot signal it. Treat that as a
+    // successful existence probe, then still apply the Linux zombie check.
+    // Keep parity with isPidDefinitelyDead (EPERM is not "definitely dead").
+    if ((err as NodeJS.ErrnoException).code !== "EPERM") {
+      return false;
+    }
   }
   if (isZombieProcess(pid)) {
     return false;
@@ -59,6 +66,7 @@ function getDarwinProcessStartTime(pid: number): number | null {
         encoding: "utf8",
         env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
+        timeout: DARWIN_PS_TIMEOUT_MS,
       })
       .trim();
     // Darwin's lstart output has no timezone. Force UTC for both ps and parsing so

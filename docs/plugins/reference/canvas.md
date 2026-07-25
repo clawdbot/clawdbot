@@ -16,4 +16,4 @@ Experimental Canvas control and A2UI rendering surfaces for paired nodes.
 
 ## Surface
 
-contracts: tools; skills
+contracts: `tools`; skills

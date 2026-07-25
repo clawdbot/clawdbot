@@ -3,12 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import type { Model } from "../../llm/types.js";
 import {
-  testing as extraParamsTesting,
   resolvePreparedExtraParams,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
 } from "./extra-params.js";
-import { runExtraParamsCase } from "./extra-params.test-support.js";
+import { runExtraParamsCase, testing as extraParamsTesting } from "./extra-params.test-support.js";
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
@@ -86,13 +85,15 @@ describe("extra-params: provider runtime handoff", () => {
         id: "gpt-5.6-sol",
       } as unknown as Model<"openai-responses">,
       thinkingLevel: "max",
+      workspaceDir: "/tmp/runtime-workspace",
       payload: { model: "gpt-5.6-sol", input: [] },
     });
 
     expect(wrapProviderStreamFn).toHaveBeenCalledTimes(1);
-    expect(wrapProviderStreamFn).toHaveBeenCalledWith(
-      expect.objectContaining({ context: expect.objectContaining({ thinkingLevel: "max" }) }),
-    );
+    expect(wrapProviderStreamFn.mock.calls[0]?.[0]).toMatchObject({
+      workspaceDir: "/tmp/runtime-workspace",
+      context: { thinkingLevel: "max", workspaceDir: "/tmp/runtime-workspace" },
+    });
   });
 
   it("keeps unsupported upstream transport values out of OpenClaw runtime hooks", () => {

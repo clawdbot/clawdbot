@@ -1,4 +1,6 @@
 // Tests reply payload construction and metadata propagation from agent runs.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -167,7 +169,10 @@ describe("buildReplyPayloads media filter integration", () => {
       originatingChatType: "dm",
     });
 
-    expect(getReplyPayloadMetadata(replyPayloads[0])?.replyDelivery).toEqual({
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.replyDelivery,
+    ).toEqual({
       chatType: "direct",
       replyToMode: "first",
     });
@@ -210,9 +215,12 @@ describe("buildReplyPayloads media filter integration", () => {
       text: "⚠️ API rate limit reached.",
       replyToId: "msg-1",
     });
-    expectFields(getReplyPayloadMetadata(replyPayloads[0]), {
-      deliverDespiteSourceReplySuppression: true,
-    });
+    expectFields(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant")),
+      {
+        deliverDespiteSourceReplySuppression: true,
+      },
+    );
   });
 
   it("sanitizes source reply transcript mirror text with final payload text", async () => {
@@ -241,9 +249,10 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expect(replyPayloads[0]?.text).toBe("Visible\n\nDone");
-    expect(getReplyPayloadMetadata(replyPayloads[0])?.sourceReplyTranscriptMirror?.text).toBe(
-      "Visible\n\nDone",
-    );
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.sourceReplyTranscriptMirror?.text,
+    ).toBe("Visible\n\nDone");
   });
 
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
@@ -254,7 +263,9 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0].mediaUrl).toBeUndefined();
+    expect(
+      expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl,
+    ).toBeUndefined();
   });
 
   it("preserves media URL when not in messagingToolSentMediaUrls", async () => {
@@ -265,7 +276,9 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0].mediaUrl).toBe("file:///tmp/photo.jpg");
+    expect(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl).toBe(
+      "file:///tmp/photo.jpg",
+    );
   });
 
   it("normalizes sent media URLs before deduping normalized reply media", async () => {
@@ -399,7 +412,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("discord-only text");
   });
 
-  it("falls back to global text dedupe for legacy multi-target messaging telemetry", async () => {
+  it("does not apply ambiguous global text evidence across multiple routes", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
@@ -412,7 +425,8 @@ describe("buildReplyPayloads media filter integration", () => {
       ],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("hello world!");
   });
 
   it("dedupes final media only against message-tool media sent to the same route", async () => {
@@ -442,7 +456,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/discord-photo.jpg");
   });
 
-  it("falls back to global media dedupe for legacy multi-target messaging telemetry", async () => {
+  it("does not apply ambiguous global media evidence across multiple routes", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
@@ -458,8 +472,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(1);
     expectFields(replyPayloads[0], {
       text: "photo",
-      mediaUrl: undefined,
-      mediaUrls: undefined,
+      mediaUrl: "file:///tmp/photo.jpg",
     });
   });
 
@@ -1555,3 +1568,4 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("hello world!");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

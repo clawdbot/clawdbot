@@ -215,7 +215,14 @@ function killPidIfAlive(pid: number | undefined): void {
   if (pid === undefined || !pidIsAlive(pid)) {
     return;
   }
-  process.kill(pid, "SIGKILL");
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    // The process can exit after the liveness probe; ESRCH already satisfies cleanup.
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ESRCH") {
+      throw error;
+    }
+  }
 }
 
 afterEach(() => {
@@ -247,6 +254,20 @@ describe("bundled plugin install/uninstall probe", () => {
     await expect(pendingPid).resolves.toBe(123);
     killPidIfAlive(0);
     expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("ignores ESRCH when a probed process exits before cleanup", () => {
+    const killError = Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+    const kill = vi
+      .spyOn(process, "kill")
+      .mockReturnValueOnce(true)
+      .mockImplementationOnce(() => {
+        throw killError;
+      });
+
+    expect(() => killPidIfAlive(123)).not.toThrow();
+    expect(kill).toHaveBeenNthCalledWith(1, 123, 0);
+    expect(kill).toHaveBeenNthCalledWith(2, 123, "SIGKILL");
   });
 
   it("keeps the sweep script compatible with macOS Bash 3", () => {

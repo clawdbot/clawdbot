@@ -1,9 +1,10 @@
 // Twitch tests cover actions plugin behavior.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { twitchMessageActions } from "./actions.js";
-import type { ResolvedTwitchAccountContext } from "./config.js";
 import { resolveTwitchAccountContext } from "./config.js";
 import { twitchOutbound } from "./outbound.js";
+
+type ResolvedTwitchAccountContext = ReturnType<typeof resolveTwitchAccountContext>;
 
 vi.mock("./config.js", () => ({
   DEFAULT_ACCOUNT_ID: "default",

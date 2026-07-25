@@ -18,10 +18,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   listProfilesForProvider,
 }));
 
-import {
-  defaultQaRuntimeModelForMode,
-  resolveQaPreferredLiveModel,
-} from "./model-selection.runtime.js";
+import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 
 describe("qa model selection runtime", () => {
   beforeEach(() => {
@@ -36,7 +33,6 @@ describe("qa model selection runtime", () => {
   it("keeps the OpenAI live default when an API key is configured", () => {
     resolveEnvApiKey.mockReturnValue({ apiKey: "sk-test" });
 
-    expect(resolveQaPreferredLiveModel()).toBeUndefined();
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
     expect(loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
@@ -51,8 +47,7 @@ describe("qa model selection runtime", () => {
       },
     });
 
-    expect(resolveQaPreferredLiveModel()).toBe("openai/gpt-5.5");
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.5");
+    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6-luna");
     expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
       readOnly: true,
       allowKeychainPrompt: false,
@@ -70,16 +65,17 @@ describe("qa model selection runtime", () => {
       },
     });
 
-    expect(resolveQaPreferredLiveModel()).toBeUndefined();
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
   });
 
   it("leaves mock defaults unchanged", () => {
-    expect(defaultQaRuntimeModelForMode("mock-openai")).toBe("mock-openai/gpt-5.5");
+    expect(defaultQaRuntimeModelForMode("mock-openai")).toBe("mock-openai/gpt-5.6-luna");
     expect(defaultQaRuntimeModelForMode("mock-openai", { alternate: true })).toBe(
-      "mock-openai/gpt-5.5-alt",
+      "mock-openai/gpt-5.6-luna-alt",
     );
-    expect(defaultQaRuntimeModelForMode("aimock")).toBe("aimock/gpt-5.5");
-    expect(defaultQaRuntimeModelForMode("aimock", { alternate: true })).toBe("aimock/gpt-5.5-alt");
+    expect(defaultQaRuntimeModelForMode("aimock")).toBe("aimock/gpt-5.6-luna");
+    expect(defaultQaRuntimeModelForMode("aimock", { alternate: true })).toBe(
+      "aimock/gpt-5.6-luna-alt",
+    );
   });
 });

@@ -3,10 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import type {
-  AcceptedInboundAccessControlResult,
-  InboundAccessControlResult,
-} from "./access-control.js";
+import type { AcceptedInboundAccessControlResult } from "./access-control.js";
 import {
   readAllowFromStoreMock,
   sendMessageMock,
@@ -20,6 +17,7 @@ import { createTestWebInboundMessage } from "./test-message.test-helper.js";
 setupAccessControlTestHarness();
 let checkInboundAccessControl: typeof import("./access-control.js").checkInboundAccessControl;
 let resolveWhatsAppCommandAuthorized: typeof import("../inbound-policy.js").resolveWhatsAppCommandAuthorized;
+type InboundAccessControlResult = Awaited<ReturnType<typeof checkInboundAccessControl>>;
 
 beforeAll(async () => {
   ({ checkInboundAccessControl } = await import("./access-control.js"));

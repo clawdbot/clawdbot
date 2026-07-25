@@ -8,11 +8,13 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { formatDiscordApprovalDisplayValue } from "./approval-message-safety.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
@@ -22,7 +24,7 @@ import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
 import {
   buildDiscordPresentationPayload,
   DISCORD_PRESENTATION_CAPABILITIES,
-  DISCORD_PRESENTATION_TEXT_LIMIT,
+  resolveDiscordComponentSpec,
 } from "./outbound-components.js";
 import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
@@ -34,7 +36,7 @@ import {
 } from "./outbound-send-context.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
 
-export const DISCORD_TEXT_CHUNK_LIMIT = DISCORD_PRESENTATION_TEXT_LIMIT;
+export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE =
   /<\s*(system-reminder|previous_response)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE =
@@ -51,6 +53,9 @@ function stripDiscordInternalRuntimeScaffolding(text: string): string {
 
 const loadDiscordThreadBindings = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.js"),
+);
+const loadDiscordComponentSendRuntime = createLazyRuntimeModule(
+  () => import("./send.components.js"),
 );
 
 function resolveDiscordWebhookIdentity(params: {
@@ -292,12 +297,42 @@ export const discordOutbound: ChannelOutboundAdapter = {
         cfg,
       }),
   }),
-  afterDeliverPayload: async ({ target, payload }) => {
+  afterDeliverPayload: async ({ cfg, target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,
       to: resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId }),
       accountId: target.accountId,
     });
+    const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
+    const result = results.find(
+      (candidate) => candidate.channel === "discord" && candidate.messageId,
+    );
+    const componentSpec = questionId ? await resolveDiscordComponentSpec(payload) : undefined;
+    if (questionId && result && componentSpec) {
+      const to = resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId });
+      questionGatewayRuntime.registerChannelDelivery({
+        questionId,
+        deliveryId: `discord:${target.accountId ?? "default"}:${result.channelId ?? to}:${result.messageId}`,
+        finalize: async (statusLine) => {
+          const { editDiscordComponentMessage } = await loadDiscordComponentSendRuntime();
+          await editDiscordComponentMessage(
+            to,
+            result.messageId,
+            {
+              ...componentSpec,
+              blocks: [
+                ...(componentSpec.blocks ?? []).filter((block) => block.type !== "actions"),
+                // Same markdown-inert display escaping approvals use; raw
+                // option labels must not become live Discord markup/mentions.
+                { type: "text", text: `-# ${formatDiscordApprovalDisplayValue(statusLine)}` },
+              ],
+              modal: undefined,
+            },
+            { cfg, accountId: target.accountId ?? undefined },
+          );
+        },
+      });
+    }
     const threadId = normalizeOptionalStringifiedId(target.threadId);
     if (!threadId) {
       return;

@@ -29,6 +29,7 @@ import {
   type CodexPluginOwnedApp,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
+import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { isJsonObject, type JsonObject, type JsonValue, type v2 } from "./protocol.js";
 
 /** Policy context for one app id exposed by a configured Codex plugin. */
@@ -43,7 +44,7 @@ export type PluginAppPolicyContextEntry = {
 };
 
 /** Policy context for one account-connected app admitted without a plugin package. */
-export type AccountAppPolicyContextEntry = {
+type AccountAppPolicyContextEntry = {
   source: "account";
   appName: string;
   allowDestructiveActions: boolean;
@@ -62,11 +63,12 @@ export type PluginAppPolicyContext = {
 };
 
 /** Diagnostic emitted while building app config for a native Codex thread. */
-export type CodexPluginThreadConfigDiagnostic =
+type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
   | {
       code:
         | "plugin_activation_failed"
+        | "plugin_config_timeout"
         | "app_not_ready"
         | "account_app_inventory_unavailable"
         | "approval_overrides_clear_failed";
@@ -86,12 +88,13 @@ export type CodexPluginThreadConfig = {
 };
 
 /** Inputs for building a Codex thread app/plugin config patch. */
-export type BuildCodexPluginThreadConfigParams = {
+type BuildCodexPluginThreadConfigParams = {
   pluginConfig?: unknown;
   request: CodexPluginRuntimeRequest;
   configCwd?: string;
   appCache?: CodexAppInventoryCache;
   appCacheKey: string;
+  metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
 };
 
@@ -114,6 +117,24 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
     policy: policyFingerprint(policy),
     appCacheKey: params.appCacheKey ?? null,
   });
+}
+
+/** Builds the deny-all app patch used when plugin discovery exceeds its turn budget. */
+export function buildCodexPluginThreadConfigTimeoutFallback(params: {
+  pluginConfig?: unknown;
+  appCacheKey: string;
+  message: string;
+}): CodexPluginThreadConfig {
+  const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
+  const fallback = emptyPluginThreadConfig({
+    enabled: true,
+    inputFingerprint,
+    configPatch: buildDisabledAppsConfigPatch(),
+  });
+  return {
+    ...fallback,
+    diagnostics: [{ code: "plugin_config_timeout", message: params.message }],
+  };
 }
 
 /** Builds the Codex apps config patch and policy context for a native thread. */
@@ -142,6 +163,7 @@ export async function buildCodexPluginThreadConfig(
           request: params.request,
           appCache,
           appCacheKey: params.appCacheKey,
+          metadataCache: params.metadataCache,
           nowMs: params.nowMs,
           suppressAppInventoryRefresh: true,
         })
@@ -164,6 +186,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      metadataCache: params.metadataCache,
       nowMs: params.nowMs,
     });
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
@@ -182,6 +205,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      metadataCache: params.metadataCache,
       targetAppIds: record.ownedAppIds,
     });
     activationResults.push(activation);
@@ -214,6 +238,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      metadataCache: params.metadataCache,
       nowMs: params.nowMs,
     });
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
@@ -233,6 +258,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      metadataCache: params.metadataCache,
       nowMs: params.nowMs,
     });
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({

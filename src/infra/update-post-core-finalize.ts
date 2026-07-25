@@ -75,7 +75,7 @@ function buildFinalizeEnv(
   return env;
 }
 
-export type PostCoreFinalizeOutcome =
+type PostCoreFinalizeOutcome =
   | { status: "skipped"; reason: "not-git-update" | "entrypoint-missing" }
   | { status: "ok"; entrypoint: string }
   | {
@@ -88,7 +88,7 @@ export type PostCoreFinalizeOutcome =
 
 type FinalizeSpawnResult = { code: number | null; stderr?: string };
 
-export type PostCoreFinalizeSpawner = (params: {
+type PostCoreFinalizeSpawner = (params: {
   argv: string[];
   cwd: string;
   timeoutMs: number;

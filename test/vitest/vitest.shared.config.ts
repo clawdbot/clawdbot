@@ -174,10 +174,6 @@ export const sharedVitestConfig = {
         ),
       },
       {
-        find: "openclaw/extension-api",
-        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
-      },
-      {
         find: "@openclaw/qa-channel/api.js",
         replacement: path.join(repoRoot, "extensions", "qa-channel", "api.ts"),
       },
@@ -186,12 +182,20 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "extensions", "discord", "api.ts"),
       },
       {
+        find: "@openclaw/matrix/test-api.js",
+        replacement: path.join(repoRoot, "extensions", "matrix", "test-api.ts"),
+      },
+      {
         find: "@openclaw/slack/api.js",
         replacement: path.join(repoRoot, "extensions", "slack", "api.ts"),
       },
       {
         find: "@openclaw/whatsapp/api.js",
         replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
+      },
+      {
+        find: "@openclaw/gateway-client/browser",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "browser.ts"),
       },
       {
         find: "@openclaw/gateway-client/readiness",
@@ -222,6 +226,16 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/gateway-protocol/frame-guards",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "frame-guards.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/gateway-error-details",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "gateway-error-details.ts",
+        ),
       },
       {
         find: "@openclaw/gateway-protocol/schema",
@@ -392,6 +406,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
       },
       {
+        find: "@openclaw/normalization-core/agent-id",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "agent-id.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/boolean-coercion",
         replacement: path.join(
           repoRoot,
@@ -422,6 +440,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/phone-presentation",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "phone-presentation.ts",
+        ),
+      },
+      {
         find: "@openclaw/normalization-core/record-coerce",
         replacement: path.join(
           repoRoot,
@@ -430,6 +458,10 @@ export const sharedVitestConfig = {
           "src",
           "record-coerce.ts",
         ),
+      },
+      {
+        find: "@openclaw/normalization-core/result",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "result.ts"),
       },
       {
         find: "@openclaw/normalization-core/string-coerce",
@@ -471,6 +503,8 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "mime"),
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
+      sourcePackageAlias("retry"),
+      sourcePackageAlias("workboard-contract"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
@@ -480,10 +514,6 @@ export const sharedVitestConfig = {
         find: `@openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "packages", "plugin-sdk", "src", `${subpath}.ts`),
       })),
-      {
-        find: "openclaw/plugin-sdk",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
-      },
     ],
   },
   test: {

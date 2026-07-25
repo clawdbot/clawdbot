@@ -71,8 +71,8 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
     func listModels() async throws -> [OpenClawChatModelChoice] {
         [
             OpenClawChatModelChoice(
-                modelID: "gpt-5.5",
-                name: "GPT-5.5",
+                modelID: "gpt-5.6-luna",
+                name: "GPT-5.6 Luna",
                 provider: "openai",
                 contextWindow: 400_000),
             OpenClawChatModelChoice(
@@ -104,7 +104,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             count: 2,
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "openai",
-                model: "gpt-5.5",
+                model: "gpt-5.6-luna",
                 contextTokens: 400_000,
                 thinkingLevels: [
                     OpenClawChatThinkingLevelOption(id: "off", label: "off"),
@@ -202,11 +202,12 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             outputTokens: 900,
             totalTokens: 3400,
             modelProvider: "openai",
-            model: "gpt-5.5",
+            model: "gpt-5.6-luna",
             contextTokens: 400_000)
     }
 }
 
+#if os(iOS)
 #Preview("Chat") {
     OpenClawChatPreview(scenario: .connected)
 }
@@ -243,6 +244,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         markdownVariant: .standard,
         userAccent: OpenClawChatTheme.accent)
 }
+#endif
 
 private struct OpenClawChatPreview: View {
     let scenario: OpenClawChatPreviewTransport.Scenario

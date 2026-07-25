@@ -41,6 +41,14 @@ type CodexUsageLimitErrorResult = {
   rateLimitsForProfile?: JsonValue;
 };
 
+export function createCodexUsageLimitPromptError(message: string): Error & { status: 429 } {
+  return Object.assign(new Error(message), { status: 429 as const });
+}
+
+export function isCodexUsageLimitPromptError(error: unknown): error is Error & { status: 429 } {
+  return error instanceof Error && "status" in error && error.status === 429;
+}
+
 /** Marks a Codex auth profile blocked until the reset time advertised by rate limits. */
 export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   params: EmbeddedRunAttemptParams;
@@ -101,22 +109,20 @@ export async function refreshCodexUsageLimitPromptError(params: {
   message: string | undefined;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<string | undefined> {
+}): Promise<CodexUsageLimitErrorResult | undefined> {
   if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(params.message)) {
     return undefined;
   }
-  return (
-    await refreshCodexUsageLimitError({
-      client: params.client,
-      source: {
-        message: params.message,
-        codexErrorInfo: "usageLimitExceeded",
-        rateLimits: readRecentCodexRateLimits(params.client),
-      },
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-    })
-  )?.message;
+  return refreshCodexUsageLimitError({
+    client: params.client,
+    source: {
+      message: params.message,
+      codexErrorInfo: "usageLimitExceeded",
+      rateLimits: readRecentCodexRateLimits(params.client),
+    },
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+  });
 }
 
 async function refreshCodexUsageLimitError(params: {
@@ -155,6 +161,7 @@ async function refreshCodexUsageLimitError(params: {
     message: params.source.message,
     codexErrorInfo: params.source.codexErrorInfo,
     rateLimits,
+    rateLimitsAuthoritative: true,
   });
   const message = refreshedMessage ?? initialMessage;
   return message ? { message, rateLimitsForProfile: rateLimits } : undefined;

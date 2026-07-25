@@ -41,7 +41,7 @@ export function isPersistentBrowserProfileMutation(method: string, path: string)
  * the user's Keychain lives, so it is exempt from the host-local persistent
  * mutation block while remaining blocked over a node proxy.
  */
-export function isBrowserSystemProfileImport(method: string, path: string): boolean {
+function isBrowserSystemProfileImport(method: string, path: string): boolean {
   return method === "POST" && normalizeBrowserRequestPath(path) === "/profiles/import";
 }
 

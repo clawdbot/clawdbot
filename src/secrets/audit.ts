@@ -1,7 +1,6 @@
 /** Audits configured secrets and reports plaintext/ref migration status. */
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import {
   readPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
@@ -15,7 +14,7 @@ import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
@@ -38,23 +37,20 @@ import {
   listAgentModelsJsonPaths,
   listAuthProfileStoreAgentDirs,
   listLegacyAuthJsonPaths,
+  listSecretsDotEnvPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
 /** Stable finding codes emitted by `openclaw secrets audit`. */
-export type SecretsAuditCode =
-  | "PLAINTEXT_FOUND"
-  | "REF_UNRESOLVED"
-  | "REF_SHADOWED"
-  | "LEGACY_RESIDUE";
+type SecretsAuditCode = "PLAINTEXT_FOUND" | "REF_UNRESOLVED" | "REF_SHADOWED" | "LEGACY_RESIDUE";
 
 /** Audit severity used for CLI output and check-mode exit behavior. */
-export type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
+type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
 
 /** One secret audit finding with file/path context. */
-export type SecretsAuditFinding = {
+type SecretsAuditFinding = {
   code: SecretsAuditCode;
   severity: SecretsAuditSeverity;
   file: string;
@@ -65,10 +61,10 @@ export type SecretsAuditFinding = {
 };
 
 /** Overall audit state derived from findings and unresolved refs. */
-export type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
+type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
 /** Structured report returned by the secrets audit command. */
-export type SecretsAuditReport = {
+type SecretsAuditReport = {
   version: 1;
   status: SecretsAuditStatus;
   resolution: {
@@ -639,7 +635,7 @@ export async function runSecretsAudit(
   };
 
   const stateDir = resolveStateDir(env, os.homedir);
-  const envPath = path.join(resolveConfigDir(env, os.homedir), ".env");
+  const envPaths = listSecretsDotEnvPaths({ configPath, stateDir });
   const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
   let resolution = {
     refsChecked: 0,
@@ -688,10 +684,9 @@ export async function runSecretsAudit(
     });
   }
 
-  collectEnvPlaintext({
-    envPath,
-    collector,
-  });
+  for (const envPath of envPaths) {
+    collectEnvPlaintext({ envPath, collector });
+  }
   collectAuthJsonResidue({
     stateDir,
     collector,

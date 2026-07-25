@@ -43,7 +43,7 @@ const defaultDeps: RemindToolDeps = {
   },
 };
 
-export function createRemindTool(
+function createRemindTool(
   toolContext: OpenClawPluginToolContext = {},
   deps: RemindToolDeps = defaultDeps,
 ): AnyAgentTool {

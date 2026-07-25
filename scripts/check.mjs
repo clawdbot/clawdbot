@@ -87,6 +87,8 @@ export async function main(argv = process.argv.slice(2)) {
       parallel: true,
       commands: [
         { name: "conflict markers", args: ["check:no-conflict-markers"] },
+        { name: "environment variable count ratchet", args: ["check:env-var-count"] },
+        { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"] },
         { name: "changelog attributions", args: ["check:changelog-attributions"] },
         { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
         {
@@ -109,6 +111,7 @@ export async function main(argv = process.argv.slice(2)) {
         { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
         { name: "npm shrinkwrap guard", args: ["deps:shrinkwrap:check"] },
         { name: "package patch guard", args: ["deps:patches:check"] },
+        { name: "script declaration contracts", args: ["check:script-declarations"] },
       ],
     },
     {
@@ -119,6 +122,7 @@ export async function main(argv = process.argv.slice(2)) {
         : [
             { name: "typecheck prod", args: ["tsgo:prod"] },
             { name: "typecheck scripts", args: ["tsgo:scripts"] },
+            { name: "typecheck test root", args: ["tsgo:test:root"] },
           ],
     },
     {

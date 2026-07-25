@@ -7,7 +7,6 @@ struct DebugSettings: View {
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let labelColumnWidth: CGFloat = 140
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
-    @AppStorage(canvasEnabledKey) private var canvasEnabled: Bool = true
     private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
     @State private var launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
@@ -25,7 +24,7 @@ struct DebugSettings: View {
     @State private var tunnelResetStatus: String?
     @State private var pendingKill: DebugActions.PortListener?
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
-    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
+    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
 
     @State private var canvasSessionKey: String = "main"
     @State private var canvasStatus: String?
@@ -276,7 +275,7 @@ struct DebugSettings: View {
                     self.gridLabel("App logging")
                     VStack(alignment: .leading, spacing: 8) {
                         Picker("Verbosity", selection: self.$appLogLevelRaw) {
-                            ForEach(AppLogLevel.allCases) { level in
+                            ForEach(Logger.Level.allCases, id: \.rawValue) { level in
                                 Text(level.title).tag(level.rawValue)
                             }
                         }

@@ -1,6 +1,6 @@
 .usage-page {
   display: grid;
-  gap: 16px;
+  gap: var(--space-7);
   container-type: inline-size;
 }
 
@@ -8,13 +8,10 @@
   min-width: 0;
 }
 
-.usage-page .card,
-.usage-page .stat,
-.usage-page .usage-insight-card,
-.usage-page .context-details-panel,
-.usage-page .session-logs-compact,
-.usage-page .session-timeseries-compact {
-  animation: rise 0.25s var(--ease-out) backwards;
+/* Escape-hatch padding for dashboard content inside a .settings-group;
+   matches the .settings-row inline padding. */
+.usage-panel {
+  padding: var(--space-4);
 }
 
 .usage-page .btn.btn--sm {
@@ -43,7 +40,6 @@
   gap: 14px;
 }
 
-.provider-usage-heading,
 .provider-usage-card__header,
 .provider-usage-window__meta,
 .provider-usage-billing-row {
@@ -53,7 +49,6 @@
   gap: 12px;
 }
 
-.provider-usage-count,
 .provider-usage-plan {
   display: inline-flex;
   align-items: center;
@@ -280,37 +275,12 @@
   gap: 12px;
 }
 
-.usage-header-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
 .usage-header-metrics {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-}
-
-.usage-refresh-indicator,
-.usage-loading-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-muted));
-  color: var(--accent);
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-.usage-loading-badge {
-  width: fit-content;
 }
 
 .usage-loading-spinner {
@@ -333,11 +303,6 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-}
-
-.usage-loading-title-group {
-  display: grid;
-  gap: 8px;
 }
 
 .usage-loading-controls {
@@ -481,28 +446,19 @@
   letter-spacing: 0.01em;
 }
 
+/* Plain text metric (value + unit) — pill chrome removed per settings design. */
 .usage-metric-badge {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--bg-elevated);
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   letter-spacing: 0.01em;
-  transition: border-color 0.18s var(--ease-out);
-}
-
-.usage-metric-badge:hover {
-  border-color: var(--border-strong);
 }
 
 .usage-metric-badge strong {
   color: var(--text-strong);
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -510,16 +466,10 @@
 .usage-pin-btn.active,
 .chart-toggle .toggle-btn.active {
   border-color: var(--accent);
-  background: var(--accent);
+  background: var(--primary);
   color: var(--primary-foreground);
   font-weight: 600;
   box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-.usage-action-btn.usage-primary-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .chart-toggle .toggle-btn.active {
@@ -581,7 +531,7 @@
   gap: 6px;
 }
 
-details.usage-filter-select,
+.usage-filter-select,
 .usage-export-menu {
   position: relative;
 }
@@ -596,7 +546,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   display: none;
 }
 
-.usage-filter-select summary {
+.usage-filter-trigger {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -614,29 +564,20 @@ details.usage-filter-select summary::-webkit-details-marker,
     background 0.18s var(--ease-out);
 }
 
-.usage-filter-select summary:hover {
+.usage-filter-trigger:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
 }
 
-.usage-filter-select[open] summary {
+.usage-filter-select[open] .usage-filter-trigger {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.usage-filter-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: var(--radius-full);
-  background: var(--bg-muted);
-  color: var(--muted);
-  font-size: 12px; /* was 10px */
-  font-weight: 700;
-  letter-spacing: 0.02em;
+.usage-filter-select::part(menu),
+.usage-export-menu::part(menu) {
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 48px));
 }
 
 .usage-filter-popover,
@@ -718,7 +659,6 @@ details.usage-filter-select summary::-webkit-details-marker,
 
 .usage-query-chip,
 .usage-query-suggestion,
-.usage-badge,
 .usage-empty-state__feature {
   display: inline-flex;
   align-items: center;
@@ -948,17 +888,32 @@ details.usage-filter-select summary::-webkit-details-marker,
   width: 16px;
   height: 16px;
   margin-left: 4px;
+  padding: 0;
   border-radius: var(--radius-full);
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: transparent;
   color: var(--muted);
+  font-family: inherit;
   font-size: 12px; /* was 9px */
-  cursor: help;
+  line-height: 1;
+  cursor: pointer;
   opacity: 0.7;
-  transition: opacity 0.15s var(--ease-out);
+  transition:
+    border-color 0.15s var(--ease-out),
+    color 0.15s var(--ease-out),
+    opacity 0.15s var(--ease-out);
 }
 
-.usage-summary-hint:hover {
+.usage-summary-hint:hover,
+.usage-summary-hint:focus-visible {
+  border-color: var(--border-strong);
+  color: var(--text);
   opacity: 1;
+}
+
+.usage-summary-hint:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
 }
 
 .usage-insights-grid {
@@ -1053,7 +1008,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   gap: 12px;
 }
 
-.usage-mosaic-header,
 .daily-chart-header,
 .sessions-card-header,
 .sessions-card-meta,
@@ -1068,13 +1022,11 @@ details.usage-filter-select summary::-webkit-details-marker,
   gap: 8px;
 }
 
-.usage-mosaic-title,
 .usage-mosaic-total,
 .session-detail-title {
   color: var(--text-strong);
 }
 
-.usage-mosaic-title,
 .session-detail-title {
   font-size: 15px;
   font-weight: 700;
@@ -1886,67 +1838,8 @@ details.usage-filter-select summary::-webkit-details-marker,
   background: var(--card);
 }
 
-@container (min-width: 1400px) {
-  .usage-overview-layout {
-    grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.95fr);
-    align-items: start;
-  }
-
-  .usage-summary-grid {
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-  }
-
-  .usage-summary-card--hero {
-    grid-column: span 4;
-  }
-
-  .usage-summary-card--half {
-    grid-column: span 2;
-  }
-
-  .usage-summary-card--medium {
-    grid-column: span 3;
-  }
-
-  .usage-summary-card--compact {
-    grid-column: span 2;
-  }
-
-  .usage-insights-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@container (min-width: 1780px) {
-  .usage-overview-layout {
-    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
-  }
-
-  .usage-insights-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .usage-error-list--hours {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .usage-error-list--hours .usage-error-row {
-    min-width: 0;
-    align-items: flex-start;
-    padding: 12px 14px;
-    border: 1px solid color-mix(in srgb, var(--danger) 16%, var(--border));
-    border-radius: var(--radius-lg);
-    background: color-mix(in srgb, var(--danger) 5%, var(--bg-muted));
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .usage-error-list--hours .usage-error-rate {
-    font-size: 18px;
-  }
-}
-
+/* The settings page column caps the dashboard at 1120px, so only the
+   narrow-container adjustments below can still trigger. */
 @container (max-width: 1080px) {
   .usage-grid,
   .usage-mosaic-grid,

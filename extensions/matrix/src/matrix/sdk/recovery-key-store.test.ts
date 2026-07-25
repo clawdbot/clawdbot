@@ -7,10 +7,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
-import {
-  readMatrixRecoveryKeyState,
-  readMatrixRecoveryKeyStateForPath,
-} from "../crypto-state-store.js";
+import { readMatrixRecoveryKeyStateForPath } from "../crypto-state-store.js";
 import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixSecretStorageStatus } from "./types.js";
 
@@ -89,7 +86,7 @@ function expectRecoveryKeySummary(
 }
 
 function readStoredRecoveryKey(recoveryKeyPath: string) {
-  const state = readMatrixRecoveryKeyState(path.dirname(recoveryKeyPath));
+  const state = readMatrixRecoveryKeyStateForPath(recoveryKeyPath);
   if (!state) {
     throw new Error("expected stored recovery key state");
   }
@@ -215,7 +212,7 @@ describe("MatrixRecoveryKeyStore", () => {
 
     expect(resolved?.[0]).toBe("CUSTOM");
     expect(Array.from(resolved?.[1] ?? [])).toEqual([4, 3, 2, 1]);
-    expect(readMatrixRecoveryKeyState(dir)).toBeNull();
+    expect(readMatrixRecoveryKeyStateForPath(path.join(dir, "recovery-key.json"))).toBeNull();
     expect(readMatrixRecoveryKeyStateForPath(recoveryKeyPath)?.keyId).toBe("CUSTOM");
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
     expect(fs.existsSync(`${recoveryKeyPath}.migrated`)).toBe(true);

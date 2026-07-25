@@ -30,8 +30,8 @@ interface CredentialBackup {
   savedAt: string;
 }
 
-export const CREDENTIAL_BACKUPS_NAMESPACE = "credential-backups";
-export const MAX_CREDENTIAL_BACKUPS = 1000;
+const CREDENTIAL_BACKUPS_NAMESPACE = "credential-backups";
+const MAX_CREDENTIAL_BACKUPS = 1000;
 
 function createCredentialBackupStore() {
   return openQQBotSyncKeyedStore<CredentialBackup>({
@@ -40,7 +40,7 @@ function createCredentialBackupStore() {
   });
 }
 
-export function credentialBackupKey(accountId: string): string {
+function credentialBackupKey(accountId: string): string {
   return buildQQBotStateKey("credential-backup", accountId);
 }
 

@@ -16,7 +16,7 @@ Adds Arcee model provider support to OpenClaw.
 
 ## Surface
 
-providers: arcee
+providers: `arcee`
 
 ## Related docs
 

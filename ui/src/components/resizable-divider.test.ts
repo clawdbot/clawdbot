@@ -2,11 +2,16 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResizableDivider } from "./resizable-divider.ts";
 import "./resizable-divider.ts";
 
 let container: HTMLDivElement;
 const originalPointerEvent = globalThis.PointerEvent;
+
+type ResizableDivider = HTMLElement & {
+  orientation: "horizontal" | "vertical";
+  splitRatio: number;
+  updateComplete: Promise<boolean>;
+};
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;

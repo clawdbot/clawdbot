@@ -5,8 +5,8 @@ import type {
   HealthRepairResult,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/health";
+import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
-import { CHECK_IDS, type POLICY_CHECK_IDS } from "./metadata.js";
 
 type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
 type ConfigRecord = Record<string, unknown>;

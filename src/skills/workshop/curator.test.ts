@@ -8,7 +8,12 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { loadSkills } from "../loading/session.js";
 import {
   buildWorkspaceSkillSnapshot,
@@ -33,22 +38,101 @@ vi.mock("./store.js", () => ({
 }));
 
 import {
-  ARCHIVE_AFTER_MS,
-  DOCTOR_WEDGED_AFTER_MS,
-  STALE_AFTER_MS,
   getSkillCuratorDoctorWarning,
   getSkillCuratorStatus,
   pinCuratedSkill,
-  recordSkillUsage,
-  registerSkillUsageTracking,
   restoreCuratedSkill,
-  runSkillCuratorSweep,
+  startSkillCuratorMaintenance,
   unpinCuratedSkill,
 } from "./curator.js";
+
+const STALE_AFTER_MS = 30 * 24 * 60 * 60_000;
+const ARCHIVE_AFTER_MS = 90 * 24 * 60 * 60_000;
+const CURATOR_INITIAL_DELAY_MS = 5 * 60_000;
+const DOCTOR_WEDGED_AFTER_MS = 7 * 24 * 60 * 60_000;
 
 let rootDir = "";
 let stateDir = "";
 let originalStateDir: string | undefined;
+
+function registerSkillUsageTracking(): () => void {
+  return startSkillCuratorMaintenance({
+    onError: (error) => {
+      throw error;
+    },
+    runSweep: async () => undefined,
+  });
+}
+
+async function recordSkillUsage(event: {
+  skillFile: string;
+  skillName: string;
+  skillSource: "bundled" | "unknown" | "workspace";
+  agentId?: string;
+  ts: number;
+}): Promise<void> {
+  const cleanup = registerSkillUsageTracking();
+  const now = vi.spyOn(Date, "now").mockReturnValue(event.ts);
+  try {
+    emitTrustedSkillUsedDiagnosticEvent(
+      {
+        type: "skill.used",
+        skillName: event.skillName,
+        skillSource: event.skillSource,
+        activation: "read",
+        agentId: event.agentId,
+      },
+      { skillUsage: { skillFile: event.skillFile } },
+    );
+  } finally {
+    now.mockRestore();
+  }
+  await waitForDiagnosticEventsDrained();
+  cleanup();
+}
+
+async function runSkillCuratorSweep(options: {
+  env?: NodeJS.ProcessEnv;
+  nowMs?: number;
+}): Promise<void> {
+  const nowMs = options.nowMs ?? Date.now();
+  vi.useFakeTimers();
+  vi.setSystemTime(nowMs - CURATOR_INITIAL_DELAY_MS);
+  let failure: unknown;
+  const cleanup = startSkillCuratorMaintenance({
+    onError: (error) => {
+      failure = error;
+    },
+    registerUsageTracking: () => () => undefined,
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(CURATOR_INITIAL_DELAY_MS);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const status = getSkillCuratorStatus({ env: process.env });
+      if (failure || status.lastSuccessAtMs === nowMs || status.lastError) {
+        break;
+      }
+      await Promise.resolve();
+    }
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+  }
+  if (failure) {
+    throw failure instanceof Error
+      ? failure
+      : new Error("skill curator sweep failed", { cause: failure });
+  }
+}
+
+function readSkillUsageFiles(): string[] {
+  const database = openOpenClawStateDatabase({ env: process.env });
+  const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_usage">>(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    kysely.selectFrom("skill_usage").select("skill_file").orderBy("skill_file", "asc"),
+  ).rows.map((row) => row.skill_file);
+}
 
 function addAppliedSkill(params: {
   name: string;
@@ -152,7 +236,7 @@ describe("skill curator usage", () => {
     const nowMs = Date.now();
     const skillFile = path.join(rootDir, "agent", "skills", "daily-brief", "SKILL.md");
     addAppliedSkill({ name: "Daily Brief", appliedAtMs: nowMs });
-    const unregister = registerSkillUsageTracking({ env: process.env });
+    const unregister = registerSkillUsageTracking();
     emitTrustedSkillUsedDiagnosticEvent(
       {
         type: "skill.used",
@@ -187,7 +271,7 @@ describe("skill curator usage", () => {
   it("skips usage events without a canonical skill file", async () => {
     const nowMs = Date.now();
     addAppliedSkill({ name: "Nameless Usage", appliedAtMs: nowMs });
-    const unregister = registerSkillUsageTracking({ env: process.env });
+    const unregister = registerSkillUsageTracking();
     emitTrustedSkillUsedDiagnosticEvent({
       type: "skill.used",
       skillName: "Nameless Usage",
@@ -207,26 +291,20 @@ describe("skill curator usage", () => {
   it("keeps last-used time monotonic when events arrive out of order", async () => {
     const skillFile = path.join(rootDir, "agent", "skills", "ordered", "SKILL.md");
     addAppliedSkill({ name: "Ordered", appliedAtMs: 0 });
-    recordSkillUsage(
-      {
-        skillFile,
-        skillName: "Ordered",
-        skillSource: "workspace",
-        agentId: "newer",
-        ts: 200,
-      },
-      { env: process.env },
-    );
-    recordSkillUsage(
-      {
-        skillFile,
-        skillName: "Ordered",
-        skillSource: "workspace",
-        agentId: "older",
-        ts: 100,
-      },
-      { env: process.env },
-    );
+    await recordSkillUsage({
+      skillFile,
+      skillName: "Ordered",
+      skillSource: "workspace",
+      agentId: "newer",
+      ts: 200,
+    });
+    await recordSkillUsage({
+      skillFile,
+      skillName: "Ordered",
+      skillSource: "workspace",
+      agentId: "older",
+      ts: 100,
+    });
 
     await runSkillCuratorSweep({ env: process.env, nowMs: 201 });
     expect(getSkillCuratorStatus({ env: process.env }).skills[0]).toMatchObject({
@@ -236,7 +314,7 @@ describe("skill curator usage", () => {
   });
 
   it("contains subscriber failures without throwing into the emitter", async () => {
-    const unregister = registerSkillUsageTracking({ env: process.env });
+    const unregister = registerSkillUsageTracking();
     expect(() =>
       emitTrustedSkillUsedDiagnosticEvent(
         {
@@ -288,26 +366,20 @@ describe("skill curator lifecycle", () => {
     addAppliedSkill({ name: "Unused Archive", appliedAtMs: nowMs - ARCHIVE_AFTER_MS - 1 });
     await runSkillCuratorSweep({ env: process.env, nowMs });
 
-    recordSkillUsage(
-      {
-        skillFile: path.join(rootDir, "agent", "skills", "dormant", "SKILL.md"),
-        skillName: "Dormant",
-        skillSource: "workspace",
-        agentId: "main",
-        ts: nowMs + 1,
-      },
-      { env: process.env },
-    );
-    recordSkillUsage(
-      {
-        skillFile: path.join(rootDir, "agent", "skills", "deep-archive", "SKILL.md"),
-        skillName: "Deep Archive",
-        skillSource: "workspace",
-        agentId: "main",
-        ts: nowMs + 1,
-      },
-      { env: process.env },
-    );
+    await recordSkillUsage({
+      skillFile: path.join(rootDir, "agent", "skills", "dormant", "SKILL.md"),
+      skillName: "Dormant",
+      skillSource: "workspace",
+      agentId: "main",
+      ts: nowMs + 1,
+    });
+    await recordSkillUsage({
+      skillFile: path.join(rootDir, "agent", "skills", "deep-archive", "SKILL.md"),
+      skillName: "Deep Archive",
+      skillSource: "workspace",
+      agentId: "main",
+      ts: nowMs + 1,
+    });
     await runSkillCuratorSweep({ env: process.env, nowMs: nowMs + 2 });
 
     const byKey = new Map(
@@ -352,16 +424,13 @@ describe("skill curator lifecycle", () => {
       proposalId: "shared-name-b",
       agentDirName: "agent-b",
     });
-    recordSkillUsage(
-      {
-        skillFile: firstSkillFile,
-        skillName: "Shared Name",
-        skillSource: "workspace",
-        agentId: "agent-a",
-        ts: nowMs,
-      },
-      { env: process.env },
-    );
+    await recordSkillUsage({
+      skillFile: firstSkillFile,
+      skillName: "Shared Name",
+      skillSource: "workspace",
+      agentId: "agent-a",
+      ts: nowMs,
+    });
 
     await runSkillCuratorSweep({ env: process.env, nowMs });
     const status = getSkillCuratorStatus({ env: process.env });
@@ -415,16 +484,26 @@ describe("skill curator lifecycle", () => {
     ]);
   });
 
-  it("prunes lifecycle rows when curated skill files disappear", async () => {
+  it("prunes lifecycle and usage rows when curated skill files disappear", async () => {
     const nowMs = Date.UTC(2026, 0, 1);
+    const skillFile = path.join(rootDir, "agent", "skills", "removed-skill", "SKILL.md");
     addAppliedSkill({ name: "Removed Skill", appliedAtMs: nowMs });
+    await recordSkillUsage({
+      skillFile,
+      skillName: "Removed Skill",
+      skillSource: "workspace",
+      agentId: "main",
+      ts: nowMs,
+    });
     await runSkillCuratorSweep({ env: process.env, nowMs });
-    expect(getSkillCuratorStatus({ env: process.env }).skills).toHaveLength(1);
+    expect(getSkillCuratorStatus({ env: process.env }).skills).toMatchObject([{ useCount: 1 }]);
+    expect(readSkillUsageFiles()).toEqual([skillFile]);
 
-    fs.rmSync(path.join(rootDir, "agent", "skills", "removed-skill", "SKILL.md"));
+    fs.rmSync(skillFile);
     await runSkillCuratorSweep({ env: process.env, nowMs: nowMs + 1 });
 
     expect(getSkillCuratorStatus({ env: process.env }).skills).toEqual([]);
+    expect(readSkillUsageFiles()).toEqual([]);
   });
 
   it("leaves manually authored skills outside lifecycle state", async () => {
@@ -498,21 +577,36 @@ describe("skill curator lifecycle", () => {
           resolveManifest = resolve;
         }),
     );
-    const sweep = runSkillCuratorSweep({ env: process.env, nowMs });
-
-    expect(
-      getSkillCuratorDoctorWarning({
-        env: process.env,
-        nowMs: nowMs + DOCTOR_WEDGED_AFTER_MS + 1,
-      }),
-    ).toContain("skill curator has not completed a sweep");
-
-    resolveManifest?.({
-      schema: "openclaw.skill-workshop.proposals-manifest.v1",
-      updatedAt: new Date(nowMs).toISOString(),
-      proposals: [],
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs - CURATOR_INITIAL_DELAY_MS);
+    let failure: unknown;
+    const cleanup = startSkillCuratorMaintenance({
+      onError: (error) => {
+        failure = error;
+      },
+      registerUsageTracking: () => () => undefined,
     });
-    await sweep;
+    try {
+      vi.advanceTimersByTime(CURATOR_INITIAL_DELAY_MS);
+      await Promise.resolve();
+      expect(
+        getSkillCuratorDoctorWarning({
+          env: process.env,
+          nowMs: nowMs + DOCTOR_WEDGED_AFTER_MS + 1,
+        }),
+      ).toContain("skill curator has not completed a sweep");
+
+      resolveManifest?.({
+        schema: "openclaw.skill-workshop.proposals-manifest.v1",
+        updatedAt: new Date(nowMs).toISOString(),
+        proposals: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(failure).toBeUndefined();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 
   it("filters archived skills from snapshots while retaining stale skills", async () => {

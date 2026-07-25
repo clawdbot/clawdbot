@@ -249,7 +249,7 @@ function configureClickClack() {
           ...cfg.plugins?.entries?.clickclack?.llm,
           allowAgentIdOverride: true,
           allowModelOverride: true,
-          allowedModels: ["openai/gpt-5.5"],
+          allowedModels: ["openai/gpt-5.6-luna"],
         },
       },
     },
@@ -264,7 +264,7 @@ function configureClickClack() {
       workspace: "release",
       defaultTo: "channel:general",
       replyMode: "model",
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-luna",
       reconnectMs: 250,
     },
   };

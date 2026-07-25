@@ -12,9 +12,7 @@ import {
   buildMSTeamsPollCard,
   createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
-  normalizeMSTeamsPollSelections,
   type MSTeamsPoll,
-  type MSTeamsPollStore,
 } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -72,103 +70,6 @@ describe("msteams polls", () => {
       throw new Error("expected stored poll after recordVote");
     }
     expect(stored.votes["user-1"]).toEqual(["0"]);
-  });
-
-  it("does not coerce partial poll selections", () => {
-    expect(
-      normalizeMSTeamsPollSelections(
-        {
-          id: "poll-1",
-          question: "Lunch?",
-          options: ["Pizza", "Sushi"],
-          maxSelections: 2,
-          votes: {},
-          createdAt: "2026-03-22T00:00:00.000Z",
-        },
-        ["0", "1x"],
-      ),
-    ).toEqual(["0"]);
-  });
-
-  it("accepts only strict decimal poll selections", () => {
-    expect(
-      normalizeMSTeamsPollSelections(
-        {
-          id: "poll-1",
-          question: "Lunch?",
-          options: ["Pizza", "Sushi"],
-          maxSelections: 2,
-          votes: {},
-          createdAt: "2026-03-22T00:00:00.000Z",
-        },
-        ["+0", "0x1", "1"],
-      ),
-    ).toEqual(["0", "1"]);
-  });
-});
-
-const createStateStore = async () => {
-  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
-  return createMSTeamsPollStoreState({ stateDir });
-};
-
-function createMemoryPollStore(initial: MSTeamsPoll[] = []): MSTeamsPollStore {
-  const polls = new Map<string, MSTeamsPoll>();
-  for (const poll of initial) {
-    polls.set(poll.id, { ...poll });
-  }
-
-  return {
-    createPoll: async (poll) => {
-      polls.set(poll.id, { ...poll });
-    },
-    getPoll: async (pollId) => polls.get(pollId) ?? null,
-    recordVote: async ({ pollId, voterId, selections }) => {
-      const poll = polls.get(pollId);
-      if (!poll) {
-        return null;
-      }
-      const normalized = normalizeMSTeamsPollSelections(poll, selections);
-      poll.votes[voterId] = normalized;
-      poll.updatedAt = new Date().toISOString();
-      polls.set(poll.id, poll);
-      return poll;
-    },
-  };
-}
-
-const createMemoryStore = () => createMemoryPollStore();
-
-describe.each([
-  { name: "memory", createStore: createMemoryStore },
-  { name: "state", createStore: createStateStore },
-])("$name poll store", ({ createStore }) => {
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
-    setMSTeamsRuntime(msteamsRuntimeStub);
-  });
-
-  it("stores polls and records normalized votes", async () => {
-    const store = await createStore();
-    await store.createPoll({
-      id: "poll-1",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      createdAt: new Date().toISOString(),
-      votes: {},
-    });
-
-    const poll = await store.recordVote({
-      pollId: "poll-1",
-      voterId: "user-1",
-      selections: ["0", "1"],
-    });
-
-    if (!poll) {
-      throw new Error("poll store did not return the updated poll");
-    }
-    expect(poll.votes["user-1"]).toEqual(["0"]);
   });
 });
 
@@ -265,6 +166,30 @@ describe("state poll store", () => {
     });
   });
 
+  it.each([
+    { selections: ["0", "1x"], expected: ["0"] },
+    { selections: ["+0", "0x1", "1"], expected: ["0", "1"] },
+  ])("accepts only strict decimal poll selections", async ({ selections, expected }) => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
+    const store = createMSTeamsPollStoreState({ stateDir });
+    await store.createPoll({
+      id: "poll-strict-selections",
+      question: "Pick",
+      options: ["A", "B"],
+      maxSelections: 2,
+      createdAt: new Date().toISOString(),
+      votes: {},
+    });
+
+    await expect(
+      store.recordVote({
+        pollId: "poll-strict-selections",
+        voterId: "user-1",
+        selections,
+      }),
+    ).resolves.toMatchObject({ votes: { "user-1": expected } });
+  });
+
   it("keeps large vote maps split across bounded rows", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
     const store = createMSTeamsPollStoreState({ stateDir });
@@ -359,76 +284,5 @@ describe("state poll store", () => {
     const buckets = await voteBucketStore.entries();
     expect(buckets.some((row) => row.value.pollId === oldPollId)).toBe(false);
     expect(buckets.some((row) => row.value.pollId === "poll-new")).toBe(true);
-  });
-});
-
-describe("memory poll store", () => {
-  it("reads seeded polls back, updates timestamps, and returns null for missing polls", async () => {
-    const store = createMemoryPollStore([
-      {
-        id: "poll-1",
-        question: "Pick one",
-        options: ["A", "B"],
-        maxSelections: 1,
-        votes: {},
-        createdAt: "2026-03-22T00:00:00.000Z",
-        updatedAt: "2026-03-22T00:00:00.000Z",
-      },
-    ]);
-
-    await expect(store.getPoll("poll-1")).resolves.toEqual({
-      id: "poll-1",
-      question: "Pick one",
-      options: ["A", "B"],
-      maxSelections: 1,
-      votes: {},
-      createdAt: "2026-03-22T00:00:00.000Z",
-      updatedAt: "2026-03-22T00:00:00.000Z",
-    });
-
-    const originalUpdatedAt = "2026-03-22T00:00:00.000Z";
-    const result = await store.recordVote({
-      pollId: "poll-1",
-      voterId: "user-1",
-      selections: ["1", "0", "missing"],
-    });
-
-    expect(result?.votes["user-1"]).toEqual(["1"]);
-    expect(result?.updatedAt).not.toBe(originalUpdatedAt);
-
-    await store.createPoll({
-      id: "poll-2",
-      question: "Pick many",
-      options: ["X", "Y"],
-      maxSelections: 2,
-      votes: {},
-      createdAt: "2026-03-22T00:00:00.000Z",
-      updatedAt: "2026-03-22T00:00:00.000Z",
-    });
-
-    const updatedPoll = await store.recordVote({
-      pollId: "poll-2",
-      voterId: "user-2",
-      selections: ["1", "0", "1"],
-    });
-    if (!updatedPoll?.updatedAt) {
-      throw new Error("expected updated poll timestamp after recordVote");
-    }
-    const { updatedAt, ...stableUpdatedPoll } = updatedPoll;
-    expect(typeof updatedAt).toBe("string");
-    expect(stableUpdatedPoll).toEqual({
-      id: "poll-2",
-      question: "Pick many",
-      options: ["X", "Y"],
-      maxSelections: 2,
-      votes: {
-        "user-2": ["1", "0"],
-      },
-      createdAt: "2026-03-22T00:00:00.000Z",
-    });
-
-    await expect(
-      store.recordVote({ pollId: "missing", voterId: "nobody", selections: ["x"] }),
-    ).resolves.toBeNull();
   });
 });

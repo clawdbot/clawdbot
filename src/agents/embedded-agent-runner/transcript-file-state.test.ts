@@ -25,6 +25,28 @@ afterEach(async () => {
 });
 
 describe("readTranscriptFileState", () => {
+  it("normalizes appended session names to one line", async () => {
+    const root = await makeRoot("openclaw-transcript-state-name-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "session-1",
+        timestamp: "2026-07-16T00:00:00.000Z",
+        cwd: root,
+      })}\n`,
+      "utf-8",
+    );
+    const state = await readTranscriptFileState(sessionFile);
+
+    const entry = state.appendSessionInfo("  first\nsecond\r\nthird  ");
+
+    expect(entry.name).toBe("first second third");
+    expect(state.getEntries().at(-1)).toMatchObject({ name: "first second third" });
+  });
+
   it("skips malformed session entries without moving the active leaf", async () => {
     // Bad rows are ignored for branch construction, but valid legacy orphan
     // roots remain reachable so partial imports can still be replayed.
@@ -1477,3 +1499,4 @@ describe("readTranscriptFileState", () => {
     expect(branchText).toEqual(["before malformed row", "after malformed row"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

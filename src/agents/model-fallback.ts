@@ -40,6 +40,7 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
+  findCliMaxTurnsError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
   resolveModelFallbackError,
@@ -54,7 +55,11 @@ import {
   isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
 } from "./fallback-skip-cache.js";
-import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
+import {
+  MissingAgentHarnessError,
+  isAgentHarnessPreflightError,
+  isMissingAgentHarnessError,
+} from "./harness/errors.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
@@ -65,14 +70,14 @@ import {
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
-import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
-import { isCliProvider } from "./model-selection-cli.js";
 import {
   type ModelManifestNormalizationContext,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
+import { isCliProvider } from "./model-selection-cli.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
@@ -151,7 +156,7 @@ type FailoverAttribution = {
  * exhausted. Carries per-attempt details so callers can build informative
  * user-facing messages (e.g. "rate-limited, retry in 30 s").
  */
-export class FallbackSummaryError extends Error {
+class FallbackSummaryError extends Error {
   readonly attempts: FallbackAttempt[];
   readonly soonestCooldownExpiry: number | null;
   readonly sessionId?: string;
@@ -360,10 +365,10 @@ type ModelFallbackClassifiedResult<T> = Pick<
   "result" | "provider" | "model"
 >;
 
-type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
+type ModelFallbackAuthRuntime = typeof import("./auth-profiles.runtime.js");
 
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
-  () => import("./model-fallback-auth.runtime.js"),
+  () => import("./auth-profiles.runtime.js"),
 );
 const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
 const fallbackCandidateCache = new Map<string, ModelCandidate[]>();
@@ -411,6 +416,11 @@ async function runFallbackCandidate<T>(params: {
     };
   } catch (err) {
     if (isCommandLaneTaskTimeoutError(err)) {
+      throw err;
+    }
+    // Harness preflight is model-independent. Preserve its typed ownership
+    // before timeout-shaped messages can be normalized as provider failures.
+    if (isAgentHarnessPreflightError(err)) {
       throw err;
     }
     const fallbackError = resolveModelFallbackError(err, {
@@ -553,6 +563,20 @@ function resolveResultClassificationError(
 
 function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
+}
+
+function resolveNextFallbackCandidateIndex(params: {
+  candidates: ModelCandidate[];
+  currentIndex: number;
+  excludedProviders: ReadonlySet<string>;
+}): number {
+  for (let index = params.currentIndex + 1; index < params.candidates.length; index += 1) {
+    const candidate = params.candidates[index];
+    if (candidate && !params.excludedProviders.has(candidate.provider)) {
+      return index;
+    }
+  }
+  return params.candidates.length;
 }
 
 function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | undefined): boolean {
@@ -704,10 +728,9 @@ function findLiveSessionModelSwitchRedirectIndex(params: {
   currentIndex: number;
 }): number | null {
   const targetKey = modelKey(params.error.provider, params.error.model);
-  for (let i = params.currentIndex + 1; i < params.candidates.length; i += 1) {
-    const candidate = params.candidates[i];
+  for (const [offset, candidate] of params.candidates.slice(params.currentIndex + 1).entries()) {
     if (modelKey(candidate.provider, candidate.model) === targetKey) {
-      return i;
+      return params.currentIndex + 1 + offset;
     }
   }
   return null;
@@ -888,14 +911,6 @@ export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefi
   }
   return DEFAULT_PROVIDER;
 }
-
-export const testing = {
-  resolveFallbackCandidates: resolveModelCandidateChain,
-  resolveImageFallbackCandidates,
-  resolveCooldownDecision,
-  resolveSessionSuspensionReason,
-  shouldDiscardDeferredSessionSuspension,
-} as const;
 
 export function resolveModelCandidateChain(
   params: {
@@ -1412,6 +1427,13 @@ function shouldDiscardDeferredSessionSuspension(params: {
   );
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelFallbackTestApi")] = {
+    resolveCooldownDecision,
+    shouldDiscardDeferredSessionSuspension,
+  };
+}
+
 export async function runWithModelFallback<T>(
   params: RunWithModelFallbackParams<T>,
 ): Promise<ModelFallbackRunResult<T>> {
@@ -1458,6 +1480,7 @@ async function runWithModelFallbackInternal<T>(
   let latestClassifiedResult: ModelFallbackClassifiedResult<T> | undefined;
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
+  const tlsFailedProviders = new Set<string>();
   const resolveTerminalSuspensionLane = () =>
     deferredSuspension.pending ? deferredSuspension.pending.laneId : params.lane;
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
@@ -1503,7 +1526,20 @@ async function runWithModelFallbackInternal<T>(
   const requestedCandidate = candidates[0];
 
   for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
+    const candidate = candidates.at(i);
+    if (!candidate) {
+      throw new Error(`Missing model fallback candidate at index ${i}`);
+    }
+    if (tlsFailedProviders.has(candidate.provider)) {
+      continue;
+    }
+    const nextCandidateIndex = resolveNextFallbackCandidateIndex({
+      candidates,
+      currentIndex: i,
+      excludedProviders: tlsFailedProviders,
+    });
+    const nextCandidate = candidates[nextCandidateIndex];
+    const hasRemainingCandidate = nextCandidate !== undefined;
     const candidateHarnessAuth = await resolveModelFallbackCandidateHarnessAuthPrecheck({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -1559,7 +1595,7 @@ async function runWithModelFallbackInternal<T>(
           total: candidates.length,
           reason: skipReason as FailoverReason,
           error,
-          nextCandidate: candidates[i + 1],
+          nextCandidate,
           isPrimary,
           requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
@@ -1576,6 +1612,12 @@ async function runWithModelFallbackInternal<T>(
         cfg: params.cfg,
         store: authStore,
         provider: candidate.provider,
+      });
+      authRuntime.maybeReprobeWhamBlockedProfiles({
+        store: authStore,
+        profileIds,
+        agentDir: params.agentDir,
+        forModel: candidate.model,
       });
       const isAnyProfileAvailable = profileIds.some(
         (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
@@ -1614,7 +1656,7 @@ async function runWithModelFallbackInternal<T>(
           // Only lock the lane when no remaining candidates can serve as
           // fallbacks. Per-provider cooldown state already prevents
           // re-attempting the failed provider on subsequent turns.
-          const hasRemainingCandidates = i + 1 < candidates.length;
+          const hasRemainingCandidates = hasRemainingCandidate;
           if (params.sessionId) {
             emitFailoverEvent({
               sessionId: params.sessionId,
@@ -1651,7 +1693,7 @@ async function runWithModelFallbackInternal<T>(
             total: candidates.length,
             reason: decision.reason,
             error,
-            nextCandidate: candidates[i + 1],
+            nextCandidate,
             isPrimary,
             requestedModelMatched: requestedModel,
             fallbackConfigured: hasFallbackCandidates,
@@ -1680,7 +1722,7 @@ async function runWithModelFallbackInternal<T>(
             total: candidates.length,
             reason: decision.reason,
             error: decision.error,
-            nextCandidate: candidates[i + 1],
+            nextCandidate,
             isPrimary,
             requestedModelMatched: requestedModel,
             fallbackConfigured: hasFallbackCandidates,
@@ -1718,7 +1760,7 @@ async function runWithModelFallbackInternal<T>(
               total: candidates.length,
               reason: decision.reason,
               error,
-              nextCandidate: candidates[i + 1],
+              nextCandidate,
               isPrimary,
               requestedModelMatched: requestedModel,
               fallbackConfigured: hasFallbackCandidates,
@@ -1743,7 +1785,7 @@ async function runWithModelFallbackInternal<T>(
           attempt: i + 1,
           total: candidates.length,
           reason: decision.reason,
-          nextCandidate: candidates[i + 1],
+          nextCandidate,
           isPrimary,
           requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
@@ -1759,12 +1801,12 @@ async function runWithModelFallbackInternal<T>(
       attempts,
       options: {
         ...runOptions,
-        isFinalFallbackAttempt: i + 1 === candidates.length,
+        isFinalFallbackAttempt: !hasRemainingCandidate,
       },
       // Only the outer fallback loop knows another candidate remains. Carry
       // that fact through this attempt so the embedded runner does not freeze
       // the shared lane before the next candidate can run.
-      deferSessionSuspension: i + 1 < candidates.length,
+      deferSessionSuspension: hasRemainingCandidate,
       onDeferredSessionSuspension: (suspension) => {
         deferredSuspension.pending = suspension;
       },
@@ -1802,6 +1844,11 @@ async function runWithModelFallbackInternal<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
+    // Max-turn termination can follow successful tool actions. Stop before
+    // candidate fallback so the user can verify effects before any replay.
+    if (findCliMaxTurnsError(err)) {
+      throw err;
+    }
     if (
       !attemptRun.classifiedResult &&
       params.canFallbackAfterError &&
@@ -1851,6 +1898,11 @@ async function runWithModelFallbackInternal<T>(
         throw err;
       }
       if (isMissingAgentHarnessError(err)) {
+        throw err;
+      }
+      // Harness preflight depends on the selected runtime and its local state,
+      // not the model candidate. Retrying it would only amplify the same stall.
+      if (isAgentHarnessPreflightError(err)) {
         throw err;
       }
       const normalized =
@@ -1908,7 +1960,7 @@ async function runWithModelFallbackInternal<T>(
           requestedModel: params.model,
           attempt: i + 1,
           total: candidates.length,
-          nextCandidate: candidates[i + 1],
+          nextCandidate,
           isPrimary,
           requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
@@ -1920,7 +1972,7 @@ async function runWithModelFallbackInternal<T>(
       // there are remaining candidates.  Only abort/context-overflow errors
       // (handled above) are truly non-retryable.
       const isKnownFailover = isFailoverError(normalized);
-      if (!isKnownFailover && i === candidates.length - 1) {
+      if (!isKnownFailover && !hasRemainingCandidate) {
         throw err;
       }
 
@@ -1941,6 +1993,14 @@ async function runWithModelFallbackInternal<T>(
         });
       }
 
+      if (isKnownFailover && normalized.reason === "tls_certificate") {
+        tlsFailedProviders.add(candidate.provider);
+      }
+      const failedNextCandidateIndex = resolveNextFallbackCandidateIndex({
+        candidates,
+        currentIndex: i,
+        excludedProviders: tlsFailedProviders,
+      });
       lastError = isKnownFailover ? normalized : err;
       await observeFailedCandidate({
         attempts,
@@ -1953,7 +2013,7 @@ async function runWithModelFallbackInternal<T>(
         requestedModel: params.model,
         attempt: i + 1,
         total: candidates.length,
-        nextCandidate: candidates[i + 1],
+        nextCandidate: candidates[failedNextCandidateIndex],
         isPrimary,
         requestedModelMatched: requestedModel,
         fallbackConfigured: hasFallbackCandidates,
@@ -1965,6 +2025,9 @@ async function runWithModelFallbackInternal<T>(
         attempt: i + 1,
         total: candidates.length,
       });
+      if (failedNextCandidateIndex > i + 1) {
+        i = failedNextCandidateIndex - 1;
+      }
     }
   }
 
@@ -2017,6 +2080,7 @@ export async function runWithImageModelFallback<T>(params: {
   modelOverride?: string;
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
+  abortSignal?: AbortSignal;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
@@ -2032,14 +2096,17 @@ export async function runWithImageModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
+  for (const [i, candidate] of candidates.entries()) {
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
       attempts,
       attempt: i + 1,
       total: candidates.length,
+      abortSignal: params.abortSignal,
+    }).catch((error: unknown) => {
+      params.abortSignal?.throwIfAborted();
+      throw error;
     });
     if ("success" in attemptRun) {
       return attemptRun.success;
@@ -2071,4 +2138,4 @@ export async function runWithImageModelFallback<T>(params: {
     cfg: params.cfg,
   });
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

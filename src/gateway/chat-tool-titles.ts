@@ -52,7 +52,7 @@ const TOOL_TITLES_SYSTEM_PROMPT = [
   'Respond with JSON only: {"titles":{"<id>":"<title>"}} covering every item id.',
 ].join(" ");
 
-export type ToolTitleRequestItem = { id: string; name: string; input: string };
+type ToolTitleRequestItem = { id: string; name: string; input: string };
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
@@ -74,7 +74,7 @@ function normalizeItems(items: readonly ToolTitleRequestItem[]): ToolTitleReques
     // secret egress path. Redaction runs on the full schema-bounded input and
     // only then truncates — slicing first could bisect a secret so its
     // fragment no longer matches any redaction pattern.
-    const input = redactToolPayloadText(item.input).slice(0, TOOL_TITLE_INPUT_MAX_CHARS);
+    const input = truncateUtf16Safe(redactToolPayloadText(item.input), TOOL_TITLE_INPUT_MAX_CHARS);
     if (!id || !name || !input.trim() || seen.has(id)) {
       continue;
     }
@@ -220,7 +220,6 @@ async function generateMissingTitles(params: {
       // Profile-isolated sessions must not leak their tool args through the
       // agent/default credential; the session's auth profile wins.
       preferredProfile: params.sessionAuthProfile,
-      useAsyncModelResolution: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
   } catch (err) {

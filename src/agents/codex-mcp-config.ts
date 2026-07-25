@@ -12,22 +12,17 @@ import {
 } from "../plugins/bundle-mcp.js";
 import { isRecord } from "../utils.js";
 import {
-  applyCommonServerConfig,
   decodeHeaderEnvPlaceholder,
+  normalizeBundleMcpServerConfig,
   normalizeStringRecord,
-} from "./cli-runner/bundle-mcp-adapter-shared.js";
+} from "./bundle-mcp-adapter.js";
 import type {
   CodexBundleMcpThreadConfig,
   CodexMcpServersConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
-
-export type {
-  CodexBundleMcpThreadConfig,
-  CodexMcpServersConfig,
-  LoadCodexBundleMcpThreadConfigParams,
-} from "./codex-mcp-config.types.js";
+import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
 function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
   return (
@@ -116,8 +111,7 @@ export function normalizeCodexMcpServerConfig(
   name: string,
   server: BundleMcpServerConfig,
 ): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
-  applyCommonServerConfig(next, server);
+  const next = normalizeBundleMcpServerConfig(server);
   applyCodexToolFilter(next, name, server);
   const defaultToolsApprovalMode = resolveCodexDefaultToolsApprovalMode(server);
   if (defaultToolsApprovalMode) {
@@ -154,10 +148,15 @@ export function normalizeCodexMcpServerConfig(
   return next;
 }
 
-/** Build Codex `mcp_servers` config from normalized bundle MCP config. */
+/**
+ * Build Codex `mcp_servers` config from normalized bundle MCP config.
+ * Requester-scoped servers are excluded: harness-native MCP clients are
+ * session-shared and must never dial placeholder or requester-bound URLs.
+ */
 export function buildCodexMcpServersConfig(config: BundleMcpConfig): CodexMcpServersConfig {
+  const { staticServers } = partitionMcpServersByConnectionScope(config.mcpServers);
   return Object.fromEntries(
-    Object.entries(config.mcpServers).map(([name, server]) => [
+    Object.entries(staticServers).map(([name, server]) => [
       name,
       normalizeCodexMcpServerConfig(name, server),
     ]),

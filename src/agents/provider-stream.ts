@@ -3,7 +3,11 @@
  * Resolves plugin-owned or transport-aware stream functions and registers the
  * model API once a concrete stream implementation exists.
  */
+import type { ApiRegistry } from "@openclaw/ai";
+import "./ai-transport-runtime-host.js";
+import { createTransportAwareStreamFnForModel } from "@openclaw/ai/transports";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Api, Model } from "../llm/types.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
@@ -12,7 +16,6 @@ import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
-import { createTransportAwareStreamFnForModel } from "./provider-transport-stream.js";
 import type { StreamFn } from "./runtime/index.js";
 
 /** Resolves and registers the stream function for a provider-backed model. */
@@ -23,6 +26,7 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   allowRuntimePluginLoad?: boolean;
+  apiRegistry?: ApiRegistry;
 }): StreamFn | undefined {
   // Plugin stream factories may capture model headers, so construction is the
   // last safe boundary for providers that do not expose the host fetch seam.
@@ -66,7 +70,10 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   }
   // Register custom APIs only after a concrete stream exists, so later callers
   // can route by model.api without reloading provider runtime hooks.
-  ensureCustomApiRegistered(params.model.api, streamFn);
+  const apiRegistry = params.apiRegistry ?? getModelLlmRuntime(params.model)?.registry;
+  if (apiRegistry) {
+    ensureCustomApiRegistered(apiRegistry, params.model.api, streamFn);
+  }
   return streamFn;
 }
 

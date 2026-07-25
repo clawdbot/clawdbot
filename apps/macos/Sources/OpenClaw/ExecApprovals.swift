@@ -361,28 +361,6 @@ enum ExecApprovalHelpers {
     }
 }
 
-struct ExecEventPayload: Codable {
-    var sessionKey: String
-    var runId: String
-    var host: String
-    var command: String?
-    var exitCode: Int?
-    var timedOut: Bool?
-    var success: Bool?
-    var output: String?
-    var reason: String?
-
-    static func truncateOutput(_ raw: String, maxChars: Int = 20000) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.count <= maxChars {
-            return trimmed
-        }
-        let suffix = trimmed.suffix(maxChars)
-        return "... (truncated) \(suffix)"
-    }
-}
-
 actor SkillBinsCache {
     static let shared = SkillBinsCache()
 

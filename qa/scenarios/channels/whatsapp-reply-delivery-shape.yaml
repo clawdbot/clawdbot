@@ -1,0 +1,19 @@
+title: WhatsApp direct Gateway send chunks long replies
+scenario:
+  id: whatsapp-reply-delivery-shape
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.outbound-text-sends
+  execution:
+    profiles: { "whatsapp:mock-default": 27 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 120000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-reply-delivery-shape }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppReplyDeliveryShapeScenario
+  args: [{ expr: whatsappScenarioContext }]

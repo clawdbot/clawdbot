@@ -1,9 +1,7 @@
+import { detectOpenAICompletionsCompat } from "@openclaw/ai/transports";
 // Verifies OpenAI-compatible endpoint defaults for streaming usage and reasoning payloads.
 import { describe, expect, it } from "vitest";
-import {
-  detectOpenAICompletionsCompat,
-  resolveOpenAICompletionsCompatDefaults,
-} from "./openai-completions-compat.js";
+import { resolveOpenAICompletionsCompatDefaults } from "./openai-completions-compat.test-support.js";
 
 describe("resolveOpenAICompletionsCompatDefaults", () => {
   it("keeps streaming usage enabled for provider-declared compatible endpoints", () => {
@@ -82,6 +80,16 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
 
     expect(defaults.thinkingFormat).toBe("together");
     expect(defaults.supportsReasoningEffort).toBe(false);
+    expect(defaults.maxTokensField).toBe("max_tokens");
+  });
+
+  it("uses Z.AI's documented max_tokens field", () => {
+    const defaults = resolveOpenAICompletionsCompatDefaults({
+      provider: "zai",
+      endpointClass: "zai-native",
+      knownProviderFamily: "zai",
+    });
+
     expect(defaults.maxTokensField).toBe("max_tokens");
   });
 

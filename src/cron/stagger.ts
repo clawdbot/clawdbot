@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Resolves deterministic cron stagger windows for recurring schedules. */
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import type { CronSchedule } from "./types.js";
@@ -20,15 +21,22 @@ function hasRecurringWildcardHour(field: string): boolean {
 }
 
 /** Returns whether a cron expression fires recurring jobs exactly at the top of an hour. */
-export function isRecurringTopOfHourCronExpr(expr: string) {
+function isRecurringTopOfHourCronExpr(expr: string) {
   const fields = parseCronFields(expr);
   if (fields.length === 5) {
     const [minuteField, hourField] = fields;
-    return minuteField === "0" && hasRecurringWildcardHour(hourField);
+    return (
+      minuteField === "0" &&
+      hasRecurringWildcardHour(expectDefined(hourField, "stagger hour field"))
+    );
   }
   if (fields.length === 6) {
     const [secondField, minuteField, hourField] = fields;
-    return secondField === "0" && minuteField === "0" && hasRecurringWildcardHour(hourField);
+    return (
+      secondField === "0" &&
+      minuteField === "0" &&
+      hasRecurringWildcardHour(expectDefined(hourField, "stagger hour field"))
+    );
   }
   return false;
 }

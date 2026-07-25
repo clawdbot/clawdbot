@@ -92,6 +92,27 @@ describe("auth-store", () => {
     });
   });
 
+  it("revalidates setup ownership immediately before restoring backup credentials", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-guarded-restore");
+    const credsPath = path.join(authDir, "creds.json");
+    const guardError = new Error("verified inference route changed");
+    fsSync.writeFileSync(credsPath, "{x", "utf-8");
+    fsSync.writeFileSync(
+      path.join(authDir, "creds.json.bak"),
+      JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
+      "utf-8",
+    );
+
+    await expect(
+      restoreCredsFromBackupIfNeeded(authDir, {
+        beforeCredentialPersistence: async () => {
+          throw guardError;
+        },
+      }),
+    ).rejects.toBe(guardError);
+    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{x");
+  });
+
   it("leaves malformed creds unchanged when the backup is malformed", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-malformed-backup");
     const credsPath = path.join(authDir, "creds.json");
@@ -276,6 +297,24 @@ describe("auth-store", () => {
 
       await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(true);
       expect(fsSync.existsSync(authDir)).toBe(false);
+    });
+  });
+
+  it("revalidates setup ownership immediately before deleting linked credentials", async () => {
+    await withOwnedOAuthAuthDir("openclaw-wa-auth-guarded-logout", async (authDir) => {
+      const credsPath = path.join(authDir, "creds.json");
+      const guardError = new Error("verified inference route changed");
+      fsSync.writeFileSync(credsPath, "{}", "utf-8");
+
+      await expect(
+        logoutWeb({
+          authDir,
+          beforeCredentialPersistence: async () => {
+            throw guardError;
+          },
+        }),
+      ).rejects.toBe(guardError);
+      expect(fsSync.existsSync(credsPath)).toBe(true);
     });
   });
 

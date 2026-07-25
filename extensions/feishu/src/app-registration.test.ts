@@ -11,7 +11,8 @@ import {
   pollAppRegistration,
   printQrCode,
 } from "./app-registration.js";
-import { FEISHU_JSON_MAX_BYTES } from "./json-response.js";
+
+const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 const { renderQrTerminalMock } = vi.hoisted(() => ({
   renderQrTerminalMock: vi.fn(async () => "terminal-qr"),
@@ -241,6 +242,41 @@ describe("Feishu app registration", () => {
     await expect(poll).resolves.toEqual({ status: "timeout" });
   });
 
+  it("stops polling promptly when abortSignal fires during the poll interval", async () => {
+    let requestCount = 0;
+    await withRegistrationServer(
+      (_req, res) => {
+        requestCount += 1;
+        writeJson(res, { error: "authorization_pending" });
+      },
+      async ({ fetchImpl, lookupFn }) => {
+        const controller = new AbortController();
+        const started = Date.now();
+
+        const poll = pollAppRegistration({
+          deviceCode: "device-code",
+          interval: 30,
+          expireIn: 600,
+          abortSignal: controller.signal,
+          fetchImpl,
+          lookupFn,
+        });
+        // Let the first poll resolve and the loop enter its 30s interval sleep.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        controller.abort();
+
+        await expect(poll).resolves.toEqual({ status: "timeout" });
+        expect(Date.now() - started).toBeLessThan(10_000);
+        expect(requestCount).toBe(1);
+        console.log(
+          `[feishu pollAppRegistration abort proof] interval=30s aborted_after=200ms elapsed=${Date.now() - started}ms requests=${requestCount} outcome=timeout`,
+        );
+      },
+    );
+  });
+
   it("prints scan-to-create QR codes with compact terminal rendering", async () => {
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
@@ -251,6 +287,39 @@ describe("Feishu app registration", () => {
       { small: true },
     );
     expect(writeSpy).toHaveBeenCalledWith("terminal-qr\n");
+  });
+
+  it("times out registration POSTs when accounts never return headers", async () => {
+    await withRegistrationServer(
+      // Accept TCP but never write headers — idle body timers never start.
+      (_req, _res) => {},
+      async (options) => {
+        const started = Date.now();
+        const outcome = await beginAppRegistration("feishu", {
+          ...options,
+          // Keep the real guarded-fetch path while shortening its production deadline.
+          timeoutMs: 80,
+        }).then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+        const elapsedMs = Date.now() - started;
+        expect(outcome.ok).toBe(false);
+        if (!outcome.ok) {
+          expect(outcome.error).toMatchObject({
+            name: "TimeoutError",
+            message: "request timed out",
+          });
+        }
+        expect(elapsedMs).toBeGreaterThanOrEqual(60);
+        expect(elapsedMs).toBeLessThan(2_000);
+        console.log(
+          `[feishu fetchFeishuJson hang proof] timed_out=${!outcome.ok} name=${
+            outcome.ok ? "n/a" : (outcome.error as Error).name
+          } elapsed_ms=${elapsedMs}`,
+        );
+      },
+    );
   });
 
   // over-cap: body > 16 MiB, no Content-Length. The bounded reader cancels

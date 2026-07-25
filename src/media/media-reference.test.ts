@@ -1,6 +1,7 @@
 // Media reference tests cover resolving refs to local, remote, and inline media.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -172,10 +173,20 @@ describe("media reference helpers", () => {
         });
       }
       await expect(
-        resolveInboundMediaReference(path.join(stateDir, "media", "inbound", "nested", ids[0])),
+        resolveInboundMediaReference(
+          path.join(
+            stateDir,
+            "media",
+            "inbound",
+            "nested",
+            expectDefined(ids[0], "ids[0] test invariant"),
+          ),
+        ),
       ).resolves.toBeNull();
       await expect(
-        resolveInboundMediaReference(path.join(stateDir, "media", "outbound", ids[0])),
+        resolveInboundMediaReference(
+          path.join(stateDir, "media", "outbound", expectDefined(ids[0], "ids[0] test invariant")),
+        ),
       ).resolves.toBeNull();
     } finally {
       await Promise.all(filePaths.map((filePath) => fs.rm(filePath, { force: true })));

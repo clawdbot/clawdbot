@@ -2,11 +2,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  createVllmProviderThinkingWrapper,
-  createVllmQwenThinkingWrapper,
-  wrapVllmProviderStream,
-} from "./stream.js";
+import { createVllmQwenThinkingWrapper, wrapVllmProviderStream } from "./stream.js";
 
 function capturePayload(params: {
   format: "chat-template" | "top-level";
@@ -135,21 +131,21 @@ describe("createVllmProviderThinkingWrapper", () => {
       return {} as ReturnType<StreamFn>;
     };
 
-    const wrapped = createVllmProviderThinkingWrapper({
-      baseStreamFn,
+    const model = {
+      api: "openai-completions",
+      provider: "vllm",
+      id: "nemotron-3-super",
+      reasoning: true,
+      ...params.model,
+    } as Model<"openai-completions">;
+    const wrapped = wrapVllmProviderStream({
+      provider: "vllm",
+      modelId: model.id,
+      model,
       thinkingLevel: params.thinkingLevel ?? "high",
-    });
-    void wrapped(
-      {
-        api: "openai-completions",
-        provider: "vllm",
-        id: "nemotron-3-super",
-        reasoning: true,
-        ...params.model,
-      } as Model<"openai-completions">,
-      { messages: [] } as Context,
-      {},
-    );
+      streamFn: baseStreamFn,
+    } as never);
+    void wrapped?.(model, { messages: [] } as Context, {});
 
     return captured;
   }

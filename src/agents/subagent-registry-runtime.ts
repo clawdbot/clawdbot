@@ -11,6 +11,7 @@ export {
 export {
   countPendingDescendantRuns,
   countPendingDescendantRunsExcludingRun,
+  hasDescendantRunAwaitingSettle,
   isSubagentSessionRunActive,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,

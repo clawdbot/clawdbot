@@ -2,12 +2,7 @@
 export const AGENT_BUTTON_KEY = "agent";
 export const AGENT_SELECT_KEY = "agentsel";
 
-export {
-  ackComponentInteraction,
-  resolveAgentComponentRoute,
-  resolveComponentInteractionContext,
-  resolveDiscordChannelContext,
-} from "./agent-components-context.js";
+export { ackComponentInteraction, resolveAgentComponentRoute } from "./agent-components-context.js";
 export {
   ensureAgentComponentInteractionAllowed,
   ensureComponentUserAllowed,

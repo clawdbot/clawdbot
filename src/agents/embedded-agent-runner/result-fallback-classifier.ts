@@ -110,6 +110,7 @@ function classifyGenericExternalRunFailurePayload(params: {
     payload?.isReasoning === true ||
     typeof text !== "string" ||
     text.trim() !== GENERIC_EXTERNAL_RUN_FAILURE_TEXT ||
+    !payload ||
     hasNonTextVisiblePayloadContent(payload)
   ) {
     return null;

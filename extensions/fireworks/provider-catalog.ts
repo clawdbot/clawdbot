@@ -12,7 +12,7 @@ const FIREWORKS_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 });
 
 export const FIREWORKS_BASE_URL = FIREWORKS_MANIFEST_PROVIDER.baseUrl;
-export const FIREWORKS_DEFAULT_MODEL_ID = "accounts/fireworks/routers/kimi-k2p5-turbo";
+export const FIREWORKS_DEFAULT_MODEL_ID = "accounts/fireworks/routers/kimi-k2p6-turbo";
 
 function requireFireworksManifestModel(id: string): ModelDefinitionConfig {
   const model = FIREWORKS_MANIFEST_PROVIDER.models.find((entry) => entry.id === id);

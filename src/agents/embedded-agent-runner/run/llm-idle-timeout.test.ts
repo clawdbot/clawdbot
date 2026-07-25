@@ -1,4 +1,5 @@
 import { notifyLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+import { expectDefined } from "@openclaw/normalization-core";
 // LLM idle-timeout tests cover timeout selection and stream wrapping for
 // embedded provider calls, including local-provider and cron exceptions.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -674,7 +675,10 @@ describe("streamWithIdleTimeout", () => {
         return {
           async next() {
             if (index < chunks.length) {
-              return { done: false, value: chunks[index++] };
+              return {
+                done: false,
+                value: expectDefined(chunks[index++], "chunks[index++] test invariant"),
+              };
             }
             return { done: true, value: undefined };
           },

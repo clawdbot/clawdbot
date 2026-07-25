@@ -1,13 +1,14 @@
 /** Policy and execution pipeline for approved node-host system.run requests. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayClient } from "../gateway/client.js";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import {
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
@@ -48,7 +49,7 @@ import {
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import type { NodeHostClient } from "./client.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -145,7 +146,10 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
 };
 
-const safeBinTrustedDirWarningCache = new Set<string>();
+const safeBinTrustedDirWarningCache = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
 const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
@@ -166,10 +170,9 @@ type EffectiveSystemRunExecPolicy = {
 };
 
 function warnWritableTrustedDirOnce(message: string): void {
-  if (safeBinTrustedDirWarningCache.has(message)) {
+  if (safeBinTrustedDirWarningCache.check(message)) {
     return;
   }
-  safeBinTrustedDirWarningCache.add(message);
   logWarn(message);
 }
 
@@ -194,14 +197,7 @@ function resolveAgentExecConfig(
   if (!agentId) {
     return undefined;
   }
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const entry = cfg.agents?.list?.find(
-    (candidate) =>
-      candidate !== null &&
-      typeof candidate === "object" &&
-      normalizeAgentId(candidate.id) === normalizedAgentId,
-  );
-  return entry?.tools?.exec;
+  return resolveAgentConfig(cfg, agentId)?.tools?.exec;
 }
 
 /** Resolves the effective exec security/ask policy for one system.run request. */
@@ -262,8 +258,8 @@ async function resolveSystemRunAutoReviewer(params: {
   });
 }
 
-export type HandleSystemRunInvokeOptions = {
-  client: GatewayClient;
+type HandleSystemRunInvokeOptions = {
+  client: NodeHostClient;
   params: SystemRunParams;
   skillBins: SkillBinsProvider;
   execHostEnforced: boolean;
@@ -282,7 +278,7 @@ export type HandleSystemRunInvokeOptions = {
     approvals: ExecApprovalsResolved;
     request: ExecHostRequest;
   }) => Promise<ExecHostResponse | null>;
-  sendNodeEvent: (client: GatewayClient, event: string, payload: unknown) => Promise<void>;
+  sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
   buildExecEventPayload: (payload: ExecEventPayload) => ExecEventPayload;
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
@@ -1095,3 +1091,4 @@ export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions):
   }
   await executeSystemRunPhase(opts, policyPhase);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

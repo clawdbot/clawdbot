@@ -1,0 +1,5 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"out","kind":"POST /v2/users/user-openid-trace/messages","data":{"payload":{"input_notify":{"input_second":10,"input_type":1},"msg_id":"qq-msg-final-only","msg_seq":1,"msg_type":6},"result":{"id":"wire-msg-1","timestamp":"2026-01-01T00:00:00.000Z"}}}
+{"seq":3,"at":0,"dir":"in","kind":"final","data":{"text":"All checks passed."}}
+{"seq":4,"at":0,"dir":"out","kind":"POST /v2/users/user-openid-trace/messages","data":{"payload":{"content":"All checks passed.","msg_id":"qq-msg-final-only","msg_seq":2,"msg_type":0},"result":{"id":"wire-msg-2","timestamp":"2026-01-01T00:00:00.000Z"}}}
+{"seq":5,"at":0,"dir":"in","kind":"idle"}

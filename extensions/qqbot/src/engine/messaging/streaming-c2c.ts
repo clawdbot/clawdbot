@@ -25,6 +25,7 @@ import {
   type MessageResponse,
 } from "../types.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
+import { claimMessageReply } from "./outbound-reply.js";
 import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import type { MediaTargetContext } from "./outbound.js";
 import { getMessageApi } from "./sender.js";
@@ -1000,6 +1001,14 @@ export class StreamingController {
         return;
       }
       const firstText = safeText;
+      // A stream session is one passive reply: claim once before its first
+      // POST, then reuse the same msg_seq for all later chunks in the session.
+      const passive = claimMessageReply(this.deps.replyToMsgId);
+      if (!passive.allowed) {
+        this.logWarn(`stream budget unavailable; falling back to static delivery`);
+        this.transition("aborted", "doStartStreaming", "passive_budget_exhausted");
+        return;
+      }
       const resp = await this.sendStreamChunk(
         firstText,
         StreamInputState.GENERATING,
@@ -1182,8 +1191,8 @@ async function sendMediaQueue(queue: SendQueueItem[], ctx: StreamingMediaContext
 
 /**
  * 是否对私聊走 QQ 官方 C2C `stream_messages` 流式 API。
- * - `streaming: true` 等效于 `mode: "partial"` 且 `c2cStreamApi: true`。
- * - 仍支持对象里显式设 `c2cStreamApi: true` 以兼容旧配置；仅 C2C 场景生效。
+ * - `streaming.nativeTransport: true` 启用；仅 C2C 场景生效。
+ * - 旧的 `streaming: true` 布尔与 `c2cStreamApi` 键由 `openclaw doctor --fix` 迁移。
  */
 export function shouldUseOfficialC2cStream(
   account: GatewayAccount,
@@ -1192,12 +1201,6 @@ export function shouldUseOfficialC2cStream(
   if (targetType !== "c2c") {
     return false;
   }
-  const s = account.config?.streaming;
-  if (s === true) {
-    return true;
-  }
-  if (s && typeof s === "object" && s.c2cStreamApi === true) {
-    return true;
-  }
-  return false;
+  return account.config?.streaming?.nativeTransport === true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

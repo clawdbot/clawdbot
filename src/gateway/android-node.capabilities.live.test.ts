@@ -1,5 +1,6 @@
 // Android node capability live tests verify paired node command allowlists and remote policy behavior.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
 import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
@@ -478,11 +479,14 @@ function selectTargetNode(nodes: NodeListNode[]): NodeListNode {
     throw new Error("no Android node found in node.list");
   }
 
-  return androidNodes.slice().toSorted((a, b) => {
-    const aMs = typeof a.connectedAtMs === "number" ? a.connectedAtMs : 0;
-    const bMs = typeof b.connectedAtMs === "number" ? b.connectedAtMs : 0;
-    return bMs - aMs;
-  })[0];
+  return expectDefined(
+    androidNodes.slice().toSorted((a, b) => {
+      const aMs = typeof a.connectedAtMs === "number" ? a.connectedAtMs : 0;
+      const bMs = typeof b.connectedAtMs === "number" ? b.connectedAtMs : 0;
+      return bMs - aMs;
+    })[0],
+    "androidNodes.slice().toSorted((a, b) => { const aMs = typeof a.connec... test invariant",
+  );
 }
 
 async function invokeNodeCommand(params: {
@@ -608,7 +612,7 @@ describeLive("android node capability integration (preconditioned)", () => {
     );
     expect(
       commandsToRun.length,
-      "node.describe advertised no non-interactive allowlisted commands (check gateway.nodes allowCommands/denyCommands)",
+      "node.describe advertised no non-interactive allowlisted commands (check gateway.nodes.commands allow/deny)",
     ).toBeGreaterThan(0);
 
     const missingProfiles = commandsToRun.filter((command) => !COMMAND_PROFILES[command]);
@@ -628,7 +632,7 @@ describeLive("android node capability integration (preconditioned)", () => {
           `Android node missing required non-interactive command(s): ${missingRequiredCommands.join(", ")}`,
           `runnable after policy filtering (${commandsToRun.length}/${ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS.length}): ${commandsToRun.join(", ")}`,
           `advertised by node.describe: ${commands.join(", ")}`,
-          "precondition: update the Android node, or fix gateway.nodes allowCommands/denyCommands before running this suite",
+          "precondition: update the Android node, or fix gateway.nodes.commands allow/deny before running this suite",
         ].join("\n"),
       );
     }
@@ -641,7 +645,10 @@ describeLive("android node capability integration (preconditioned)", () => {
 
   const profiledCommands = Object.keys(COMMAND_PROFILES).toSorted();
   for (const command of profiledCommands) {
-    const profile = COMMAND_PROFILES[command];
+    const profile = expectDefined(
+      COMMAND_PROFILES[command],
+      "COMMAND_PROFILES[command] test invariant",
+    );
     const timeout = Math.max(20_000, profile.timeoutMs ?? 20_000) + 15_000;
     it(`command: ${command}`, { timeout }, async () => {
       if (!client) {

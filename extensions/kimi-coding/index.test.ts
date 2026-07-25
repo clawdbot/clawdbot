@@ -43,4 +43,43 @@ describe("kimi provider plugin", () => {
       defaultLevel: "off",
     });
   });
+
+  it.each(["k3", "k3[1m]"])("exposes %s off and max thinking", async (modelId) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "kimi",
+        modelId,
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "max", label: "max" },
+      ],
+      defaultLevel: "max",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("wraps K3 simple completions without changing K2 simple completions", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const streamFn = (() => undefined) as never;
+
+    expect(
+      provider.wrapSimpleCompletionStreamFn?.({
+        provider: "kimi",
+        modelId: "k3",
+        streamFn,
+      } as never),
+    ).not.toBe(streamFn);
+    expect(
+      provider.wrapSimpleCompletionStreamFn?.({
+        provider: "kimi",
+        modelId: "kimi-for-coding",
+        streamFn,
+      } as never),
+    ).toBe(streamFn);
+  });
 });

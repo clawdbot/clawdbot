@@ -1,9 +1,12 @@
+import { Response as UndiciResponse } from "undici";
 import { describe, expect, it } from "vitest";
 import {
   appendSlackNativeDataFallbackText,
+  buildSlackNativeDataAccessibilityText,
   hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
-  renderSlackNativeDataFallbackText,
+  isSlackInvalidBlocksResponse,
+  isSlackNativeResponseUrlRejection,
 } from "./native-data-blocks.js";
 
 const chart = {
@@ -52,47 +55,122 @@ describe("Slack native data blocks", () => {
     expect(isSlackInvalidBlocksError(new Error("invalid_blocks"))).toBe(false);
   });
 
-  it("routes supported blocks to their complete fallback renderers", () => {
-    expect(renderSlackNativeDataFallbackText(chart)).toBe(
-      "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
-    );
-    expect(renderSlackNativeDataFallbackText(table)).toBe(
-      "Pipeline report (table)\n- Account: Acme; ARR: $125k",
-    );
-    expect(renderSlackNativeDataFallbackText({ type: "section" })).toBeUndefined();
+  it("matches Bolt 5 response_url responses and contextual RespondError failures", async () => {
+    const response = new Response(JSON.stringify({ error: "invalid_blocks" }), { status: 200 });
+    await expect(isSlackInvalidBlocksResponse(response)).resolves.toBe(true);
+    await expect(
+      isSlackInvalidBlocksResponse(
+        new UndiciResponse(JSON.stringify({ error: "invalid_blocks" }), { status: 200 }),
+      ),
+    ).resolves.toBe(true);
+    await expect(isSlackInvalidBlocksResponse(new Response("ok"))).resolves.toBe(false);
+    expect(
+      isSlackNativeResponseUrlRejection({
+        code: "slack_bolt_respond_error",
+        statusCode: 400,
+      }),
+    ).toBe(true);
+    expect(
+      isSlackNativeResponseUrlRejection({
+        code: "slack_bolt_respond_error",
+        statusCode: 500,
+      }),
+    ).toBe(false);
   });
 
-  it("escapes raw structured-data tokens before rendering mrkdwn fallbacks", () => {
-    expect(
-      renderSlackNativeDataFallbackText({
-        type: "data_table",
-        caption: "<!channel> pipeline",
-        rows: [[{ type: "raw_text", text: "Owner" }], [{ type: "raw_text", text: "<@U123>" }]],
-      }),
-    ).toBe("&lt;!channel&gt; pipeline (table)\n- Owner: &lt;@U123&gt;");
-    expect(
-      renderSlackNativeDataFallbackText({
-        type: "data_visualization",
-        title: "<!here> revenue",
-        chart: {
-          type: "pie",
-          segments: [{ label: "<@U456>", value: 1 }],
-        },
-      }),
-    ).toBe("&lt;!here&gt; revenue (pie chart)\n- &lt;@U456&gt;: 1");
-  });
-
-  it("appends mixed native data in block order exactly once", () => {
+  it("appends mixed native data in block order without collapsing repeated blocks", () => {
     const chartText = "Revenue mix (pie chart)\n- Product: 60\n- Services: 40";
     const tableText = "Pipeline report (table)\n- Account: Acme; ARR: $125k";
     const expected = `Overview\n\n${chartText}\n\n${tableText}`;
 
-    expect(appendSlackNativeDataFallbackText("Overview", [chart, table, chart])).toBe(expected);
+    expect(appendSlackNativeDataFallbackText("Overview", [chart, table, chart])).toBe(
+      `${expected}\n\n${chartText}`,
+    );
     expect(appendSlackNativeDataFallbackText(expected, [chart, table])).toBe(expected);
     expect(
       appendSlackNativeDataFallbackText("Revenue mix (pie chart) - Product: 60 - Services: 40", [
         chart,
       ]),
     ).toBe("Revenue mix (pie chart) - Product: 60 - Services: 40");
+  });
+
+  it("builds formatting-disabled accessibility in actual block order", () => {
+    expect(
+      buildSlackNativeDataAccessibilityText("Outside", [
+        { type: "section", text: { type: "mrkdwn", text: "Before" } },
+        table,
+        { type: "section", text: { type: "mrkdwn", text: "After" } },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              action_id: "private-action",
+              text: { type: "plain_text", text: "Approve" },
+              value: "private-value",
+            },
+            {
+              type: "users_select",
+              action_id: "private-select",
+              placeholder: { type: "plain_text", text: "Choose owner" },
+            },
+          ],
+        },
+      ]),
+    ).toBe(
+      [
+        "Outside",
+        "Before",
+        "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
+        "After",
+        "Approve\nChoose owner",
+      ].join("\n\n"),
+    );
+  });
+
+  it("keeps plain text objects literal in formatting-disabled accessibility", () => {
+    expect(
+      buildSlackNativeDataAccessibilityText("", [
+        { type: "section", text: { type: "plain_text", text: "1 < 2 & <@U123>" } },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "Keep <literal>" },
+            },
+          ],
+        },
+        table,
+      ]),
+    ).toBe(
+      [
+        "1 < 2 & <@U123>",
+        "Keep <literal>",
+        "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
+      ].join("\n\n"),
+    );
+  });
+
+  it("preserves repeated visible blocks even when their text matches the base", () => {
+    const chartText = "Revenue mix (pie chart)\n- Product: 60\n- Services: 40";
+
+    expect(buildSlackNativeDataAccessibilityText(chartText, [chart, chart])).toBe(
+      [chartText, chartText].join("\n\n"),
+    );
+    expect(
+      buildSlackNativeDataAccessibilityText("Refresh", [
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "Refresh" },
+              value: "hidden",
+            },
+          ],
+        },
+      ]),
+    ).toBe("Refresh\n\nRefresh");
   });
 });

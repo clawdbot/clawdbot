@@ -67,6 +67,13 @@ export function isOpenAIGpt55Model(model: OpenAIReasoningModel): boolean {
   return /^gpt-5\.5(?:-|$)/u.test(id) || /^gpt-5\.5(?:\s|\(|-|$)/u.test(name);
 }
 
+/** Return whether a model is the GPT-5.6 family. */
+export function isOpenAIGpt56Model(model: OpenAIReasoningModel): boolean {
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  const name = normalizeModelId(typeof model.name === "string" ? model.name : undefined);
+  return /^gpt-5\.6(?:-|$)/u.test(id) || /^gpt-5\.6(?:\s|\(|-|$)/u.test(name);
+}
+
 /** Normalize user-facing reasoning effort names to API effort names. */
 export function normalizeOpenAIReasoningEffort(effort: string): string {
   const trimmed = effort.trim();

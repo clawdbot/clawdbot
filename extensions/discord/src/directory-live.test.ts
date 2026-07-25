@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS } from "./api.js";
 import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "./directory-live.js";
 
 function makeParams(overrides: Partial<DirectoryConfigParams> = {}): DirectoryConfigParams {
@@ -29,6 +30,23 @@ function resolveFetchUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
+function hangingBodyResponse(signal?: AbortSignal): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("["));
+      if (signal?.aborted) {
+        controller.error(signal.reason);
+        return;
+      }
+      signal?.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 describe("discord directory live lookups", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -36,6 +54,7 @@ describe("discord directory live lookups", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -56,6 +75,20 @@ describe("discord directory live lookups", () => {
 
     expect(rows).toStrictEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("aborts hanging group directory response bodies after the lookup timeout", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      return hangingBodyResponse(init?.signal ?? undefined);
+    });
+
+    const rows = listDiscordDirectoryGroupsLive(makeParams({ query: "general" }));
+    const rejection = expect(rows).rejects.toThrow(/abort/i);
+
+    await vi.advanceTimersByTimeAsync(DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS);
+    await rejection;
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("filters group channels by query and respects limit", async () => {

@@ -16,7 +16,7 @@ export type SlackEventScope = {
   uploadCompletionClient?: WebClient;
 };
 
-export type SlackEventScopeResolution =
+type SlackEventScopeResolution =
   | { ok: true; scope?: SlackEventScope }
   | {
       ok: false;

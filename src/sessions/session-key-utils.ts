@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp } from "../shared/regexp.js";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -15,7 +16,7 @@ export type ParsedThreadSessionSuffix = {
   threadId: string | undefined;
 };
 
-export type ParsedSessionDeliveryRoute = {
+type ParsedSessionDeliveryRoute = {
   accountId?: string;
   channel: string;
   peerId: string;
@@ -23,7 +24,7 @@ export type ParsedSessionDeliveryRoute = {
   threadId?: string;
 };
 
-export type ParsedCronRunScopeSuffix = {
+type ParsedCronRunScopeSuffix = {
   baseSessionKey: string | undefined;
   runId: string | undefined;
 };
@@ -65,7 +66,7 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
-export function isCasePreservingPeer(
+function isCasePreservingPeer(
   channel: string | undefined | null,
   peerKind: string | undefined | null,
 ): boolean {
@@ -122,10 +123,6 @@ export function normalizeSessionPeerId(params: {
   return isCasePreservingPeer(params.channel, params.peerKind)
     ? peerId
     : normalizeLowercaseStringOrEmpty(peerId);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 type PreservedSpan = { start: number; end: number; trim: boolean };

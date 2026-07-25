@@ -665,9 +665,9 @@ export async function analyzeNodeApprovalRequirement(params: {
     }),
     autoReviewArgv:
       autoReviewBindingEval.segments.length === 1 &&
-      (autoReviewBindingEval.segments[0]?.raw === undefined ||
-        autoReviewBindingEval.segments[0].raw.trim() === autoReviewBindingCommand.trim())
-        ? autoReviewBindingEval.segments[0].argv
+      (autoReviewBindingEval.segments.at(0)?.raw === undefined ||
+        autoReviewBindingEval.segments.at(0)?.raw.trim() === autoReviewBindingCommand.trim())
+        ? autoReviewBindingEval.segments.at(0)?.argv
         : undefined,
   };
 }

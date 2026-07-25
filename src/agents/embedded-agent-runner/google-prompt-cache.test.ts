@@ -1,5 +1,6 @@
 // Coverage for Google prompt-cache creation, reuse, and request rewriting.
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -203,7 +204,11 @@ describe("google prompt cache", () => {
     );
 
     const headers = fetchInit(fetchMock).headers as Record<string, string>;
-    expect(resolveSecretSentinel(headers.Authorization)).toBe("Bearer google-oauth-token");
+    expect(
+      resolveSecretSentinel(
+        expectDefined(headers.Authorization, "headers.Authorization test invariant"),
+      ),
+    ).toBe("Bearer google-oauth-token");
     expect(headers["x-goog-api-key"]).toBeUndefined();
     expect(headers["Content-Type"]).toBe("application/json");
   });
@@ -236,7 +241,11 @@ describe("google prompt cache", () => {
 
       const headers = fetchInit(fetchMock).headers as Record<string, string>;
       expect(headers.Authorization).toBe("Bearer google-kill-switch-token");
-      expect(isSecretValueRegisteredForRedaction(headers.Authorization)).toBe(true);
+      expect(
+        isSecretValueRegisteredForRedaction(
+          expectDefined(headers.Authorization, "headers.Authorization test invariant"),
+        ),
+      ).toBe(true);
     } finally {
       vi.unstubAllEnvs();
     }

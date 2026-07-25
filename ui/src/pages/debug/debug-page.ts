@@ -4,7 +4,7 @@ import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -13,6 +13,7 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderDebug } from "./view.ts";
 
@@ -41,7 +42,14 @@ class DebugPage extends OpenClawLightDomElement {
   @state() private debugCallError: string | null = null;
   @state() private eventLog: readonly EventLogEntry[] = [];
 
-  private debugPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private readonly polling = new PollController(
+    this,
+    DEBUG_POLL_INTERVAL_MS,
+    () => {
+      void this.loadDiagnostics();
+    },
+    false,
+  );
   private hasBoundGatewaySource = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private requestGeneration = 0;
@@ -71,7 +79,6 @@ class DebugPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
-    this.stopPolling();
     this.subscriptions.clear();
     this.requestGeneration += 1;
     this.gatewaySource = null;
@@ -80,13 +87,13 @@ class DebugPage extends OpenClawLightDomElement {
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
-    const connectionChanged = snapshot.connected !== this.connected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
     const clientChanged = resetForSourceBind || snapshot.client !== this.client;
     if (clientChanged || connectionChanged) {
       this.requestGeneration += 1;
     }
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     if (clientChanged) {
       this.resetServerState();
     } else if (connectionChanged) {
@@ -108,23 +115,10 @@ class DebugPage extends OpenClawLightDomElement {
 
   private syncPolling() {
     if (!this.connected || !this.client) {
-      this.stopPolling();
+      this.polling.stop();
       return;
     }
-    if (this.debugPollInterval !== null) {
-      return;
-    }
-    this.debugPollInterval = globalThis.setInterval(() => {
-      void this.loadDiagnostics();
-    }, DEBUG_POLL_INTERVAL_MS);
-  }
-
-  private stopPolling() {
-    if (this.debugPollInterval === null) {
-      return;
-    }
-    globalThis.clearInterval(this.debugPollInterval);
-    this.debugPollInterval = null;
+    this.polling.start();
   }
 
   private ensureInitialDebug() {
@@ -230,7 +224,6 @@ class DebugPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("debug")}</div>
-          <div class="page-sub">${subtitleForRoute("debug")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}
@@ -238,4 +231,6 @@ class DebugPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-debug-page", DebugPage);
+if (!customElements.get("openclaw-debug-page")) {
+  customElements.define("openclaw-debug-page", DebugPage);
+}

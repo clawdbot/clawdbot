@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalMainCommitMatches,
   canonicalPullRequests,
+  collectReleaseProvenanceOverrides,
   contaminatingPullRequestReferences,
+  contributionRecordTarget,
   countTopLevelSectionBullets,
   createGithubSnapshotState,
   cumulativeShippedPullRequests,
@@ -14,9 +16,16 @@ import {
   githubApiWithSnapshot,
   highlightCountError,
   persistGithubSnapshot,
+  pullRequestTitleFromCommitSubject,
   releaseNoteReferences,
+  releasePullRequestReferencesToSuppress,
+  releaseProvenanceMarkers,
+  recoverUnavailablePullRequests,
+  renderedContributionRecordReferences,
+  resolvedReleasePullRequests,
   standardRevertedHash,
   subtractShippedPullRequests,
+  validateReleaseProvenanceOverrides,
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 
@@ -39,6 +48,146 @@ function git(cwd: string, args: string[]): string {
 }
 
 describe("release-note verification", () => {
+  it("accepts only canonical commit PR suffixes", () => {
+    expect(pullRequestTitleFromCommitSubject("Fix status (#102147)", 102147)).toBe("Fix status");
+    expect(pullRequestTitleFromCommitSubject("Fix status(#102147)", 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject("Fix status (#0102147)", 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject(" Fix status (#102147)", 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject("Fix status (#102147) ", 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject("Fix status (#102148)", 102147)).toBeUndefined();
+  });
+
+  it("reads the exact target from a generated contribution record", () => {
+    const target = "a".repeat(40);
+    expect(
+      contributionRecordTarget({
+        source: [
+          "## 2026.7.2",
+          "",
+          "### Complete contribution record",
+          "",
+          `This audited record covers the complete base..${target} history: 1 merged PR.`,
+        ].join("\n"),
+      }),
+    ).toBe(target);
+  });
+
+  it("recovers a vanished PR only from an exact covered commit and prior record", () => {
+    const number = 102147;
+    const commit = {
+      authorHandle: undefined,
+      closingReferences: [102146],
+      coauthors: [],
+      committedAt: "2026-07-01T12:00:00Z",
+      hash: "a".repeat(40),
+      pullRequests: [],
+      references: [number],
+      subject: `Fix silent maintenance delivery status (#${number})`,
+    };
+    const source = {
+      activeCommits: [commit],
+      coauthorsByReference: new Map<number, Set<string>>(),
+      pullRequests: new Set<number>(),
+      target: "c".repeat(40),
+    };
+    const nodes = new Map();
+    const recovered = recoverUnavailablePullRequests({
+      numbers: [number],
+      nodes,
+      record: {
+        pullRequests: new Map([[number, { references: [], thanks: ["coolmanns"] }]]),
+      },
+      recordTarget: "b".repeat(40),
+      source,
+      isAncestor: () => true,
+    });
+
+    expect(recovered.get(number)).toMatchObject({
+      __typename: "PullRequest",
+      number,
+      title: "Fix silent maintenance delivery status",
+      mergedAt: commit.committedAt,
+      mergeCommit: { oid: commit.hash },
+      author: { __typename: "User", login: "coolmanns" },
+    });
+    expect(commit.pullRequests).toEqual([number]);
+    expect(source.pullRequests).toEqual(new Set([number]));
+    expect(source.coauthorsByReference.get(number)).toEqual(new Set(["coolmanns"]));
+  });
+
+  it("does not recover an unavailable reference without an exact PR title suffix", () => {
+    const number = 102147;
+    const source = {
+      activeCommits: [
+        {
+          committedAt: "2026-07-01T12:00:00Z",
+          hash: "a".repeat(40),
+          pullRequests: [],
+          references: [number],
+          subject: `Fix status; refs #${number}`,
+        },
+      ],
+      coauthorsByReference: new Map<number, Set<string>>(),
+      pullRequests: new Set<number>(),
+      target: "c".repeat(40),
+    };
+
+    expect(
+      recoverUnavailablePullRequests({
+        numbers: [number],
+        nodes: new Map(),
+        record: {
+          pullRequests: new Map([[number, { references: [], thanks: ["coolmanns"] }]]),
+        },
+        recordTarget: "b".repeat(40),
+        source,
+        isAncestor: () => true,
+      }),
+    ).toEqual(new Map());
+  });
+
+  it("does not recover an unavailable PR with multiple active canonical commits", () => {
+    const number = 102147;
+    const coveredHash = "a".repeat(40);
+    const laterHash = "d".repeat(40);
+    const source = {
+      activeCommits: [
+        {
+          committedAt: "2026-07-01T12:00:00Z",
+          hash: coveredHash,
+          pullRequests: [],
+          references: [number],
+          subject: `Fix status (#${number})`,
+        },
+        {
+          committedAt: "2026-07-02T12:00:00Z",
+          hash: laterHash,
+          pullRequests: [],
+          references: [number],
+          subject: `Fix status again (#${number})`,
+        },
+      ],
+      coauthorsByReference: new Map<number, Set<string>>(),
+      pullRequests: new Set<number>(),
+      target: "c".repeat(40),
+    };
+
+    expect(
+      recoverUnavailablePullRequests({
+        numbers: [number],
+        nodes: new Map(),
+        record: {
+          pullRequests: new Map([[number, { references: [], thanks: ["coolmanns"] }]]),
+        },
+        recordTarget: "b".repeat(40),
+        source,
+        isAncestor: (left: string, right: string) =>
+          (left === "b".repeat(40) && right === source.target) ||
+          (left === coveredHash && right === "b".repeat(40)),
+      }),
+    ).toEqual(new Map());
+  });
+
   it("stores default GitHub snapshots in the shared Git common directory", () => {
     const commonDir = resolve("/tmp/openclaw-shared-git");
     expect(defaultGithubSnapshotPath("a".repeat(40), "b".repeat(40), commonDir)).toBe(
@@ -50,13 +199,121 @@ describe("release-note verification", () => {
     );
   });
 
+  it("accepts only exact release provenance markers for active commits", () => {
+    const releaseCommit = "a".repeat(40);
+    const markerCommit = "b".repeat(40);
+    const body = [
+      `Release provenance: ${releaseCommit} -> #104905, #102980, #104956`,
+      `Release provenance for ${"c".repeat(40)} -> #123`,
+    ].join("\n");
+
+    expect(releaseProvenanceMarkers(body)).toEqual([
+      {
+        commit: releaseCommit,
+        pullRequests: [104905, 102980, 104956],
+      },
+    ]);
+    expect(
+      collectReleaseProvenanceOverrides([
+        { body: "", hash: releaseCommit },
+        { body, hash: markerCommit },
+      ]),
+    ).toEqual(new Map([[releaseCommit, [104905, 102980, 104956]]]));
+    expect(resolvedReleasePullRequests([104939], [], false, [104905, 102980, 104956])).toEqual([
+      104905, 102980, 104956,
+    ]);
+    expect(
+      releasePullRequestReferencesToSuppress(
+        [],
+        "test(live): harden GPT-5.6 nonce retries for July (#104939)",
+        [104905, 102980, 104956],
+        true,
+      ),
+    ).toEqual([104939]);
+  });
+
+  it("rejects malformed, out-of-range, or conflicting release provenance markers", () => {
+    const releaseCommit = "a".repeat(40);
+    const firstMarkerCommit = "b".repeat(40);
+    const secondMarkerCommit = "c".repeat(40);
+
+    expect(() => releaseProvenanceMarkers("Release provenance: short -> #123")).toThrow(
+      "invalid release provenance marker",
+    );
+    expect(() =>
+      collectReleaseProvenanceOverrides([
+        {
+          body: `Release provenance: ${"d".repeat(40)} -> #104905`,
+          hash: firstMarkerCommit,
+        },
+      ]),
+    ).toThrow("release provenance marker targets commit outside the active range");
+    expect(() =>
+      collectReleaseProvenanceOverrides([
+        { body: "", hash: releaseCommit },
+        {
+          body: `Release provenance: ${releaseCommit} -> #104905`,
+          hash: firstMarkerCommit,
+        },
+        {
+          body: `Release provenance: ${releaseCommit} -> #104956`,
+          hash: secondMarkerCommit,
+        },
+      ]),
+    ).toThrow(`conflicting release provenance markers for ${releaseCommit}`);
+  });
+
+  it("requires release provenance PRs to be merged into current main", () => {
+    const releaseCommit = "a".repeat(40);
+    const mainCommit = "b".repeat(40);
+    const mergeCommit = "c".repeat(40);
+    const overrides = new Map([[releaseCommit, [104905]]]);
+    const validNode = {
+      __typename: "PullRequest",
+      baseRefName: "main",
+      mergeCommit: { oid: mergeCommit },
+      mergedAt: "2026-07-12T00:00:00Z",
+    };
+
+    expect(() =>
+      validateReleaseProvenanceOverrides(
+        overrides,
+        new Map([[104905, validNode]]),
+        mainCommit,
+        () => true,
+      ),
+    ).not.toThrow();
+    for (const node of [
+      { ...validNode, baseRefName: "release/2026.7.1" },
+      { ...validNode, mergedAt: null },
+    ]) {
+      expect(() =>
+        validateReleaseProvenanceOverrides(
+          overrides,
+          new Map([[104905, node]]),
+          mainCommit,
+          () => true,
+        ),
+      ).toThrow("references non-main PR #104905");
+    }
+    expect(() =>
+      validateReleaseProvenanceOverrides(
+        overrides,
+        new Map([[104905, validNode]]),
+        mainCommit,
+        () => false,
+      ),
+    ).toThrow("references non-main PR #104905");
+  });
+
   it("uses the original main PR for explicit and uniquely matched backports", () => {
     const mainCommit = {
       authorEmail: "maintainer@example.com",
       authorName: "Maintainer",
       changedPaths: new Set(["src/channel.ts"]),
       hash: "a".repeat(40),
-      subject: "fix(channel): preserve durable replies (#123)",
+      pullRequests: [123],
+      subject: "fix(channel): preserve durable replies",
     };
     const explicitBackport = {
       authorEmail: "other@example.com",
@@ -74,9 +331,71 @@ describe("release-note verification", () => {
       hash: "c".repeat(40),
       subject: "fix(channel): preserve durable replies",
     };
+    const pullRequestBackport = {
+      authorEmail: mainCommit.authorEmail,
+      authorName: mainCommit.authorName,
+      body: "Backport of #123 to release/2026.7.1.",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "d".repeat(40),
+      subject: "fix(channel): keep replies after renewal",
+    };
 
     expect(canonicalMainCommitMatches(explicitBackport, [mainCommit])).toEqual([mainCommit.hash]);
     expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalMainCommitMatches(pullRequestBackport, [mainCommit])).toEqual([
+      mainCommit.hash,
+    ]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        {
+          ...mainCommit,
+          pullRequests: [],
+          body: "Original main PR #123.",
+          subject: "fix(channel): preserve durable replies",
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        {
+          ...mainCommit,
+          pullRequests: [999],
+          subject: "fix(channel): keep replies after renewal",
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(
+        { ...pullRequestBackport, authorEmail: "other@example.com", authorName: "Other" },
+        [mainCommit],
+      ),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(
+        { ...pullRequestBackport, changedPaths: new Set(["src/other.ts"]) },
+        [mainCommit],
+      ),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches({ ...pullRequestBackport, body: "Related #123." }, [mainCommit]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        mainCommit,
+        { ...mainCommit, hash: "e".repeat(40), pullRequests: [123] },
+      ]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        mainCommit,
+        {
+          ...mainCommit,
+          body: "Original main PR #123.",
+          hash: "f".repeat(40),
+          pullRequests: [],
+        },
+      ]),
+    ).toEqual([mainCommit.hash]);
     expect(canonicalPullRequests([456], [123])).toEqual([123]);
   });
 
@@ -336,6 +655,40 @@ describe("release-note verification", () => {
     ).toEqual([]);
   });
 
+  it("allows shipped PR references only in generated record metadata", () => {
+    const nodes = new Map([
+      [97118, { __typename: "PullRequest" }],
+      [102000, { __typename: "PullRequest" }],
+    ]);
+    const params = {
+      noteReferences: [],
+      recordedReferences: [97118, 102000],
+      excludedRecordedReferences: new Set([97118]),
+      sourcePullRequests: new Set([102000]),
+      sourceReferences: [102000],
+      seededPullRequests: new Set<number>(),
+      nodes,
+    };
+
+    expect(contaminatingPullRequestReferences(params)).toEqual([]);
+    expect(
+      contaminatingPullRequestReferences({
+        ...params,
+        noteReferences: [97118],
+      }),
+    ).toEqual([97118]);
+  });
+
+  it("ignores the stale generated record while rewriting it", () => {
+    const record = {
+      pullRequests: new Map([[104732, { references: [102289], thanks: ["fuller-stack-dev"] }]]),
+      legacyIssues: new Map(),
+    };
+
+    expect(renderedContributionRecordReferences(record, true)).toEqual([]);
+    expect(renderedContributionRecordReferences(record, false)).toEqual([104732, 102289]);
+  });
+
   it("excludes Unreleased records from a cumulative shipped tag boundary", () => {
     const changelog = [
       "# Changelog",
@@ -538,6 +891,57 @@ describe("release-note verification", () => {
 
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves CHANGELOG.md untouched when the rendered ledger fails validation", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
+    try {
+      git(cwd, ["init", "-q"]);
+      const changelog = [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- Only one highlight.",
+        "",
+        "### Changes",
+        "",
+        "### Fixes",
+        "",
+      ].join("\n");
+      writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "initial"]);
+      const manifestPath = join(cwd, "release-manifest.json");
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          "HEAD",
+          "--target",
+          "HEAD",
+          "--main-ref",
+          "HEAD",
+          "--manifest",
+          manifestPath,
+          "--version",
+          "2026.7.1",
+          "--write-ledger",
+        ],
+        { cwd, encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("1 errors");
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).version).toBe("2026.7.1");
+      expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

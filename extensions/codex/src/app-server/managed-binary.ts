@@ -2,12 +2,13 @@
  * Resolves the managed Codex app-server binary shipped with or installed beside
  * the Codex plugin before stdio startup.
  */
-import { constants as fsConstants, readFileSync } from "node:fs";
+import { constants as fsConstants, existsSync, readFileSync, realpathSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { CodexAppServerStartOptions } from "./config.js";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
 import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +30,13 @@ type ResolveManagedCodexAppServerOptions = {
   pathExists?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
 };
 
+type ResolveManagedCodexNativeCommandOptions = {
+  platform?: NodeJS.Platform;
+  arch?: NodeJS.Architecture;
+  pathExists?: (filePath: string) => boolean;
+  resolvePackageJson?: (packageName: string, root: string) => string | undefined;
+};
+
 /** Rewrites managed stdio start options to point at an executable Codex binary path. */
 export async function resolveManagedCodexAppServerStartOptions(
   startOptions: CodexAppServerStartOptions,
@@ -42,6 +50,7 @@ export async function resolveManagedCodexAppServerStartOptions(
   const paths = resolveManagedCodexAppServerPaths({
     platform,
     pluginRoot: options.pluginRoot,
+    managedCommandOrder: startOptions.managedCommandOrder,
   });
   const pathExists = options.pathExists ?? commandPathExists;
   const commandPaths = await findManagedCodexAppServerCommandPaths({
@@ -49,7 +58,7 @@ export async function resolveManagedCodexAppServerStartOptions(
     pathExists,
     platform,
   });
-  const commandPath = commandPaths[0];
+  const commandPath = expectDefined(commandPaths[0], "resolved managed Codex command path");
   const managedFallbackCommandPaths = commandPaths.slice(1);
 
   return {
@@ -60,15 +69,126 @@ export async function resolveManagedCodexAppServerStartOptions(
   };
 }
 
+/** Resolves the native artifact behind a successful managed launcher selection. */
+export function resolveManagedCodexNativeCommand(
+  command: string,
+  options: ResolveManagedCodexNativeCommandOptions = {},
+): string | undefined {
+  const platform = options.platform ?? process.platform;
+  if (
+    platform === "darwin" &&
+    MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS.some((candidate) => candidate === command)
+  ) {
+    return command;
+  }
+  const target = resolveCodexNativeTarget(platform, options.arch ?? process.arch);
+  if (!target) {
+    return undefined;
+  }
+  const packageRoot = resolveManagedCodexPackageRootForCommand(command, platform);
+  if (!packageRoot) {
+    return undefined;
+  }
+  const resolvePackageJson = options.resolvePackageJson ?? resolvePackageJsonFromRoot;
+  const pathExists = options.pathExists ?? existsSync;
+  for (const packageName of [target.packageName, MANAGED_CODEX_APP_SERVER_PACKAGE]) {
+    const packageJsonPath = resolvePackageJson(packageName, packageRoot);
+    if (!packageJsonPath) {
+      continue;
+    }
+    const candidate = path.join(
+      path.dirname(packageJsonPath),
+      "vendor",
+      target.triple,
+      "bin",
+      platform === "win32" ? "codex.exe" : "codex",
+    );
+    if (pathExists(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function resolveManagedCodexPackageRootForCommand(
+  command: string,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const pathApi = pathForPlatform(platform);
+  const commandPaths = [command];
+  try {
+    commandPaths.unshift(realpathSync(command));
+  } catch {
+    // Lexical .bin shims still identify their adjacent package root.
+  }
+  for (const commandPath of commandPaths) {
+    let current = pathApi.dirname(commandPath);
+    while (true) {
+      if (
+        pathApi.basename(current) === "codex" &&
+        pathApi.basename(pathApi.dirname(current)) === "@openai"
+      ) {
+        return current;
+      }
+      if (pathApi.basename(current) === ".bin") {
+        return pathApi.join(pathApi.dirname(current), "@openai", "codex");
+      }
+      const parent = pathApi.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+  }
+  return undefined;
+}
+
+function resolveCodexNativeTarget(
+  platform: NodeJS.Platform,
+  arch: NodeJS.Architecture,
+): { packageName: string; triple: string } | undefined {
+  // Mirrors @openai/codex's launcher mapping; this resolves identity only and
+  // leaves process environment/launch behavior with the upstream entrypoint.
+  if ((platform === "linux" || platform === "android") && arch === "x64") {
+    return { packageName: "@openai/codex-linux-x64", triple: "x86_64-unknown-linux-musl" };
+  }
+  if ((platform === "linux" || platform === "android") && arch === "arm64") {
+    return { packageName: "@openai/codex-linux-arm64", triple: "aarch64-unknown-linux-musl" };
+  }
+  if (platform === "darwin" && arch === "x64") {
+    return { packageName: "@openai/codex-darwin-x64", triple: "x86_64-apple-darwin" };
+  }
+  if (platform === "darwin" && arch === "arm64") {
+    return { packageName: "@openai/codex-darwin-arm64", triple: "aarch64-apple-darwin" };
+  }
+  if (platform === "win32" && arch === "x64") {
+    return { packageName: "@openai/codex-win32-x64", triple: "x86_64-pc-windows-msvc" };
+  }
+  if (platform === "win32" && arch === "arm64") {
+    return { packageName: "@openai/codex-win32-arm64", triple: "aarch64-pc-windows-msvc" };
+  }
+  return undefined;
+}
+
+function resolvePackageJsonFromRoot(packageName: string, root: string): string | undefined {
+  try {
+    return createRequire(path.join(root, "package.json")).resolve(`${packageName}/package.json`);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Returns the preferred and fallback managed Codex binary paths for a plugin root. */
-export function resolveManagedCodexAppServerPaths(params: {
+function resolveManagedCodexAppServerPaths(params: {
   platform?: NodeJS.Platform;
   pluginRoot?: string;
+  managedCommandOrder?: CodexManagedCommandOrder;
 }): ManagedCodexAppServerPaths {
   const platform = params.platform ?? process.platform;
   const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
     params.pluginRoot ?? CODEX_PLUGIN_ROOT,
     platform,
+    params.managedCommandOrder ?? "package-first",
   );
   return {
     commandPath: candidateCommandPaths[0] ?? "",
@@ -79,17 +199,23 @@ export function resolveManagedCodexAppServerPaths(params: {
 function resolveManagedCodexAppServerCommandCandidates(
   pluginRoot: string,
   platform: NodeJS.Platform,
+  managedCommandOrder: CodexManagedCommandOrder,
 ): string[] {
   const pathApi = pathForPlatform(platform);
   const commandName = platform === "win32" ? "codex.cmd" : "codex";
   const roots = resolveManagedCodexAppServerCandidateRoots(pluginRoot, platform);
-  return [
-    ...new Set([
-      ...resolveDesktopCodexAppServerCommandCandidates(platform),
-      ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
-      ...resolveManagedCodexPackageBinCandidates(roots, platform),
-    ]),
+  const packageCommandPaths = [
+    ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
+    ...resolveManagedCodexPackageBinCandidates(roots, platform),
   ];
+  const desktopCommandPaths = resolveDesktopCodexAppServerCommandCandidates(platform);
+  // Ordinary turns must honor the pinned package version. Computer Use opts
+  // into the desktop app owner because its macOS TCC permissions live there.
+  const orderedCommandPaths =
+    managedCommandOrder === "desktop-first"
+      ? [...desktopCommandPaths, ...packageCommandPaths]
+      : [...packageCommandPaths, ...desktopCommandPaths];
+  return [...new Set(orderedCommandPaths)];
 }
 
 function resolveDesktopCodexAppServerCommandCandidates(platform: NodeJS.Platform): string[] {
@@ -189,11 +315,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** Internal helpers exposed for managed-binary path-resolution tests. */
-export const testing = {
-  resolveDefaultCodexPluginRoot,
-};
-
 function isDistExtensionRoot(pluginRoot: string, platform: NodeJS.Platform): boolean {
   const pathApi = pathForPlatform(platform);
   const extensionsDir = pathApi.dirname(pluginRoot);
@@ -240,4 +361,3 @@ async function commandPathExists(filePath: string, platform: NodeJS.Platform): P
     return false;
   }
 }
-export { testing as __testing };

@@ -1,10 +1,8 @@
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import {
-  createTuiPluginApprovalController,
-  parseTuiPluginApproval,
-} from "./tui-plugin-approvals.js";
+import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 
 type TestSelector = Component & {
   items: SelectItem[];
@@ -120,9 +118,12 @@ function createHarness() {
 }
 
 describe("TUI plugin approvals", () => {
-  it("parses the pending plugin approval gateway shape", () => {
-    expect(parseTuiPluginApproval(approvalPayload())).toEqual(approvalPayload());
-    expect(parseTuiPluginApproval({ id: "plugin:missing-request" })).toBeNull();
+  it("ignores malformed plugin approval gateway payloads", () => {
+    const harness = createHarness();
+    harness.controller.handleEvent("plugin.approval.requested", {
+      id: "plugin:missing-request",
+    });
+    expect(harness.openOverlay).not.toHaveBeenCalled();
   });
 
   it("shows workspace skill approvals for the active session and resolves the selection", async () => {
@@ -132,7 +133,9 @@ describe("TUI plugin approvals", () => {
 
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
     const prompt = harness.openOverlay.mock.calls[0]?.[0];
-    const renderedPrompt = stripAnsi(prompt.render(80).join("\n"));
+    const renderedPrompt = stripAnsi(
+      expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
+    );
     expect(renderedPrompt).toContain("workspace skill approval: Apply workspace skill proposal");
     expect(renderedPrompt).toContain("Severity: Warning");
     expect(renderedPrompt).toContain("Tool: skill_workshop");
@@ -299,9 +302,9 @@ describe("TUI plugin approvals", () => {
 
     expect(harness.resolvePluginApproval).not.toHaveBeenCalled();
     const prompt = harness.openOverlay.mock.calls[0]?.[0];
-    expect(stripAnsi(prompt.render(80).join("\n"))).toContain(
-      "Press Enter again to confirm Allow once.",
-    );
+    expect(
+      stripAnsi(expectDefined(prompt, "prompt test invariant").render(80).join("\n")),
+    ).toContain("Press Enter again to confirm Allow once.");
 
     harness.selectors[0]?.onSelect?.({ value: "allow-once", label: "Allow once" });
     await vi.waitFor(() => {
@@ -391,7 +394,7 @@ describe("TUI plugin approvals", () => {
     );
 
     const prompt = harness.openOverlay.mock.calls[0]?.[0];
-    const renderedPrompt = prompt.render(80).join("\n");
+    const renderedPrompt = expectDefined(prompt, "prompt test invariant").render(80).join("\n");
     expect(renderedPrompt).not.toContain("\u001B]52");
     expect(renderedPrompt).not.toContain("\u0007");
     expect(renderedPrompt).not.toContain("\u0000");

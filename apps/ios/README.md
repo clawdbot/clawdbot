@@ -64,19 +64,21 @@ Release behavior:
 - App Store release uses manual `Apple Distribution` signing with profile names pinned in `apps/ios/Config/AppStoreSigning.json`.
 - Fastlane owns one-time Developer Portal setup, encrypted `match` signing sync to the repo/branch pinned in `apps/ios/Config/AppStoreSigning.json`, and release handling.
 - App Store release also switches the app to `OpenClawPushMode=appStore`, which derives relay transport, official distribution, the canonical production relay, production APNs, production relay profile, `appleStrict` proof, and the App-Attest-capable entitlement file.
-- `pnpm ios:release:upload` generates App Store screenshots, uploads release notes, and attaches `apps/ios/APP-REVIEW-NOTES.md` as a rendered PDF before archiving and uploading the IPA.
+- `pnpm ios:release:upload` generates App Store screenshots, archives and validates the IPA, uploads release notes and the rendered `apps/ios/APP-REVIEW-NOTES.md` attachment, uploads the IPA, and waits for Apple processing.
 - Agent-driven App Store uploads must use `pnpm ios:release:upload` as the only release path. If that command fails, stop and fix the failing screenshot, metadata, archive, validation, or upload step before trying again.
 - Do not treat `pnpm ios:release:archive`, `asc builds upload`, `asc release stage`, `asc publish appstore`, direct Fastlane lanes, or App Store Connect mutation commands as fallback upload paths after `pnpm ios:release:upload` fails.
 - The release archive is validated before upload by inspecting the exported IPA's signed entitlements, embedded App Store profile, and push mode. The upload fails if the IPA is not an App Store production relay build.
 - App Review submission is manual in App Store Connect. The release lane uploads a build, public metadata, and the App Review PDF attachment, but it does not submit for review or upload the App Store Connect `Notes` field.
+- Before submitting a HealthKit-enabled build, the release owner must update the public privacy policy and App Store Connect privacy details for the Health & Fitness aggregates shared with the user's configured AI provider.
 - The release flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
-- Release uploads require an explicit CalVer version passed with `--version`.
+- Release uploads derive the gateway, App Store revision, and build from the canonical repository version plus live App Store Connect state.
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
-- The release version must use CalVer like `2026.4.10`.
-- That release value becomes:
-  - `CFBundleShortVersionString = 2026.4.10`
-  - `CFBundleVersion = next App Store Connect build number for 2026.4.10`
-- Local defaults derive from root `package.json`; App Store uploads use the explicit `--version` value.
+- The gateway version must use CalVer like `2026.7.2`.
+- Gateway `2026.7.2`, App Store revision `1` becomes:
+  - `CFBundleShortVersionString = 2026.7.21`
+  - `CFBundleVersion = next App Store Connect build number for 2026.7.21`
+- Each App Store version has its own build sequence beginning at `1`.
+- Local defaults and release planning derive the gateway from root `package.json`; App Store Connect versions and build uploads determine the release revision and build.
 - See `apps/ios/VERSIONING.md` for the full workflow.
 
 Relay behavior for App Store builds:
@@ -106,29 +108,33 @@ Release-owner secrets:
 Prepare the generated release xcconfig/project without archiving:
 
 ```bash
-pnpm ios:release:prepare -- --version 2026.6.11 --build-number 7
+pnpm ios:release:prepare -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
 Archive without upload:
 
 ```bash
-pnpm ios:release:archive -- --version 2026.6.11
+pnpm ios:release:archive -- --version 2026.7.2 --revision 1
 ```
 
 This command is for local archive validation only. It is not a fallback upload
 path after `pnpm ios:release:upload` fails.
 
-Archive and upload to App Store Connect:
+Inspect and cut the deterministic release plan:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11
+pnpm ios:release:plan -- --json
+pnpm ios:release:cut
 ```
 
-If you need to force a specific build number:
+Review and commit the changelog cut, then archive and upload to App Store Connect:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11 --build-number 7
+pnpm ios:release:upload
 ```
+
+Explicit `--version`, `--revision`, and `--build-number` values are checked
+overrides and must match the live plan.
 
 ### Maintainer Quick Release Checklist
 
@@ -162,16 +168,17 @@ This should create `apps/ios/fastlane/.env` with non-secret App Store Connect va
 
    Use `pnpm ios:release:signing:setup` for the initial portal setup, then `MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted Fastlane match assets to the shared private repo.
 
-4. If you are starting a brand-new production release train, add or update the matching iOS changelog section and validate the release notes:
+4. Inspect the plan and cut the exact encoded-version changelog section:
 
 ```bash
-pnpm ios:version:check -- --version 2026.6.11
+pnpm ios:release:plan -- --json
+pnpm ios:release:cut
 ```
 
-5. Upload the build with explicit release intent:
+5. Review and commit `apps/ios/CHANGELOG.md`, then upload:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
+pnpm ios:release:upload
 ```
 
 6. If `pnpm ios:release:upload` fails, stop at that failure. Do not archive
@@ -179,7 +186,7 @@ pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
    step, then rerun `pnpm ios:release:upload`.
 
 7. Expected behavior:
-   - Fastlane reads the explicit `--version` value
+   - Fastlane resolves the gateway, revision, and next build from repository and App Store Connect state
    - validates iOS versioning inputs for that version
    - resolves the next App Store Connect build number for that short version
    - generates deterministic App Store screenshots
@@ -187,19 +194,21 @@ pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
    - generates `apps/ios/build/AppStoreRelease.xcconfig`
    - archives `OpenClaw`
    - validates the exported IPA's push mode, signed entitlements, and embedded App Store profile
-   - uploads the IPA to App Store Connect for processing and App Review use
+   - validates the IPA with Apple, uploads it, and waits for App Store Connect processing
    - leaves App Review submission for a maintainer to complete manually
 
 8. Expected outputs after a successful run:
    - `apps/ios/build/app-store/OpenClaw-<version>.ipa`
    - `apps/ios/build/app-store/OpenClaw-<version>.app.dSYM.zip`
    - Fastlane log line like `Uploaded iOS App Store build: version=<version> short=<short> build=<build>`
+   - a complete App Store Connect build-upload record for that version and build
 
 9. If this is a fresh clone on a maintainer machine that already works elsewhere, it is OK to copy the non-secret `apps/ios/fastlane/.env` from another trusted local clone on the same Mac. The Keychain-backed private key remains machine-local and is not stored in the repo.
 
 ## iOS Versioning Workflow
 
-- Release upload version: explicit `--version`
+- Release gateway version: canonical root version, with an optional checked `--version` override
+- App Store revision and build: deterministic App Store Connect plan
 - Local default version: root `package.json`
 - iOS-only changelog: `apps/ios/CHANGELOG.md`
 - Generated local artifacts:
@@ -211,7 +220,8 @@ pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
 ```bash
 pnpm ios:version
 pnpm ios:version:check
-pnpm ios:version -- --version 2026.6.11
+pnpm ios:release:plan -- --json
+pnpm ios:release:cut
 pnpm ios:filelist:gen
 ```
 
@@ -219,19 +229,19 @@ Recommended flow:
 
 ### App Store Connect iteration on an existing train
 
-1. Choose the App Store train explicitly, for example `2026.6.11`.
-2. Update `apps/ios/CHANGELOG.md`, usually under `## Unreleased` while iterating.
-3. Run `pnpm ios:version:check -- --version 2026.6.11` after changelog changes.
-4. Upload additional App Store Connect builds with `pnpm ios:release:upload -- --version 2026.6.11`.
-5. Let Fastlane bump only the numeric build number.
+1. Run `pnpm ios:release:plan -- --json`; the editable revision is selected automatically.
+2. Run `pnpm ios:release:cut` when new `## Unreleased` notes need to join that revision.
+3. Review and commit `apps/ios/CHANGELOG.md`.
+4. Run `pnpm ios:release:upload`.
+5. Failed, processing, and complete Apple-visible uploads all advance the next numeric build.
 
-### Starting the next production release train
+### Starting the next App Store revision
 
 1. Confirm the target gateway version in root `package.json`.
-2. Update `apps/ios/CHANGELOG.md` for the new release as needed.
-3. Run `pnpm ios:version:check -- --version <release-version>`.
-4. Submit the first App Store Connect build with `pnpm ios:release:upload -- --version <release-version>`.
-5. Keep iterating on that same explicit version until the release candidate is ready.
+2. Add release notes under `## Unreleased`.
+3. Run `pnpm ios:release:plan -- --json`; released history determines the next revision.
+4. Run `pnpm ios:release:cut`, review and commit the changelog, then run `pnpm ios:release:upload`.
+5. Keep rerunning the planner-driven upload until the release candidate is ready.
 
 See `apps/ios/VERSIONING.md` for the detailed spec.
 
@@ -286,7 +296,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 
 - Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
-- Chat + Talk surfaces through the operator gateway session.
+- One Chat surface for text, realtime voice, dictation, and voice notes through the operator gateway session.
 - iOS node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
 - Share extension deep-link forwarding into the connected gateway session.

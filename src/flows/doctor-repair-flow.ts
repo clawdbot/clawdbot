@@ -18,13 +18,13 @@ import type {
 } from "./health-checks.js";
 
 // Repair runner for structured doctor health checks; carries config between checks.
-export interface DoctorRepairRunOptions {
+interface DoctorRepairRunOptions {
   readonly checks?: readonly HealthCheckInput[];
   readonly dryRun?: boolean;
   readonly diff?: boolean;
 }
 
-export interface DoctorRepairRunResult {
+interface DoctorRepairRunResult {
   readonly config: OpenClawConfig;
   readonly findings: readonly HealthFinding[];
   readonly remainingFindings: readonly HealthFinding[];

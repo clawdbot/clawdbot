@@ -22,14 +22,13 @@ async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: numb
       logFileName: "producer.log",
       maxDetailsBytes: params.maxDetailsBytes,
       maxLogBytes: params.maxLogBytes ?? 64,
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       repoRoot,
       target: {
         id: "script-evidence-test",
         title: "Script evidence test",
         sourcePath: "test/e2e/qa-lab/runtime/script-evidence.test.ts",
-        primaryCoverageIds: ["qa.script-evidence"],
       },
     }),
   };

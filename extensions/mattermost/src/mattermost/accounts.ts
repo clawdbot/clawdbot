@@ -11,7 +11,9 @@ import {
   resolveChannelStreamingChunkMode,
   resolveChannelPreviewStreamMode,
   type StreamingMode,
+  type TextChunkMode,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { BlockStreamingCoalesceConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type {
@@ -39,10 +41,10 @@ export type ResolvedMattermostAccount = {
   oncharPrefixes?: string[];
   requireMention?: boolean;
   textChunkLimit?: number;
-  chunkMode?: MattermostAccountConfig["chunkMode"];
+  chunkMode?: TextChunkMode;
   streamingMode: StreamingMode;
   blockStreaming?: boolean;
-  blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
+  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
 };
 
 const mattermostAccountHelpers = createAccountListHelpers("mattermost", {
@@ -134,11 +136,10 @@ export function resolveMattermostAccount(params: {
     oncharPrefixes: merged.oncharPrefixes,
     requireMention,
     textChunkLimit: merged.textChunkLimit,
-    chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode,
+    chunkMode: resolveChannelStreamingChunkMode(merged),
     streamingMode: resolveChannelPreviewStreamMode(merged, "partial"),
-    blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
-    blockStreamingCoalesce:
-      resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
+    blockStreaming: resolveChannelStreamingBlockEnabled(merged),
+    blockStreamingCoalesce: resolveChannelStreamingBlockCoalesce(merged),
   };
 }
 

@@ -112,6 +112,18 @@ const postNativeMessage = (handler, payload) => {
   Reflect.apply(handler.postMessage, handler, [payload]);
 };
 
+const createSecureActionId = () => {
+  const crypto = globalThis.crypto;
+  if (typeof crypto?.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto?.getRandomValues === "function") {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return `a2ui_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+  return null;
+};
+
 const openclawTheme = {
   components: {
     AudioPlayer: emptyClasses(),
@@ -382,10 +394,7 @@ class OpenClawA2UIHost extends LitElement {
   }
 
   #makeActionId() {
-    return (
-      globalThis.crypto?.randomUUID?.() ??
-      `a2ui_${Date.now()}_${Math.random().toString(16).slice(2)}`
-    );
+    return createSecureActionId();
   }
 
   #setToast(text, kind = "ok", timeoutMs = 1400) {
@@ -476,6 +485,10 @@ class OpenClawA2UIHost extends LitElement {
     }
 
     const actionId = this.#makeActionId();
+    if (!actionId) {
+      this.#setToast("Secure action identifiers unavailable", "error", 4500);
+      return;
+    }
     this.pendingAction = { id: actionId, name, phase: "sending", startedAt: Date.now() };
     this.requestUpdate();
 

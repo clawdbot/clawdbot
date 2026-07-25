@@ -1,116 +1,37 @@
-title: Update run package self-upgrade
+title: Gateway update.run package self-upgrade
 
 scenario:
   id: update-run-package-self-upgrade
   surface: runtime
   coverage:
     primary:
-      - runtime.update-run
+      - cli.update-status-and-rpc
     secondary:
-      - runtime.gateway-restart
-      - runtime.package-update
-  objective: Verify an agent can self-update an installed OpenClaw package from 2026.4.26 to latest by using the gateway update.run action, then recover through the forced restart.
+      - cli.managed-gateway-restart
+  objective: Verify an installed OpenClaw 2026.4.26 package upgrades to the resolved latest package through the authenticated Gateway update.run RPC and returns healthy after restart.
   successCriteria:
-    - The agent is explicitly instructed to use the gateway tool action update.run instead of shell package-manager commands.
-    - The update request carries a restart note marker that can be observed after the gateway restart.
-    - Gateway and qa-channel return healthy after update.run restarts the process.
+    - The package-backed Docker lane installs and verifies openclaw@2026.4.26 before invoking the authenticated Gateway update.run RPC directly.
+    - The lane resolves openclaw@latest before the RPC and rejects a no-op or any installed version that differs from the resolved target.
+    - The update RPC succeeds with source and target versions and writes the exact requested restart note into the update sentinel.
+    - The restarted Gateway reports the resolved target version, passes health, readiness, and RPC status probes, and reports the QA channel account running.
+    - Missing OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 produces blocked evidence without starting the destructive lane.
   docsRefs:
     - docs/cli/update.md
     - docs/install/updating.md
     - docs/gateway/protocol.md
+    - docs/help/testing-updates-plugins.md
   codeRefs:
-    - src/agents/tools/gateway-tool.ts
     - src/gateway/server-methods/update.ts
     - src/infra/restart.ts
+    - scripts/e2e/update-run-package-self-upgrade-docker.sh
+    - scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh
+    - scripts/e2e/lib/upgrade-survivor/assertions.mjs
   execution:
-    kind: flow
-    summary: "Opt-in destructive package-update lane: ask the agent to update a 2026.4.26 install to latest via gateway action update.run and verify the restart marker after recovery."
-    config:
-      requiredProviderMode: live-frontier
-      sourceVersion: "2026.4.26"
-      targetTag: latest
-      allowEnv: OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF
-      channelId: qa-room
-
-flow:
-  steps:
-    - name: asks the agent to self-update through update.run
-      actions:
-        - if:
-            expr: "env.gateway.runtimeEnv[config.allowEnv] !== '1'"
-            then:
-              - assert: "true"
-            else:
-              - call: waitForGatewayHealthy
-                args:
-                  - ref: env
-                  - 60000
-              - call: waitForQaChannelReady
-                args:
-                  - ref: env
-                  - 60000
-              - call: reset
-              - set: sessionKey
-                value:
-                  expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', peer: { kind: 'channel', id: config.channelId } })"
-              - call: createSession
-                args:
-                  - ref: env
-                  - Update run package self-upgrade
-                  - ref: sessionKey
-              - call: readEffectiveTools
-                saveAs: tools
-                args:
-                  - ref: env
-                  - ref: sessionKey
-              - assert:
-                  expr: "tools.has('gateway')"
-                  message: gateway tool not present for update.run self-upgrade scenario
-              - set: startIndex
-                value:
-                  expr: state.getSnapshot().messages.length
-              - set: marker
-                value:
-                  expr: "`QA-UPDATE-RUN-${randomUUID().slice(0, 8)}`"
-              - call: startAgentRun
-                saveAs: started
-                args:
-                  - ref: env
-                  - sessionKey:
-                      ref: sessionKey
-                    to:
-                      expr: "`channel:${config.channelId}`"
-                    message:
-                      expr: |-
-                        `Update-run self-upgrade QA check. The OpenClaw package under test was installed from openclaw@${config.sourceVersion} and must update itself to openclaw@${config.targetTag}. Use the gateway tool with action=update.run. Do not run npm, pnpm, bun, git pull, or shell package-manager commands yourself. Set note exactly to "${marker} update.run complete" and restartDelayMs to 0 so the post-restart channel message proves recovery.`
-                    timeoutMs:
-                      expr: liveTurnTimeoutMs(env, 180000)
-              - call: waitForGatewayHealthy
-                args:
-                  - ref: env
-                  - 180000
-              - call: waitForQaChannelReady
-                args:
-                  - ref: env
-                  - 180000
-              - call: waitForOutboundMessage
-                saveAs: outbound
-                args:
-                  - ref: state
-                  - lambda:
-                      params: [candidate]
-                      expr: "candidate.text.includes(marker)"
-                  - expr: liveTurnTimeoutMs(env, 180000)
-                  - sinceIndex:
-                      ref: startIndex
-              - call: env.gateway.call
-                saveAs: updateStatus
-                args:
-                  - update.status
-                  - {}
-                  - timeoutMs: 30000
-              - assert:
-                  expr: "Boolean(updateStatus?.sentinel)"
-                  message:
-                    expr: "`update.status did not report a restart sentinel after update.run: ${JSON.stringify(updateStatus)}`"
-      detailsExpr: "env.gateway.runtimeEnv[config.allowEnv] !== '1' ? `skipped destructive package self-update; set ${config.allowEnv}=1 to run` : `runId=${started.runId} marker=${marker} outbound=${outbound.text}`"
+    kind: script
+    path: test/e2e/qa-lab/runtime/update-run-package-self-upgrade.ts
+    summary: Runs the opt-in package-backed Docker lane for authenticated Gateway update.run self-upgrade and emits source/target, restart sentinel, Gateway health, and QA channel evidence.
+    allowBlockedEvidence: true
+    timeoutMs: 3600000
+    args:
+      - --artifact-base
+      - ${outputDir}

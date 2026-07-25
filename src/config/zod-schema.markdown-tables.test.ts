@@ -1,14 +1,14 @@
 // Verifies markdown table config schema parsing and defaults.
 import { describe, expect, it } from "vitest";
-import { MarkdownTableModeSchema } from "./zod-schema.core.js";
+import { MarkdownConfigSchema } from "./zod-schema.core.js";
 
-describe("MarkdownTableModeSchema", () => {
+describe("MarkdownConfigSchema tables", () => {
   it("accepts block mode", () => {
-    expect(MarkdownTableModeSchema.parse("block")).toBe("block");
+    expect(MarkdownConfigSchema.parse({ tables: "block" })).toEqual({ tables: "block" });
   });
 
   it("rejects unsupported values", () => {
-    const result = MarkdownTableModeSchema.safeParse("plain");
+    const result = MarkdownConfigSchema.safeParse({ tables: "plain" });
 
     expect(result.success).toBe(false);
     if (result.success) {

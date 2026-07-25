@@ -90,8 +90,9 @@ function summarizeKnownExec(words: string[]): string {
       stash: "stash git changes",
     };
 
-    if (sub && map[sub]) {
-      return map[sub];
+    const mappedSummary = sub ? map[sub] : undefined;
+    if (mappedSummary) {
+      return mappedSummary;
     }
     if (!sub || sub.startsWith("/") || sub.startsWith("~") || sub.includes("/")) {
       return gitCwd ? `run git command in ${gitCwd}` : "run git command";
@@ -484,7 +485,10 @@ function summarizeExecCommand(command: string): ExecSummary | undefined {
   }
 
   const summaries = stages.map((stage) => summarizePipeline(stage));
-  const text = summaries.length === 1 ? summaries[0] : summaries.join(" → ");
+  const text = summaries.length === 1 ? summaries.at(0) : summaries.join(" → ");
+  if (!text) {
+    return undefined;
+  }
   const allGeneric = summaries.every((summary) => isGenericSummary(summary));
 
   return { text, chdirPath, allGeneric };

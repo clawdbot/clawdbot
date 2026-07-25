@@ -32,7 +32,8 @@ import type { ExecHostResponse } from "../infra/exec-host.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
-import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
+
+type HandleSystemRunInvokeOptions = Parameters<typeof handleSystemRunInvoke>[0];
 
 vi.mock("../logger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logger.js")>()),
@@ -127,12 +128,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   }
 
   function bindCurrentPolicyToPlan(plan: SystemRunApprovalPlan): SystemRunApprovalPlan {
+    const agentId = plan.agentId ?? "main";
     return {
       ...plan,
+      agentId,
       sessionKey: plan.sessionKey ?? "agent:main:main",
       policySnapshot: createExecApprovalPolicySnapshot({
         file: loadExecApprovals(),
-        agentId: plan.agentId ?? undefined,
+        agentId,
       }),
     };
   }
@@ -554,21 +557,27 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     let dispatchCommand = command;
     let dispatchRawCommand = params.rawCommand;
     let dispatchCwd = params.cwd;
-    let dispatchAgentId = params.agentId;
+    let dispatchAgentId: string | undefined = params.agentId ?? "main";
     const forwardsDelayedApproval =
       params.approvalSource === "auto-review" ||
       params.approved === true ||
       params.approvalDecision === "allow" ||
       params.approvalDecision === "allow-once" ||
       params.approvalDecision === "allow-always";
-    let systemRunPlan = params.systemRunPlan;
+    let systemRunPlan: SystemRunApprovalPlan | undefined = params.systemRunPlan
+      ? {
+          ...params.systemRunPlan,
+          agentId: params.systemRunPlan.agentId ?? dispatchAgentId,
+          sessionKey: params.systemRunPlan.sessionKey ?? "agent:main:main",
+        }
+      : undefined;
     if (forwardsDelayedApproval && params.prepareDelayedApprovalPlan !== false) {
       if (!systemRunPlan) {
         const prepared = buildSystemRunApprovalPlan({
           command,
           rawCommand: params.rawCommand,
           cwd: params.cwd,
-          agentId: params.agentId,
+          agentId: dispatchAgentId,
           sessionKey: "agent:main:main",
         });
         if (!prepared.ok) {
@@ -3626,3 +3635,4 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

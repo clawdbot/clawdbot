@@ -269,4 +269,76 @@ describe("chutes plugin OAuth", () => {
     expect(credentials.accountId).toBeUndefined();
     expect(timeoutSpy).toHaveBeenCalledTimes(2);
   });
+
+  it("cancels the userinfo error response body when profile lookup fails", async () => {
+    let canceled = false;
+    let bytesPulled = 0;
+    const userInfoResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (bytesPulled > 0) {
+            controller.close();
+            return;
+          }
+          bytesPulled += 1;
+          controller.enqueue(new TextEncoder().encode("temporarily unavailable"));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 503 },
+    );
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = fetchInputUrl(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return new Response(
+          '{"access_token":"at_123","refresh_token":"rt_123","expires_in":3600}',
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === CHUTES_USERINFO_ENDPOINT) {
+        return userInfoResponse;
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const credentials = await loginWithFetch(fetchFn);
+
+    expect(canceled).toBe(true);
+    expect(credentials.access).toBe("at_123");
+    expect(credentials.email).toBeUndefined();
+    expect(credentials.accountId).toBeUndefined();
+  });
+
+  it("cancels authentication when the caller aborts during userinfo", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled by caller");
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return new Response(
+          '{"access_token":"at_cancel","refresh_token":"rt_cancel","expires_in":3600}',
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === CHUTES_USERINFO_ENDPOINT) {
+        controller.abort(reason);
+        return await rejectWhenAborted(init);
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      loginChutes({
+        app: { clientId: "cid_test", redirectUri: REDIRECT_URI, scopes: ["openid"] },
+        manual: true,
+        createState: () => "state_test",
+        onAuth: vi.fn(async () => {}),
+        onPrompt: vi.fn(async () => `${REDIRECT_URI}?code=code_test&state=state_test`),
+        fetchFn,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+  });
 });

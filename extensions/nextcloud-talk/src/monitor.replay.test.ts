@@ -1,31 +1,93 @@
 // Nextcloud Talk tests cover monitor.replay plugin behavior.
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import {
-  NextcloudTalkRetryableWebhookError,
-  processNextcloudTalkReplayGuardedMessage,
-  readNextcloudTalkWebhookBody,
-} from "./monitor.js";
+import { createNextcloudTalkWebhookServer as createRawNextcloudTalkWebhookServer } from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
-import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
-import type { NextcloudTalkInboundMessage } from "./types.js";
+import type { NextcloudTalkInboundMessage, NextcloudTalkWebhookServerOptions } from "./types.js";
+import { inspectNextcloudTalkWebhookEnvelope } from "./webhook-spool-state.js";
 
-describe("readNextcloudTalkWebhookBody", () => {
-  it("reads valid body within max bytes", async () => {
-    const req = createMockIncomingRequest(['{"type":"Create"}']);
-    const body = await readNextcloudTalkWebhookBody(req, 1024);
-    expect(body).toBe('{"type":"Create"}');
-  });
+type TestWebhookServerOptions = Omit<NextcloudTalkWebhookServerOptions, "onWebhook"> & {
+  onMessage: (rawBody: string) => void | Promise<void>;
+};
 
-  it("rejects when payload exceeds max bytes", async () => {
-    const req = createMockIncomingRequest(["x".repeat(300)]);
-    await expect(readNextcloudTalkWebhookBody(req, 128)).rejects.toThrow("PayloadTooLarge");
+function createNextcloudTalkWebhookServer(options: TestWebhookServerOptions) {
+  const { onMessage, ...serverOptions } = options;
+  return createRawNextcloudTalkWebhookServer({
+    ...serverOptions,
+    onWebhook: async (rawBody) => {
+      await onMessage(rawBody);
+      return "accepted";
+    },
   });
-});
+}
+
+async function invokeWebhookServerRequest(params: {
+  body: string;
+  headers: Record<string, string>;
+  maxBodyBytes: number;
+}) {
+  const { server } = createNextcloudTalkWebhookServer({
+    host: "127.0.0.1",
+    port: 0,
+    path: "/nextcloud-body-limit",
+    secret: "nextcloud-secret", // pragma: allowlist secret
+    maxBodyBytes: params.maxBodyBytes,
+    onMessage: vi.fn(),
+  });
+  const listener = server.listeners("request")[0] as
+    | ((req: IncomingMessage, res: ServerResponse) => void)
+    | undefined;
+  if (!listener) {
+    throw new Error("expected Nextcloud Talk request listener");
+  }
+  const req = Object.assign(createMockIncomingRequest([params.body]), {
+    method: "POST",
+    url: "/nextcloud-body-limit",
+    headers: params.headers,
+    socket: { remoteAddress: "127.0.0.1" },
+  }) as unknown as IncomingMessage;
+
+  return await new Promise<{ body: string; status: number }>((resolve) => {
+    let status = 0;
+    const res = {
+      headersSent: false,
+      writeHead(code: number) {
+        status = code;
+        this.headersSent = true;
+        return this;
+      },
+      end(body?: string) {
+        resolve({ body: body ?? "", status });
+        return this;
+      },
+    };
+    listener(req, res as unknown as ServerResponse);
+  });
+}
 
 describe("createNextcloudTalkWebhookServer auth order", () => {
+  it("closes when abort races with listener startup", async () => {
+    const abortController = new AbortController();
+    const webhook = createRawNextcloudTalkWebhookServer({
+      host: "127.0.0.1",
+      port: 0,
+      path: "/nextcloud-abort-startup",
+      secret: "test-secret",
+      onWebhook: async () => "accepted",
+      abortSignal: abortController.signal,
+    });
+
+    const starting = webhook.start();
+    abortController.abort();
+    await starting;
+
+    expect(webhook.server.listening).toBe(false);
+    await webhook.stop();
+  });
+
   it("rejects missing signature headers before reading request body", async () => {
     const readBody = vi.fn(async () => {
       throw new Error("should not be called for missing signature headers");
@@ -48,6 +110,19 @@ describe("createNextcloudTalkWebhookServer auth order", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Missing signature headers" });
     expect(readBody).not.toHaveBeenCalled();
+  });
+
+  it("rejects signed payloads over the configured body limit", async () => {
+    const { body, headers } = createSignedCreateMessageRequest();
+
+    const response = await invokeWebhookServerRequest({
+      body,
+      headers,
+      maxBodyBytes: 128,
+    });
+
+    expect(response.status).toBe(413);
+    expect(JSON.parse(response.body)).toEqual({ error: "Payload too large" });
   });
 });
 
@@ -75,25 +150,7 @@ describe("createNextcloudTalkWebhookServer backend allowlist", () => {
   });
 });
 
-describe("createNextcloudTalkWebhookServer replay handling", () => {
-  function createReplayGuardedProcess(params: {
-    stateDir?: string;
-    accountId?: string;
-    handleMessage: () => Promise<void>;
-  }) {
-    const replayGuard = createNextcloudTalkReplayGuard(
-      params.stateDir ? { stateDir: params.stateDir } : {},
-    );
-
-    return (message: NextcloudTalkInboundMessage) =>
-      processNextcloudTalkReplayGuardedMessage({
-        replayGuard,
-        accountId: params.accountId ?? "acct",
-        message,
-        handleMessage: params.handleMessage,
-      });
-  }
-
+describe("Nextcloud Talk replay identity fixture", () => {
   function buildInboundMessage(): NextcloudTalkInboundMessage {
     return {
       messageId: "msg-1",
@@ -108,76 +165,24 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
     };
   }
 
-  it("acknowledges replayed requests and skips onMessage side effects", async () => {
-    const seen = new Set<string>();
-    const onMessage = vi.fn(async () => {});
-    const shouldProcessMessage = vi.fn(async (message: NextcloudTalkInboundMessage) => {
-      if (seen.has(message.messageId)) {
-        return false;
-      }
-      seen.add(message.messageId);
-      return true;
-    });
-    const harness = await startWebhookServer({
-      path: "/nextcloud-replay",
-      shouldProcessMessage,
-      onMessage,
-    });
-
-    const { body, headers } = createSignedCreateMessageRequest();
-
-    const first = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers,
-      body,
-    });
-    const second = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers,
-      body,
-    });
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(shouldProcessMessage).toHaveBeenCalledTimes(2);
-    expect(onMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows a retry after replay-guarded processing fails before commit", async () => {
-    let attempts = 0;
-    const handleMessage = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new NextcloudTalkRetryableWebhookError("transient nextcloud failure");
-      }
-    });
-    const processMessage = createReplayGuardedProcess({
-      handleMessage,
-    });
+  it("keeps the retired guard identity fields represented", () => {
     const message = buildInboundMessage();
-
-    await expect(processMessage(message)).rejects.toThrow("transient nextcloud failure");
-    await expect(processMessage(message)).resolves.toBe("processed");
-
-    expect(handleMessage).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps replay committed after a non-retryable replay-guarded processing failure", async () => {
-    const visibleSideEffect = vi.fn();
-    const handleMessage = vi.fn(async () => {
-      visibleSideEffect();
-      throw new Error("post-send failure");
+    const rawBody = JSON.stringify({
+      type: "Create",
+      actor: { type: "Person", id: message.senderId, name: message.senderName },
+      object: {
+        type: "Note",
+        id: message.messageId,
+        name: message.text,
+        content: message.text,
+        mediaType: message.mediaType,
+      },
+      target: { type: "Collection", id: message.roomToken, name: message.roomName },
     });
-    const processMessage = createReplayGuardedProcess({
-      handleMessage,
+    expect(inspectNextcloudTalkWebhookEnvelope(rawBody)).toEqual({
+      eventId: message.messageId,
+      laneKey: `room:${message.roomToken}`,
     });
-    const message = buildInboundMessage();
-
-    await expect(processMessage(message)).rejects.toThrow("post-send failure");
-    await expect(processMessage(message)).resolves.toBe("duplicate");
-
-    expect(handleMessage).toHaveBeenCalledTimes(1);
-    expect(visibleSideEffect).toHaveBeenCalledTimes(1);
   });
 });
 

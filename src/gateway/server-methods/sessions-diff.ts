@@ -3,6 +3,7 @@
 // Control UI diff panel can render without shelling out client-side.
 import fs from "node:fs/promises";
 import nodePath from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   validateSessionsDiffParams,
@@ -13,7 +14,7 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { runGit } from "../../agents/worktrees/git.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -112,20 +113,20 @@ export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
 function chunkPath(chunk: string): string | null {
   const newFile = /^\+\+\+ b\/(.+)$/m.exec(chunk);
   if (newFile) {
-    return newFile[1];
+    return expectDefined(newFile[1], "new file capture group 1");
   }
   // Deleted files have `+++ /dev/null`; key the chunk by the old path.
   const oldFile = /^--- a\/(.+)$/m.exec(chunk);
   if (oldFile) {
-    return oldFile[1];
+    return expectDefined(oldFile[1], "old file capture group 1");
   }
   // Pure renames and binary chunks have neither marker line.
   const renameTo = /^rename to (.+)$/m.exec(chunk);
   if (renameTo) {
-    return renameTo[1];
+    return expectDefined(renameTo[1], "rename to capture group 1");
   }
   const header = /^diff --git a\/.+ b\/(.+)$/m.exec(chunk);
-  return header ? header[1] : null;
+  return header ? expectDefined(header[1], "header capture group 1") : null;
 }
 
 /** Splits a multi-file `git diff --patch` into per-file chunks keyed by path. */
@@ -421,7 +422,7 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
     deletions: 0,
     ...(unavailableReason ? { unavailableReason } : {}),
   });
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.sessionKey, {
+  const { cfg, entry, storePath, canonicalKey } = loadSessionEntryReadOnly(params.sessionKey, {
     agentId: params.agentId,
   });
   // Same session scoping as sessions.files.*: an unknown session must not fall

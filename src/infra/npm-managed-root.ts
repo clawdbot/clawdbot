@@ -518,7 +518,7 @@ function isTopLevelLockPackageLocation(location: string): boolean {
   return location.split("/").filter((part) => part === "node_modules").length === 1;
 }
 
-export type MissingRequiredPlatformPackage = {
+type MissingRequiredPlatformPackage = {
   name: string;
   packagePath: string;
 };
@@ -1233,3 +1233,4 @@ export async function removeManagedNpmRootDependency(params: {
   };
   await writeJson(manifestPath, next, { trailingNewline: true });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

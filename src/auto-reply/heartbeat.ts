@@ -1,20 +1,13 @@
 /** Heartbeat prompt defaults, token stripping, task parsing, and due-time helpers. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-/** YAML-like task entry parsed from HEARTBEAT.md. */
-export type HeartbeatTask = {
-  name: string;
-  interval: string;
-  prompt: string;
-};
-
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
-const HEARTBEAT_CONTEXT_PROMPT =
-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats.";
+export const HEARTBEAT_CRON_TASK_GUIDANCE =
+  "Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch.";
+const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context when provided. ${HEARTBEAT_CRON_TASK_GUIDANCE} Do not infer or repeat old tasks from prior chats.`;
 /** Default prompt for heartbeat turns when config does not override it. */
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply HEARTBEAT_OK.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
@@ -54,18 +47,19 @@ function stripHeartbeatHtmlComments(content: string): string[] {
 }
 
 /**
- * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
+ * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
  *
  * A file is considered effectively empty if it contains only:
  * - Whitespace / empty lines
  * - Markdown/HTML comments
  * - Markdown ATX headers (`#`, `##`, ...)
+ * - One-line HTML comments (`<!-- ... -->`)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
- * Note: A missing file returns false (not effectively empty) so the LLM can still
- * decide what to do. This function is only for when the file exists but has no content.
+ * Note: Missing scratch returns false (not effectively empty) so the model can
+ * still decide what to do. This function applies only when a scratch row exists.
  */
 export function isHeartbeatContentEffectivelyEmpty(content: string | undefined | null): boolean {
   if (content === undefined || content === null) {
@@ -90,6 +84,9 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     // This intentionally does NOT skip lines like "#TODO" or "#hashtag" which might be content
     // (Those aren't valid markdown headers - ATX headers require space after #)
     if (/^#+(\s|$)/.test(trimmed)) {
+      continue;
+    }
+    if (/^<!--.*-->$/.test(trimmed)) {
       continue;
     }
     // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "
@@ -245,116 +242,4 @@ export function stripHeartbeatToken(
   }
 
   return { shouldSkip: false, text: rest, didStrip: true };
-}
-
-/**
- * Parse heartbeat tasks from HEARTBEAT.md content.
- * Supports YAML-like task definitions:
- *
- * tasks:
- *   - name: email-check
- *     interval: 30m
- *     prompt: "Check for urgent unread emails"
- */
-export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
-  const tasks: HeartbeatTask[] = [];
-  const lines = stripHeartbeatHtmlComments(content);
-  let inTasksBlock = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    // Detect tasks block start.
-    if (trimmed === "tasks:") {
-      inTasksBlock = true;
-      continue;
-    }
-
-    if (!inTasksBlock) {
-      continue;
-    }
-
-    // End of tasks block is any new top-level content that is not a task field.
-    const isTaskField =
-      trimmed.startsWith("interval:") ||
-      trimmed.startsWith("prompt:") ||
-      trimmed.startsWith("- name:");
-    if (
-      !isTaskField &&
-      !trimmed.startsWith(" ") &&
-      !trimmed.startsWith("\t") &&
-      trimmed &&
-      !trimmed.startsWith("-")
-    ) {
-      inTasksBlock = false;
-      continue;
-    }
-
-    // Parse a task entry and scan following indented fields.
-    if (trimmed.startsWith("- name:")) {
-      const name = trimmed
-        .replace("- name:", "")
-        .trim()
-        .replace(/^["']|["']$/g, "");
-      let interval = "";
-      let prompt = "";
-
-      // Look ahead for interval and prompt
-      for (let j = i + 1; j < lines.length; j++) {
-        const nextLine = lines[j];
-        const nextTrimmed = nextLine.trim();
-
-        // End of this task
-        if (nextTrimmed.startsWith("- name:")) {
-          break;
-        }
-
-        // Check for task fields BEFORE checking for end of block
-        if (
-          nextTrimmed.startsWith("interval:") &&
-          (nextLine.startsWith(" ") || nextLine.startsWith("\t"))
-        ) {
-          interval = nextTrimmed
-            .replace("interval:", "")
-            .trim()
-            .replace(/^["']|["']$/g, "");
-        } else if (
-          nextTrimmed.startsWith("prompt:") &&
-          (nextLine.startsWith(" ") || nextLine.startsWith("\t"))
-        ) {
-          prompt = nextTrimmed
-            .replace("prompt:", "")
-            .trim()
-            .replace(/^["']|["']$/g, "");
-        } else if (!nextTrimmed.startsWith(" ") && !nextTrimmed.startsWith("\t") && nextTrimmed) {
-          // End of tasks block
-          inTasksBlock = false;
-          break;
-        }
-      }
-
-      if (name && interval && prompt) {
-        tasks.push({ name, interval, prompt });
-      }
-    }
-  }
-
-  return tasks;
-}
-
-/**
- * Check if a task is due based on its interval and last run time.
- */
-export function isTaskDue(lastRunMs: number | undefined, interval: string, nowMs: number): boolean {
-  if (lastRunMs === undefined) {
-    return true; // Never run, always due
-  }
-
-  try {
-    const intervalMs = parseDurationMs(interval, { defaultUnit: "m" });
-    return nowMs - lastRunMs >= intervalMs;
-  } catch {
-    return false;
-  }
 }

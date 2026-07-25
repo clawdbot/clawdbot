@@ -134,6 +134,7 @@ function createRouteContext(
     state: () => ({
       resolved: {
         actionTimeoutMs: options?.actionTimeoutMs ?? 45_000,
+        extraArgs: [],
         ssrfPolicy: options?.ssrfPolicy,
       },
     }),
@@ -156,7 +157,7 @@ function createRouteContext(
 
 async function callTabsRoute(params: {
   method: "get" | "post";
-  path: "/tabs" | "/tabs/action" | "/tabs/focus";
+  path: "/tabs" | "/tabs/action" | "/tabs/focus" | "/tabs/open";
   body?: Record<string, unknown>;
   profileCtx: ProfileContext;
   actionTimeoutMs?: number;
@@ -187,6 +188,45 @@ async function callTabsRoute(params: {
   );
   return response;
 }
+
+it("returns the profile that actually handled tab open", async () => {
+  const profileCtx = createProfileContext({
+    profile: { name: "hot-profile" },
+    openTab: vi.fn(async () => ({
+      targetId: "HOT-TAB",
+      title: "Hot",
+      url: "https://example.com",
+      type: "page" as const,
+      ownership: {
+        status: "durable" as const,
+        nativeTargetId: "HOT-NATIVE",
+        profileFingerprint: "sha256:profile",
+        browserInstanceFingerprint: "sha256:browser",
+      },
+    })),
+  });
+
+  const response = await callTabsRoute({
+    method: "post",
+    path: "/tabs/open",
+    body: { url: "https://example.com" },
+    profileCtx,
+  });
+
+  expect(response.body).toEqual({
+    targetId: "HOT-TAB",
+    title: "Hot",
+    url: "https://example.com",
+    type: "page",
+    ownership: {
+      status: "durable",
+      nativeTargetId: "HOT-NATIVE",
+      profileFingerprint: "sha256:profile",
+      browserInstanceFingerprint: "sha256:browser",
+    },
+    resolvedProfile: "hot-profile",
+  });
+});
 
 async function callTabsAction(params: {
   body: Record<string, unknown>;
@@ -245,6 +285,21 @@ describe("browser tab routes", () => {
     navigationGuardMocks.withBrowserNavigationPolicy.mockImplementation((ssrfPolicy?: unknown) =>
       ssrfPolicy ? { ssrfPolicy } : {},
     );
+  });
+
+  it("validates tab-open input before resolving or leasing a profile", async () => {
+    const profileCtx = createProfileContext();
+    const routeCtx = createRouteContext(profileCtx);
+    const forProfile = vi.fn(routeCtx.forProfile);
+    const { app, postHandlers } = createBrowserRouteApp();
+    registerBrowserTabRoutes(app, { ...routeCtx, forProfile } as never);
+    const response = createBrowserRouteResponse();
+
+    await postHandlers.get("/tabs/open")?.({ params: {}, query: {}, body: {} }, response.res);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({ error: "url is required" });
+    expect(forProfile).not.toHaveBeenCalled();
   });
 
   it("returns browser-not-running for close when the browser is not reachable", async () => {
@@ -365,7 +420,7 @@ describe("browser tab routes", () => {
     const response = await callTabsList({ profileCtx });
 
     expect(response.statusCode).toBe(200);
-    expect(isReachable).toHaveBeenCalledWith(300);
+    expect(isReachable).toHaveBeenCalledWith(300, { signal: expect.any(AbortSignal) });
   });
 
   it("normalizes configured existing-session tab reachability timeouts", async () => {
@@ -380,14 +435,16 @@ describe("browser tab routes", () => {
 
     const zeroResponse = await callTabsList({ profileCtx, actionTimeoutMs: 0 });
     expect(zeroResponse.statusCode).toBe(200);
-    expect(isReachable).toHaveBeenLastCalledWith(300);
+    expect(isReachable).toHaveBeenLastCalledWith(300, { signal: expect.any(AbortSignal) });
 
     const hugeResponse = await callTabsList({
       profileCtx,
       actionTimeoutMs: Number.MAX_SAFE_INTEGER,
     });
     expect(hugeResponse.statusCode).toBe(200);
-    expect(isReachable).toHaveBeenLastCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(isReachable).toHaveBeenLastCalledWith(MAX_TIMER_TIMEOUT_MS, {
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("redacts blocked tab URLs from GET /tabs", async () => {
@@ -573,7 +630,7 @@ describe("browser tab routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
+    expect(response.body).toEqual({ ok: true, targetId: "T2" });
     expect(profileCtx.focusTab).toHaveBeenCalledWith("T2", { exactTargetId: true });
     expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();

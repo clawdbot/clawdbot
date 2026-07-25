@@ -161,7 +161,7 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onMark?.("mark-1");
 
     expect(sendMark).not.toHaveBeenCalled();
-    expect(bridge["acknowledgeMark"]).toHaveBeenCalledTimes(1);
+    expect(bridge["acknowledgeMark"]).toHaveBeenCalledWith("mark-1");
   });
 
   it("can ignore provider marks", () => {

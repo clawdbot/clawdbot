@@ -60,8 +60,7 @@ vi.mock("../infra/archive.js", async () => {
 const { ClawHubRequestError } = await import("../infra/clawhub.js");
 type ClawHubResolvedArtifact = import("../infra/clawhub.js").ClawHubResolvedArtifact;
 type ClawHubRiskAcknowledgementRequest = import("./clawhub.js").ClawHubRiskAcknowledgementRequest;
-const { CLAWHUB_INSTALL_ERROR_CODE, formatClawHubSpecifier, installPluginFromClawHub } =
-  await import("./clawhub.js");
+const { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } = await import("./clawhub.js");
 
 const DEMO_ARCHIVE_INTEGRITY = "sha256-qerEjGEpvES2+Tyan0j2xwDRkbcnmh4ZFfKN9vWbsa8=";
 const DEMO_ARCHIVE_SHA256 = "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af";
@@ -368,11 +367,6 @@ describe("installPluginFromClawHub", () => {
       targetDir: "/tmp/openclaw/plugins/demo",
       version: "2026.3.22",
     });
-  });
-
-  it("formats clawhub specifiers", () => {
-    expect(formatClawHubSpecifier({ name: "demo" })).toBe("clawhub:demo");
-    expect(formatClawHubSpecifier({ name: "demo", version: "1.2.3" })).toBe("clawhub:demo@1.2.3");
   });
 
   it("installs a ClawHub plugin through the archive installer", async () => {
@@ -990,6 +984,7 @@ describe("installPluginFromClawHub", () => {
     expectSuccessfulClawHubInstall(result, { clawhubChannel: "community" });
     const success = expectInstallSuccess(result);
     expect(success.clawhub?.clawhubTrustDisposition).toBe("review-required");
+    expect(success.warning).toContain("WARNING - ClawHub found security risks");
     expect(success.clawhub?.clawhubTrustScanStatus).toBe("suspicious");
     expect(success.clawhub?.clawhubTrustReasons).toEqual(["payload_strings"]);
     expect(success.clawhub?.clawhubTrustCheckedAt).toMatch(
@@ -3263,3 +3258,4 @@ describe("installPluginFromClawHub", () => {
     await expectClawHubInstallError({ setup, spec, expected });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

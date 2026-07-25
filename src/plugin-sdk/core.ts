@@ -1,4 +1,4 @@
-// Core SDK contracts expose stable identifiers, manifests, and shared plugin metadata types.
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
 import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
@@ -36,7 +36,6 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
-
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
@@ -86,6 +85,9 @@ export type {
   ProviderAuthDoctorHintContext,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderAppGuidedSetup,
+  ProviderAppGuidedSetupCandidate,
+  ProviderAppGuidedSetupContext,
   ProviderAuthResult,
   ProviderAugmentModelCatalogContext,
   ProviderBuildMissingAuthMessageContext,
@@ -96,7 +98,6 @@ export type {
   ProviderCatalogContext,
   ProviderCatalogResult,
   ProviderDefaultThinkingPolicyContext,
-  ProviderDiscoveryContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeResolvedModelContext,
@@ -141,6 +142,8 @@ export type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
+export type { OpenClawPluginGatewayEventScope } from "../plugins/gateway-events.js";
+export type { OpenClawPluginGatewayEvents } from "../plugins/gateway-events.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
@@ -169,7 +172,7 @@ export type {
   ChannelSetupInput,
 } from "../channels/plugins/types.public.js";
 export type { ChatType } from "../channels/chat-type.js";
-export type { NormalizedLocation } from "../channels/location.js";
+export type { NormalizedLocation, OutboundLocation } from "../channels/location.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 export type { PollInput } from "../polls.js";
@@ -208,6 +211,7 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export type { ContextEngineSessionTarget } from "../context-engine/types.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export {
@@ -222,6 +226,7 @@ export { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
+  prepareMemorySystemPromptAddition,
 } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export {
@@ -321,12 +326,14 @@ function resolveSdkChatChannelMeta(id: string) {
       metaById: buildChatChannelMetaById(),
     };
   }
+  // Optional by design: createChannelPluginBase serves external plugin ids that
+  // are never in the bundled catalog; their meta comes entirely from params.meta.
   return cachedSdkChatChannelMeta.metaById[id];
 }
 
 /** Resolve bundled chat channel metadata while respecting the active bundled-plugin directory. */
 export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
-  return resolveSdkChatChannelMeta(id);
+  return expectDefined(resolveSdkChatChannelMeta(id), `chat channel metadata: ${id}`);
 }
 
 /** Remove one of the known provider prefixes from a free-form target string. */
@@ -519,18 +526,21 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   configSchema?: ChannelPlugin<TResolvedAccount>["configSchema"];
   config?: ChannelPlugin<TResolvedAccount>["config"];
   security?: ChannelPlugin<TResolvedAccount>["security"];
-  setup: NonNullable<ChannelPlugin<TResolvedAccount>["setup"]>;
+  setup?: NonNullable<ChannelPlugin<TResolvedAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<TResolvedAccount>["setupContract"]>;
   groups?: ChannelPlugin<TResolvedAccount>["groups"];
 };
 
 type CreatedChannelPluginBase<TResolvedAccount> = Pick<
   ChannelPlugin<TResolvedAccount>,
-  "id" | "meta" | "setup"
+  "id" | "meta"
 > &
   Partial<
     Pick<
       ChannelPlugin<TResolvedAccount>,
       | "setupWizard"
+      | "setup"
+      | "setupContract"
       | "capabilities"
       | "commands"
       | "doctor"
@@ -861,6 +871,8 @@ export function createChannelPluginBase<TResolvedAccount>(
     ...(params.config ? { config: params.config } : {}),
     ...(params.security ? { security: params.security } : {}),
     ...(params.groups ? { groups: params.groups } : {}),
-    setup: params.setup,
+    ...(params.setup ? { setup: params.setup } : {}),
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

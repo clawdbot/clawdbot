@@ -1,0 +1,19 @@
+title: WhatsApp group mention gating
+scenario:
+  id: whatsapp-mention-gating
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.group-allowlists
+  execution:
+    profiles: { "whatsapp:default": 1, "whatsapp:mock-default": 1 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 60000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-mention-gating }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppMentionGatingScenario
+  args: [{ expr: whatsappScenarioContext }]

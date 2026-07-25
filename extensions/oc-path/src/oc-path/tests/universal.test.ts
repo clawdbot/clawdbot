@@ -1,4 +1,5 @@
 // OC Path tests cover universal plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../emit.js";
 import { emitJsonc } from "../jsonc/emit.js";
@@ -7,7 +8,7 @@ import { emitJsonl } from "../jsonl/emit.js";
 import { parseJsonl } from "../jsonl/parse.js";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
-import { detectInsertion, resolveOcPath, setOcPath } from "../universal.js";
+import { resolveOcPath, setOcPath } from "../universal.js";
 import { parseYaml } from "../yaml/parse.js";
 
 function expectLeaf(
@@ -34,35 +35,6 @@ function expectInsertionPoint(match: ReturnType<typeof resolveOcPath>, container
     expect(match.container).toBe(container);
   }
 }
-
-describe("detectInsertion", () => {
-  it("returns null for plain paths", () => {
-    expect(detectInsertion(parseOcPath("oc://X.md/section/item/field"))).toBeNull();
-  });
-
-  it("detects bare `+` end-insertion at section", () => {
-    const info = detectInsertion(parseOcPath("oc://X.md/tools/+"));
-    expect(info?.marker).toBe("+");
-    expect(info?.parentPath.section).toBe("tools");
-    expect(info?.parentPath.item).toBeUndefined();
-  });
-
-  it("detects `+key` keyed insertion", () => {
-    const info = detectInsertion(parseOcPath("oc://config/plugins/+gitlab"));
-    expect(info?.marker).toEqual({ kind: "keyed", key: "gitlab" });
-  });
-
-  it("detects `+nnn` indexed insertion", () => {
-    const info = detectInsertion(parseOcPath("oc://config/items/+2"));
-    expect(info?.marker).toEqual({ kind: "indexed", index: 2 });
-  });
-
-  it("detects file-root insertion", () => {
-    const info = detectInsertion(parseOcPath("oc://session.jsonl/+"));
-    expect(info?.marker).toBe("+");
-    expect(info?.parentPath.section).toBeUndefined();
-  });
-});
 
 describe("resolveOcPath — md AST", () => {
   const md = parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n").ast;
@@ -342,7 +314,10 @@ describe("setOcPath — jsonl leaf", () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       const out = emitJsonl(r.ast as Parameters<typeof emitJsonl>[0]);
-      expect(JSON.parse(out.split("\n")[0])).toEqual({ event: "start", n: 42 });
+      expect(JSON.parse(expectDefined(out.split("\n")[0], "first emitted JSONL line"))).toEqual({
+        event: "start",
+        n: 42,
+      });
     }
   });
 
@@ -352,7 +327,9 @@ describe("setOcPath — jsonl leaf", () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       const out = emitJsonl(r.ast as Parameters<typeof emitJsonl>[0]);
-      expect(JSON.parse(out.split("\n")[0])).toEqual({ event: "replaced" });
+      expect(JSON.parse(expectDefined(out.split("\n")[0], "replaced JSONL line"))).toEqual({
+        event: "replaced",
+      });
     }
   });
 
@@ -479,6 +456,23 @@ describe("setOcPath — jsonc insertion", () => {
       });
     }
   });
+
+  it("preserves comments, trailing commas, and CRLF", () => {
+    const ast = parseJsonc(
+      '{\r\n  // keep\r\n  "plugins": {\r\n    "github": "tok",\r\n  },\r\n}\r\n',
+    ).ast;
+    const r = setOcPath(ast, parseOcPath("oc://config/plugins/+gitlab"), '"new-tok"');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(emitJsonc(r.ast as Parameters<typeof emitJsonc>[0])).toBe(
+        '{\r\n  // keep\r\n  "plugins": {\r\n    "github": "tok",\r\n    "gitlab": "new-tok",\r\n  },\r\n}\r\n',
+      );
+      expectLeaf(resolveOcPath(r.ast, parseOcPath("oc://config/plugins/gitlab")), {
+        leafType: "string",
+        valueText: "new-tok",
+      });
+    }
+  });
 });
 
 describe("setOcPath — jsonl insertion (session append)", () => {
@@ -490,7 +484,10 @@ describe("setOcPath — jsonl insertion (session append)", () => {
       const out = emitJsonl(r.ast as Parameters<typeof emitJsonl>[0]);
       const lines = out.split("\n").filter((l) => l.length > 0);
       expect(lines).toHaveLength(2);
-      expect(JSON.parse(lines[1])).toEqual({ event: "step", n: 1 });
+      expect(JSON.parse(expectDefined(lines[1], "appended JSONL line"))).toEqual({
+        event: "step",
+        n: 1,
+      });
     }
   });
 

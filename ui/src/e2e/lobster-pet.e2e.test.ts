@@ -81,7 +81,7 @@ describeControlUiE2e("Control UI lobster pet", () => {
     const sprite = page.locator(".lobster-pet");
     await expect.poll(() => sprite.count()).toBe(0);
 
-    await page.clock.runFor(600_500);
+    await page.clock.fastForward(600_500);
     await settlePet();
     expect(await page.locator(".lobster-pet--vigil").count()).toBe(1);
     await page.evaluate(async () => {

@@ -2,9 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { deriveConceptTags } from "./concept-vocabulary.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -12,15 +14,12 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 
 import {
   configureMemoryCoreDreamingState,
-  configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
 } from "./dreaming-state.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   filterLiveShortTermRecallEntries,
-  isShortTermMemoryPath,
   loadShortTermPromotionDreamingStats,
   recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
@@ -30,8 +29,12 @@ import {
   readLightStagedKeys,
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
-  testing,
 } from "./short-term-promotion.js";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+  shortTermTestState as testing,
+} from "./test-helpers.js";
 
 describe("short-term promotion", () => {
   let fixtureRoot = "";
@@ -129,24 +132,6 @@ describe("short-term promotion", () => {
   async function expectEnoent(promise: Promise<unknown>): Promise<void> {
     await expect(promise).rejects.toHaveProperty("code", "ENOENT");
   }
-
-  it("detects short-term daily memory paths", () => {
-    expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
-    expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
-    expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
-    expect(isShortTermMemoryPath("memory/network.md")).toBe(false);
-    expect(isShortTermMemoryPath("memory/daily/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/daily notes/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/日记/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/notes/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/nested/deep/2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/dreaming/2026-04-03.md")).toBe(false);
-    expect(isShortTermMemoryPath("memory/dreaming/deep/2026-04-03.md")).toBe(false);
-    expect(isShortTermMemoryPath("../../vault/memory/dreaming/deep/2026-04-03.md")).toBe(false);
-    expect(isShortTermMemoryPath("notes/daily/2026-04-03.md")).toBe(false);
-  });
 
   it("records short-term recall for notes stored in a memory/ subdirectory", async () => {
     await withTempWorkspace(async (workspaceDir) => {
@@ -318,7 +303,6 @@ describe("short-term promotion", () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       const longSnippet = `Stable claim identity ${"x".repeat(maxSnippetChars + 100)}`;
-      const claimHash = testing.buildClaimHash(longSnippet);
 
       await recordGroundedShortTermCandidates({
         workspaceDir,
@@ -356,7 +340,11 @@ describe("short-term promotion", () => {
 
       const entries = Object.entries(await readRecallStoreEntries(workspaceDir));
       expect(entries).toHaveLength(1);
-      const [key, entry] = entries[0];
+      const [key, entry] = expectDefined(entries[0], "stable claim recall entry");
+      const claimHash = entry.claimHash;
+      if (typeof claimHash !== "string") {
+        throw new Error("expected stable claim hash");
+      }
       expect(key.endsWith(`:${claimHash}`)).toBe(true);
       expect(entry.claimHash).toBe(claimHash);
       expect(entry.recallCount).toBe(1);
@@ -1069,7 +1057,9 @@ describe("short-term promotion", () => {
       expect(fasterDecay).toHaveLength(1);
       expect(slowerDecay[0]?.components.recency).toBeCloseTo(0.5, 3);
       expect(fasterDecay[0]?.components.recency).toBeCloseTo(0.25, 3);
-      expect(slowerDecay[0].score).toBeGreaterThan(fasterDecay[0].score);
+      const slowerResult = expectDefined(slowerDecay[0], "slower decay result");
+      const fasterResult = expectDefined(fasterDecay[0], "faster decay result");
+      expect(slowerResult.score).toBeGreaterThan(fasterResult.score);
     });
   });
 
@@ -1158,7 +1148,9 @@ describe("short-term promotion", () => {
         nowMs,
       });
       expect(ranked[0]?.path).toBe("memory/2026-04-02.md");
-      expect(ranked[0].score).toBeGreaterThan(ranked[1].score);
+      const boostedResult = expectDefined(ranked[0], "boosted phase-signal result");
+      const baselineResult = expectDefined(ranked[1], "baseline phase-signal result");
+      expect(boostedResult.score).toBeGreaterThan(baselineResult.score);
 
       const phaseStore = await testing.readPhaseSignalStore(
         workspaceDir,
@@ -1240,7 +1232,9 @@ describe("short-term promotion", () => {
 
       expect(staleSignalRank).toHaveLength(1);
       expect(freshSignalRank).toHaveLength(1);
-      expect(freshSignalRank[0].score).toBeGreaterThan(staleSignalRank[0].score);
+      const freshResult = expectDefined(freshSignalRank[0], "fresh phase-signal result");
+      const staleResult = expectDefined(staleSignalRank[0], "stale phase-signal result");
+      expect(freshResult.score).toBeGreaterThan(staleResult.score);
     });
   });
 
@@ -1610,220 +1604,6 @@ describe("short-term promotion", () => {
       });
 
       expect(ranked).toStrictEqual([]);
-    });
-  });
-
-  it("treats diff-prefixed dreaming snippets as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "@@ -1,1 - Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats bracket-prefixed dreaming snippets as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "([ Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat ordinary candidate notes with daily-memory evidence as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Candidate: move backups weekly. confidence: 0.76 evidence: memory/2026-04-08.md:1-1",
-      ),
-    ).toBe(false);
-  });
-
-  it("treats transcript-style dreaming prompt echoes as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "[main/dreaming-narrative-light.jsonl#L1] User: Write a dream diary entry from these memory fragments:",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats snippets with metadata prefix before the Candidate marker as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "- - status: staged - Candidate: User: [cron:26fb656d] run thing - confidence: 0.00 - evidence: memory/.dreams/session-corpus/2026-04-12.txt:25-25 - recalls: 0 - status: staged",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats snippets with confidence prefix before the Candidate marker as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "confidence: 0.58 - Candidate: Assistant: Mason shipped the enforcement pass. - evidence: memory/.dreams/session-corpus/2026-04-11.txt:167-167 - recalls: 0 - status: staged",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats raw session metadata snippets as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Session: 2026-06-18 10:37:05 EDT; Session Key: agent:cody:discord:channel:1502199757592989836; Session ID: 6d52b6a2-a2e1-4839-a69a-a532b9090a6d; Source: discord",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats raw conversation summaries as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Conversation Summary: assistant: Traced all three. No changes made.",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats raw transcript turns as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "user: Save important context from this session to the daily memory file. STRICT RULES: 1. The file MUST be named exactly memory/2026-06-18.md",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats promotion score metadata as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Polycore PR #112 re-review... [score=0.837 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
-      ),
-    ).toBe(true);
-  });
-
-  it("treats legacy and signals= promotion annotations as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "Legacy annotation [score=0.837 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
-      ),
-    ).toBe(true);
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "New annotation [score=0.837 signals=7 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat prose that mentions the word Candidate as contaminated", () => {
-    expect(
-      testing.isContaminatedDreamingSnippet(
-        "The Candidate profile for Josh Rhoden shows he runs SEU's network admin team; stack is Cisco plus Meraki.",
-      ),
-    ).toBe(false);
-  });
-
-  describe("lineRangeOverlapsDreamingFence", () => {
-    it("returns true when the range falls inside a Light Sleep fence", () => {
-      const lines = [
-        "# Daily note",
-        "## Notes",
-        "Real durable content.",
-        "## Light Sleep",
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: some staged dream content",
-        "<!-- openclaw:dreaming:light:end -->",
-        "## After",
-        "More real content.",
-      ];
-      // Line 6 (1-indexed) sits between the fence markers.
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
-    });
-
-    it("returns false when the range sits entirely outside any dreaming fence", () => {
-      const lines = [
-        "# Daily note",
-        "Real durable content.",
-        "<!-- openclaw:dreaming:rem:start -->",
-        "staged dream content",
-        "<!-- openclaw:dreaming:rem:end -->",
-        "More real content.",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 2)).toBe(false);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(false);
-    });
-
-    it("returns true when the range straddles a fence boundary", () => {
-      const lines = [
-        "real line 1",
-        "<!-- openclaw:dreaming:diary:start -->",
-        "dream line",
-        "<!-- openclaw:dreaming:diary:end -->",
-        "real line 5",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 4)).toBe(true);
-    });
-
-    it("recovers after a fence end so later real content is not flagged", () => {
-      const lines = [
-        "<!-- openclaw:dreaming:light:start -->",
-        "dream",
-        "<!-- openclaw:dreaming:light:end -->",
-        "real line 4",
-        "<!-- openclaw:dreaming:rem:start -->",
-        "more dream",
-        "<!-- openclaw:dreaming:rem:end -->",
-        "real line 8",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 4, 4)).toBe(false);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 8, 8)).toBe(false);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
-    });
-
-    // Marker lines themselves carry managed-block content. A relocated range
-    // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
-    // build its snippet from raw lines that contain that marker text, leaking
-    // it into MEMORY.md alongside any adjacent fenced content captured by the
-    // same window. The guard treats marker lines as inside-fence so those
-    // ranges are rejected. (#80613)
-    it("returns true when the range ends on a Light Sleep start marker", () => {
-      const lines = [
-        "## Plan",
-        "- Plan switches use exRule, not abConfig",
-        "",
-        "## Light Sleep",
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: staged dream",
-        "<!-- openclaw:dreaming:light:end -->",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 5)).toBe(true);
-    });
-
-    it("returns true when the range begins on a Light Sleep end marker", () => {
-      const lines = [
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: staged dream",
-        "<!-- openclaw:dreaming:light:end -->",
-        "- normal durable bullet",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 3, 4)).toBe(true);
-    });
-
-    it("returns true when the range covers only a marker line", () => {
-      const lines = [
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: staged dream",
-        "<!-- openclaw:dreaming:light:end -->",
-      ];
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 1, 1)).toBe(true);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 3, 3)).toBe(true);
-    });
-
-    it("returns true for REM marker single-line ranges even with no body between markers", () => {
-      const lines = [
-        "real line 1",
-        "<!-- openclaw:dreaming:rem:start -->",
-        "<!-- openclaw:dreaming:rem:end -->",
-        "real line 4",
-      ];
-      // No content between the markers, but the marker text itself must not
-      // ride along into a promoted snippet.
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 2)).toBe(true);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 3, 3)).toBe(true);
-      // Real-content single lines remain unflagged.
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 1, 1)).toBe(false);
-      expect(testing.lineRangeOverlapsDreamingFence(lines, 4, 4)).toBe(false);
     });
   });
 
@@ -3235,33 +3015,6 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("uses score tie-breakers when retention timestamps are invalid", () => {
-    const entry = {
-      key: "lower-score",
-      path: "memory/2026-04-01.md",
-      startLine: 1,
-      endLine: 1,
-      source: "memory" as const,
-      snippet: "Invalid timestamp recall",
-      recallCount: 1,
-      dailyCount: 0,
-      groundedCount: 0,
-      totalScore: 1,
-      maxScore: 0.75,
-      firstRecalledAt: "not-a-date",
-      lastRecalledAt: "not-a-date",
-      queryHashes: ["q"],
-      recallDays: ["2026-04-01"],
-      conceptTags: [],
-    };
-    const higherScoreEntry = { ...entry, key: "higher-score", totalScore: 2 };
-
-    expect([entry, higherScoreEntry].toSorted(testing.compareShortTermRecallRetention)).toEqual([
-      higherScoreEntry,
-      entry,
-    ]);
-  });
-
   it("rejects long contaminated legacy recall entries before truncating snippets", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
@@ -3333,7 +3086,7 @@ describe("short-term promotion", () => {
             lastRecalledAt: "2026-04-04T00:00:00.000Z",
             queryHashes: ["a", "b"],
             recallDays: ["2026-04-04"],
-            conceptTags: testing.deriveConceptTags({
+            conceptTags: deriveConceptTags({
               path: "memory/2026-04-01.md",
               snippet,
             }),
@@ -3448,41 +3201,6 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("extracts stable concept tags from snippets and paths", () => {
-    expect(
-      testing.deriveConceptTags({
-        path: "memory/2026-04-03.md",
-        snippet: "Move backups to S3 Glacier and sync QMD router notes.",
-      }),
-      // "s3" is a protected-glossary term; it now surfaces as a standalone token past the
-      // per-script min-length gate (the longer terms still match as substrings).
-    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "s3", "sync"]);
-  });
-
-  it("extracts multilingual concept tags across latin and cjk snippets", () => {
-    expect(
-      testing.deriveConceptTags({
-        path: "memory/2026-04-03.md",
-        snippet: "Configuración du routeur et sauvegarde Glacier.",
-      }),
-    ).toStrictEqual(["glacier", "sauvegarde", "routeur", "configuración"]);
-    expect(
-      testing.deriveConceptTags({
-        path: "memory/2026-04-03.md",
-        snippet: "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。",
-      }),
-    ).toStrictEqual([
-      "バックアップ",
-      "ルーター",
-      "障害対応",
-      "路由器",
-      "备份",
-      "网关",
-      "障害",
-      "対応",
-    ]);
-  });
-
   describe("MEMORY.md budget compaction (#73691)", () => {
     it("drops the oldest promoted section before write when memoryFileMaxChars would be exceeded", async () => {
       await withTempWorkspace(async (workspaceDir) => {
@@ -3566,6 +3284,10 @@ describe("short-term promotion", () => {
         const memoryPath = path.join(workspaceDir, "MEMORY.md");
         const seeded = "# Long-Term Memory\n\nSome small existing content.\n";
         await fs.writeFile(memoryPath, seeded, "utf-8");
+        if (process.platform !== "win32") {
+          await fs.chmod(workspaceDir, 0o750);
+          await fs.chmod(memoryPath, 0o640);
+        }
 
         await recordShortTermRecalls({
           workspaceDir,
@@ -3603,9 +3325,222 @@ describe("short-term promotion", () => {
         expect(applied.compactedDates).toEqual([]);
         const memoryText = await fs.readFile(memoryPath, "utf-8");
         expect(memoryText).toContain("Some small existing content.");
+        if (process.platform !== "win32") {
+          expect((await fs.stat(workspaceDir)).mode & 0o7777).toBe(0o750);
+          expect((await fs.stat(memoryPath)).mode & 0o7777).toBe(0o640);
+        }
       });
     });
   });
+
+  describe("MEMORY.md atomic promotion write", () => {
+    it.runIf(process.platform !== "win32")(
+      "preserves a dangling MEMORY.md symlink and its target directory mode",
+      async () => {
+        await withTempWorkspace(async (workspaceDir) => {
+          await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+            "Keep the shared memory target and directory permissions intact.",
+          ]);
+
+          const aliasParent = path.join(fixtureRoot, `alias-${caseId++}`, "nested");
+          const workspaceAlias = path.join(aliasParent, "workspace");
+          const sharedDir = path.join(fixtureRoot, `${path.basename(workspaceDir)}-shared`);
+          const linkedDir = path.join(workspaceDir, "linked");
+          const intermediatePath = path.join(sharedDir, "memory-alias.md");
+          const targetPath = path.join(sharedDir, `${"long".repeat(55)}\\`);
+          const memoryPath = path.join(workspaceDir, "MEMORY.md");
+          await fs.mkdir(aliasParent, { recursive: true });
+          await fs.mkdir(path.join(sharedDir, "nested"), { recursive: true });
+          await fs.chmod(sharedDir, 0o755);
+          await fs.symlink(workspaceDir, workspaceAlias);
+          await fs.symlink(path.join(sharedDir, "nested"), linkedDir);
+          await fs.symlink(path.basename(targetPath), intermediatePath);
+          await fs.symlink("invalid-target.md/", memoryPath);
+
+          await recordShortTermRecalls({
+            workspaceDir: workspaceAlias,
+            query: "shared memory",
+            nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+            results: [
+              {
+                path: "memory/2026-04-29.md",
+                startLine: 1,
+                endLine: 1,
+                score: 0.96,
+                snippet: "Keep the shared memory target and directory permissions intact.",
+                source: "memory",
+              },
+            ],
+          });
+          const ranked = await rankShortTermPromotionCandidates({
+            workspaceDir: workspaceAlias,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          });
+
+          await expect(
+            applyShortTermPromotions({
+              workspaceDir: workspaceAlias,
+              candidates: ranked,
+              minScore: 0,
+              minRecallCount: 0,
+              minUniqueQueries: 0,
+            }),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+          await expectEnoent(fs.lstat(path.join(workspaceDir, "invalid-target.md")));
+          await fs.unlink(memoryPath);
+          await fs.symlink("linked/../memory-alias.md", memoryPath);
+
+          await applyShortTermPromotions({
+            workspaceDir: workspaceAlias,
+            candidates: ranked,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          });
+
+          expect((await fs.lstat(memoryPath)).isSymbolicLink()).toBe(true);
+          expect((await fs.lstat(intermediatePath)).isSymbolicLink()).toBe(true);
+          expect(await fs.readFile(targetPath, "utf-8")).toContain(
+            "Keep the shared memory target and directory permissions intact.",
+          );
+          expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o755);
+
+          const secondSnippet = "Keep writing through a shared read-only directory.";
+          await writeDailyMemoryNote(workspaceDir, "2026-04-30", [secondSnippet]);
+          await recordShortTermRecalls({
+            workspaceDir: workspaceAlias,
+            query: "read-only parent",
+            nowMs: Date.parse("2026-04-30T10:00:00.000Z"),
+            results: [
+              {
+                path: "memory/2026-04-30.md",
+                startLine: 1,
+                endLine: 1,
+                score: 0.96,
+                snippet: secondSnippet,
+                source: "memory",
+              },
+            ],
+          });
+          const secondRanked = await rankShortTermPromotionCandidates({
+            workspaceDir: workspaceAlias,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          });
+
+          const canonicalTargetPath = await fs.realpath(targetPath);
+          const openSpy = vi.spyOn(fs, "open");
+          await fs.chmod(targetPath, 0o600);
+          await fs.chmod(sharedDir, 0o555);
+          try {
+            await applyShortTermPromotions({
+              workspaceDir: workspaceAlias,
+              candidates: secondRanked,
+              minScore: 0,
+              minRecallCount: 0,
+              minUniqueQueries: 0,
+            });
+            expect(await fs.readFile(targetPath, "utf-8")).toContain(secondSnippet);
+            expect(openSpy).toHaveBeenCalledWith(canonicalTargetPath, "r+");
+            expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o555);
+          } finally {
+            await fs.chmod(sharedDir, 0o755);
+          }
+        });
+      },
+    );
+
+    it("preserves the existing MEMORY.md when the promotion write fails mid-flight", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+          "Notes",
+          "",
+          "Rotate the staging Postgres credentials before next deploy.",
+        ]);
+
+        const memoryPath = path.join(workspaceDir, "MEMORY.md");
+        const sentinel = "FINAL-USER-MEMORY-SENTINEL-do-not-lose";
+        const filler = "pad line filler content ".repeat(9_000);
+        const seeded = `# Long-Term Memory\n\n${filler}\n- ${sentinel}\n`;
+        await fs.writeFile(memoryPath, seeded, "utf-8");
+
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "rotate creds",
+          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+          results: [
+            {
+              path: "memory/2026-04-29.md",
+              startLine: 3,
+              endLine: 3,
+              score: 0.96,
+              snippet: "Rotate the staging Postgres credentials before next deploy.",
+              source: "memory",
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+
+        const truncateAt = 51_200;
+        const originalWriteFile = fs.writeFile.bind(fs);
+        vi.spyOn(fs, "writeFile").mockImplementation((async (
+          target: Parameters<typeof fs.writeFile>[0],
+          data: Parameters<typeof fs.writeFile>[1],
+          options?: Parameters<typeof fs.writeFile>[2],
+        ) => {
+          const targetPath =
+            typeof target === "string" ? target : target instanceof URL ? target.pathname : "";
+          if (targetPath && path.basename(targetPath).startsWith("MEMORY.md")) {
+            const text =
+              typeof data === "string" ? data : Buffer.from(data as Uint8Array).toString();
+            await originalWriteFile(target, text.slice(0, truncateAt), options);
+            throw Object.assign(new Error("EFBIG: file too large, write"), {
+              code: "EFBIG",
+            });
+          }
+          return originalWriteFile(target, data, options);
+        }) as typeof fs.writeFile);
+
+        await expect(
+          applyShortTermPromotions({
+            workspaceDir,
+            candidates: ranked,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+            nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+            memoryFileMaxChars: 5_000_000,
+          }),
+        ).rejects.toMatchObject({ code: "EFBIG" });
+
+        const after = await fs.readFile(memoryPath, "utf-8");
+        expect(after).toBe(seeded);
+        await expect(
+          rankShortTermPromotionCandidates({
+            workspaceDir,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          }),
+        ).resolves.toHaveLength(1);
+        expect(
+          (await fs.readdir(workspaceDir)).filter((entry) =>
+            entry.startsWith("MEMORY.md.promotion"),
+          ),
+        ).toEqual([]);
+      });
+    });
+  });
+
   it("shows signalCount instead of just recallCount in promotion annotations", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const nowMs = Date.parse("2026-05-28T10:00:00.000Z");
@@ -3629,10 +3564,11 @@ describe("short-term promotion", () => {
       });
 
       const store = await testing.readRecallStore(workspaceDir, new Date(nowMs).toISOString());
-      const entryKey = Object.keys(store.entries)[0];
-      store.entries[entryKey].dailyCount = 6;
-      store.entries[entryKey].recallCount = 0;
-      store.entries[entryKey].groundedCount = 1;
+      const entryKey = expectDefined(Object.keys(store.entries)[0], "signal-count recall key");
+      const entry = expectDefined(store.entries[entryKey], "signal-count recall entry");
+      entry.dailyCount = 6;
+      entry.recallCount = 0;
+      entry.groundedCount = 1;
       await testing.writeRawRecallStore(workspaceDir, store);
 
       const ranked = await rankShortTermPromotionCandidates({
@@ -3644,10 +3580,11 @@ describe("short-term promotion", () => {
       });
 
       expect(ranked.length).toBe(1);
-      expect(ranked[0].recallCount).toBe(0);
-      expect(ranked[0].dailyCount).toBe(6);
-      expect(ranked[0].groundedCount).toBe(1);
-      expect(ranked[0].signalCount).toBe(7);
+      const rankedResult = expectDefined(ranked[0], "signal-count ranking result");
+      expect(rankedResult.recallCount).toBe(0);
+      expect(rankedResult.dailyCount).toBe(6);
+      expect(rankedResult.groundedCount).toBe(1);
+      expect(rankedResult.signalCount).toBe(7);
 
       const applied = await applyShortTermPromotions({
         workspaceDir,
@@ -3688,7 +3625,8 @@ describe("short-term promotion", () => {
 
         const entries = Object.values(await readRecallStoreEntries(workspaceDir));
         expect(entries).toHaveLength(1);
-        expect(readEntrySnippet(entries[0])).toBe(prefix);
+        const entry = expectDefined(entries[0], "UTF-16 recall entry");
+        expect(readEntrySnippet(entry)).toBe(prefix);
       });
     });
 
@@ -3734,3 +3672,4 @@ describe("short-term promotion", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

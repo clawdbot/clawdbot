@@ -55,7 +55,10 @@ function setDeep(obj: Record<string, unknown>, keys: string[], value: unknown) {
     }
     node = node[key] as Record<string, unknown>;
   }
-  node[keys[keys.length - 1]] = value;
+  const lastKey = keys.at(-1);
+  if (lastKey !== undefined) {
+    node[lastKey] = value;
+  }
 }
 
 function parseHexRgbToSignedArgbInt(hex: string): number | null {

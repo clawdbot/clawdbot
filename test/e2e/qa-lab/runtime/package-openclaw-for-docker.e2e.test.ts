@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPackageArtifacts,
@@ -13,9 +13,12 @@ import {
   parseArgs,
   prepareBundledAiRuntimePackage,
   runCommandForTest,
+  writePackageInventoryForDocker,
 } from "../../../../scripts/package-openclaw-for-docker.mjs";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const skipBundledAiRuntime = async (): Promise<() => Promise<void>> => async () => {};
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) {
@@ -44,7 +47,7 @@ async function readPid(filePath: string, timeoutMs: number): Promise<number> {
         return pid;
       }
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for a positive pid in ${filePath}`);
 }
@@ -55,7 +58,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -81,6 +84,93 @@ async function waitForExit(
 }
 
 describe("package-openclaw-for-docker", () => {
+  it.runIf(process.platform === "win32")(
+    "runs npm through the toolchain-local runner on Windows",
+    async () => {
+      const output = await runCommandForTest("npm", ["--version"], process.cwd(), {
+        captureStdout: true,
+        timeoutMs: 30_000,
+      });
+
+      expect(output.trim()).toMatch(/^\d+\.\d+\.\d+$/u);
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "runs pnpm.cmd through the portable runner on Windows",
+    async () => {
+      const tempDir = tempDirs.make("openclaw-package-pnpm-runner-");
+      fs.writeFileSync(
+        path.join(tempDir, "pnpm.cmd"),
+        '@echo off\r\nif "%~1"=="probe" echo package-pnpm-runner-ok\r\n',
+      );
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (key.toUpperCase() === "PATH" || key.toUpperCase() === "PATHEXT") {
+          delete env[key];
+        }
+      }
+      env.PATH = tempDir;
+      env.PATHEXT = ".CMD";
+      env.npm_execpath = "";
+
+      const output = await runCommandForTest("pnpm", ["probe"], tempDir, {
+        captureStdout: true,
+        env,
+        timeoutMs: 30_000,
+      });
+
+      expect(output.trim()).toBe("package-pnpm-runner-ok");
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "kills pnpm.cmd descendants when the package command times out",
+    async () => {
+      const tempDir = tempDirs.make("openclaw-package-pnpm-timeout-");
+      const childPidPath = path.join(tempDir, "child.pid");
+      const childScriptPath = path.join(tempDir, "child.cjs");
+      fs.writeFileSync(
+        childScriptPath,
+        [
+          "const fs = require('node:fs');",
+          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(process.pid));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        path.join(tempDir, "pnpm.cmd"),
+        `@echo off\r\n"${process.execPath}" "${childScriptPath}"\r\n`,
+      );
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (key.toUpperCase() === "PATH" || key.toUpperCase() === "PATHEXT") {
+          delete env[key];
+        }
+      }
+      env.PATH = tempDir;
+      env.PATHEXT = ".CMD";
+      env.npm_execpath = "";
+      env.OPENCLAW_TEST_CHILD_PID = childPidPath;
+
+      let childPid = 0;
+      try {
+        const runPromise = runCommandForTest("pnpm", ["probe"], tempDir, {
+          env,
+          killAfterMs: 25,
+          timeoutMs: 500,
+        });
+        childPid = await readPid(childPidPath, 2_000);
+        await expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
   it("parses package artifact output options", () => {
     expect(
       parseArgs([
@@ -132,6 +222,96 @@ describe("package-openclaw-for-docker", () => {
     for (const [flag, args] of duplicateCases) {
       expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
     }
+  });
+
+  it("loads from a trusted harness checkout without installed dependencies", async () => {
+    const tempRoot = tempDirs.make("openclaw-package-harness-");
+    const copiedFiles = [
+      "scripts/package-openclaw-for-docker.mjs",
+      "scripts/package-changelog.mjs",
+      "scripts/npm-runner.mjs",
+      "scripts/pnpm-runner.mjs",
+      "scripts/windows-cmd-helpers.mjs",
+      "scripts/lib/bundled-plugin-build-entries.mjs",
+      "scripts/lib/bundled-plugin-paths.mjs",
+      "scripts/lib/managed-child-process.mjs",
+      "scripts/lib/optional-bundled-clusters.mjs",
+      "scripts/lib/windows-taskkill.mjs",
+    ];
+    try {
+      for (const relativePath of copiedFiles) {
+        const target = path.join(tempRoot, relativePath);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(relativePath, target);
+      }
+      const result = await new Promise<{ status: number | null; stderr: string }>(
+        (resolve, reject) => {
+          const child = spawn(
+            process.execPath,
+            [path.join(tempRoot, "scripts/package-openclaw-for-docker.mjs"), "--invalid"],
+            { cwd: tempRoot, stdio: ["ignore", "ignore", "pipe"] },
+          );
+          let stderr = "";
+          child.stderr.on("data", (chunk) => {
+            stderr += String(chunk);
+          });
+          child.on("error", reject);
+          child.on("close", (status) => resolve({ status, stderr }));
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("unknown argument: --invalid");
+      expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+    } finally {
+      fs.rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("writes inventory for a frozen source checkout without the trusted helper", async () => {
+    const sourceDir = tempDirs.make("openclaw-package-frozen-source-");
+    fs.mkdirSync(path.join(sourceDir, "dist"), { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "scripts"), { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "node_modules", "tsx"), { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "package.json"), '{"name":"openclaw"}\n');
+    fs.writeFileSync(
+      path.join(sourceDir, "node_modules", "tsx", "package.json"),
+      '{"name":"tsx","exports":"./loader.mjs","type":"module"}\n',
+    );
+    fs.writeFileSync(path.join(sourceDir, "node_modules", "tsx", "loader.mjs"), "export {};\n");
+    fs.writeFileSync(path.join(sourceDir, "dist", "entry.js"), "export {};\n");
+    fs.writeFileSync(
+      path.join(sourceDir, "scripts", "write-package-dist-inventory.ts"),
+      [
+        'import fs from "node:fs";',
+        'fs.writeFileSync("dist/postinstall-inventory.json", JSON.stringify(["dist/entry.js"]));',
+      ].join("\n"),
+    );
+
+    await writePackageInventoryForDocker(
+      sourceDir,
+      async (command: string, args: string[], cwd: string) => {
+        expect({ command, cwd }).toEqual({ command: "node", cwd: sourceDir });
+        expect(args).toEqual([
+          "--import",
+          pathToFileURL(path.join(sourceDir, "node_modules", "tsx", "loader.mjs")).href,
+          path.join(sourceDir, "scripts", "write-package-dist-inventory.ts"),
+        ]);
+        fs.writeFileSync(
+          path.join(sourceDir, "dist", "postinstall-inventory.json"),
+          JSON.stringify(["dist/entry.js"]),
+        );
+      },
+    );
+
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(sourceDir, "dist", "postinstall-inventory.json"), "utf8"),
+      ),
+    ).toEqual(["dist/entry.js"]);
+    expect(fs.existsSync(path.join(sourceDir, "scripts", "lib", "package-dist-inventory.ts"))).toBe(
+      false,
+    );
   });
 
   it("rejects pnpm pack with npm metadata output", () => {
@@ -229,7 +409,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual([
       {
         command: "node",
-        args: ["scripts/build-all.mjs", "ciArtifacts"],
+        args: ["scripts/build-all.mjs", "full"],
         cwd: "/repo",
         dockerBuildExtensions: undefined,
         internalDockerBuildPluginIds: undefined,
@@ -576,8 +756,14 @@ describe("package-openclaw-for-docker", () => {
   it("ignores unsafe output directory tarball names when npm stdout is not usable", async () => {
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-pack-"));
     try {
-      fs.writeFileSync(path.join(outputDir, "openclaw-C:evil.tgz"), "");
-      fs.writeFileSync(path.join(outputDir, String.raw`openclaw-nested\evil.tgz`), "");
+      if (process.platform === "win32") {
+        const nestedDir = path.join(outputDir, "openclaw-nested");
+        fs.mkdirSync(nestedDir);
+        fs.writeFileSync(path.join(nestedDir, "evil.tgz"), "");
+      } else {
+        fs.writeFileSync(path.join(outputDir, "openclaw-C:evil.tgz"), "");
+        fs.writeFileSync(path.join(outputDir, String.raw`openclaw-nested\evil.tgz`), "");
+      }
       await expect(
         packOpenClawPackageForDocker("/repo", outputDir, {
           prepareBundledAiRuntime: skipBundledAiRuntime,

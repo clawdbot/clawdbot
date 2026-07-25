@@ -1,6 +1,16 @@
 // Gateway Ws Client script supports OpenClaw repository automation.
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+
+// Release Docker images ship this script without src/, so keep transport
+// normalization self-contained instead of importing a core-only helper.
+export function rawDataToString(data: WebSocket.RawData): string {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return data instanceof ArrayBuffer ? Buffer.from(data).toString("utf8") : data.toString("utf8");
+}
 
 type GatewayReqFrame = { type: "req"; id: string; method: string; params?: unknown };
 type GatewayResFrame = {
@@ -10,8 +20,8 @@ type GatewayResFrame = {
   payload?: unknown;
   error?: unknown;
 };
-export type GatewayEventFrame = { type: "event"; event: string; seq?: number; payload?: unknown };
-export type GatewayFrame =
+type GatewayEventFrame = { type: "event"; event: string; seq?: number; payload?: unknown };
+type GatewayFrame =
   | GatewayReqFrame
   | GatewayResFrame
   | GatewayEventFrame
@@ -37,19 +47,6 @@ export function resolveGatewayUrl(urlRaw: string): URL {
   return url;
 }
 
-function toText(data: WebSocket.RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8");
-  }
-  return Buffer.from(data as Buffer).toString("utf8");
-}
-
 export function createGatewayWsClient(params: {
   url: string;
   handshakeTimeoutMs?: number;
@@ -58,6 +55,7 @@ export function createGatewayWsClient(params: {
   onEvent?: (evt: GatewayEventFrame) => void;
 }) {
   const ws = new WebSocket(params.url, { handshakeTimeout: params.handshakeTimeoutMs ?? 8000 });
+  ws.binaryType = "nodebuffer";
   const pending = new Map<
     string,
     {
@@ -140,7 +138,7 @@ export function createGatewayWsClient(params: {
     });
 
   ws.on("message", (data) => {
-    const text = toText(data);
+    const text = rawDataToString(data);
     let frame: GatewayFrame | null;
     try {
       frame = JSON.parse(text) as GatewayFrame;

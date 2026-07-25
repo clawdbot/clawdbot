@@ -19,7 +19,6 @@ vi.mock("./bot-message-context.body.js", () => ({
       wasMentioned: true,
       effectiveWasMentioned: true,
       requireMention: false,
-      shouldSkip: false,
     },
     canDetectMention: false,
     shouldBypassMention: false,

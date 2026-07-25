@@ -1,7 +1,9 @@
 // Presentation data for the plugins catalog: bundled cover art, deterministic
 // fallback gradients, category shelving, and curated connector suggestions.
+import { expectDefined } from "@openclaw/normalization-core";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { t } from "../../i18n/index.ts";
+import { takeGraphemes } from "../../lib/graphemes.ts";
 
 /**
  * Cover art bundled at ui/public/plugin-art/<slug>.webp. The gateway CSP is
@@ -128,12 +130,12 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "portfolio-pulse",
   "qa-channel",
   "qa-lab",
-  "qa-matrix",
   "qianfan",
   "qqbot",
   "qwen",
   "raft",
   "reddit",
+  "reef",
   "runway",
   "searxng",
   "senseaudio",
@@ -208,9 +210,12 @@ const FALLBACK_GRADIENTS: ReadonlyArray<readonly [string, string]> = [
 export function pluginFallbackGradient(id: string): readonly [string, string] {
   let hash = 0;
   for (const char of id) {
-    hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+    hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
   }
-  return FALLBACK_GRADIENTS[hash % FALLBACK_GRADIENTS.length]!;
+  return expectDefined(
+    FALLBACK_GRADIENTS[hash % FALLBACK_GRADIENTS.length],
+    "plugin fallback gradient palette entry",
+  );
 }
 
 export function pluginMonogram(name: string): string {
@@ -218,7 +223,11 @@ export function pluginMonogram(name: string): string {
   if (words.length === 0) {
     return "";
   }
-  const initials = words.length === 1 ? words[0].slice(0, 2) : `${words[0][0]}${words[1][0]}`;
+  const first = expectDefined(words[0], "plugin monogram first word");
+  const second = words[1];
+  const initials = second
+    ? `${takeGraphemes(first, 1)}${takeGraphemes(second, 1)}`
+    : takeGraphemes(first, 2);
   return initials.toLocaleUpperCase();
 }
 
@@ -249,7 +258,7 @@ export function pluginCategoryLabel(category: string): string {
   }
 }
 
-export type ConnectorMcpTemplate = {
+type ConnectorMcpTemplate = {
   serverName: string;
   config: {
     url?: string;
@@ -269,15 +278,14 @@ export const CONNECTOR_GROUP_ORDER: readonly ConnectorGroup[] = ["work", "dev", 
 export type ConnectorSuggestion = {
   id: string;
   name: string;
-  description: string;
+  descriptionKey: string;
   group: ConnectorGroup;
   action: { kind: "mcp"; mcp: ConnectorMcpTemplate } | { kind: "clawhub"; query: string };
 };
 
 /**
  * Curated connector shelf: one-click MCP servers for official hosted endpoints
- * plus ClawHub searches proven to return live packages. Descriptions are
- * catalog data (like manifest descriptions), not localized UI chrome.
+ * plus ClawHub searches proven to return live packages.
  */
 export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
   // --- Work & productivity ---
@@ -285,7 +293,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "notion",
     group: "work",
     name: "Notion",
-    description: "Search, create, and update pages and databases in your Notion workspace.",
+    descriptionKey: "pluginsPage.connectorDescriptions.notion",
     action: {
       kind: "mcp",
       mcp: {
@@ -300,7 +308,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "linear",
     group: "work",
     name: "Linear",
-    description: "Triage issues, update cycles, and file bugs straight from chat.",
+    descriptionKey: "pluginsPage.connectorDescriptions.linear",
     action: {
       kind: "mcp",
       mcp: {
@@ -316,7 +324,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "todoist",
     group: "work",
     name: "Todoist",
-    description: "Read, add, and complete tasks and projects in Todoist.",
+    descriptionKey: "pluginsPage.connectorDescriptions.todoist",
     action: {
       kind: "mcp",
       mcp: {
@@ -332,7 +340,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "airtable",
     group: "work",
     name: "Airtable",
-    description: "Query and update records, tables, and bases in Airtable.",
+    descriptionKey: "pluginsPage.connectorDescriptions.airtable",
     action: {
       kind: "mcp",
       mcp: {
@@ -351,14 +359,14 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "jira",
     group: "work",
     name: "Jira",
-    description: "Create, search, and triage Jira tickets from chat.",
+    descriptionKey: "pluginsPage.connectorDescriptions.jira",
     action: { kind: "clawhub", query: "jira" },
   },
   {
     id: "canva",
     group: "work",
     name: "Canva",
-    description: "Create and edit Canva designs, manage assets, and export results.",
+    descriptionKey: "pluginsPage.connectorDescriptions.canva",
     action: {
       kind: "mcp",
       mcp: {
@@ -373,7 +381,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "stripe",
     group: "work",
     name: "Stripe",
-    description: "Check payments, customers, invoices, and subscriptions in your Stripe account.",
+    descriptionKey: "pluginsPage.connectorDescriptions.stripe",
     action: {
       kind: "mcp",
       mcp: {
@@ -388,28 +396,28 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "google-calendar",
     group: "work",
     name: "Calendar",
-    description: "Read, create, and get briefed on events — your agent owns your schedule.",
+    descriptionKey: "pluginsPage.connectorDescriptions.googleCalendar",
     action: { kind: "clawhub", query: "google calendar" },
   },
   {
     id: "email-inbox",
     group: "work",
     name: "Email",
-    description: "Mailbox triage, summaries, and drafts with send-on-approval.",
+    descriptionKey: "pluginsPage.connectorDescriptions.email",
     action: { kind: "clawhub", query: "email" },
   },
   {
     id: "pdf-tools",
     group: "work",
     name: "PDF",
-    description: "Extract, merge, convert, and OCR PDF documents.",
+    descriptionKey: "pluginsPage.connectorDescriptions.pdf",
     action: { kind: "clawhub", query: "pdf" },
   },
   {
     id: "transcription",
     group: "work",
     name: "Transcription",
-    description: "Turn audio and video into clean, structured transcripts.",
+    descriptionKey: "pluginsPage.connectorDescriptions.transcription",
     action: { kind: "clawhub", query: "transcription" },
   },
   // --- Coding & infrastructure ---
@@ -417,7 +425,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "github",
     group: "dev",
     name: "GitHub",
-    description: "PR review queues, issue triage, and repo Q&A through the official GitHub MCP.",
+    descriptionKey: "pluginsPage.connectorDescriptions.github",
     action: {
       kind: "mcp",
       mcp: {
@@ -438,7 +446,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "sentry",
     group: "dev",
     name: "Sentry",
-    description: "Crash alerts explained and triaged the moment they fire.",
+    descriptionKey: "pluginsPage.connectorDescriptions.sentry",
     action: {
       kind: "mcp",
       mcp: {
@@ -453,7 +461,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "context7",
     group: "dev",
     name: "Context7",
-    description: "Version-specific library docs and code examples while coding. No signup needed.",
+    descriptionKey: "pluginsPage.connectorDescriptions.context7",
     action: {
       kind: "mcp",
       mcp: {
@@ -468,7 +476,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "deepwiki",
     group: "dev",
     name: "DeepWiki",
-    description: "Ask questions about any public GitHub repo. Free, no account needed.",
+    descriptionKey: "pluginsPage.connectorDescriptions.deepwiki",
     action: {
       kind: "mcp",
       mcp: {
@@ -483,7 +491,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "hugging-face",
     group: "dev",
     name: "Hugging Face",
-    description: "Search models, datasets, and papers; run Spaces as tools.",
+    descriptionKey: "pluginsPage.connectorDescriptions.huggingFace",
     action: {
       kind: "mcp",
       mcp: {
@@ -498,14 +506,14 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "grafana",
     group: "dev",
     name: "Grafana",
-    description: "Grafana know-how and community connectors for dashboards and alerts.",
+    descriptionKey: "pluginsPage.connectorDescriptions.grafana",
     action: { kind: "clawhub", query: "grafana" },
   },
   {
     id: "kubernetes",
     group: "dev",
     name: "Kubernetes",
-    description: "Cluster operations and troubleshooting from chat.",
+    descriptionKey: "pluginsPage.connectorDescriptions.kubernetes",
     action: { kind: "clawhub", query: "kubernetes" },
   },
   // --- Home & media ---
@@ -513,7 +521,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "home-assistant",
     group: "home",
     name: "Home Assistant",
-    description: "Control lights, climate, and automations across your whole home.",
+    descriptionKey: "pluginsPage.connectorDescriptions.homeAssistant",
     action: {
       kind: "mcp",
       mcp: {
@@ -531,21 +539,21 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "spotify",
     group: "home",
     name: "Spotify",
-    description: "Search, queue, and soundtrack your day with mood-based playlists.",
+    descriptionKey: "pluginsPage.connectorDescriptions.spotify",
     action: { kind: "clawhub", query: "spotify" },
   },
   {
     id: "sonos",
     group: "home",
     name: "Sonos",
-    description: "Whole-home audio: play, group rooms, and queue by chat.",
+    descriptionKey: "pluginsPage.connectorDescriptions.sonos",
     action: { kind: "clawhub", query: "sonos" },
   },
   {
     id: "reddit",
     group: "life",
     name: "Reddit",
-    description: "Browse, search, and summarize subreddits and threads.",
+    descriptionKey: "pluginsPage.connectorDescriptions.reddit",
     action: { kind: "clawhub", query: "reddit" },
   },
   // --- Everyday life ---
@@ -553,42 +561,42 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     id: "portfolio-pulse",
     group: "life",
     name: "Markets",
-    description: "Live stocks and crypto with price alerts and daily digests.",
+    descriptionKey: "pluginsPage.connectorDescriptions.markets",
     action: { kind: "clawhub", query: "stocks" },
   },
   {
     id: "trip-scout",
     group: "life",
     name: "Travel",
-    description: "Flight and hotel search with fare watching and trip memory.",
+    descriptionKey: "pluginsPage.connectorDescriptions.travel",
     action: { kind: "clawhub", query: "flights" },
   },
   {
     id: "morning-brief",
     group: "life",
     name: "News",
-    description: "A personalized daily briefing: news, weather, and tasks in one message.",
+    descriptionKey: "pluginsPage.connectorDescriptions.news",
     action: { kind: "clawhub", query: "news" },
   },
   {
     id: "maps",
     group: "life",
     name: "Maps",
-    description: "Places, routing, and travel-time answers.",
+    descriptionKey: "pluginsPage.connectorDescriptions.maps",
     action: { kind: "clawhub", query: "maps" },
   },
   {
     id: "translation",
     group: "life",
     name: "Translation",
-    description: "Translate and localize text and documents.",
+    descriptionKey: "pluginsPage.connectorDescriptions.translation",
     action: { kind: "clawhub", query: "translation" },
   },
   {
     id: "notes",
     group: "life",
     name: "Notes",
-    description: "Capture notes to Markdown, Obsidian, Notion, or Bear.",
+    descriptionKey: "pluginsPage.connectorDescriptions.notes",
     action: { kind: "clawhub", query: "notes" },
   },
 ];

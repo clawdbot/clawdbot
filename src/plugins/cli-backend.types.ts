@@ -1,7 +1,90 @@
 /** Type contracts for plugin-owned CLI backend integrations. */
-import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
+
+/** Static command adapter owned by a CLI backend plugin registration. */
+export type CliBackendConfig = {
+  /** CLI command to execute (absolute path or on PATH). */
+  command: string;
+  /** Base args applied to every invocation. */
+  args?: string[];
+  /** Output parsing mode (default: json). */
+  output?: "json" | "text" | "jsonl";
+  /** Output parsing mode when resuming a CLI session. */
+  resumeOutput?: "json" | "text" | "jsonl";
+  /** JSONL event dialect for CLIs with provider-specific stream formats. */
+  jsonlDialect?: "claude-stream-json" | "gemini-stream-json";
+  /** Long-lived CLI process mode. */
+  liveSession?: "claude-stdio";
+  /** Prompt input mode (default: arg). */
+  input?: "arg" | "stdin";
+  /** Max prompt length for arg mode (if exceeded, stdin is used). */
+  maxPromptArgChars?: number;
+  /** Extra env vars injected for this CLI. */
+  env?: Record<string, string>;
+  /** Env vars to remove before launching this CLI. */
+  clearEnv?: string[];
+  /** Flag used to pass model id (e.g. --model). */
+  modelArg?: string;
+  /** Model aliases mapping (OpenClaw model id → CLI model id). */
+  modelAliases?: Record<string, string>;
+  /** Args used to pass a session id (use {sessionId} placeholder). */
+  sessionArgs?: string[];
+  /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
+  resumeArgs?: string[];
+  /** Argument appended to one explicitly forked resume invocation. */
+  forkArg?: string;
+  /** When to pass session ids. */
+  sessionMode?: "always" | "existing" | "none";
+  /** JSON fields to read session id from (in order). */
+  sessionIdFields?: string[];
+  /** Flag used to pass system prompt. */
+  systemPromptArg?: string;
+  /** Flag used to pass a system prompt file. */
+  systemPromptFileArg?: string;
+  /** Config override flag used to pass a system prompt file (e.g. -c). */
+  systemPromptFileConfigArg?: string;
+  /** Config override key used to pass a system prompt file. */
+  systemPromptFileConfigKey?: string;
+  /** System prompt behavior (append vs replace). */
+  systemPromptMode?: "append" | "replace";
+  /** When to send system prompt. */
+  systemPromptWhen?: "first" | "always" | "never";
+  /** Flag used to pass image paths. */
+  imageArg?: string;
+  /** How to pass multiple images. */
+  imageMode?: "repeat" | "list";
+  /** Where staged image files should live before handing them to the CLI. */
+  imagePathScope?: "temp" | "workspace";
+  /** Serialize runs for this CLI. */
+  serialize?: boolean;
+  /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
+  reseedFromRawTranscriptWhenUncompacted?: boolean;
+  /** Runtime reliability tuning for this backend's process lifecycle. */
+  reliability?: {
+    /** No-output watchdog tuning (fresh vs resumed runs). */
+    watchdog?: {
+      /** Fresh/new sessions (non-resume). */
+      fresh?: {
+        /** Fraction of overall timeout used when fixed timeout is not set. */
+        noOutputTimeoutRatio?: number;
+        /** Lower bound for computed watchdog timeout. */
+        minMs?: number;
+        /** Upper bound for computed watchdog timeout. */
+        maxMs?: number;
+      };
+      /** Resume sessions. */
+      resume?: {
+        /** Fraction of overall timeout used when fixed timeout is not set. */
+        noOutputTimeoutRatio?: number;
+        /** Lower bound for computed watchdog timeout. */
+        minMs?: number;
+        /** Upper bound for computed watchdog timeout. */
+        maxMs?: number;
+      };
+    };
+  };
+};
 
 export type PluginTextReplacement = {
   from: string | RegExp;
@@ -26,8 +109,14 @@ export type CliBackendPrepareExecutionContext = {
   agentDir?: string;
   provider: string;
   modelId: string;
+  /** Effective OpenClaw context budget selected for this run. */
+  contextTokenBudget?: number;
   authProfileId?: string;
   executionMode?: CliBackendExecutionMode;
+  /** Exact runtime tool surface the backend must enforce for this run. */
+  toolAvailability?: CliBackendToolAvailability;
+  /** Core-prepared environment, including any bundled MCP settings path. */
+  env?: Readonly<Record<string, string>>;
 };
 
 export type CliBackendPreparedExecution = {
@@ -39,6 +128,8 @@ export type CliBackendPreparedExecution = {
    */
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Positive acknowledgement for `prepare-execution` tool enforcement. */
+  toolAvailabilityEnforced?: true;
 };
 
 export type CliBackendThinkingLevel =
@@ -53,6 +144,18 @@ export type CliBackendThinkingLevel =
 
 export type CliBackendExecutionMode = "agent" | "side-question";
 
+/** Exact backend-native plus canonical OpenClaw tool surface for one CLI run. */
+export type CliBackendToolAvailability = {
+  native: readonly string[];
+  /** Canonical OpenClaw tool names served through the host-isolated transport. */
+  openClaw: readonly string[];
+  /**
+   * @deprecated Compatibility projection for CLI backend plugins built against
+   * v2026.7.2-beta.1 through v2026.7.2-beta.3. Use `openClaw` for canonical names.
+   */
+  mcp: readonly string[];
+};
+
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;
   workspaceDir: string;
@@ -61,6 +164,7 @@ export type CliBackendResolveExecutionArgsContext = {
   authProfileId?: string;
   thinkingLevel?: CliBackendThinkingLevel;
   executionMode?: CliBackendExecutionMode;
+  toolAvailability?: CliBackendToolAvailability;
   useResume: boolean;
   baseArgs: readonly string[];
 };
@@ -71,7 +175,10 @@ export type CliBackendResolveExecutionArgs = (
 
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
-export type CliBackendNativeToolMode = "none" | "always-on";
+export type CliBackendNativeToolMode = "none" | "always-on" | "selectable";
+
+/** Backend-owned mechanism that enforces exact per-run tool availability. */
+export type CliBackendToolAvailabilityEnforcement = "execution-args" | "prepare-execution";
 
 export type CliBackendSideQuestionToolMode = "disabled";
 
@@ -81,13 +188,24 @@ export type CliBackendNormalizeConfigContext = {
   agentId?: string;
 };
 
+/** Backend-owned implementation boundary for script-backed CLI executables. */
+export type CliBackendRuntimeArtifactPolicy = Readonly<{
+  kind: "bundled-package-tree";
+  /** Exact package.json name whose complete installed tree owns inference. */
+  packageName: string;
+  /** Only the command itself may be the package entrypoint. */
+  entrypoint: "command";
+  /** Canonical basenames allowed when this backend ships a self-contained native build. */
+  nativeExecutableNames?: readonly string[];
+}>;
+
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
   id: string;
   /** Canonical model provider whose models this CLI backend can execute. */
   modelProvider?: string;
-  /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
+  /** Static command adapter owned by this plugin. */
   config: CliBackendConfig;
   /**
    * Context-engine host capabilities provided by this backend when it is
@@ -99,6 +217,16 @@ export type CliBackendPlugin = {
    * Set only when the backend bounds its own transcript and persists resumable state.
    */
   ownsNativeCompaction?: boolean;
+  /**
+   * Whether embedded runs opted into `cliBackendDispatch: "subscription-auth"`
+   * execute through this backend when the selected credential is
+   * subscription-scoped (oauth/token) or unresolvable.
+   *
+   * Set only when this backend's model provider rejects or meters direct API
+   * calls on subscription tokens, so the passthrough would fail or silently
+   * bill outside plan limits. API-key credentials always keep the passthrough.
+   */
+  subscriptionAuthDispatch?: boolean;
   /**
    * Optional live-smoke metadata owned by the backend plugin.
    *
@@ -114,6 +242,8 @@ export type CliBackendPlugin = {
       binaryName?: string;
     };
   };
+  /** Required whenever this backend can become a verified inference owner. */
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *
@@ -131,10 +261,7 @@ export type CliBackendPlugin = {
    */
   bundleMcpMode?: CliBundleMcpMode;
   /**
-   * Optional config normalizer applied after user overrides merge.
-   *
-   * Use this for backend-specific compatibility rewrites when old config
-   * shapes need to stay working.
+   * Optional config normalizer applied to the registered adapter.
    */
   normalizeConfig?: (
     config: CliBackendConfig,
@@ -178,6 +305,13 @@ export type CliBackendPlugin = {
    */
   authEpochMode?: CliBackendAuthEpochMode;
   /**
+   * Whether `prepareExecution` may auto-select a configured auth profile.
+   *
+   * Defaults to true for auth bridges. Set false for environment/config-only
+   * hooks that do not consume OpenClaw auth profiles.
+   */
+  autoSelectAuthProfile?: boolean;
+  /**
    * Backend-owned execution bridge.
    *
    * Use this on async run paths when the backend needs a generated auth/config
@@ -199,11 +333,12 @@ export type CliBackendPlugin = {
    * native effort flag.
    */
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  /** How this backend enforces an exact per-run `toolAvailability` contract. */
+  toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
-   * catalog. Backends that cannot provide a true no-tools mode must mark
-   * themselves as `always-on` so callers that require disabled tools fail
-   * closed instead of launching a native harness.
+   * catalog. Exact restricted runs require `selectable` plus a declared
+   * `toolAvailabilityEnforcement`; `always-on` backends fail closed.
    */
   nativeToolMode?: CliBackendNativeToolMode;
   /**

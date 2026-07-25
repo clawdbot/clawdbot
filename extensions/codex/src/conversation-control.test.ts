@@ -66,10 +66,21 @@ const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
 }));
 
+function controlClient(request: ReturnType<typeof vi.fn>, clientId = "control-client") {
+  return { request, getInstanceId: () => clientId };
+}
+
 vi.mock("./app-server/shared-client.js", () => ({
   ...sharedClientMocks,
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
+  releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
+    lease.client = undefined;
+  }),
+  withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
+    lease: { client?: unknown };
+    run: (client: unknown) => Promise<unknown>;
+  }) => await params.run(params.lease.client),
 }));
 
 describe("codex conversation controls", () => {
@@ -256,13 +267,15 @@ describe("codex conversation controls", () => {
       model: "gpt-5.4",
       modelProvider: "openai",
     });
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async () => ({
-        thread: { id: "thread-1", cwd: tempDir },
-        model: "gpt-5.5",
-        modelProvider: "openai",
-      })),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      controlClient(
+        vi.fn(async () => ({
+          thread: { id: "thread-1", cwd: tempDir },
+          model: "gpt-5.5",
+          modelProvider: "openai",
+        })),
+      ),
+    );
 
     await expect(
       setCodexConversationModel({ sessionFile, agentDir, model: "gpt-5.5" }),
@@ -275,6 +288,7 @@ describe("codex conversation controls", () => {
     expect(binding?.authProfileId).toBe("work");
     expect(binding?.model).toBe("gpt-5.5");
     expect(binding?.modelProvider).toBeUndefined();
+    expect(binding?.clientId).toBe("control-client");
   });
 
   it("keeps Guardian reviewer when switching a stale local binding to a provider-qualified OpenAI model", async () => {
@@ -292,7 +306,7 @@ describe("codex conversation controls", () => {
       model: "gpt-5.5",
       modelProvider: "openai",
     }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(controlClient(request));
 
     await expect(
       setCodexConversationModel({
@@ -325,7 +339,7 @@ describe("codex conversation controls", () => {
       model: "local-model-2",
       modelProvider: "lmstudio",
     }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(controlClient(request));
 
     await expect(
       setCodexConversationModel({
@@ -356,7 +370,7 @@ describe("codex conversation controls", () => {
       model: "openai/gpt-oss-20b",
       modelProvider: "lmstudio",
     }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(controlClient(request));
 
     await expect(
       setCodexConversationModel({
@@ -382,13 +396,15 @@ describe("codex conversation controls", () => {
       model: "gpt-5.4",
       modelProvider: "openai",
     });
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async () => ({
-        thread: { id: "thread-1", cwd: tempDir },
-        model: "gpt-5.5 <@U123> [trusted](https://evil)",
-        modelProvider: "openai",
-      })),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      controlClient(
+        vi.fn(async () => ({
+          thread: { id: "thread-1", cwd: tempDir },
+          model: "gpt-5.5 <@U123> [trusted](https://evil)",
+          modelProvider: "openai",
+        })),
+      ),
+    );
 
     await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
       "Codex model set to gpt-5.5 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09.",

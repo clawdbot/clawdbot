@@ -2,7 +2,7 @@
 import { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
 import { WRITER_QUEUES } from "./store-writer-state.js";
 
-export type RunExclusiveSessionStoreWriteOptions = {
+type RunExclusiveSessionStoreWriteOptions = {
   reentrant?: boolean;
 };
 

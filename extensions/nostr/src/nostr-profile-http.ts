@@ -30,7 +30,7 @@ import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 // Types
 // ============================================================================
 
-export interface NostrProfileHttpContext {
+interface NostrProfileHttpContext {
   /** Get current profile from config */
   getConfigProfile: (accountId: string) => NostrProfile | undefined;
   /** Update profile in config (after successful publish) */
@@ -57,18 +57,6 @@ const profileRateLimiter = createFixedWindowRateLimiter({
   maxRequests: RATE_LIMIT_MAX_REQUESTS,
   maxTrackedKeys: RATE_LIMIT_MAX_TRACKED_KEYS,
 });
-
-export function clearNostrProfileRateLimitStateForTest(): void {
-  profileRateLimiter.clear();
-}
-
-export function getNostrProfileRateLimitStateSizeForTest(): number {
-  return profileRateLimiter.size();
-}
-
-export function isNostrProfileRateLimitedForTest(accountId: string, nowMs: number): boolean {
-  return profileRateLimiter.isRateLimited(accountId, nowMs);
-}
 
 function checkRateLimit(accountId: string): boolean {
   return !profileRateLimiter.isRateLimited(accountId);

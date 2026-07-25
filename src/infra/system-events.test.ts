@@ -1,4 +1,6 @@
 // Covers system event queue routing, draining, and formatting.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -71,6 +73,66 @@ describe("system events (session routing)", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
   });
 
+  it("requires a context key when replacing an event", () => {
+    expect(() =>
+      enqueueSystemEvent("Voice roster", {
+        sessionKey: "agent:main:main",
+        contextKey: " ",
+        replace: true,
+      }),
+    ).toThrow("contextKey");
+  });
+
+  it("replaces one keyed event without evicting unrelated queued events", () => {
+    const key = "agent:main:test-upsert";
+    enqueueSystemEvent("Voice roster 0", {
+      sessionKey: key,
+      contextKey: "discord:voice-membership:default:g1",
+      replace: true,
+    });
+    for (let index = 0; index < 19; index += 1) {
+      enqueueSystemEvent(`unrelated ${index}`, {
+        sessionKey: key,
+        contextKey: `unrelated:${index}`,
+      });
+    }
+    for (let index = 1; index <= 25; index += 1) {
+      enqueueSystemEvent(`Voice roster ${index}`, {
+        sessionKey: key,
+        contextKey: "discord:voice-membership:default:g1",
+        replace: true,
+      });
+    }
+
+    expect(peekSystemEvents(key)).toHaveLength(20);
+    expect(peekSystemEvents(key).filter((event) => event.startsWith("unrelated "))).toHaveLength(
+      19,
+    );
+    expect(peekSystemEvents(key).at(-1)).toBe("Voice roster 25");
+  });
+
+  it("consumes unchanged inspected events when a keyed event is replaced in flight", () => {
+    const key = "agent:main:test-upsert-consume-race";
+    enqueueSystemEvent("Voice roster 0", {
+      sessionKey: key,
+      contextKey: "discord:voice-membership:default:g1",
+      replace: true,
+    });
+    enqueueSystemEvent("Exec completed", { sessionKey: key, contextKey: "exec:job-1" });
+    const inspected = peekSystemEventEntries(key);
+
+    enqueueSystemEvent("Voice roster 1", {
+      sessionKey: key,
+      contextKey: "discord:voice-membership:default:g1",
+      replace: true,
+    });
+
+    expect(consumeSystemEventEntries(key, inspected).map((event) => event.text)).toEqual([
+      "Exec completed",
+    ]);
+    expect(peekSystemEvents(key)).toEqual(["Voice roster 1"]);
+  });
+
   it("returns false for consecutive duplicate events", () => {
     const first = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
     const second = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
@@ -103,7 +165,7 @@ describe("system events (session routing)", () => {
     const peeked = peekSystemEventEntries(key);
     expect(hasSystemEvents(key)).toBe(true);
     expect(peeked).toHaveLength(1);
-    peeked[0].text = "mutated";
+    expectDefined(peeked[0], "peeked[0] test invariant").text = "mutated";
     expect(peekSystemEvents(key)).toEqual(["Node connected"]);
 
     expect(drainSystemEventEntries(key).map((entry) => entry.text)).toEqual(["Node connected"]);
@@ -147,7 +209,10 @@ describe("system events (session routing)", () => {
       },
     });
     const inspected = peekSystemEventEntries(key);
-    inspected[0].deliveryContext!.threadId = "42";
+    expectDefined(
+      expectDefined(inspected[0], "inspected event").deliveryContext,
+      "inspected delivery context",
+    ).threadId = "42";
 
     expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
     expect(peekSystemEvents(key)).toStrictEqual([]);
@@ -171,7 +236,10 @@ describe("system events (session routing)", () => {
 
     const events = peekSystemEventEntries(key);
     const resolved = resolveSystemEventDeliveryContext(events);
-    events[0].deliveryContext!.to = "mutated";
+    expectDefined(
+      expectDefined(events[0], "first system event").deliveryContext,
+      "first event delivery context",
+    ).to = "mutated";
 
     expect(resolved).toEqual({
       channel: "telegram",

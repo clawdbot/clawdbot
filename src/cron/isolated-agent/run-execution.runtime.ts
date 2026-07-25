@@ -15,7 +15,6 @@ export {
 } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";
 export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
-export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 export { registerAgentRunContext } from "../../infra/agent-events.js";
 export { logWarn } from "../../logger.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -26,14 +25,6 @@ const cronExecutionCliRuntimeLoader = createLazyImportLoader(
 
 async function loadCronExecutionCliRuntime() {
   return await cronExecutionCliRuntimeLoader.load();
-}
-
-/** Lazily resolves CLI session ids without loading the cron CLI runner at module import time. */
-export async function getCliSessionId(
-  ...args: Parameters<typeof import("../../agents/cli-session.js").getCliSessionId>
-): Promise<ReturnType<typeof import("../../agents/cli-session.js").getCliSessionId>> {
-  const runtime = await loadCronExecutionCliRuntime();
-  return runtime.getCliSessionId(...args);
 }
 
 /** Lazily resolves complete CLI bindings so cron continuations preserve reuse metadata. */

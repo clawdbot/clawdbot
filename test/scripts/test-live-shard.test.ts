@@ -88,6 +88,12 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
       "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
     );
+    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
+      "src/skills/workshop/experience-review.live.test.ts",
+    );
+    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
+      "src/agents/zai.live.test.ts",
+    );
     expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
       "src/agents/zai.live.test.ts",
     ]);
@@ -98,10 +104,11 @@ describe("scripts/test-live-shard", () => {
       "src/gateway/gateway-codex-harness.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
-      "src/crestodian/rescue-channel.live.test.ts",
       "src/gateway/android-node.capabilities.live.test.ts",
       "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
       "src/gateway/gateway-trajectory-export.live.test.ts",
+      "src/system-agent/rescue-channel.live.test.ts",
+      "src/system-agent/setup-app-recommendations.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual([
       "src/infra/push-apns-http2.live.test.ts",
@@ -379,6 +386,37 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
+  it("allows the experience review live file to be skipped until its env is enabled", () => {
+    const reviewFile = "src/skills/workshop/experience-review.live.test.ts";
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src/agents/openai-reasoning-compat.live.test.ts"),
+          assertionResults: [{ status: "passed" }],
+        },
+        {
+          name: path.join(process.cwd(), reviewFile),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+    const expectedFiles = ["src/agents/openai-reasoning-compat.live.test.ts", reviewFile];
+
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
+      ok: true,
+    });
+    expect(
+      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW: "1",
+      }),
+    ).toEqual({
+      ok: false,
+      reason: `Vitest report selected live test files had no passing assertions: ${reviewFile}`,
+    });
+  });
+
   it("does not count disabled opt-in sentinel assertions as live shard proof", () => {
     const payload = {
       numPassedTests: 1,
@@ -515,12 +553,12 @@ function writeFakePnpm(filePath: string): void {
       '  "-e",',
       "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\",",
       "], { stdio: 'ignore' });",
-      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
-      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
       'process.on("SIGTERM", () => {',
       '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
       "  process.exit(0);",
       "});",
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"),
@@ -534,7 +572,7 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await delay(5);
   }
 }
 
@@ -546,7 +584,7 @@ async function waitForClose(
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for child close");
     }),
   ]);

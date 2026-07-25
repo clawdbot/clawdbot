@@ -44,7 +44,7 @@ command handling is enabled for the surface.
       do **not** persist session settings.
     - Directives only apply for **authorized senders**. If `commands.allowFrom`
       is set, it is the only allowlist used; otherwise authorization comes from
-      channel allowlists/pairing plus `commands.useAccessGroups`. Unauthorized
+      channel allowlists, pairing, and always-on access-group enforcement. Unauthorized
       senders see directives treated as plain text.
   </Accordion>
 </AccordionGroup>
@@ -122,7 +122,7 @@ command handling is enabled for the surface.
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart` and gateway restart tool actions.
+  Enables `/restart` and external `SIGUSR1` restart requests.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
@@ -150,10 +150,6 @@ command handling is enabled for the surface.
   global default; provider-specific keys override it.
 </ParamField>
 
-<ParamField path="commands.useAccessGroups" type="boolean" default="true">
-  Enforces allowlists/policies for commands when `commands.allowFrom` is not set.
-</ParamField>
-
 ## Command list
 
 Commands come from three sources:
@@ -178,8 +174,11 @@ plugins.
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
     | `/session max-age <duration\|off>` | Manage thread-binding max-age expiry |
-    | `/export-session [path]` | Export the current session to HTML. Alias: `/export` |
+    | `/export-session [path]` | Owner-only. Export the current session to HTML inside the workspace. Alias: `/export` |
     | `/export-trajectory [path]` | Export a JSONL trajectory bundle for the current session. Alias: `/trajectory` |
+
+    Explicit `/export-session` paths replace existing files inside the
+    workspace. Omit the path to generate a collision-safe filename.
 
     <Note>
       Control UI intercepts typed `/new` to create and switch to a fresh
@@ -237,7 +236,7 @@ plugins.
     | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
     | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
-    | `/crestodian <request>` | Run the Crestodian setup and repair helper from an owner DM |
+    | `/openclaw <request>` | Run the OpenClaw setup and repair helper from an owner DM |
     | `/tasks` | List active/recent background tasks for the current session |
     | `/context [list\|detail\|map\|json]` | Explain how context is assembled |
     | `/whoami` | Show your sender id. Alias: `/id` |
@@ -368,8 +367,9 @@ use the Control UI Tools panel or config surfaces.
 ```
 
 On Discord, `/model` and `/models` open an interactive picker with provider and
-model dropdowns. The picker respects `agents.defaults.models`, including
-`provider/*` entries.
+model dropdowns. The picker respects `agents.defaults.modelPolicy.allow`,
+including `provider/*` entries. Without an explicit allowlist, model entries and
+aliases do not restrict selection.
 
 ## `/config`: on-disk config writes
 
@@ -379,10 +379,10 @@ model dropdowns. The picker respects `agents.defaults.models`, including
 
 ```text
 /config show
-/config show messages.responsePrefix
-/config get messages.responsePrefix
-/config set messages.responsePrefix="[openclaw]"
-/config unset messages.responsePrefix
+/config show channels.whatsapp.responsePrefix
+/config get channels.whatsapp.responsePrefix
+/config set channels.whatsapp.responsePrefix="[openclaw]"
+/config unset channels.whatsapp.responsePrefix
 ```
 
 Config is validated before write. Invalid changes are rejected. `/config`
@@ -417,9 +417,9 @@ chat.
 
 ```text
 /debug show
-/debug set messages.responsePrefix="[openclaw]"
+/debug set channels.whatsapp.responsePrefix="[openclaw]"
 /debug set channels.whatsapp.allowFrom=["+1555","+4477"]
-/debug unset messages.responsePrefix
+/debug unset channels.whatsapp.responsePrefix
 /debug reset
 ```
 
@@ -435,12 +435,23 @@ chat.
 /plugin show context7
 /plugins enable context7
 /plugins disable context7
-/plugins install ./path/to/plugin
+/plugins install clawhub:<package>
+/plugins install npm:@openclaw/<official-package>
+/plugins install npm:<package> --force
+/plugins install git:<repository>@<ref> --force
 ```
 
 `/plugins enable|disable` updates plugin config and hot-reloads the Gateway
 plugin runtime for new agent turns. `/plugins install` restarts managed
-Gateways automatically because plugin source modules changed.
+Gateways automatically because plugin source modules changed. Trusted ClawHub
+and official-catalog installs do not need extra acknowledgement. Arbitrary npm,
+git, archive, `npm-pack:`, and local path sources show a provenance warning and
+require a trailing `--force` after you review the source. This flag acknowledges
+the source and permits replacement of an existing install; it does not bypass
+`security.installPolicy` or installer security checks. ClawHub releases with
+risk warnings still require the separate shell-only
+`--acknowledge-clawhub-risk` flag. Marketplace, linked, and pinned installs also
+remain shell-only.
 
 ## `/trace`: plugin trace output
 
@@ -469,6 +480,10 @@ Unlike a normal message:
 - In Codex harness sessions, runs as an ephemeral Codex side thread.
 - Does **not** change future session context.
 - Is not written to transcript history.
+
+In the Control UI, `/btw` and `/side` open the session rail and ask its
+read-only companion instead of starting the detached BTW path. The TUI and
+external-channel behavior above is unchanged.
 
 See [BTW side questions](/tools/btw) for the full behavior.
 

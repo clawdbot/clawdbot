@@ -3,13 +3,13 @@ title: Active goal context survives compaction
 scenario:
   id: goal-context-survives-compaction
   surface: goals
-  category: session-memory-and-context-engine.context-engine
+  category: session-memory.context-engine
   coverage:
     primary:
-      - goals.context-injection
+      - session-memory.goal-continuance-context-injection
     secondary:
-      - goals.continuance
-      - runtime.compaction
+      - session-memory.goal-continuance-continuance
+      - session-memory.compaction
   objective: Verify compaction does not remove active session-goal context from the next model turn.
   successCriteria:
     - An authorized channel turn starts a session goal through `/goal start`.
@@ -33,8 +33,8 @@ scenario:
   execution:
     kind: flow
     summary: Start a goal, compact the session, then inspect the next mock-provider request for active-goal context.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       requiredProviderMode: mock-openai
       conversationId: goal-context-compaction
       senderId: qa-goal-operator
@@ -133,9 +133,9 @@ flow:
             expr: "!normalizeLowercaseStringOrEmpty(compactReply.text).includes('skipped')"
             message:
               expr: "`manual compaction did not compact the seeded session: ${compactReply.text}`"
-        - set: requestCountBeforePostCompactionTurn
+        - set: requestCursorBeforePostCompactionTurn
           value:
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - set: postCompactOutboundIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
@@ -154,7 +154,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforePostCompactionTurn).find((request) => String(request.prompt ?? '').includes(config.postCompactionMessage))"
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforePostCompactionTurn}`)).find((request) => String(request.prompt ?? '').includes(config.postCompactionMessage))"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 100
         - waitForOutbound:
@@ -168,7 +168,6 @@ flow:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: postCompactionReply
         - assert:
-            expr: "String(postCompactionRequest.prompt ?? '').includes(config.expectedGoalContext)"
-            message:
-              expr: "`post-compaction provider prompt missed active goal context: ${String(postCompactionRequest.prompt ?? '')}`"
+            expr: "String(postCompactionRequest.allInputText ?? '').includes(config.expectedGoalContext)"
+            message: post-compaction provider request input missed active goal context
       detailsExpr: "`compact=${compactReply.text}; post-compaction=${postCompactionReply.text}`"

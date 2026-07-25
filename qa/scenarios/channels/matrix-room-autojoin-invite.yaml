@@ -1,0 +1,23 @@
+title: Matrix invite auto-join accepts fresh group rooms
+scenario:
+  id: matrix-room-autojoin-invite
+  surface: channels
+  coverage:
+    primary:
+      - matrix.conversation-routing-and-delivery
+  execution:
+    profiles: { "matrix:all": 18, "matrix:transport": 17 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        autoJoin: always
+        groupPolicy: open
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runRoomAutoJoinInviteScenario
+  args:
+    - expr: "scenarioContext"

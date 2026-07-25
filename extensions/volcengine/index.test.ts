@@ -36,6 +36,13 @@ describe("volcengine plugin", () => {
         contextWindow: entry.contextWindow,
       })),
     ]);
+    expect(DOUBAO_CODING_MODEL_CATALOG.map((entry) => entry.id)).toEqual([
+      "ark-code-latest",
+      "doubao-seed-2.1-turbo",
+      "glm-5.2",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+    ]);
   });
 
   it("declares its coding provider auth alias in the manifest", () => {
@@ -73,9 +80,9 @@ describe("volcengine plugin", () => {
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "volcengine-plan",
-      modelId: "kimi-k2.5",
+      modelId: "doubao-seed-2.1-turbo",
       model: {
-        id: "kimi-k2.5",
+        id: "doubao-seed-2.1-turbo",
         provider: "volcengine-plan",
         api: "openai-completions",
         compat: { unsupportedToolSchemaKeywords: ["not"] },

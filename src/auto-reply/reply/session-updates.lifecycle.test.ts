@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import {
+  applySessionEntryLifecycleMutation,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -38,7 +43,7 @@ async function createFixture() {
   const sessionStore: Record<string, SessionEntry> = {
     [sessionKey]: entry,
   };
-  await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+  await replaceSessionEntry({ storePath, sessionKey }, entry);
   return { storePath, sessionKey, sessionStore, entry, transcriptPath };
 }
 
@@ -182,7 +187,11 @@ describe("session-updates lifecycle hooks", () => {
 
   it("recreates a complete persisted row when compaction updates a missing store row", async () => {
     const { storePath, sessionKey, sessionStore, entry } = await createFixture();
-    await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
+    await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [{ sessionKey }],
+      skipMaintenance: true,
+    });
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -194,7 +203,7 @@ describe("session-updates lifecycle hooks", () => {
       now: 456,
     });
 
-    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(sessionStore[sessionKey]?.sessionId).toBe("s2");
     expect(sessionStore[sessionKey]?.sessionFile).toContain("s2.jsonl");
     expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);

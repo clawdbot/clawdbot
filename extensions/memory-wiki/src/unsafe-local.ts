@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import pMap from "p-map";
 import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -29,7 +30,13 @@ type UnsafeLocalArtifact = {
   relativePath: string;
 };
 
+type UnsafeLocalArtifactCollection = {
+  artifacts: UnsafeLocalArtifact[];
+  unavailableConfiguredPaths: string[];
+};
+
 const DIRECTORY_TEXT_EXTENSIONS = new Set([".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"]);
+const UNSAFE_LOCAL_SYNC_CONCURRENCY = 16;
 
 function detectFenceLanguage(filePath: string): string {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
@@ -46,7 +53,7 @@ function detectFenceLanguage(filePath: string): string {
 }
 
 async function listAllowedFilesRecursive(rootDir: string): Promise<string[]> {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdir(rootDir, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
     const fullPath = path.join(rootDir, entry.name);
@@ -66,41 +73,52 @@ async function listAllowedFilesRecursive(rootDir: string): Promise<string[]> {
 
 async function collectUnsafeLocalArtifacts(
   configuredPaths: string[],
-): Promise<UnsafeLocalArtifact[]> {
+): Promise<UnsafeLocalArtifactCollection> {
   const artifacts: UnsafeLocalArtifact[] = [];
+  const unavailableConfiguredPaths: string[] = [];
   for (const configuredPath of configuredPaths) {
     const absoluteConfiguredPath = path.resolve(configuredPath);
-    const stat = await fs.stat(absoluteConfiguredPath).catch(() => null);
-    if (!stat) {
-      continue;
-    }
-    if (stat.isDirectory()) {
-      const files = await listAllowedFilesRecursive(absoluteConfiguredPath);
-      for (const absolutePath of files) {
-        artifacts.push({
-          syncKey: await resolveArtifactKey(absolutePath),
+    const scopedArtifacts: UnsafeLocalArtifact[] = [];
+    try {
+      const stat = await fs.stat(absoluteConfiguredPath);
+      if (stat.isDirectory()) {
+        const files = await listAllowedFilesRecursive(absoluteConfiguredPath);
+        for (const absolutePath of files) {
+          scopedArtifacts.push({
+            syncKey: await resolveArtifactKey(absolutePath),
+            configuredPath: absoluteConfiguredPath,
+            absolutePath,
+            relativePath: path.relative(absoluteConfiguredPath, absolutePath).replace(/\\/g, "/"),
+          });
+        }
+      } else if (stat.isFile()) {
+        scopedArtifacts.push({
+          syncKey: await resolveArtifactKey(absoluteConfiguredPath),
           configuredPath: absoluteConfiguredPath,
-          absolutePath,
-          relativePath: path.relative(absoluteConfiguredPath, absolutePath).replace(/\\/g, "/"),
+          absolutePath: absoluteConfiguredPath,
+          relativePath: path.basename(absoluteConfiguredPath),
         });
       }
+    } catch {
+      unavailableConfiguredPaths.push(absoluteConfiguredPath);
       continue;
     }
-    if (stat.isFile()) {
-      artifacts.push({
-        syncKey: await resolveArtifactKey(absoluteConfiguredPath),
-        configuredPath: absoluteConfiguredPath,
-        absolutePath: absoluteConfiguredPath,
-        relativePath: path.basename(absoluteConfiguredPath),
-      });
-    }
+    artifacts.push(...scopedArtifacts);
   }
 
   const deduped = new Map<string, UnsafeLocalArtifact>();
   for (const artifact of artifacts) {
     deduped.set(artifact.syncKey, artifact);
   }
-  return [...deduped.values()];
+  return { artifacts: [...deduped.values()], unavailableConfiguredPaths };
+}
+
+function isSourceWithinConfiguredPath(sourcePath: string, configuredPath: string): boolean {
+  const relative = path.relative(configuredPath, sourcePath);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 function resolveUnsafeLocalPagePath(params: { configuredPath: string; absolutePath: string }): {
@@ -214,16 +232,31 @@ export async function syncMemoryWikiUnsafeLocalSources(
     };
   }
 
-  const artifacts = await collectUnsafeLocalArtifacts(config.unsafeLocal.paths);
+  const { artifacts, unavailableConfiguredPaths } = await collectUnsafeLocalArtifacts(
+    config.unsafeLocal.paths,
+  );
   const state = await readMemoryWikiSourceSyncState(config.vault.path);
+  const activeKeys = new Set<string>();
+  for (const [syncKey, entry] of Object.entries(state.entries)) {
+    if (
+      entry.group === "unsafe-local" &&
+      unavailableConfiguredPaths.some((configuredPath) =>
+        isSourceWithinConfiguredPath(entry.sourcePath, configuredPath),
+      )
+    ) {
+      // A configured source scope remains authoritative until it is readable again or removed
+      // from config. Treating an unreadable mount as empty would permanently delete human notes.
+      activeKeys.add(syncKey);
+    }
+  }
   assertMemoryWikiSourceSyncStateCapacity({
     state,
     group: "unsafe-local",
-    incomingCount: artifacts.length,
+    incomingCount: new Set([...artifacts.map((artifact) => artifact.syncKey), ...activeKeys]).size,
   });
-  const activeKeys = new Set<string>();
-  const results = await Promise.all(
-    artifacts.map(async (artifact) => {
+  const results = await pMap(
+    artifacts,
+    async (artifact) => {
       const stats = await fs.stat(artifact.absolutePath);
       activeKeys.add(artifact.syncKey);
       return await writeUnsafeLocalSourcePage({
@@ -233,7 +266,8 @@ export async function syncMemoryWikiUnsafeLocalSources(
         sourceSize: stats.size,
         state,
       });
-    }),
+    },
+    { concurrency: UNSAFE_LOCAL_SYNC_CONCURRENCY, stopOnError: true },
   );
 
   const removedCount = await pruneImportedSourceEntries({

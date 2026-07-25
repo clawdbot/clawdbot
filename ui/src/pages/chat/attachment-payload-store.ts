@@ -94,10 +94,3 @@ export function discardChatAttachmentDataUrls(attachments: readonly ChatAttachme
     discardChatAttachmentDataUrl(attachment.id);
   }
 }
-
-export function resetChatAttachmentPayloadStoreForTest(): void {
-  for (const payload of payloads.values()) {
-    revokeObjectUrl(payload.previewUrl);
-  }
-  payloads.clear();
-}

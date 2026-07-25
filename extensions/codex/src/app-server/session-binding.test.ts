@@ -13,6 +13,7 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   createCodexAppServerBindingStore,
   createStoredCodexAppServerBinding,
+  hashCodexAppServerBindingFingerprint,
   readCodexAppServerThreadBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";
@@ -379,6 +380,39 @@ describe("Codex app-server binding store", () => {
       pluginAppPolicyContext,
     });
     expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("normalizes legacy fingerprints without rehashing canonical values", () => {
+    const rawDynamicToolsFingerprint = JSON.stringify([{ name: "legacy_tool" }]);
+    const rawUserMcpServersFingerprint = JSON.stringify({
+      mcp_servers: { legacy: { command: "node" } },
+    });
+    const imported = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-legacy-fingerprints",
+      cwd: "/repo",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      dynamicToolsFingerprint: rawDynamicToolsFingerprint,
+      userMcpServersFingerprint: rawUserMcpServersFingerprint,
+    });
+    expect(imported?.binding).toMatchObject({
+      dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(rawDynamicToolsFingerprint),
+      userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(rawUserMcpServersFingerprint),
+    });
+
+    const existingHash = `sha256:${"a".repeat(64)}`;
+    const canonical = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-canonical-fingerprints",
+      cwd: "/repo",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      dynamicToolsFingerprint: "[]",
+      userMcpServersFingerprint: existingHash,
+    });
+    expect(canonical?.binding).toMatchObject({
+      dynamicToolsFingerprint: "[]",
+      userMcpServersFingerprint: existingHash,
+    });
   });
 
   it("canonicalizes undefined fields before writing to JSON-only plugin state", async () => {
@@ -1140,6 +1174,39 @@ describe("Codex app-server binding store", () => {
     expect(invalid?.binding.pluginAppPolicyContext).toBeUndefined();
   });
 
+  it("round-trips workspace-directory plugin policy context", () => {
+    const stored = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-workspace-plugin",
+      cwd: "/repo",
+      pluginAppPolicyContext: {
+        fingerprint: "policy-workspace",
+        apps: {
+          workspaceData: {
+            configKey: "workspaceData",
+            marketplaceName: "workspace-directory",
+            pluginName: "workspace-data@workspace-directory",
+            allowDestructiveActions: true,
+            destructiveApprovalMode: "ask",
+            mcpServerNames: [],
+          },
+        },
+        pluginAppIds: { workspaceData: ["workspace-data"] },
+      },
+    });
+
+    expect(stored?.binding.pluginAppPolicyContext).toMatchObject({
+      apps: {
+        workspaceData: {
+          marketplaceName: "workspace-directory",
+          pluginName: "workspace-data@workspace-directory",
+          destructiveApprovalMode: "ask",
+        },
+      },
+      pluginAppIds: { workspaceData: ["workspace-data"] },
+    });
+  });
+
   it("serializes writes from another facade behind a native-compaction lease", async () => {
     vi.useFakeTimers();
     const { state } = createStateStore();
@@ -1358,3 +1425,4 @@ describe("Codex app-server binding store", () => {
     ).toThrow("requires an agent id");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

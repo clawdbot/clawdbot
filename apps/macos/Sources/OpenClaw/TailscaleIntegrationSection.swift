@@ -317,9 +317,7 @@ struct TailscaleIntegrationSection: View {
     private static func buildAndSaveTailscaleConfig(
         tailscaleMode: GatewayTailscaleMode,
         requireCredentialsForServe: Bool,
-        password: String,
-        connectionMode: AppState.ConnectionMode,
-        isPaused: Bool) async -> (Bool, String?)
+        password: String) async -> (Bool, String?)
     {
         let settings = GatewayTailscaleSettingsSnapshot(
             mode: tailscaleMode,
@@ -499,15 +497,13 @@ struct TailscaleIntegrationSection: View {
     @MainActor
     private static func saveTailscaleSettings(
         settings: GatewayTailscaleSettingsSnapshot,
-        connectionMode: AppState.ConnectionMode,
-        isPaused: Bool) async -> (Bool, String?)
+        connectionMode _: AppState.ConnectionMode,
+        isPaused _: Bool) async -> (Bool, String?)
     {
         await self.buildAndSaveTailscaleConfig(
             tailscaleMode: settings.mode,
             requireCredentialsForServe: settings.requireCredentialsForServe,
-            password: settings.password,
-            connectionMode: connectionMode,
-            isPaused: isPaused)
+            password: settings.password)
     }
 
     private func startStatusTimer() {

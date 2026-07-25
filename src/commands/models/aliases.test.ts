@@ -1,7 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { modelsAliasesListCommand, modelsAliasesRemoveCommand } from "./aliases.js";
+import {
+  modelsAliasesAddCommand,
+  modelsAliasesListCommand,
+  modelsAliasesRemoveCommand,
+} from "./aliases.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -175,6 +182,36 @@ describe("modelsAliasesRemoveCommand", () => {
   });
 });
 
+describe("modelsAliasesAddCommand", () => {
+  beforeEach(() => {
+    mocks.readConfigFileSnapshot.mockReset();
+    mocks.replaceConfigFile.mockReset();
+    mocks.loadModelsConfig.mockReset();
+  });
+
+  it("does not make an unlisted model override invalid on a fresh config", async () => {
+    const cfg = {} as OpenClawConfig;
+    mocks.loadModelsConfig.mockResolvedValue(cfg);
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+
+    await modelsAliasesAddCommand("zippy", "clawrouter/deepseek/deepseek-v4-flash", makeRuntime());
+
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    const written = replaceParams?.nextConfig as OpenClawConfig;
+    const persisted = stampConfigWriteMetadata(written, "2026-07-18T00:00:00.000Z", "test", cfg);
+    const policy = createModelVisibilityPolicy({
+      cfg: persisted,
+      catalog: [],
+      defaultProvider: "clawrouter",
+      defaultModel: "deepseek/deepseek-v4-flash",
+    });
+    expect(written.agents?.defaults?.modelPolicy).toBeUndefined();
+    expect(persisted.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
+  });
+});
+
 describe("modelsAliasesListCommand <-> modelsAliasesRemoveCommand agreement", () => {
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockReset();
@@ -227,7 +264,10 @@ describe("modelsAliasesListCommand <-> modelsAliasesRemoveCommand agreement", ()
     for (const alias of listed) {
       mocks.replaceConfigFile.mockClear();
       const removeRuntime = makeRuntime();
-      const result = await modelsAliasesRemoveCommand(alias, removeRuntime).then(
+      const result = await modelsAliasesRemoveCommand(
+        expectDefined(alias, "alias test invariant"),
+        removeRuntime,
+      ).then(
         () => ({ ok: true as const }),
         (err: unknown) => ({
           ok: false as const,

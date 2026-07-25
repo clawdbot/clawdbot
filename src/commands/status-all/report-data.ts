@@ -1,7 +1,7 @@
 // Collects raw data needed to render `openclaw status --all`.
 // This file performs local read-only probes; formatting stays in report-line builders.
 
-import { canExecRequestNode } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectPortUsage } from "../../infra/ports.js";
@@ -119,14 +119,16 @@ async function resolveStatusAllLocalDiagnosis(params: {
       ? (() => {
           try {
             // Skill eligibility depends on whether the default agent may request node exec.
+            const nodeSkills = resolveNodeExecEligibility({
+              cfg: overview.cfg,
+              agentId: overview.agentStatus.defaultId,
+            });
             return buildWorkspaceSkillStatus(defaultWorkspace, {
               config: overview.cfg,
               eligibility: {
+                nodeSkills,
                 remote: getRemoteSkillEligibility({
-                  advertiseExecNode: canExecRequestNode({
-                    cfg: overview.cfg,
-                    agentId: overview.agentStatus.defaultId,
-                  }),
+                  advertiseExecNode: nodeSkills.canExec,
                 }),
               },
             });

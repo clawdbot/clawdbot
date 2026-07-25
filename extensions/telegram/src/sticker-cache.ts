@@ -3,10 +3,10 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/agent-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import {
   findModelInCatalog,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   modelSupportsVision,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAutoImageModel } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -57,7 +57,18 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   let activeModel = undefined as { provider: string; model: string } | undefined;
   let catalog: ModelCatalogEntry[] = [];
   try {
-    catalog = await loadModelCatalog({ config: cfg });
+    catalog = await loadPreparedModelCatalog({
+      config: cfg,
+      ...(agentId
+        ? {
+            agentId,
+            agentDir: agentDir ?? resolveAgentDir(cfg, agentId),
+          }
+        : agentDir
+          ? { agentDir }
+          : {}),
+      readOnly: true,
+    });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
     const supportsVision = modelSupportsVision(entry);
     if (supportsVision) {

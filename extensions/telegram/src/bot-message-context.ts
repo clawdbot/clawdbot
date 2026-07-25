@@ -111,7 +111,6 @@ export type TelegramMessageContext = {
   initialTypingCueSent?: boolean;
   ackReactionPromise: Promise<boolean> | null;
   reactionApi: TelegramReactionApi | null;
-  removeAckAfterReply: boolean;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
 };
@@ -425,6 +424,8 @@ export const buildTelegramMessageContext = async ({
     cfg,
   });
   const baseRequireMention = resolveGroupRequireMention(chatId, cfg);
+  // Persisted session activation intentionally interleaves topic and group config.
+  // ScopeTree resolves config only, so this precedence remains session-owned here.
   const groupRequireMention = firstDefined(
     topicConfig?.requireMention,
     activationOverride,
@@ -536,7 +537,6 @@ export const buildTelegramMessageContext = async ({
   });
   const ackReactionEmoji =
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
-  const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
     ackReaction &&
     shouldAckReactionGate({
@@ -560,7 +560,7 @@ export const buildTelegramMessageContext = async ({
   const resolvedStatusReactionEmojis = statusReactionsEnabled
     ? resolveTelegramStatusReactionEmojis({
         initialEmoji: ackReaction,
-        overrides: statusReactionsConfig?.emojis,
+        overrides: undefined,
       })
     : null;
   const statusReactionVariantsByEmoji = resolvedStatusReactionEmojis
@@ -608,7 +608,6 @@ export const buildTelegramMessageContext = async ({
           },
           initialEmoji: ackReaction,
           emojis: resolvedStatusReactionEmojis ?? undefined,
-          timing: statusReactionsConfig?.timing,
           onError: (err) => {
             logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
           },
@@ -661,7 +660,6 @@ export const buildTelegramMessageContext = async ({
     initialTypingCueSent,
     ackReactionPromise,
     reactionApi,
-    removeAckAfterReply,
     statusReactionController,
     accountId: account.accountId,
   };

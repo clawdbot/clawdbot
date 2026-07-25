@@ -16,6 +16,7 @@
  */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { WebSocketServer } from "ws";
 import {
   getBrowserControlState,
@@ -23,7 +24,7 @@ import {
 } from "../../control-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProfile } from "../config.js";
-import { extensionRelayTokenMatches, readExtensionRelayToken } from "./relay-auth.js";
+import { readExtensionRelayToken } from "./relay-auth.js";
 import { ensureExtensionRelayForProfile } from "./relay-lifecycle.js";
 import {
   attachExtensionWebSocket,
@@ -35,7 +36,7 @@ import {
 const log = createSubsystemLogger("browser").child("extension-relay-gateway");
 
 /** Path the browser plugin registers on the gateway (ends in /extension so the pairing parser accepts it). */
-export const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
+const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
 
 // Single noServer WebSocketServer for all gateway-hosted extension upgrades.
 let wss: WebSocketServer | null = null;
@@ -98,11 +99,7 @@ export async function handleGatewayExtensionUpgrade(
   let state = getBrowserControlState();
   const expectedToken = readExtensionRelayToken();
   const candidate = requestExtensionProtocolToken(req);
-  if (
-    !expectedToken ||
-    candidate.length === 0 ||
-    !extensionRelayTokenMatches(expectedToken, candidate)
-  ) {
+  if (!expectedToken || candidate.length === 0 || !safeEqualSecret(expectedToken, candidate)) {
     destroy(socket, "401 Unauthorized");
     return true;
   }

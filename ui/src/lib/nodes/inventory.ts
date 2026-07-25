@@ -1,3 +1,4 @@
+import type { PresenceEntry } from "../../api/types.ts";
 // Builds the unified nodes/devices inventory shown on the Nodes page.
 // The gateway exposes two overlapping views of the same machines: paired device
 // records (roles + tokens) and the node catalog (caps + live links). This module
@@ -6,18 +7,17 @@
 import { normalizeOptionalString } from "../string-coerce.ts";
 import type { PairedDevice } from "./index.ts";
 
-export type NodeApprovalState =
-  | "approved"
-  | "pending-approval"
-  | "pending-reapproval"
-  | "unapproved";
+type NodeApprovalState = "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
 
 /** Typed projection of one raw `node.list` row. */
-export type NodeListEntry = {
+type NodeListEntry = {
   nodeId: string;
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
+  modelIdentifier?: string;
   clientId?: string;
   clientMode?: string;
   remoteIp?: string;
@@ -40,6 +40,7 @@ export type NodesInventoryEntry = {
   clientMode?: string;
   platform?: string;
   version?: string;
+  modelIdentifier?: string;
   remoteIp?: string;
   roles: string[];
   scopes: string[];
@@ -47,6 +48,7 @@ export type NodesInventoryEntry = {
   autoApproved: boolean;
   lastSeenAtMs?: number;
   approvedAtMs?: number;
+  presence?: PresenceEntry;
   device?: PairedDevice;
   node?: NodeListEntry;
 };
@@ -79,7 +81,7 @@ function stringList(value: unknown): string[] {
     .filter((entry): entry is string => entry !== undefined);
 }
 
-export function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null {
+function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null {
   const nodeId = normalizeOptionalString(raw.nodeId);
   if (!nodeId) {
     return null;
@@ -90,6 +92,9 @@ export function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry 
     displayName: normalizeOptionalString(raw.displayName),
     platform: normalizeOptionalString(raw.platform),
     version: normalizeOptionalString(raw.version),
+    coreVersion: normalizeOptionalString(raw.coreVersion),
+    uiVersion: normalizeOptionalString(raw.uiVersion),
+    modelIdentifier: normalizeOptionalString(raw.modelIdentifier),
     clientId: normalizeOptionalString(raw.clientId),
     clientMode: normalizeOptionalString(raw.clientMode),
     remoteIp: normalizeOptionalString(raw.remoteIp),
@@ -129,7 +134,12 @@ function maxDefined(...values: Array<number | undefined>): number | undefined {
   return max;
 }
 
-function buildEntry(id: string, device?: PairedDevice, node?: NodeListEntry): NodesInventoryEntry {
+function buildEntry(
+  id: string,
+  device?: PairedDevice,
+  node?: NodeListEntry,
+  presence?: PresenceEntry,
+): NodesInventoryEntry {
   const roles = device ? deviceRoles(device) : [];
   if (node?.paired && !roles.includes("node")) {
     // Legacy nodes/paired.json rows have no device record; they are still nodes.
@@ -146,17 +156,30 @@ function buildEntry(id: string, device?: PairedDevice, node?: NodeListEntry): No
     displayName,
     clientId,
     clientMode: normalizeOptionalString(device?.clientMode) ?? node?.clientMode,
-    platform: normalizeOptionalString(device?.platform) ?? node?.platform,
-    version: node?.version,
+    platform:
+      normalizeOptionalString(presence?.platform) ??
+      normalizeOptionalString(device?.platform) ??
+      node?.platform,
+    version: normalizeOptionalString(presence?.version) ?? node?.version,
+    modelIdentifier: normalizeOptionalString(presence?.modelIdentifier) ?? node?.modelIdentifier,
     remoteIp: normalizeOptionalString(device?.remoteIp) ?? node?.remoteIp,
     roles,
     scopes: stringList(device?.scopes),
-    // Node catalog rows and the server-computed device connection state both
-    // count: operator-only clients never appear in node.list.
+    // Server-computed device/node connectivity accounts for multiple live
+    // connections sharing one device id; one disconnect beacon cannot.
     connected: node?.connected === true || device?.connected === true,
-    autoApproved: device?.approvedVia === "silent" || device?.approvedVia === "trusted-cidr",
-    lastSeenAtMs: maxDefined(device?.lastSeenAtMs, node?.lastSeenAtMs, node?.connectedAtMs),
+    autoApproved:
+      device?.approvedVia === "silent" ||
+      device?.approvedVia === "trusted-cidr" ||
+      device?.approvedVia === "ssh-verified",
+    lastSeenAtMs: maxDefined(
+      device?.lastSeenAtMs,
+      node?.lastSeenAtMs,
+      node?.connectedAtMs,
+      optionalNumber(presence?.ts),
+    ),
     approvedAtMs: maxDefined(device?.approvedAtMs, node?.approvedAtMs),
+    presence,
     device,
     node,
   };
@@ -203,12 +226,22 @@ function compareGroups(left: NodesInventoryGroup, right: NodesInventoryGroup): n
 export function buildNodesInventory(params: {
   paired: PairedDevice[];
   nodes: Array<Record<string, unknown>>;
+  presence?: PresenceEntry[];
 }): NodesInventoryGroup[] {
   const nodesById = new Map<string, NodeListEntry>();
   for (const raw of params.nodes) {
     const node = parseNodeListEntry(raw);
     if (node) {
       nodesById.set(node.nodeId, node);
+    }
+  }
+  const presenceById = new Map<string, PresenceEntry>();
+  for (const presence of params.presence ?? []) {
+    for (const rawId of [presence.deviceId, presence.instanceId]) {
+      const id = normalizeOptionalString(rawId)?.toLowerCase();
+      if (id) {
+        presenceById.set(id, presence);
+      }
     }
   }
   const entries: NodesInventoryEntry[] = [];
@@ -219,11 +252,11 @@ export function buildNodesInventory(params: {
       continue;
     }
     seen.add(id);
-    entries.push(buildEntry(id, device, nodesById.get(id)));
+    entries.push(buildEntry(id, device, nodesById.get(id), presenceById.get(id.toLowerCase())));
   }
   for (const [id, node] of nodesById) {
     if (!seen.has(id)) {
-      entries.push(buildEntry(id, undefined, node));
+      entries.push(buildEntry(id, undefined, node, presenceById.get(id.toLowerCase())));
     }
   }
 
@@ -242,6 +275,9 @@ export function buildNodesInventory(params: {
   for (const [key, bucket] of groupsByKey) {
     const sorted = bucket.toSorted(compareEntries);
     const primary = sorted[0];
+    if (!primary) {
+      continue;
+    }
     groups.push({
       key,
       name: primary.name,
@@ -254,20 +290,74 @@ export function buildNodesInventory(params: {
 
 /**
  * Duplicate entries safe to bulk-remove: superseded, not currently connected,
- * and auto-approved (silent local / trusted-CIDR), so the client re-pairs
- * without user action. Owner/QR-approved and pre-provenance duplicates keep
- * their per-entry Remove button but never enter the bulk sweep.
+ * and either auto-approved (silent local / trusted-CIDR / SSH-verified), so the
+ * client re-pairs without user action, or a frozen pre-provenance device row.
+ * Owner/QR-approved duplicates keep their per-entry Remove button. Node-only
+ * catalog rows are never sweep-eligible without a device pairing record.
  *
  * Deliberate tradeoff: groups key on display metadata because no machine
  * identity survives a key rotation. Two distinct same-named trusted-CIDR
  * machines can therefore land in one group and the offline one may be swept —
- * accepted because the sweep is admin-confirmed and a wrongly removed client
- * is re-admitted automatically by the same auto-approve policy on reconnect.
+ * accepted because the sweep is admin-confirmed and a wrongly removed
+ * auto-approved client is re-admitted automatically by the same policy on
+ * reconnect. Pre-provenance duplicates cannot be auto-pruned server-side, so
+ * the same explicit admin confirmation is their cleanup boundary.
  */
 export function listStaleInventoryEntries(groups: NodesInventoryGroup[]): NodesInventoryEntry[] {
   return groups.flatMap((group) =>
-    group.duplicates.filter((entry) => !entry.connected && entry.autoApproved),
+    group.duplicates.filter(
+      (entry) =>
+        !entry.connected &&
+        (entry.autoApproved ||
+          (entry.device !== undefined && entry.device.approvedVia === undefined)),
+    ),
   );
+}
+
+/** Returns the Gateway self beacon, when present in the current snapshot. */
+export function findGatewayPresence(presence: PresenceEntry[]): PresenceEntry | undefined {
+  return presence.find((entry) => normalizeOptionalString(entry.mode)?.toLowerCase() === "gateway");
+}
+
+/**
+ * Live presence beacons with no pairing or node-catalog row, e.g. clients on
+ * shared token/password auth without a device identity. They were visible on
+ * the retired Instances page; without this the merged Devices page would hide
+ * live connections that the gateway intentionally tracks.
+ */
+export function listUnpairedPresence(
+  presence: PresenceEntry[],
+  groups: NodesInventoryGroup[],
+): PresenceEntry[] {
+  const knownIds = new Set<string>();
+  for (const group of groups) {
+    for (const entry of [group.primary, ...group.duplicates]) {
+      knownIds.add(entry.id.toLowerCase());
+    }
+  }
+  return presence.filter((entry) => {
+    if (normalizeOptionalString(entry.mode)?.toLowerCase() === "gateway") {
+      return false;
+    }
+    // Recently disconnected beacons linger for the presence TTL; only live
+    // connections earn a row here.
+    if (normalizeOptionalString(entry.reason)?.toLowerCase() === "disconnect") {
+      return false;
+    }
+    const ids = [entry.deviceId, entry.instanceId]
+      .map((id) => normalizeOptionalString(id)?.toLowerCase())
+      .filter((id): id is string => id !== undefined);
+    // Text-only system-event beacons carry no client identity; they are notes,
+    // not live connections, and would render as bogus "unknown client" rows.
+    if (
+      ids.length === 0 &&
+      !normalizeOptionalString(entry.host) &&
+      !normalizeOptionalString(entry.mode)
+    ) {
+      return false;
+    }
+    return !ids.some((id) => knownIds.has(id));
+  });
 }
 
 /** Which pairing stores a removal must touch for this entry. */

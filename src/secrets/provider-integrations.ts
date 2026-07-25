@@ -25,7 +25,7 @@ export type SecretProviderIntegrationPreset = {
 };
 
 /** Result of materializing a plugin integration into a manual exec provider config. */
-export type SecretProviderIntegrationResolution =
+type SecretProviderIntegrationResolution =
   | {
       ok: true;
       providerConfig: ManualExecSecretProviderConfig;
@@ -100,9 +100,8 @@ function isSecurePluginEntrypointPath(params: {
   pluginRootRealpath: string;
   resolvedEntrypoint: string;
   entrypointRealpath: string;
-  allowInsecurePath: boolean;
 }): boolean {
-  if (params.allowInsecurePath || process.platform === "win32") {
+  if (process.platform === "win32") {
     return true;
   }
   const originalSegments = pathSegmentsBetween(
@@ -178,7 +177,7 @@ function resolveNodeEntrypointArg(params: {
   if (params.rejectHardlinks && stat.nlink > 1) {
     return undefined;
   }
-  if (params.integration.allowInsecurePath !== true && !isSecurePosixPathStat(stat)) {
+  if (!isSecurePosixPathStat(stat)) {
     return undefined;
   }
   try {
@@ -192,7 +191,6 @@ function resolveNodeEntrypointArg(params: {
         pluginRootRealpath,
         resolvedEntrypoint: resolved,
         entrypointRealpath: realpath,
-        allowInsecurePath: params.integration.allowInsecurePath === true,
       })
     ) {
       return undefined;
@@ -249,9 +247,6 @@ function materializeExecProviderConfig(
     ...(integration.env ? { env: integration.env } : {}),
     ...(integration.passEnv ? { passEnv: integration.passEnv } : {}),
     trustedDirs,
-    ...(integration.command === NODE_COMMAND_PLACEHOLDER || integration.allowInsecurePath
-      ? { allowInsecurePath: true }
-      : {}),
   };
 }
 

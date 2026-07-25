@@ -70,7 +70,6 @@ describe("native Codex thread tool", () => {
             modelSelectionLocked: params?.modelSelectionLocked,
           }),
           resolveStorePath: () => path.join(root, "sessions", "sessions.json"),
-          resolveSessionFilePath: () => sessionFile,
         },
       },
     });

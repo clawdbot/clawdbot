@@ -22,10 +22,8 @@ type StaticExtensionAssetParams = Pick<RuntimePostBuildParams, "rootDir" | "fs" 
 
 type LegacyCliExitCompatChunk = { dest: string; contents: string };
 
-export function copyStaticExtensionAssets(params?: StaticExtensionAssetParams): void;
 export function listStaticExtensionAssetOutputs(params?: StaticExtensionAssetParams): string[];
 
-export const LEGACY_CLI_EXIT_COMPAT_CHUNKS: LegacyCliExitCompatChunk[];
 export function listCoreRuntimePostBuildOutputs(
   params?: Pick<RuntimePostBuildParams, "rootDir" | "fs"> & {
     chunks?: LegacyCliExitCompatChunk[];

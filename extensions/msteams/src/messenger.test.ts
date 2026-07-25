@@ -21,7 +21,6 @@ vi.mock("./graph-upload.js", async (importOriginal) => {
 });
 
 import {
-  buildActivity,
   buildConversationReference,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
@@ -159,6 +158,38 @@ function createMockApp(opts?: MockAppOptions): MSTeamsApp {
       },
     },
   } as unknown as MSTeamsApp;
+}
+
+async function buildActivity(
+  message: Parameters<typeof sendMSTeamsMessages>[0]["messages"][number],
+  conversationRef: StoredConversationReference,
+  tokenProvider?: Parameters<typeof sendMSTeamsMessages>[0]["tokenProvider"],
+  sharePointSiteId?: string,
+  mediaMaxBytes?: number,
+  options?: { feedbackLoopEnabled?: boolean },
+): Promise<Record<string, unknown>> {
+  let captured: Record<string, unknown> | undefined;
+  const app = createMockApp({
+    createFn: async (activity) => {
+      captured = activity as Record<string, unknown>;
+      return { id: "captured" };
+    },
+  });
+  await sendMSTeamsMessages({
+    replyStyle: "top-level",
+    app,
+    appId: "app123",
+    conversationRef,
+    messages: [message],
+    tokenProvider,
+    sharePointSiteId,
+    mediaMaxBytes,
+    feedbackLoopEnabled: options?.feedbackLoopEnabled,
+  });
+  if (!captured) {
+    throw new Error("expected Teams activity to be sent");
+  }
+  return captured;
 }
 
 describe("msteams messenger", () => {
@@ -804,6 +835,23 @@ describe("msteams messenger", () => {
       const reference = buildConversationReference(legacy);
       expect(reference.tenantId).toBe("tenant-legacy");
       expect(reference.aadObjectId).toBe("aad-legacy");
+    });
+
+    it("accepts a legacy bot-only imported reference and resolves the agent from bot", () => {
+      const botOnly: StoredConversationReference = {
+        activityId: "activity-bot-only",
+        user: { id: "user-legacy", name: "Legacy" },
+        bot: { id: "bot-legacy", name: "Bot" },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      };
+      const reference = buildConversationReference(botOnly);
+      expect(reference.agent).toEqual({ id: "bot-legacy", name: "Bot" });
     });
 
     it("omits tenantId and aadObjectId when neither source is available", () => {

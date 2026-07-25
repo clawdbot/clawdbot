@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import KeyboardShortcuts
 import Observation
 import OpenClawKit
 import SwiftUI
@@ -10,7 +11,6 @@ struct MenuContent: View {
     @Bindable var state: AppState
     let updater: UpdaterProviding?
     @Bindable private var updateStatus: UpdateStatus
-    private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
     private let heartbeatStore = HeartbeatStore.shared
     private let controlChannel = ControlChannel.shared
@@ -24,7 +24,7 @@ struct MenuContent: View {
     @State private var micRefreshTask: Task<Void, Never>?
     @State private var browserControlEnabled = true
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
+    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
     @AppStorage(debugFileLogEnabledKey) private var appFileLoggingEnabled: Bool = false
 
     init(state: AppState, updater: UpdaterProviding?) {
@@ -137,6 +137,14 @@ struct MenuContent: View {
                 AppNavigationActions.openChat()
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+            }
+            if self.state.quickChatEnabled {
+                Button {
+                    QuickChatController.shared.toggle()
+                } label: {
+                    Label("Quick Chat", systemImage: "text.bubble")
+                }
+                .globalKeyboardShortcut(.toggleQuickChat)
             }
             if self.state.canvasEnabled {
                 Button {
@@ -279,7 +287,7 @@ struct MenuContent: View {
                 }
                 Menu {
                     Picker("Verbosity", selection: self.$appLogLevelRaw) {
-                        ForEach(AppLogLevel.allCases) { level in
+                        ForEach(Logger.Level.allCases, id: \.rawValue) { level in
                             Text(level.title).tag(level.rawValue)
                         }
                     }
@@ -349,8 +357,12 @@ struct MenuContent: View {
         guard self.state.connectionMode != .unconfigured else { return nil }
         guard case .connected = self.controlChannel.state else { return nil }
 
-        let deviceId = DeviceIdentityStore.loadOrCreate(
-            profile: MacNodeModeCoordinator.nodeIdentityProfile).deviceId
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(
+            profile: MacNodeModeCoordinator.nodeIdentityProfile)
+        else {
+            return ("Mac identity unavailable", .red)
+        }
+        let deviceId = identity.deviceId
         if let entry = self.nodesStore.nodes.first(where: { $0.nodeId == deviceId }) {
             guard entry.isConnected else {
                 return ("Mac capabilities offline", .orange)

@@ -40,7 +40,7 @@ export function createCopilotNativeSubagentTaskMirror(params: {
   );
 }
 
-export class CopilotNativeSubagentTaskMirror {
+class CopilotNativeSubagentTaskMirror {
   private readonly runIdByAgentId = new Map<string, string>();
   private readonly runIdByToolCallId = new Map<string, string>();
   private readonly terminalRunIds = new Set<string>();

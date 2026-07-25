@@ -10,7 +10,7 @@ Wake words are **one global list owned by the Gateway** — there are no per-nod
 
 - **macOS**: local Voice Wake enable/disable toggle. Requires macOS 26+; see [Voice wake (macOS)](/platforms/mac/voicewake) for runtime/PTT details.
 - **iOS**: local Voice Wake enable/disable toggle in Settings.
-- **Android**: Voice Wake is force-disabled at runtime. The Voice tab uses manual mic capture instead of wake-word triggers.
+- **Android**: local Voice Wake enable/disable toggle and wake-word editor in Settings → Voice. Requires Android on-device speech recognition.
 
 ## Storage
 
@@ -64,7 +64,7 @@ Both broadcast to every WebSocket client with read scope (macOS app, WebChat, an
 
 - **macOS**: calls `voicewake.set`/`voicewake.get` and listens for `voicewake.changed` to stay in sync with other clients.
 - **iOS**: calls `voicewake.set`/`voicewake.get` and listens for `voicewake.changed` to keep local wake-word detection responsive.
-- **Android**: `VoiceWakeMode` (`Off`/`Foreground`/`Always`) and gateway sync code exist, but the app forces the mode to `Off` on startup — Voice Wake is not currently reachable from Android Settings.
+- **Android**: calls `voicewake.set`/`voicewake.get`, listens for `voicewake.changed`, and advertises `voiceWake` while enabled. Recognition stays on-device and foreground-only; it pauses while Talk, manual dictation, voice-note capture, or message speech owns audio.
 
 ## Related
 

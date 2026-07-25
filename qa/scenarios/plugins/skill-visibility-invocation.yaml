@@ -5,9 +5,9 @@ scenario:
   surface: skills
   coverage:
     primary:
-      - plugins.skills
+      - plugins.activation-skills
     secondary:
-      - tools.invocation
+      - plugins.mixed-plugin-skill-invocation
   objective: Verify a workspace skill becomes visible in skills.status and influences the next agent turn.
   successCriteria:
     - skills.status reports the seeded skill as visible and eligible.
@@ -17,7 +17,7 @@ scenario:
     - docs/tools/skills.md
     - docs/gateway/protocol.md
   codeRefs:
-    - src/agents/skills-status.ts
+    - src/skills/discovery/status.ts
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow

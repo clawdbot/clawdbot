@@ -1,9 +1,8 @@
 // Shared base compatibility normalizers reused by core and plugin setup migrations.
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
 import {
   normalizeLegacyBrowserConfig,
-  normalizeLegacyCrossContextMessageConfig,
-  normalizeLegacyMediaProviderOptions,
   normalizeLegacyMistralModelDefaults,
   normalizeLegacyOpenAIModelProviderApi,
   normalizeLegacyOllamaNativeNumCtxParams,
@@ -21,6 +20,7 @@ export function normalizeBaseCompatibilityConfigValues(
   cfg: OpenClawConfig,
   changes: string[],
   afterBrowser?: (config: OpenClawConfig) => OpenClawConfig,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): OpenClawConfig {
   let next = seedMissingDefaultAccountsFromSingleAccountBase(cfg, changes);
   next = normalizeLegacyBrowserConfig(next, changes);
@@ -42,9 +42,7 @@ export function normalizeBaseCompatibilityConfigValues(
   next = normalizeLegacyNanoBananaSkill(next, changes);
   next = normalizeLegacyTalkConfig(next, changes);
   next = normalizeLegacyOpenAIModelProviderApi(next, changes);
-  next = normalizeLegacyRuntimeModelRefs(next, changes);
-  next = normalizeLegacyCrossContextMessageConfig(next, changes);
-  next = normalizeLegacyMediaProviderOptions(next, changes);
+  next = normalizeLegacyRuntimeModelRefs(next, changes, blockedModelIdentities);
   next = normalizeLegacyOllamaNativeNumCtxParams(next, changes);
   return normalizeLegacyMistralModelDefaults(next, changes);
 }

@@ -57,12 +57,10 @@ and troubleshooting see the main [FAQ](/help/faq).
     | Skip reason | Meaning |
     | --- | --- |
     | `quiet-hours` | Outside the configured active-hours window |
-    | `empty-heartbeat-file` | `HEARTBEAT.md` exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
-    | `no-tasks-due` | Task mode is active but no task interval is due yet |
+    | `empty-heartbeat-file` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
     | `alerts-disabled` | All heartbeat visibility is off (`showOk`, `showAlerts`, and `useIndicator` all disabled) |
 
-    In task mode, due timestamps advance only after a real heartbeat run completes.
-    Skipped runs do not mark tasks as completed.
+    Older heartbeat `tasks:` blocks migrate to independently scheduled cron jobs with `openclaw doctor --fix`.
 
     Docs: [Heartbeat](/gateway/heartbeat), [Automation](/automation).
 
@@ -141,8 +139,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **22.19+** is required (Node 24 recommended). `pnpm` is the repo package manager.
-    Bun is **not recommended** for the Gateway.
+    Node **22.22.3+**, **24.15+**, or **25.9+** is required (Node 24 recommended). `pnpm` is the repo package manager.
+    Bun can install dependencies and run package scripts, but it cannot run the OpenClaw CLI or Gateway because it lacks `node:sqlite`.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">
@@ -225,7 +223,7 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     **Important:** if you only commit/push your workspace to GitHub, you back up
     **memory + bootstrap files**, but not session history or auth. Those live under
-    `~/.openclaw/` (for example `~/.openclaw/agents/<agentId>/sessions/`).
+    `~/.openclaw/` (for example `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`).
 
     Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#where-things-live-on-disk),
     [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
@@ -677,9 +675,9 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I use Bun?">
-    Not recommended - Bun has runtime bugs, especially with WhatsApp and Telegram. Use
-    **Node** for stable gateways. If you still want to experiment, do it on a
-    non-production gateway without WhatsApp/Telegram.
+    You can use Bun to install dependencies or run package scripts. The OpenClaw CLI and
+    Gateway require **Node** because the canonical state store uses `node:sqlite`; Bun does
+    not provide that API.
   </Accordion>
 
   <Accordion title="Telegram: what goes in allowFrom?">

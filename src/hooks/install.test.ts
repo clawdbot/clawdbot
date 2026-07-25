@@ -14,7 +14,6 @@ import {
 } from "../test-utils/npm-spec-install-test-helpers.js";
 import { isAddressInUseError } from "./gmail-watcher-errors.js";
 
-type InstallHooksFromArchive = typeof import("./install.js").installHooksFromArchive;
 type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -33,12 +32,8 @@ vi.mock("../plugins/install-security-scan.js", () => ({
 
 vi.resetModules();
 
-const {
-  HOOK_INSTALL_ERROR_CODE,
-  installHooksFromArchive,
-  installHooksFromNpmSpec,
-  installHooksFromPath,
-} = await import("./install.js");
+const { HOOK_INSTALL_ERROR_CODE, installHooksFromNpmSpec, installHooksFromPath } =
+  await import("./install.js");
 const hookInstallRuntime = await import("./install.runtime.js");
 
 const fixtureRoot = path.join(process.cwd(), ".tmp", `openclaw-hook-install-${randomUUID()}`);
@@ -110,7 +105,7 @@ function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
 }
 
 function expectInstallFailureContains(
-  result: Awaited<ReturnType<InstallHooksFromArchive>>,
+  result: Awaited<ReturnType<InstallHooksFromPath>>,
   snippets: string[],
 ) {
   expect(result.ok).toBe(false);
@@ -234,8 +229,8 @@ async function createTarGzHookPackBuffer(params: {
 
 async function installArchiveFixture(params: { fileName: string; contents: Buffer }) {
   const fixture = writeArchiveFixture(params);
-  const result = await installHooksFromArchive({
-    archivePath: fixture.archivePath,
+  const result = await installHooksFromPath({
+    path: fixture.archivePath,
     hooksDir: fixture.hooksDir,
   });
   return { fixture, result };
@@ -252,7 +247,7 @@ function expectPathInstallFailureContains(
   expect(result.error).toContain(snippet);
 }
 
-describe("installHooksFromArchive", () => {
+describe("installHooksFromPath archives", () => {
   it.each([
     {
       name: "zip",
@@ -464,6 +459,34 @@ describe("installHooksFromPath", () => {
     };
     expect(scanCall.packageDir).toContain(".openclaw-install-stage-");
     expect(fs.existsSync(path.join(hooksDir, "my-hook"))).toBe(false);
+  });
+
+  it("rejects an oversized HOOK.md to prevent OOM during frontmatter parsing", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const hookDir = path.join(workDir, "my-hook");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "x".repeat(1024 * 1024 + 1), "utf8");
+    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+
+    await expect(
+      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
+    ).rejects.toThrow(/File exceeds 1048576 bytes/);
+  });
+
+  it.runIf(process.platform !== "win32")("rejects a symlinked HOOK.md", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const hookDir = path.join(workDir, "my-hook");
+    const externalHookMd = path.join(workDir, "external-HOOK.md");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(externalHookMd, "---\nname: external\n---\n", "utf8");
+    fs.symlinkSync(externalHookMd, path.join(hookDir, "HOOK.md"), "file");
+    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+
+    await expect(
+      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
+    ).rejects.toThrow(/path must be a regular file/);
   });
 
   it("classifies hook packages that also declare plugin extensions", async () => {
@@ -694,8 +717,8 @@ describe("installHooksFromPath", () => {
     });
 
     const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromArchive({
-      archivePath,
+    const result = await installHooksFromPath({
+      path: archivePath,
       hooksDir,
     });
 

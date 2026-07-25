@@ -107,9 +107,10 @@ describe("generateDiffString", () => {
       2,
     );
 
-    expect(result.diff).toContain("+2 second");
-    expect(result.diff).toContain(" 3 third");
-    expect(result.diff).toContain(" 4 fourth");
+    expect(result).toEqual({
+      diff: " 1 first\n+2 second\n 3 third\n 4 fourth",
+      firstChangedLine: 2,
+    });
   });
 
   it("numbers context lines from the new file after a deletion", () => {
@@ -119,8 +120,19 @@ describe("generateDiffString", () => {
       2,
     );
 
-    expect(result.diff).toContain("-2 second");
-    expect(result.diff).toContain(" 2 third");
-    expect(result.diff).toContain(" 3 fourth");
+    expect(result).toEqual({
+      diff: " 1 first\n-2 second\n 2 third\n 3 fourth",
+      firstChangedLine: 2,
+    });
+  });
+
+  it("separates distant hunks without displaying dependency EOF markers", () => {
+    const oldContent = Array.from({ length: 10 }, (_, index) => String(index + 1)).join("\n");
+    const newContent = oldContent.replace(/^2$/m, "TWO").replace(/^9$/m, "NINE");
+
+    expect(generateDiffString(oldContent, newContent, 1)).toEqual({
+      diff: "  1 1\n- 2 2\n+ 2 TWO\n  3 3\n    ...\n  8 8\n- 9 9\n+ 9 NINE\n 10 10",
+      firstChangedLine: 2,
+    });
   });
 });

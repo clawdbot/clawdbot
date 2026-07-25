@@ -2,13 +2,15 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 
-export const AGENT_HARNESS_SESSION_KEY_PREFIX = "harness:";
+const AGENT_HARNESS_SESSION_KEY_PREFIX = "harness:";
 export const AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE =
   "Session key namespace is reserved for agent harness-owned sessions.";
 export const AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE =
   "Agent harness-owned session identity is locked and cannot be replaced or shared.";
 export const AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE =
   "Agent harness-owned sessions cannot be used for one-shot model runs.";
+export const MODEL_SELECTION_LOCK_REMOVAL_MESSAGE =
+  "Model-selection-locked sessions cannot be removed, unlocked, or reassigned.";
 
 function resolveAgentHarnessSessionKeyRest(sessionKey: string): string {
   const trimmed = sessionKey.trim().toLowerCase();
@@ -67,6 +69,79 @@ type AgentHarnessSessionStoreEntry = {
   modelSelectionLocked?: unknown;
   sessionId?: unknown;
 };
+
+function sessionLockOwnerMatches(
+  previous: AgentHarnessSessionStoreEntry,
+  next: AgentHarnessSessionStoreEntry,
+): boolean {
+  const previousOwner = normalizeOptionalString(previous.agentHarnessId)?.toLowerCase();
+  const nextOwner = normalizeOptionalString(next.agentHarnessId)?.toLowerCase();
+  return (
+    previousOwner === nextOwner &&
+    normalizeOptionalAgentRuntimeId(previousOwner) === normalizeOptionalAgentRuntimeId(nextOwner)
+  );
+}
+
+function hasEquivalentRelocatedLockedEntry(params: {
+  previousKey: string;
+  previousEntry: AgentHarnessSessionStoreEntry;
+  store: Record<string, AgentHarnessSessionStoreEntry>;
+}): boolean {
+  if (isAgentHarnessSessionKey(params.previousKey)) {
+    return false;
+  }
+  const sessionId = normalizeOptionalString(params.previousEntry.sessionId);
+  if (!sessionId) {
+    return false;
+  }
+  return Object.entries(params.store).some(
+    ([sessionKey, entry]) =>
+      sessionKey !== params.previousKey &&
+      entry.modelSelectionLocked === true &&
+      entry.sessionId === sessionId &&
+      sessionLockOwnerMatches(params.previousEntry, entry),
+  );
+}
+
+/** Preserves durable harness ownership across whole-store compatibility projections. */
+export function resolveAgentHarnessSessionStoreTransitionError(params: {
+  allowedRemovals?: ReadonlyMap<string, AgentHarnessSessionStoreEntry>;
+  before?: ReadonlyMap<string, AgentHarnessSessionStoreEntry>;
+  store: Record<string, AgentHarnessSessionStoreEntry>;
+}): string | undefined {
+  for (const [sessionKey, previousEntry] of params.before ?? []) {
+    const nextEntry = params.store[sessionKey];
+    if (
+      nextEntry?.modelSelectionLocked === true &&
+      sessionLockOwnerMatches(previousEntry, nextEntry)
+    ) {
+      if (nextEntry.sessionId !== previousEntry.sessionId) {
+        return AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE;
+      }
+      continue;
+    }
+    const allowedRemoval = params.allowedRemovals?.get(sessionKey);
+    if (
+      nextEntry === undefined &&
+      allowedRemoval !== undefined &&
+      JSON.stringify(previousEntry) === JSON.stringify(allowedRemoval)
+    ) {
+      continue;
+    }
+    if (
+      nextEntry === undefined &&
+      hasEquivalentRelocatedLockedEntry({
+        previousKey: sessionKey,
+        previousEntry,
+        store: params.store,
+      })
+    ) {
+      continue;
+    }
+    return MODEL_SELECTION_LOCK_REMOVAL_MESSAGE;
+  }
+  return undefined;
+}
 
 /** True when a reserved-looking row carries the durable harness lock added with this feature. */
 export function isAgentHarnessSessionStoreEntryProtected(

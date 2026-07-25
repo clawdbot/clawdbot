@@ -2,7 +2,10 @@
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveChannelStreamingBlockEnabled,
+  waitUntilAbort,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -17,7 +20,6 @@ import {
 import { getMatrixRuntime } from "../../runtime.js";
 import type {
   CoreConfig,
-  MatrixConfig,
   MatrixStreamingConfig,
   MatrixStreamingMode,
   ReplyToMode,
@@ -66,36 +68,18 @@ type MonitorMatrixOpts = {
   setStatus?: (next: import("openclaw/plugin-sdk/channel-contract").ChannelAccountSnapshot) => void;
 };
 
-function isMatrixStreamingConfig(
-  streaming: MatrixConfig["streaming"],
-): streaming is MatrixStreamingConfig {
-  return Boolean(streaming && typeof streaming === "object" && !Array.isArray(streaming));
-}
+type MatrixStreamingInput = MatrixStreamingConfig | undefined;
 
-function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): MatrixStreamingMode {
-  if (streaming === true || streaming === "partial") {
-    return "partial";
-  }
-  if (streaming === "quiet") {
-    return "quiet";
-  }
-  if (streaming === "progress") {
-    return "progress";
-  }
-  if (isMatrixStreamingConfig(streaming)) {
-    if (
-      streaming.mode === "partial" ||
-      streaming.mode === "quiet" ||
-      streaming.mode === "progress"
-    ) {
-      return streaming.mode;
-    }
+function resolveMatrixStreamingMode(streaming: MatrixStreamingInput): MatrixStreamingMode {
+  const mode = streaming?.mode;
+  if (mode === "partial" || mode === "quiet" || mode === "progress") {
+    return mode;
   }
   return "off";
 }
 
-function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]): boolean {
-  if (!isMatrixStreamingConfig(streaming)) {
+function resolveMatrixPreviewToolProgress(streaming: MatrixStreamingInput): boolean {
+  if (!streaming) {
     return true;
   }
   if (resolveMatrixStreamingMode(streaming) === "progress") {
@@ -104,17 +88,11 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]):
   return streaming.preview?.toolProgress ?? true;
 }
 
-function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixConfig["streaming"]): boolean {
+function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput): boolean {
   return (
     resolveMatrixStreamingMode(streaming) !== "off" && resolveMatrixPreviewToolProgress(streaming)
   );
 }
-
-export const testing = {
-  resolveMatrixPreviewToolProgress,
-  resolveMatrixPreviewToolProgressEnabled,
-  resolveMatrixStreamingMode,
-};
 
 const DEFAULT_MEDIA_MAX_MB = 20;
 
@@ -299,7 +277,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const previewToolProgressEnabled = resolveMatrixPreviewToolProgressEnabled(
     accountConfig.streaming,
   );
-  const blockStreamingEnabled = accountConfig.blockStreaming === true;
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(accountConfig) === true;
   const startupMs = Date.now();
   const startupGraceMs = 0;
   const warnedEncryptedRooms = new Set<string>();
@@ -548,4 +526,3 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw err;
   }
 }
-export { testing as __testing };

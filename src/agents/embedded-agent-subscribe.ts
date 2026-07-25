@@ -13,7 +13,9 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, emitAgentEventIfCurrent } from "../infra/agent-events.js";
+import { recordAgentRunOutputTokens } from "../infra/agent-run-usage.js";
+import type { AssistantMessage } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
@@ -41,6 +43,7 @@ import {
   readPendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import {
+  cleanupRunToolStartData,
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./embedded-agent-subscribe.handlers.tools.js";
@@ -159,8 +162,6 @@ function collectPendingMediaFromInternalEvents(
   return pending;
 }
 
-export type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const reasoningMode = params.reasoningMode ?? "off";
@@ -254,7 +255,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     reasoningTokens: 0,
     total: 0,
   };
+  let lastAssistantUsage: ReturnType<typeof normalizeUsage>;
   let compactionCount = 0;
+  let currentAttemptAssistant: AssistantMessage | undefined;
 
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
@@ -628,6 +631,32 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     return undefined;
   };
+  const emitRunUsage = (outputTokens: number) => {
+    const lifecycleGeneration = params.lifecycleGeneration;
+    if (!lifecycleGeneration) {
+      return;
+    }
+    const data = recordAgentRunOutputTokens({
+      runId: params.runId,
+      lifecycleGeneration,
+      outputTokens,
+      emit: (usage) =>
+        emitAgentEventIfCurrent({
+          runId: params.runId,
+          lifecycleGeneration,
+          stream: "usage",
+          data: usage,
+        }),
+    });
+    if (!data || !params.onAgentEvent) {
+      return;
+    }
+    runBestEffortCallback({
+      label: "usage agent event",
+      log,
+      callback: () => params.onAgentEvent?.({ stream: "usage", data }),
+    });
+  };
   const commitAssistantUsage = () => {
     if (state.assistantUsageCommitted || !state.pendingAssistantUsage) {
       return;
@@ -642,7 +671,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     usageTotals.total += usageTotal;
+    // A terminal abort may report zeros after several completed model calls.
+    // Retain the latest committed nonzero call so context accounting stays exact.
+    lastAssistantUsage = { ...usage };
     state.assistantUsageCommitted = true;
+    emitRunUsage(usage.output ?? 0);
   };
   const recordAssistantUsage = (usageLike: unknown) => {
     if (state.assistantUsageCommitted) {
@@ -676,6 +709,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       total: usageTotals.total || derivedTotal || undefined,
     };
   };
+  const getLastAssistantUsage = () => (lastAssistantUsage ? { ...lastAssistantUsage } : undefined);
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
@@ -1255,7 +1289,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.itemActiveIds.clear();
     state.itemStartedCount = 0;
     state.itemCompletedCount = 0;
-    state.lastToolError = undefined;
+    // Compaction retries restart presentation state, not attempt-wide mutation truth.
+    // Retain unresolved side effects so the retry cannot falsely finish as success.
+    if (state.lastToolError?.mutatingAction !== true) {
+      state.lastToolError = undefined;
+    }
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
@@ -1277,6 +1315,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
+    // A retry is a new model attempt. A silent retry must not inherit the
+    // completed assistant or pre-compaction context snapshot.
+    currentAttemptAssistant = undefined;
+    lastAssistantUsage = undefined;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     resetAssistantMessageState(0);
@@ -1285,6 +1327,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const noteLastAssistant = (msg: AgentMessage) => {
     if (msg?.role === "assistant") {
       state.lastAssistant = msg;
+    }
+  };
+  const noteCompletedAssistant = (msg: AgentMessage) => {
+    if (msg?.role === "assistant") {
+      // Context-engine projection may later replace or mutate transcript
+      // objects. Final delivery needs the model event owned by this run.
+      currentAttemptAssistant = structuredClone(msg) as AssistantMessage;
     }
   };
 
@@ -1298,6 +1347,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     builtinToolNames: params.builtinToolNames,
     trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
     noteLastAssistant,
+    noteCompletedAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
     emitToolSummary,
@@ -1329,6 +1379,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     incrementCompactionCount,
     noteCompactionTokensAfter,
     getUsageTotals,
+    getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
@@ -1342,6 +1393,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
+    cleanupRunToolStartData(params.runId);
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (state.compactionRetryPromise) {
@@ -1370,10 +1422,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   return {
     assistantTexts,
+    getCurrentAttemptAssistant: () =>
+      currentAttemptAssistant ? structuredClone(currentAttemptAssistant) : undefined,
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,
     getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
+    getLatestMcpAppChannelView: () =>
+      state.latestMcpAppChannelView ? { ...state.latestMcpAppChannelView } : undefined,
     runToolLifecycle: async <T>(toolParams: {
       toolName: string;
       toolCallId: string;
@@ -1472,6 +1528,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
+    getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),
@@ -1510,3 +1567,4 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

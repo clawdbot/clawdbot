@@ -1,4 +1,6 @@
 // Covers suspension RPC validation and coordinator response mapping.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { suspendHandlers } from "./suspend.js";
 
@@ -23,7 +25,7 @@ function invoke(method: keyof typeof suspendHandlers, params: unknown) {
   const pauseScheduling = vi.fn();
   const resumeScheduling = vi.fn();
   const warn = vi.fn();
-  const handler = suspendHandlers[method];
+  const handler = expectDefined(suspendHandlers[method], "suspendHandlers[method] test invariant");
   return Promise.resolve(
     handler({
       params,

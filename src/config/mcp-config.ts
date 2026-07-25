@@ -1,4 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Normalizes MCP server config for runtime launch and validation.
+import { stableStringify } from "../agents/stable-stringify.js";
+import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
 import {
@@ -127,6 +130,7 @@ async function updateConfiguredMcpServerConfig(params: {
   name: string;
   update: (server: Record<string, unknown>) => Record<string, unknown>;
   errorLabel: string;
+  recordIndependentOwner?: boolean;
 }): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
@@ -157,7 +161,7 @@ async function updateConfiguredMcpServerConfig(params: {
 
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
-    const issue = validated.issues[0];
+    const issue = expectDefined(validated.issues[0], "issues entry at 0");
     return {
       ok: false,
       path: loaded.path,
@@ -168,6 +172,9 @@ async function updateConfiguredMcpServerConfig(params: {
     nextConfig: validated.config,
     baseHash: loaded.baseHash,
   });
+  if (params.recordIndependentOwner !== false) {
+    markClawMcpServerIndependentlyOwned(name);
+  }
   return {
     ok: true,
     path: loaded.path,
@@ -180,9 +187,11 @@ async function updateConfiguredMcpServerConfig(params: {
 export async function updateConfiguredMcpServerTools(params: {
   name: string;
   tools: McpServerToolSelection | null;
+  recordIndependentOwner?: boolean;
 }): Promise<ConfigMcpWriteResult> {
   return updateConfiguredMcpServerConfig({
     name: params.name,
+    recordIndependentOwner: params.recordIndependentOwner,
     errorLabel: "tool selection update",
     update: (server) => {
       if (params.tools === null) {
@@ -207,9 +216,11 @@ export async function updateConfiguredMcpServerTools(params: {
 export async function updateConfiguredMcpServer(params: {
   name: string;
   update: (server: Record<string, unknown>) => Record<string, unknown>;
+  recordIndependentOwner?: boolean;
 }): Promise<ConfigMcpWriteResult> {
   return updateConfiguredMcpServerConfig({
     name: params.name,
+    recordIndependentOwner: params.recordIndependentOwner,
     errorLabel: "configure",
     update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
   });
@@ -218,6 +229,9 @@ export async function updateConfiguredMcpServer(params: {
 export async function setConfiguredMcpServer(params: {
   name: string;
   server: unknown;
+  createOnly?: boolean;
+  recordIndependentOwner?: boolean;
+  expectedServer?: Record<string, unknown>;
 }): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
@@ -230,6 +244,27 @@ export async function setConfiguredMcpServer(params: {
   const loaded = await listConfiguredMcpServers();
   if (!loaded.ok) {
     return loaded;
+  }
+  if (params.createOnly && Object.hasOwn(loaded.mcpServers, name)) {
+    return {
+      ok: false,
+      path: loaded.path,
+      error: `MCP server ${JSON.stringify(name)} already exists.`,
+    };
+  }
+  const existingServer = loaded.mcpServers[name];
+  if (
+    params.expectedServer &&
+    (!Object.hasOwn(loaded.mcpServers, name) ||
+      !existingServer ||
+      stableStringify(canonicalizeConfiguredMcpServer(existingServer)) !==
+        stableStringify(canonicalizeConfiguredMcpServer(params.expectedServer)))
+  ) {
+    return {
+      ok: false,
+      path: loaded.path,
+      error: `MCP server ${JSON.stringify(name)} changed and was not updated.`,
+    };
   }
 
   const argvRestored = restoreMcpServerArgvSentinels({
@@ -276,7 +311,7 @@ export async function setConfiguredMcpServer(params: {
 
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
-    const issue = validated.issues[0];
+    const issue = expectDefined(validated.issues[0], "issues entry at 0");
     return {
       ok: false,
       path: loaded.path,
@@ -287,6 +322,9 @@ export async function setConfiguredMcpServer(params: {
     nextConfig: validated.config,
     baseHash: loaded.baseHash,
   });
+  if (params.recordIndependentOwner !== false) {
+    markClawMcpServerIndependentlyOwned(name);
+  }
   return {
     ok: true,
     path: loaded.path,
@@ -297,6 +335,7 @@ export async function setConfiguredMcpServer(params: {
 
 export async function unsetConfiguredMcpServer(params: {
   name: string;
+  expectedServer?: Record<string, unknown>;
 }): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
@@ -314,6 +353,19 @@ export async function unsetConfiguredMcpServer(params: {
       config: loaded.config,
       mcpServers: loaded.mcpServers,
       removed: false,
+    };
+  }
+  const loadedServer = loaded.mcpServers[name];
+  if (
+    params.expectedServer &&
+    loadedServer &&
+    stableStringify(canonicalizeConfiguredMcpServer(loadedServer)) !==
+      stableStringify(canonicalizeConfiguredMcpServer(params.expectedServer))
+  ) {
+    return {
+      ok: false,
+      path: loaded.path,
+      error: `MCP server ${JSON.stringify(name)} changed and was not removed.`,
     };
   }
 
@@ -334,7 +386,7 @@ export async function unsetConfiguredMcpServer(params: {
 
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
-    const issue = validated.issues[0];
+    const issue = expectDefined(validated.issues[0], "issues entry at 0");
     return {
       ok: false,
       path: loaded.path,

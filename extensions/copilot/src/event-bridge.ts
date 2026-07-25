@@ -242,7 +242,10 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "exit_plan_mode.requested", (event) => {
-    const steps = splitPlanText(event.data.planContent);
+    const steps = splitPlanText(event.data.planContent).map((step) => ({
+      step,
+      status: "pending" as const,
+    }));
     enqueueAgentEvent({
       stream: "plan",
       data: {

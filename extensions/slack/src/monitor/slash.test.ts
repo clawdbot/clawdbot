@@ -17,11 +17,12 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   );
   return {
     ...actual,
-    loadModelCatalog: vi.fn(async () => []),
+    loadPreparedModelCatalog: vi.fn(async () => []),
   };
 });
 
 vi.mock("./slash-commands.runtime.js", () => {
+  const loginCommand = { key: "login", nativeName: "login" };
   const usageCommand = { key: "usage", nativeName: "usage" };
   const reportCommand = { key: "report", nativeName: "report" };
   const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };
@@ -93,6 +94,9 @@ vi.mock("./slash-commands.runtime.js", () => {
     },
     findCommandByNativeName: (name: string) => {
       const normalized = name.trim().toLowerCase();
+      if (normalized === "login") {
+        return loginCommand;
+      }
       if (normalized === "usage") {
         return usageCommand;
       }
@@ -132,6 +136,12 @@ vi.mock("./slash-commands.runtime.js", () => {
       return undefined;
     },
     listNativeCommandSpecsForConfig: () => [
+      {
+        name: "login",
+        description: "Login",
+        acceptsArgs: true,
+        args: [],
+      },
       {
         name: "usage",
         description: "Usage",
@@ -306,7 +316,10 @@ vi.mock("./slash-commands.runtime.js", () => {
   };
 });
 
-type RegisterFn = (params: { ctx: unknown; account: unknown }) => Promise<void>;
+type RegisterFn = (params: {
+  ctx: unknown;
+  account: unknown;
+}) => Promise<{ mode: "single"; name: string } | { mode: "native" } | { mode: "disabled" }>;
 const { registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
   registerSlackMonitorSlashCommands: RegisterFn;
 };
@@ -324,7 +337,7 @@ afterEach(() => {
 });
 
 async function registerCommands(ctx: unknown, account: unknown, trackEvent?: () => void) {
-  await registerSlackMonitorSlashCommands({
+  return await registerSlackMonitorSlashCommands({
     ctx: ctx as never,
     account: account as never,
     trackEvent,
@@ -361,7 +374,7 @@ function createDeferred<T>() {
 function createArgMenusHarness(
   cfg: OpenClawConfig = { commands: { native: true, nativeSkills: false } },
 ) {
-  const commands = new Map<string, (args: unknown) => Promise<void>>();
+  const commands = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const options = new Map<string, (args: unknown) => Promise<void>>();
   const optionsReceiverContexts: unknown[] = [];
@@ -369,7 +382,7 @@ function createArgMenusHarness(
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
   const app = {
     client: { chat: { postEphemeral } },
-    command: (name: string, handler: (args: unknown) => Promise<void>) => {
+    command: (name: string | RegExp, handler: (args: unknown) => Promise<void>) => {
       commands.set(name, handler);
     },
     action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
@@ -397,7 +410,7 @@ function createArgMenusHarness(
     useAccessGroups: false,
     channelsConfig: undefined,
     slashCommand: {
-      enabled: true,
+      enabled: false,
       name: "openclaw",
       ephemeral: true,
       sessionPrefix: "slack:slash",
@@ -584,8 +597,35 @@ function responseTexts(mock: ReturnType<typeof vi.fn>): unknown[] {
   );
 }
 
+function mockSixDispatchedReplies() {
+  const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+  deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
+    const { replies, responseBudget } = params as {
+      replies: Array<{ text: string }>;
+      responseBudget: { respond: (payload: { text: string }) => Promise<unknown> };
+    };
+    for (const reply of replies) {
+      await responseBudget.respond({ text: reply.text });
+    }
+  });
+  dispatchMock.mockImplementation((params: unknown) => {
+    const deliver = (
+      params as {
+        dispatcherOptions: {
+          deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+        };
+      }
+    ).dispatcherOptions.deliver;
+    for (let index = 0; index < 6; index += 1) {
+      void deliver({ text: `reply ${String(index + 1)}` }, { kind: "final" });
+    }
+    return { counts: { final: 6, tool: 0, block: 0 } };
+  });
+}
+
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
+  let loginHandler: (args: unknown) => Promise<void>;
   let usageHandler: (args: unknown) => Promise<void>;
   let reportHandler: (args: unknown) => Promise<void>;
   let reportCompactHandler: (args: unknown) => Promise<void>;
@@ -603,6 +643,7 @@ describe("Slack native command argument menus", () => {
   beforeAll(async () => {
     harness = createArgMenusHarness();
     await registerCommands(harness.ctx, harness.account);
+    loginHandler = requireHandler(harness.commands, "/login", "/login");
     usageHandler = requireHandler(harness.commands, "/usage", "/usage");
     reportHandler = requireHandler(harness.commands, "/report", "/report");
     reportCompactHandler = requireHandler(harness.commands, "/reportcompact", "/reportcompact");
@@ -632,6 +673,112 @@ describe("Slack native command argument menus", () => {
 
   beforeEach(() => {
     harness.postEphemeral.mockClear();
+  });
+
+  it("delivers native /login block replies before the command finishes", async () => {
+    const loginFinished = createDeferred<void>();
+    const codeDelivered = createDeferred<void>();
+    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+    deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
+      const replies = (params as { replies: Array<{ text?: string }> }).replies;
+      if (replies.some((reply) => reply.text === "Use code ABCD")) {
+        codeDelivered.resolve();
+      }
+    });
+    const asyncDispatchMock = dispatchMock as unknown as {
+      mockImplementation: (
+        implementation: (params: unknown) => Promise<unknown>,
+      ) => typeof dispatchMock;
+    };
+    asyncDispatchMock.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (
+              payload: { text: string },
+              info: { kind: "block" | "final" },
+            ) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      await deliver({ text: "Use code ABCD" }, { kind: "block" });
+      await loginFinished.promise;
+      await deliver({ text: "Codex login complete." }, { kind: "final" });
+      return { counts: { final: 1, tool: 0, block: 1 } };
+    });
+
+    const runPromise = runCommandHandler(loginHandler);
+    await codeDelivered.promise;
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
+    expect(deliverSlackSlashRepliesMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ replies: [{ text: "Use code ABCD" }] }),
+    );
+
+    loginFinished.resolve();
+    await runPromise;
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledTimes(2);
+    expect(deliverSlackSlashRepliesMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ replies: [{ text: "Codex login complete." }] }),
+    );
+  });
+
+  it("batches non-login block streams with the terminal reply", async () => {
+    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+    const asyncDispatchMock = dispatchMock as unknown as {
+      mockImplementation: (
+        implementation: (params: unknown) => Promise<unknown>,
+      ) => typeof dispatchMock;
+    };
+    asyncDispatchMock.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (
+              payload: { text: string },
+              info: { kind: "block" | "final" },
+            ) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      for (let index = 1; index <= 5; index += 1) {
+        await deliver({ text: `progress ${String(index)}` }, { kind: "block" });
+      }
+      await deliver({ text: "final answer" }, { kind: "final" });
+      return { counts: { final: 1, tool: 0, block: 5 } };
+    });
+
+    await runCommandHandler(agentStatusHandler);
+
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          { text: "progress 1" },
+          { text: "progress 2" },
+          { text: "progress 3" },
+          { text: "progress 4" },
+          { text: "progress 5" },
+          { text: "final answer" },
+        ],
+      }),
+    );
+  });
+
+  it("prefers the configured slash command over native commands", async () => {
+    const configuredHarness = createArgMenusHarness();
+    (
+      configuredHarness.ctx as {
+        slashCommand: { enabled: boolean };
+      }
+    ).slashCommand.enabled = true;
+    await registerCommands(configuredHarness.ctx, configuredHarness.account);
+
+    expect(
+      [...configuredHarness.commands.keys()].some(
+        (command) => command instanceof RegExp && command.test("/openclaw"),
+      ),
+    ).toBe(true);
+    expect(configuredHarness.commands.has("/usage")).toBe(false);
   });
 
   it("registers options handlers without losing app receiver binding", async () => {
@@ -674,58 +821,16 @@ describe("Slack native command argument menus", () => {
   );
 
   it("falls back to static menus when app.options() throws during registration", async () => {
-    const commands = new Map<string, (args: unknown) => Promise<void>>();
-    const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
-    const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+    const testHarness = createArgMenusHarness();
     const runtimeLog = vi.fn();
-    const app = {
-      client: { chat: { postEphemeral } },
-      command: (name: string, handler: (args: unknown) => Promise<void>) => {
-        commands.set(name, handler);
-      },
-      action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
-        actions.set(id, handler);
-      },
-      // Simulate Bolt throwing during options registration (e.g. receiver not initialized)
-      options: () => {
-        throw new Error("Cannot read properties of undefined (reading 'listeners')");
-      },
+    (testHarness.ctx as { runtime: { log: typeof runtimeLog } }).runtime = { log: runtimeLog };
+    testHarness.app.options = () => {
+      throw new Error("Cannot read properties of undefined (reading 'listeners')");
     };
-    const ctx = {
-      cfg: { commands: { native: true, nativeSkills: false } },
-      runtime: { log: runtimeLog },
-      botToken: "bot-token",
-      botUserId: "bot",
-      teamId: "T1",
-      allowFrom: ["*"],
-      dmEnabled: true,
-      dmPolicy: "open",
-      groupDmEnabled: false,
-      groupDmChannels: [],
-      defaultRequireMention: true,
-      groupPolicy: "open",
-      useAccessGroups: false,
-      channelsConfig: undefined,
-      slashCommand: {
-        enabled: true,
-        name: "openclaw",
-        ephemeral: true,
-        sessionPrefix: "slack:slash",
-      },
-      textLimit: 4000,
-      app,
-      isChannelAllowed: () => true,
-      resolveChannelName: async () => ({ name: "dm", type: "im" }),
-      resolveUserName: async () => ({ name: "Ada" }),
-    } as unknown;
-    const account = {
-      accountId: "acct",
-      config: { commands: { native: true, nativeSkills: false } },
-    } as unknown;
 
     // Registration should not throw despite app.options() throwing
-    await registerCommands(ctx, account);
-    expect(commands.size).toBeGreaterThan(0);
+    await registerCommands(testHarness.ctx, testHarness.account);
+    expect(testHarness.commands.size).toBeGreaterThan(0);
     expect(runtimeLog).toHaveBeenCalledTimes(1);
     expect(runtimeLog).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -733,14 +838,14 @@ describe("Slack native command argument menus", () => {
       ),
     );
     expect(
-      Array.from(actions.keys()).some(
+      Array.from(testHarness.actions.keys()).some(
         (key) => key instanceof RegExp && String(key) === String(/^openclaw_cmdarg/),
       ),
     ).toBe(true);
 
     // The /reportexternal command (140 choices) should fall back to static_select
     // instead of external_select since options registration failed
-    const handler = requireHandler(commands, "/reportexternal", "/reportexternal");
+    const handler = requireHandler(testHarness.commands, "/reportexternal", "/reportexternal");
     const respond = vi.fn().mockResolvedValue(undefined);
     const ack = vi.fn().mockResolvedValue(undefined);
     await handler({
@@ -867,6 +972,77 @@ describe("Slack native command argument menus", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = firstDispatchArg() as { ctx?: { Body?: string } };
     expect(call.ctx?.Body).toBe("/usage tokens");
+  });
+
+  it("does not apply the response_url call cap to Web API action replies", async () => {
+    mockSixDispatchedReplies();
+
+    await runArgMenuAction(argMenuHandler, {
+      action: {
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+      },
+      includeRespond: false,
+    });
+
+    expect(harness.postEphemeral).toHaveBeenCalledTimes(6);
+  });
+
+  it("keeps table fallback tokens literal in Web API action replies", async () => {
+    const tableFallback = "Account\tOwner\nprod\t<@U123> & <!channel>";
+    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+    deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
+      const responseBudget = (
+        params as {
+          responseBudget: {
+            respond: (payload: { text: string; mrkdwn?: false }) => Promise<unknown>;
+          };
+        }
+      ).responseBudget;
+      await responseBudget.respond({ text: tableFallback, mrkdwn: false });
+    });
+    dispatchMock.mockImplementation((params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      void deliver({ text: "table reply" }, { kind: "final" });
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    await runArgMenuAction(argMenuHandler, {
+      action: {
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+      },
+      includeRespond: false,
+    });
+
+    expect(harness.postEphemeral).toHaveBeenCalledWith(
+      expect.objectContaining({ text: tableFallback, mrkdwn: false }),
+    );
+  });
+
+  it("keeps the response_url call cap on action responders", async () => {
+    mockSixDispatchedReplies();
+
+    const respond = await runArgMenuAction(argMenuHandler, {
+      action: {
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+      },
+    });
+
+    expect(respond).toHaveBeenCalledTimes(5);
+    expect(harness.postEphemeral).not.toHaveBeenCalled();
+  });
+
+  it("keeps the response_url call cap on actual slash command replies", async () => {
+    mockSixDispatchedReplies();
+
+    const { respond } = await runCommandHandler(agentStatusHandler);
+
+    expect(respond).toHaveBeenCalledTimes(5);
   });
 
   it("tracks accepted slash command activity", async () => {
@@ -1097,6 +1273,8 @@ function createPolicyHarness(overrides?: {
   allowFrom?: string[];
   useAccessGroups?: boolean;
   slashEphemeral?: boolean;
+  slashCommandEnabled?: boolean;
+  slashCommandName?: string;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
@@ -1128,8 +1306,8 @@ function createPolicyHarness(overrides?: {
     useAccessGroups: overrides?.useAccessGroups ?? true,
     channelsConfig: overrides?.channelsConfig,
     slashCommand: {
-      enabled: true,
-      name: "openclaw",
+      enabled: overrides?.slashCommandEnabled ?? true,
+      name: overrides?.slashCommandName ?? "openclaw",
       ephemeral: overrides?.slashEphemeral ?? true,
       sessionPrefix: "slack:slash",
     },
@@ -1224,6 +1402,36 @@ function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
     response_type: "ephemeral",
   });
 }
+
+describe("Slack App Home command presentation", () => {
+  it("returns the configured single command when it is registered", async () => {
+    const harness = createPolicyHarness({ slashCommandName: "acme" });
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
+      mode: "single",
+      name: "acme",
+    });
+    expect(harness.commands.size).toBe(1);
+  });
+
+  it("omits the single command when slash commands are disabled", async () => {
+    const harness = createPolicyHarness({ slashCommandEnabled: false });
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
+      mode: "disabled",
+    });
+    expect(harness.commands.size).toBe(0);
+  });
+
+  it("omits the single command when native commands take precedence", async () => {
+    const harness = createArgMenusHarness();
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
+      mode: "native",
+    });
+    expect(harness.commands.size).toBeGreaterThan(0);
+  });
+});
 
 describe("slack slash commands channel policy", () => {
   it("drops mismatched slash payloads before dispatch", async () => {
@@ -1486,18 +1694,33 @@ describe("slack slash command session metadata", () => {
   });
 
   it("passes canonical hook correlation to slash reply delivery", async () => {
+    dispatchMock.mockImplementation((params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      void deliver({ text: "final answer" }, { kind: "final" });
+      void deliver({ text: "second answer" }, { kind: "final" });
+      return { counts: { final: 2, tool: 0, block: 0 } };
+    });
     const harness = createPolicyHarness({ groupPolicy: "open" });
     await registerAndRunPolicySlash({ harness });
     const dispatchArg = firstDispatchArg() as {
       ctx?: { OriginatingTo?: string; SessionKey?: string };
-      dispatcherOptions?: { deliver?: (payload: { text: string }) => Promise<void> };
     };
+    const responseBudget = (
+      deliverSlackSlashRepliesMock.mock.calls.at(-1)?.[0] as
+        | { responseBudget?: unknown }
+        | undefined
+    )?.responseBudget;
 
-    await dispatchArg.dispatcherOptions?.deliver?.({ text: "final answer" });
-
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
     expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        replies: [{ text: "final answer" }],
+        replies: [{ text: "final answer" }, { text: "second answer" }],
         messageSentHookTarget: dispatchArg.ctx?.OriginatingTo,
         sessionKeyForInternalHooks: dispatchArg.ctx?.SessionKey,
         accountId: "acct",
@@ -1505,19 +1728,26 @@ describe("slack slash command session metadata", () => {
         groupId: harness.channelId,
       }),
     );
+    expect(responseBudget).toBeDefined();
   });
 
   it("targets the channel for public slash reply hooks", async () => {
+    dispatchMock.mockImplementation((params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      void deliver({ text: "public answer" }, { kind: "final" });
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
     const harness = createPolicyHarness({
       groupPolicy: "open",
       slashEphemeral: false,
     });
     await registerAndRunPolicySlash({ harness });
-    const dispatchArg = firstDispatchArg() as {
-      dispatcherOptions?: { deliver?: (payload: { text: string }) => Promise<void> };
-    };
-
-    await dispatchArg.dispatcherOptions?.deliver?.({ text: "public answer" });
 
     expect(firstDispatchArg().ctx?.OriginatingTo).toBe(`channel:${harness.channelId}`);
     expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
@@ -1558,3 +1788,4 @@ describe("slack slash command session metadata", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -10,6 +10,7 @@ import type {
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -49,6 +50,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -130,7 +132,7 @@ async function disposeDeferredMaintenanceContextEngine(
   }
 }
 
-export function createDeferredTurnMaintenanceAbortSignal(params?: {
+function createDeferredTurnMaintenanceAbortSignal(params?: {
   processLike?: DeferredTurnMaintenanceProcessLike;
 }): {
   abortSignal?: AbortSignal;
@@ -195,7 +197,7 @@ export function createDeferredTurnMaintenanceAbortSignal(params?: {
   };
 }
 
-export function resetDeferredTurnMaintenanceStateForTest(): void {
+function resetDeferredTurnMaintenanceStateForTest(): void {
   activeDeferredTurnMaintenanceRuns.clear();
   const processLike = process as DeferredTurnMaintenanceProcessLike;
   const state = processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
@@ -205,6 +207,15 @@ export function resetDeferredTurnMaintenanceStateForTest(): void {
   state.controllers.clear();
   unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
   delete processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.contextEngineMaintenanceTestApi")
+  ] = {
+    createDeferredTurnMaintenanceAbortSignal,
+    resetDeferredTurnMaintenanceStateForTest,
+  };
 }
 
 export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
@@ -274,9 +285,10 @@ function promoteTurnMaintenanceTaskVisibility(params: {
  * Attach runtime-owned transcript rewrite helpers to an existing
  * context-engine runtime context payload.
  */
-export function buildContextEngineMaintenanceRuntimeContext(params: {
+function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   withSessionManagerRewriteLock?: SessionManagerRewriteLock;
@@ -297,6 +309,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: params.purpose ?? "context-engine.maintenance",
     }),
+    ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
       if (params.sessionManager) {
@@ -330,6 +343,7 @@ async function executeContextEngineMaintenance(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
@@ -346,11 +360,13 @@ async function executeContextEngineMaintenance(params: {
   const result = await params.contextEngine.maintain({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
     sessionFile: params.sessionFile,
     runtimeSettings: params.runtimeSettings,
     runtimeContext: buildContextEngineMaintenanceRuntimeContext({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       withSessionManagerRewriteLock:
@@ -377,6 +393,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -432,6 +449,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,
@@ -579,6 +597,7 @@ function scheduleDeferredTurnMaintenance(
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
@@ -646,6 +665,7 @@ export async function runContextEngineMaintenance(params: {
   contextEngine?: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
@@ -675,6 +695,7 @@ export async function runContextEngineMaintenance(params: {
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
@@ -698,6 +719,7 @@ export async function runContextEngineMaintenance(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: params.reason,
       sessionManager: params.sessionManager,

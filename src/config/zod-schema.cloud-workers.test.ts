@@ -16,7 +16,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
     expect(parseCloudWorkers({})).toStrictEqual({});
   });
 
-  it("accepts provider-owned settings and stored lifetime policy", () => {
+  it("accepts provider-owned settings", () => {
     expect(
       parseCloudWorkers({
         profiles: {
@@ -32,10 +32,6 @@ describe("OpenClawSchema cloudWorkers config", () => {
                 id: "/cloud-workers/development/privateKey",
               },
             },
-            lifetime: {
-              idleTimeoutMinutes: 60,
-              maxLifetimeMinutes: 1440,
-            },
           },
         },
       }),
@@ -43,6 +39,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
       profiles: {
         development: {
           provider: "static-ssh",
+          install: "bundle",
           settings: {
             host: "worker.example.test",
             port: 22,
@@ -53,10 +50,26 @@ describe("OpenClawSchema cloudWorkers config", () => {
               id: "/cloud-workers/development/privateKey",
             },
           },
-          lifetime: {
-            idleTimeoutMinutes: 60,
-            maxLifetimeMinutes: 1440,
+        },
+      },
+    });
+  });
+
+  it("accepts npm as an explicit install method", () => {
+    expect(
+      parseCloudWorkers({
+        profiles: {
+          released: {
+            provider: "qa-lab",
+            install: "npm",
           },
+        },
+      }),
+    ).toStrictEqual({
+      profiles: {
+        released: {
+          provider: "qa-lab",
+          install: "npm",
         },
       },
     });
@@ -64,6 +77,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
 
   it.each([
     { profiles: { development: { provider: "" } } },
+    { profiles: { development: { provider: "qa-lab", install: "git" } } },
     { profiles: { " development ": { provider: "qa-lab" } } },
     { profiles: { development: { provider: "qa-lab", settings: { timeout: Infinity } } } },
     { profiles: { development: { provider: "qa-lab", settings: { region: undefined } } } },

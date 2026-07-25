@@ -1,14 +1,16 @@
 // Control UI tests cover agents behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import {
   createAgentCapability,
-  loadAgents,
   loadToolsCatalog,
   loadToolsEffective,
   setDefaultAgent,
 } from "./index.ts";
-import type { AgentsConfigCapability, AgentsState } from "./index.ts";
+import type { AgentsState } from "./index.ts";
+
+type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
@@ -21,7 +23,10 @@ function deferred<T>() {
 }
 
 function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot = { client, connected: true };
+  let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
+    client,
+    phase: "connected",
+  };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
     gateway: {
@@ -34,7 +39,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
     },
     publish(connected: boolean) {
-      snapshot = { client, connected };
+      snapshot = { client, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -124,62 +129,6 @@ function createSaveState(): {
   };
 }
 
-describe("loadAgents", () => {
-  it("preserves selected agent when it still exists in the list", async () => {
-    const { state, request } = createState();
-    state.agentsSelectedId = "kimi";
-    request.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "main" },
-        { id: "kimi", name: "kimi" },
-      ],
-    });
-
-    await loadAgents(state);
-
-    expect(state.agentsSelectedId).toBe("kimi");
-  });
-
-  it("resets to default when selected agent is removed", async () => {
-    const { state, request } = createState();
-    state.agentsSelectedId = "removed-agent";
-    request.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "main" },
-        { id: "kimi", name: "kimi" },
-      ],
-    });
-
-    await loadAgents(state);
-
-    expect(state.agentsSelectedId).toBe("main");
-  });
-
-  it("sets default when no agent is selected", async () => {
-    const { state, request } = createState();
-    state.agentsSelectedId = null;
-    request.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "main" },
-        { id: "kimi", name: "kimi" },
-      ],
-    });
-
-    await loadAgents(state);
-
-    expect(state.agentsSelectedId).toBe("main");
-  });
-});
-
 describe("createAgentCapability lifecycle", () => {
   it("starts a fresh list request after a same-client reconnect", async () => {
     const first = deferred<unknown>();
@@ -235,6 +184,29 @@ describe("createAgentCapability lifecycle", () => {
     second.resolve(current);
     await currentLoad;
     expect(agents.files("main").list).toEqual(current);
+    expect(agents.files("main").loading).toBe(false);
+    agents.dispose();
+  });
+
+  it("invalidates cached and in-flight file lists for changed agents", async () => {
+    const pending = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce({ agentId: "main", workspace: "old", files: [] })
+      .mockReturnValueOnce(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+
+    await agents.refreshFiles("main");
+    expect(agents.files("main").list?.workspace).toBe("old");
+
+    const staleLoad = agents.refreshFiles("main");
+    agents.invalidateFiles(["main"]);
+    pending.resolve({ agentId: "main", workspace: "stale", files: [] });
+    await staleLoad;
+
+    expect(agents.files("main").list).toBeNull();
     expect(agents.files("main").loading).toBe(false);
     agents.dispose();
   });

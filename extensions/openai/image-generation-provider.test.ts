@@ -1,4 +1,5 @@
 // Openai tests cover image generation provider plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -728,6 +729,35 @@ describe("openai image generation provider", () => {
     expect(result.metadata).toBeUndefined();
   });
 
+  it("falls back to the provider baseUrl when the model catalog is omitted", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    // Plugin-scoped runtime snapshots can carry a built-in provider overlay
+    // before its model catalog is present.
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://openai-compatible.example.com/v1",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Create an image through a provider overlay",
+      cfg,
+    });
+
+    expect(httpConfigCall().baseUrl).toBe("https://openai-compatible.example.com/v1");
+    expect(jsonRequestCall().url).toBe(
+      "https://openai-compatible.example.com/v1/images/generations",
+    );
+    expect(result.images).toHaveLength(1);
+  });
+
   it("forwards output and OpenAI-only options on direct generations", async () => {
     mockGeneratedPngResponse();
 
@@ -897,6 +927,44 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("uses a model-specific QA image endpoint without changing the text provider route", async () => {
+    mockGeneratedPngResponse();
+    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Draw a QA lighthouse",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-image-1",
+                  name: "gpt-image-1",
+                  api: "openai-responses",
+                  baseUrl: "http://127.0.0.1:44080/v1",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(httpConfigCall().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(jsonRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/generations");
+    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
+  });
+
   it("forwards edit count, custom size, and multiple input images", async () => {
     mockGeneratedPngResponse();
 
@@ -1021,7 +1089,7 @@ describe("openai image generation provider", () => {
     const body = request.body as Record<string, unknown>;
     expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(request.timeoutMs).toBe(180_000);
-    expect(body.model).toBe("gpt-5.5");
+    expect(body.model).toBe("gpt-5.6-sol");
     expect(body.instructions).toBe("You are an image generation assistant.");
     expect(body.stream).toBe(true);
     expect(body.store).toBe(false);
@@ -1039,7 +1107,7 @@ describe("openai image generation provider", () => {
     expect(body.tool_choice).toEqual({ type: "image_generation" });
     expect(postMultipartRequestMock).not.toHaveBeenCalled();
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
+      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.6-sol timeoutMs=180000",
     );
     expect(result.images).toEqual([
       {
@@ -1356,7 +1424,7 @@ describe("openai image generation provider", () => {
     expect(authResolutionCall().store).toBe(authStore);
     expect(jsonRequestCall().url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
+      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.6-sol timeoutMs=180000",
     );
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
   });
@@ -1506,7 +1574,7 @@ describe("openai image generation provider", () => {
     });
 
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai mode=oauth fakeignored transport=codex-responses requestedModel=gpt-image-2 forged=true next responsesModel=gpt-5.5 timeoutMs=180000",
+      "image auth selected: provider=openai mode=oauth fakeignored transport=codex-responses requestedModel=gpt-image-2 forged=true next responsesModel=gpt-5.6-sol timeoutMs=180000",
     );
   });
 
@@ -1524,7 +1592,7 @@ describe("openai image generation provider", () => {
     });
 
     expect(logInfoMock).toHaveBeenCalledWith(
-      `image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=${"a".repeat(255)}... responsesModel=gpt-5.5 timeoutMs=180000`,
+      `image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=${"a".repeat(255)}... responsesModel=gpt-5.6-sol timeoutMs=180000`,
     );
   });
 
@@ -1559,6 +1627,79 @@ describe("openai image generation provider", () => {
         },
       ],
     });
+  });
+
+  it.each([
+    {
+      name: "invalid alphabet from output item",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs!bG8=" },
+      },
+    },
+    {
+      name: "invalid alphabet from completed output",
+      event: {
+        type: "response.completed",
+        response: {
+          output: [{ type: "image_generation_call", result: "aGVs!bG8=" }],
+        },
+      },
+    },
+    {
+      name: "missing canonical padding",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVsbG8" },
+      },
+    },
+    {
+      name: "internal whitespace",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs bG8=" },
+      },
+    },
+    {
+      name: "non-zero trailing bits",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "Zh==" },
+      },
+    },
+  ])("rejects malformed Codex image base64 from $name events", async ({ event }) => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(`data: ${JSON.stringify(event)}\n\n`);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw from malformed image data",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation returned malformed base64 image data");
+  });
+
+  it("accepts Codex-compatible surrounding Unicode whitespace", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      `data: ${JSON.stringify({
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "\u0085aGVsbG8=\u0085" },
+      })}\n\n`,
+    );
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw from valid image data",
+      cfg: {},
+    });
+
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("hello"));
   });
 
   it("honors configured Codex transport overrides for OAuth image generation", async () => {
@@ -2210,3 +2351,4 @@ describe("openai image generation provider", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,6 @@
 // Interactive outbound tests cover channel outbound interactive payload construction.
 import { describe, expect, it } from "vitest";
+import { renderMessagePresentationChartFallbackText } from "../../../interactive/payload.js";
 import {
   adaptMessagePresentationForChannel,
   applyPresentationActionLimits,
@@ -132,6 +133,111 @@ describe("presentation capability limits", () => {
       {
         label: "Keep",
         action: { type: "command", command: "/short" },
+      },
+    ]);
+  });
+
+  it("keeps approval and link actions out of generic callback byte limits", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Approve",
+          action: {
+            type: "approval",
+            approvalId: "approval/with/a/long/stable/id",
+            approvalKind: "exec",
+            decision: "allow-once",
+          },
+        },
+        {
+          label: "Review",
+          action: { type: "url", url: "https://example.test/approve/a-long-id" },
+        },
+        {
+          label: "Open app",
+          action: { type: "web-app", url: "https://example.test/app/a-long-id" },
+        },
+        {
+          label: "Open widget",
+          action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+        },
+      ],
+      {
+        limits: {
+          actions: {
+            maxValueBytes: 4,
+          },
+        },
+      },
+    );
+
+    expect(buttons).toEqual([
+      {
+        label: "Approve",
+        action: {
+          type: "approval",
+          approvalId: "approval/with/a/long/stable/id",
+          approvalKind: "exec",
+          decision: "allow-once",
+        },
+      },
+      {
+        label: "Review",
+        action: { type: "url", url: "https://example.test/approve/a-long-id" },
+      },
+      {
+        label: "Open app",
+        action: { type: "web-app", url: "https://example.test/app/a-long-id" },
+      },
+      {
+        label: "Open widget",
+        action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+      },
+    ]);
+  });
+
+  it("preserves legacy fields without letting them override canonical action semantics", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Approve",
+                action: {
+                  type: "approval",
+                  approvalId: "approval:1",
+                  approvalKind: "plugin",
+                  decision: "deny",
+                },
+                value: "legacy-shadow",
+                url: "https://ignored.example.test",
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: {
+        limits: { actions: { maxValueBytes: 4 } },
+      },
+    });
+
+    expect(presentation.blocks).toEqual([
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Approve",
+            action: {
+              type: "approval",
+              approvalId: "approval:1",
+              approvalKind: "plugin",
+              decision: "deny",
+            },
+            url: "https://ignored.example.test",
+          },
+        ],
       },
     ]);
   });
@@ -284,6 +390,11 @@ describe("presentation capability limits", () => {
               { label: "Approve", value: "ok" },
               { label: "Audit trail", value: "x".repeat(20) },
               { label: "Docs", value: "x".repeat(20), url: "https://docs.example.test" },
+              {
+                label: "Retry",
+                action: { type: "callback", value: "x".repeat(20) },
+                url: "https://ignored.example.test",
+              },
             ],
           },
         ],
@@ -305,7 +416,7 @@ describe("presentation capability limits", () => {
           { label: "Docs", url: "https://docs.example.test" },
         ],
       },
-      { type: "context", text: "Actions:\n- Audit trail" },
+      { type: "context", text: "Actions:\n- Audit trail\n- Retry" },
     ]);
   });
 
@@ -350,6 +461,28 @@ describe("presentation capability limits", () => {
         buttons: [{ label: "Wait", value: "wait", disabled: true }],
       },
     ]);
+  });
+
+  it("keeps disabled link fallback non-actionable", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Unavailable",
+                action: { type: "url", url: "https://private.example.test" },
+                disabled: true,
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: { limits: { actions: {} } },
+    });
+
+    expect(presentation.blocks).toEqual([{ type: "context", text: "Actions:\n- Unavailable" }]);
   });
 
   it("degrades unsupported controls before channel rendering", () => {
@@ -826,6 +959,42 @@ describe("presentation capability limits", () => {
     ).toBe("text");
   });
 
+  it("splits chart fallback without losing the final series or category", () => {
+    const categories = Array.from(
+      { length: 20 },
+      (_, index) => `Category-${String(index).padStart(2, "0")}`,
+    );
+    const series = Array.from({ length: 12 }, (_, seriesIndex) => ({
+      name: `Series-${String(seriesIndex).padStart(2, "0")}`,
+      values: categories.map((_category, categoryIndex) => seriesIndex * 100 + categoryIndex),
+    }));
+    const chart = {
+      type: "chart" as const,
+      chartType: "line" as const,
+      title: "Quarterly revenue",
+      categories,
+      series,
+    };
+    const maxLength = 500;
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: { blocks: [chart] },
+      capabilities: {
+        context: true,
+        limits: { text: { maxLength, encoding: "characters" } },
+      },
+    });
+    const fallbackBlocks = presentation.blocks.map((block) => {
+      expect(block.type).toBe("context");
+      return block.type === "context" ? block.text : "";
+    });
+
+    expect(fallbackBlocks.length).toBeGreaterThan(1);
+    expect(fallbackBlocks.every((text) => Array.from(text).length <= maxLength)).toBe(true);
+    const fallbackText = fallbackBlocks.join("");
+    expect(fallbackText).toBe(renderMessagePresentationChartFallbackText(chart));
+    expect(fallbackText).toContain("Category-19: 1119");
+  });
+
   it("keeps tables only for channels that explicitly advertise native support", () => {
     const table = {
       type: "table" as const,
@@ -867,43 +1036,93 @@ describe("presentation capability limits", () => {
     ).toBe("text");
   });
 
-  it("splits unsupported table fallback blocks without dropping tail rows", () => {
+  it.each([
+    {
+      encoding: "characters" as const,
+      length: (value: string) => Array.from(value).length,
+    },
+    {
+      encoding: "utf8-bytes" as const,
+      length: (value: string) => Buffer.byteLength(value, "utf8"),
+    },
+    {
+      encoding: "utf16-units" as const,
+      length: (value: string) => value.length,
+    },
+  ])(
+    "splits table fallback by line without losing rows for $encoding limits",
+    ({ encoding, length }) => {
+      const rows = Array.from({ length: 12 }, (_, index) => [
+        `Account-${String(index).padStart(2, "0")}`,
+        `Stage-${index}`,
+      ]);
+      const maxLength = 64;
+      const presentation = adaptMessagePresentationForChannel({
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline report",
+              headers: ["Account", "Stage"],
+              rows,
+            },
+          ],
+        },
+        capabilities: {
+          context: true,
+          limits: { text: { maxLength, encoding } },
+        },
+      });
+      const fallbackBlocks = presentation.blocks.map((block) => {
+        expect(block.type).toBe("context");
+        return block.type === "context" ? block.text : "";
+      });
+
+      expect(fallbackBlocks.length).toBeGreaterThan(1);
+      expect(fallbackBlocks.every((text) => length(text) <= maxLength)).toBe(true);
+      expect(fallbackBlocks.join("")).toBe(
+        [
+          "Pipeline report (table)",
+          ...rows.map(([account, stage]) => `- Account: ${account}; Stage: ${stage}`),
+        ].join("\n"),
+      );
+    },
+  );
+
+  it("hard-splits an oversized table row without breaking UTF-16 surrogate pairs", () => {
+    const value = "😀".repeat(20);
+    const maxLength = 10;
     const presentation = adaptMessagePresentationForChannel({
       presentation: {
         blocks: [
           {
             type: "table",
-            caption: "Pipeline report",
-            headers: ["Account", "Stage"],
-            rows: [
-              ["Acme", "Won"],
-              ["Globex", "Review"],
-              ["Initech", "Discovery"],
-            ],
+            caption: "R",
+            headers: ["Value"],
+            rows: [[value]],
           },
         ],
       },
       capabilities: {
-        tables: false,
-        context: true,
-        limits: {
-          text: { maxLength: 40, encoding: "characters" },
-        },
+        context: false,
+        limits: { text: { maxLength, encoding: "utf16-units" } },
       },
     });
+    const fallbackBlocks = presentation.blocks.map((block) => {
+      expect(block.type).toBe("text");
+      return block.type === "text" ? block.text : "";
+    });
 
-    expect(presentation.blocks.length).toBeGreaterThan(1);
+    expect(fallbackBlocks.every((text) => text.length <= maxLength)).toBe(true);
     expect(
-      presentation.blocks.every(
-        (block) =>
-          (block.type === "text" || block.type === "context") &&
-          Array.from(block.text).length <= 40,
-      ),
+      fallbackBlocks.every((text) => {
+        const first = text.charCodeAt(0);
+        const last = text.charCodeAt(text.length - 1);
+        return !(first >= 0xdc00 && first <= 0xdfff) && !(last >= 0xd800 && last <= 0xdbff);
+      }),
     ).toBe(true);
-    const fallback = presentation.blocks
-      .map((block) => (block.type === "text" || block.type === "context" ? block.text : ""))
-      .join("");
-    expect(fallback).toContain("- Account: Acme; Stage: Won");
-    expect(fallback).toContain("- Account: Initech; Stage: Discovery");
+    expect(fallbackBlocks[0]).toBe("R (table)\n");
+    expect(fallbackBlocks.slice(1).join("")).toBe(`- Value: ${value}`);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

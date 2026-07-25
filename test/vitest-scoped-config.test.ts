@@ -7,6 +7,9 @@ import { describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
+import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
+import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
+import { agentsCoreIsolatedTestFiles } from "./vitest/vitest.agents-paths.mjs";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import { createAutoReplyCoreVitestConfig } from "./vitest/vitest.auto-reply-core.config.ts";
 import { createAutoReplyReplyVitestConfig } from "./vitest/vitest.auto-reply-reply.config.ts";
@@ -45,6 +48,10 @@ import { createExtensionVoiceCallVitestConfig } from "./vitest/vitest.extension-
 import { createExtensionWhatsAppVitestConfig } from "./vitest/vitest.extension-whatsapp.config.ts";
 import { createExtensionZaloVitestConfig } from "./vitest/vitest.extension-zalo.config.ts";
 import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
+import { createGatewayClientVitestConfig } from "./vitest/vitest.gateway-client.config.ts";
+import { createGatewayCoreVitestConfig } from "./vitest/vitest.gateway-core.config.ts";
+import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
+import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createHooksVitestConfig } from "./vitest/vitest.hooks.config.ts";
 import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
@@ -65,6 +72,7 @@ import {
   createToolingDockerVitestConfig,
   toolingDockerTestFiles,
 } from "./vitest/vitest.tooling-docker.config.ts";
+import { toolingIsolatedTestFiles } from "./vitest/vitest.tooling-isolated-paths.mjs";
 import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isolated.config.ts";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
@@ -176,6 +184,10 @@ describe("resolveVitestIsolation", () => {
         replacement: path.join(process.cwd(), "packages", "acp-core", "src", "runtime", "types.ts"),
       },
     );
+    expect(findAlias(sharedVitestConfig.resolve.alias, "@openclaw/retry")).toEqual({
+      find: "@openclaw/retry",
+      replacement: path.join(process.cwd(), "packages", "retry", "src", "index.ts"),
+    });
   });
 
   it("defaults shared scoped configs to the non-isolated runner", () => {
@@ -382,6 +394,107 @@ describe("createScopedVitestConfig", () => {
     }
   });
 
+  it("keeps include-file targets inside the scoped project's ownership", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(
+        includeFile,
+        JSON.stringify(["src/gateway/server.node-pairing-ssh-verify.test.ts"]),
+        "utf8",
+      );
+
+      const config = createScopedVitestConfig(["src/gateway/server-methods/**/*.test.ts"], {
+        dir: "src/gateway",
+        env: {
+          OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+        },
+        intersectIncludeFile: true,
+      });
+      const testConfig = requireTestConfig(config);
+
+      expect(testConfig.include).toEqual([]);
+      expect(testConfig.passWithNoTests).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "src/gateway/**/*{server,client}*.test.ts",
+    "src/gateway/@(server|core).test.ts",
+    "src/gateway/nested/**/*.test.ts",
+  ])(
+    "rejects ambiguous watch-mode include-file target %s at an ownership boundary",
+    (candidate) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
+      try {
+        const includeFile = path.join(tempDir, "include.json");
+        fs.writeFileSync(includeFile, JSON.stringify([candidate]), "utf8");
+
+        expect(() =>
+          createScopedVitestConfig(["src/gateway/**/*server*.test.ts"], {
+            dir: "src/gateway",
+            env: {
+              OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+            },
+            intersectIncludeFile: true,
+          }),
+        ).toThrow(`cannot safely intersect non-literal include path: ${candidate}`);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("intersects a watch-mode directory target with project ownership", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(includeFile, JSON.stringify(["src/gateway/**/*.test.ts"]), "utf8");
+
+      const config = createScopedVitestConfig(["src/gateway/**/*server*.test.ts"], {
+        dir: "src/gateway",
+        env: {
+          OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+        },
+        intersectIncludeFile: true,
+      });
+
+      expect(requireTestConfig(config).include).toEqual(["**/*server*.test.ts"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps shared gateway include files inside their actual child projects", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(
+        includeFile,
+        JSON.stringify(["src/gateway/server.node-pairing-ssh-verify.test.ts"]),
+        "utf8",
+      );
+      const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+
+      expect(requireTestConfig(createGatewayServerVitestConfig(env)).include).toEqual([
+        "server.node-pairing-ssh-verify.test.ts",
+      ]);
+      const coreConfig = requireTestConfig(createGatewayCoreVitestConfig(env));
+      expect(coreConfig.include).toEqual(["server.node-pairing-ssh-verify.test.ts"]);
+      expect(coreConfig.passWithNoTests).toBe(true);
+      const clientConfig = requireTestConfig(createGatewayClientVitestConfig(env));
+      expect(clientConfig.include).toEqual([]);
+      expect(clientConfig.passWithNoTests).toBe(true);
+      const methodsConfig = requireTestConfig(createGatewayMethodsVitestConfig(env));
+      expect(methodsConfig.include).toEqual([]);
+      expect(methodsConfig.passWithNoTests).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("overrides setup files when a scoped config requests them", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], {
       env: {},
@@ -456,6 +569,8 @@ describe("scoped vitest configs", () => {
   const defaultAutoReplyTopLevelConfig = createAutoReplyTopLevelVitestConfig({});
   const defaultAutoReplyReplyConfig = createAutoReplyReplyVitestConfig({});
   const defaultAgentsConfig = createAgentsVitestConfig({});
+  const defaultAgentsCoreConfig = createAgentsCoreVitestConfig({});
+  const defaultAgentsCoreIsolatedConfig = createAgentsCoreIsolatedVitestConfig({});
   const defaultPluginsConfig = createPluginsVitestConfig({});
   const defaultProcessConfig = createProcessVitestConfig({});
   const defaultToolingDockerConfig = createToolingDockerVitestConfig({});
@@ -526,6 +641,19 @@ describe("scoped vitest configs", () => {
     expect(requireTestConfig(defaultAgentsConfig).fileParallelism).toBe(
       sharedVitestConfig.test.fileParallelism,
     );
+  });
+
+  it("isolates agent suites with conflicting shared-module mocks", () => {
+    const sharedConfig = requireTestConfig(defaultAgentsCoreConfig);
+    const isolatedConfig = requireTestConfig(defaultAgentsCoreIsolatedConfig);
+
+    const scopedIsolatedFiles = agentsCoreIsolatedTestFiles.map((file) =>
+      file.replace("src/agents/", ""),
+    );
+    expect(sharedConfig.exclude).toEqual(expect.arrayContaining(scopedIsolatedFiles));
+    expect(isolatedConfig.include).toEqual(scopedIsolatedFiles);
+    expect(isolatedConfig.isolate).toBe(true);
+    expect(isolatedConfig.runner).toBeUndefined();
   });
 
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
@@ -738,6 +866,11 @@ describe("scoped vitest configs", () => {
   it("normalizes memory extension include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionMemoryConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual([
+      "test/setup.ts",
+      "test/setup.extensions.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
     expect(testConfig.include).toEqual([
       "memory-core/**/*.test.ts",
       "memory-lancedb/**/*.test.ts",
@@ -985,7 +1118,7 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultToolingConfig);
     expect(testConfig.include).toEqual(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]);
     expect(testConfig.exclude).toEqual(expect.arrayContaining(toolingDockerTestFiles));
-    expect(testConfig.exclude).toContain("test/scripts/openclaw-e2e-instance.test.ts");
+    expect(testConfig.exclude).toEqual(expect.arrayContaining(toolingIsolatedTestFiles));
     expect(testConfig.include).not.toContain("src/config/doc-baseline.integration.test.ts");
   });
 
@@ -995,9 +1128,9 @@ describe("scoped vitest configs", () => {
     expect(testConfig.fileParallelism).toBe(false);
   });
 
-  it("runs shell helper tooling tests isolated from shared mocks", () => {
+  it("runs state-sensitive tooling tests isolated from shared mocks", () => {
     const testConfig = requireTestConfig(createToolingIsolatedVitestConfig({}));
-    expect(testConfig.include).toEqual(["test/scripts/openclaw-e2e-instance.test.ts"]);
+    expect(testConfig.include).toEqual(toolingIsolatedTestFiles);
     expect(testConfig.isolate).toBe(true);
     expect(testConfig.runner).toBeUndefined();
   });

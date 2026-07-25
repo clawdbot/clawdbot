@@ -3,6 +3,7 @@ import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
   releaseLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
@@ -50,6 +51,7 @@ export async function resolveCodexProviderWebSearchSupport(params: {
   clientFactory: CodexAppServerClientFactory;
   appServer: CodexAppServerRuntimeOptions;
   authProfileId: string | null | undefined;
+  preparedAuth?: CodexAppServerClientOptions["preparedAuth"];
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
   modelProviderOverride: string | undefined;
@@ -59,7 +61,9 @@ export async function resolveCodexProviderWebSearchSupport(params: {
   try {
     client = await params.clientFactory({
       startOptions: params.appServer.start,
-      authProfileId: params.authProfileId,
+      ...(params.preparedAuth
+        ? { preparedAuth: params.preparedAuth }
+        : { authProfileId: params.authProfileId }),
       agentDir: params.agentDir,
       config: params.config,
       timeoutMs: params.appServer.requestTimeoutMs,

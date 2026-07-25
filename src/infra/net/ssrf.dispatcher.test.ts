@@ -1,7 +1,8 @@
 // Pinned dispatcher tests cover undici family policy, pinned lookup injection,
 // timeout propagation, and proxy dispatcher construction.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
+
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
@@ -115,6 +116,7 @@ describe("createPinnedDispatcher", () => {
     expect(dispatcherOptions?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
     expect(dispatcherOptions?.allowH2).toBe(false);
     expect(agentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       connect: {
         lookup,
         autoSelectFamily: true,
@@ -140,6 +142,7 @@ describe("createPinnedDispatcher", () => {
     createPinnedDispatcher(pinned);
 
     expect(agentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       connect: {
         lookup,
         autoSelectFamily: false,
@@ -168,6 +171,7 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(agentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       connect: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -194,6 +198,7 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(agentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       connect: {
         autoSelectFamily: false,
         autoSelectFamilyAttemptTimeout: 50,
@@ -214,6 +219,7 @@ describe("createPinnedDispatcher", () => {
     createPinnedDispatcher(pinned, undefined, undefined, 123_456);
 
     expect(agentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       connect: {
         lookup,
         autoSelectFamily: true,
@@ -364,6 +370,7 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       connect: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -395,6 +402,7 @@ describe("createPinnedDispatcher", () => {
     });
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       uri: "http://127.0.0.1:7890",
       clientFactory: expect.any(Function),
       proxyTls: {
@@ -431,6 +439,7 @@ describe("createPinnedDispatcher", () => {
     );
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       uri: "http://127.0.0.1:7890",
       clientFactory: expect.any(Function),
       requestTls: {

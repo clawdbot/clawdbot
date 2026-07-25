@@ -8,9 +8,10 @@
   },
   "type": "module",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.55.0",
-    "@zed-industries/codex-acp": "0.16.0",
-    "acpx": "0.11.2",
+    "@agentclientprotocol/claude-agent-acp": "0.59.0",
+    "@agentclientprotocol/codex-acp": "1.1.7",
+    "acpx": "0.12.0",
+    "smol-toml": "1.7.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -23,7 +24,23 @@
     "install": {
       "npmSpec": "@openclaw/acpx",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.25"
+      "minHostVersion": ">=2026.4.25",
+      "requiredPlatformPackages": [
+        "@anthropic-ai/claude-agent-sdk-linux-x64",
+        "@anthropic-ai/claude-agent-sdk-linux-arm64",
+        "@anthropic-ai/claude-agent-sdk-linux-x64-musl",
+        "@anthropic-ai/claude-agent-sdk-linux-arm64-musl",
+        "@anthropic-ai/claude-agent-sdk-darwin-x64",
+        "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+        "@anthropic-ai/claude-agent-sdk-win32-x64",
+        "@anthropic-ai/claude-agent-sdk-win32-arm64",
+        "@openai/codex-linux-x64",
+        "@openai/codex-linux-arm64",
+        "@openai/codex-darwin-x64",
+        "@openai/codex-darwin-arm64",
+        "@openai/codex-win32-x64",
+        "@openai/codex-win32-arm64"
+      ]
     },
     "compat": {
       "pluginApi": ">=2026.7.2"

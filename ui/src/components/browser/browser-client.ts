@@ -4,9 +4,11 @@
 // that is dispatched against the browser plugin's control routes, either
 // locally or via a browser-capable node. This module narrows the handful of
 // routes the browser panel needs and keeps route-path knowledge in one place.
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 const BROWSER_REQUEST_METHOD = "browser.request";
+const BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS = 30_000;
 
 export type BrowserPanelTab = {
   /**
@@ -21,12 +23,12 @@ export type BrowserPanelTab = {
   url: string;
 };
 
-export type BrowserTabsSnapshot = {
+type BrowserTabsSnapshot = {
   running: boolean;
   tabs: BrowserPanelTab[];
 };
 
-export type BrowserScreenshotCapture = {
+type BrowserScreenshotCapture = {
   path: string;
   targetId: string;
   url: string;
@@ -61,12 +63,6 @@ type BrowserRequestEnvelope = {
 
 function browserRequest<T>(client: GatewayBrowserClient, envelope: BrowserRequestEnvelope) {
   return client.request<T>(BROWSER_REQUEST_METHOD, envelope);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function asString(value: unknown): string {
@@ -266,12 +262,16 @@ export async function inspectBrowserElementAt(
         const rect = el.getBoundingClientRect();
         const label = el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || "";
         const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
+        const nameSource = label || text;
+        const nameLimit = 120;
+        // This serialized page function cannot call imported helpers; back up only when the cap splits a surrogate pair.
+        const nameEnd = (nameSource.codePointAt(nameLimit - 1) || 0) > 0xffff ? nameLimit - 1 : nameLimit;
         return {
           tag: el.tagName.toLowerCase(),
           id: el.id || "",
           classes: Array.from(el.classList).slice(0, 6),
           role: el.getAttribute("role") || "",
-          name: (label || text).slice(0, 120),
+          name: nameSource.slice(0, nameEnd),
           rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
           focusable: typeof el.tabIndex === "number" && el.tabIndex >= 0,
         };
@@ -321,15 +321,26 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   if (params.authToken) {
     headers.set("Authorization", `Bearer ${params.authToken}`);
   }
-  const res = await fetch(`${basePath}/__openclaw__/assistant-media?${search.toString()}`, {
-    method: "GET",
-    headers,
-    credentials: "same-origin",
-  });
-  if (!res.ok) {
-    throw new Error(`screenshot fetch failed (${res.status})`);
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("screenshot fetch timed out", "TimeoutError")),
+    BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS,
+  );
+  let blob: Blob;
+  try {
+    const res = await fetch(`${basePath}/__openclaw__/assistant-media?${search.toString()}`, {
+      method: "GET",
+      headers,
+      credentials: "same-origin",
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`screenshot fetch failed (${res.status})`);
+    }
+    blob = await res.blob();
+  } finally {
+    clearTimeout(timeout);
   }
-  const blob = await res.blob();
   return await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => {

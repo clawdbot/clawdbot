@@ -6,7 +6,7 @@
 import type { DiffLine } from "./tool-call-diff.ts";
 
 /** Per-file render bound; the panel shows a truncation notice past this. */
-export const MAX_SESSION_DIFF_FILE_LINES = 600;
+const MAX_SESSION_DIFF_FILE_LINES = 600;
 
 export type ParsedFilePatch = {
   lines: DiffLine[];
@@ -38,8 +38,8 @@ export function parseSessionDiffPatch(
   for (const raw of rawLines) {
     const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
     if (hunk) {
-      const oldStart = Number.parseInt(hunk[1], 10);
-      const newStart = Number.parseInt(hunk[2], 10);
+      const oldStart = Number.parseInt(hunk[1] ?? "", 10);
+      const newStart = Number.parseInt(hunk[2] ?? "", 10);
       const gap = oldNext === undefined ? oldStart - 1 : oldStart - oldNext;
       if (gap > 0) {
         lines.push({ kind: "skip", text: formatGap(gap) });

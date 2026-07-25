@@ -2,14 +2,14 @@
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
 
-export type TokenEfficiencyRuntimeUsage = {
+type TokenEfficiencyRuntimeUsage = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
   toolCallCount: number;
 };
 
-export type TokenEfficiencyRow = {
+type TokenEfficiencyRow = {
   scenarioId: string;
   usageSource: "live-usage" | "mock-estimate";
   openclaw: TokenEfficiencyRuntimeUsage;
@@ -20,7 +20,7 @@ export type TokenEfficiencyRow = {
   toolsUsed: string[];
 };
 
-export type TokenEfficiencyReport = {
+type TokenEfficiencyReport = {
   status: "evaluated" | "estimated" | "skipped";
   runtimePair: [RuntimeId, RuntimeId];
   generatedAt: string;
@@ -53,7 +53,7 @@ export type TokenEfficiencySuiteSummary = {
   };
 };
 
-export type BuildTokenEfficiencyReportParams = {
+type BuildTokenEfficiencyReportParams = {
   summary: TokenEfficiencySuiteSummary;
   generatedAt?: string;
   thresholdPercent?: number;

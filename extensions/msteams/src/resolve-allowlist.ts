@@ -337,13 +337,14 @@ export async function resolveMSTeamsChannelAllowlist(params: {
           return { input, resolved: false, note: "team lookup incomplete" };
         }
         const exactTeams = findExactTeams(result.items, team);
-        if (exactTeams.length === 0) {
+        const [exactTeam] = exactTeams;
+        if (!exactTeam) {
           return { input, resolved: false, note: "team not found" };
         }
         if (exactTeams.length > 1) {
           return { input, resolved: false, note: "team name is ambiguous" };
         }
-        teamMatch = exactTeams[0];
+        teamMatch = exactTeam;
       }
       const graphTeamId = teamMatch.id?.trim();
       const teamName = teamMatch.displayName?.trim() || team;
@@ -538,13 +539,13 @@ export async function resolveMSTeamsUserAllowlist(params: {
         return { input, resolved: false, note: "user lookup incomplete" };
       }
       const users = findExactUsers(result.items, query);
-      if (users.length === 0) {
+      const [match] = users;
+      if (!match) {
         return { input, resolved: false, note: "user not found" };
       }
       if (users.length > 1) {
         return { input, resolved: false, note: "user identity is ambiguous" };
       }
-      const match = users[0];
       return {
         input,
         resolved: true,

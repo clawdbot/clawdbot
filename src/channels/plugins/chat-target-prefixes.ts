@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseStrictInteger } from "../../infra/parse-finite-number.js";
+import { resolveAllowlistMatchByCandidates } from "../allowlist-match.js";
 
 /**
  * Prefix mapping for service-qualified target strings.
@@ -65,13 +66,6 @@ export function isAllowedParsedChatSender(params: {
   parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean {
   const allowFrom = normalizeStringEntries(params.allowFrom);
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-
   const senderNormalized = params.normalizeSender(params.sender);
   const allowConversationTargets = params.allowConversationTargets === true;
   // Conversation ids are only considered when the channel opts in; otherwise
@@ -82,30 +76,34 @@ export function isAllowedParsedChatSender(params: {
     ? normalizeOptionalString(params.chatIdentifier)
     : undefined;
 
-  for (const entry of allowFrom) {
-    if (!entry) {
-      continue;
+  const normalizedAllowFrom = allowFrom.map((entry) => {
+    if (entry === "*") {
+      return entry;
     }
     const parsed = params.parseAllowTarget(entry);
-    if (parsed.kind === "chat_id" && chatId !== undefined) {
-      if (parsed.chatId === chatId) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_guid" && chatGuid) {
-      if (parsed.chatGuid === chatGuid) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_identifier" && chatIdentifier) {
-      if (parsed.chatIdentifier === chatIdentifier) {
-        return true;
-      }
-    } else if (parsed.kind === "handle" && senderNormalized) {
-      if (parsed.handle === senderNormalized) {
-        return true;
-      }
+    if (parsed.kind === "chat_id") {
+      return `chat_id:${parsed.chatId}`;
     }
-  }
-  return false;
+    if (parsed.kind === "chat_guid") {
+      return `chat_guid:${parsed.chatGuid}`;
+    }
+    if (parsed.kind === "chat_identifier") {
+      return `chat_identifier:${parsed.chatIdentifier}`;
+    }
+    return `handle:${parsed.handle}`;
+  });
+  return resolveAllowlistMatchByCandidates({
+    allowList: normalizedAllowFrom,
+    candidates: [
+      { value: senderNormalized ? `handle:${senderNormalized}` : undefined, source: "handle" },
+      { value: chatId !== undefined ? `chat_id:${chatId}` : undefined, source: "chat_id" },
+      { value: chatGuid ? `chat_guid:${chatGuid}` : undefined, source: "chat_guid" },
+      {
+        value: chatIdentifier ? `chat_identifier:${chatIdentifier}` : undefined,
+        source: "chat_identifier",
+      },
+    ],
+  }).allowed;
 }
 
 function stripPrefix(value: string, prefix: string): string {

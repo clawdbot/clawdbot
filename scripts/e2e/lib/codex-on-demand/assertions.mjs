@@ -1,4 +1,5 @@
 // Assertions for Codex on-demand plugin E2E scenarios.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -15,21 +16,28 @@ import {
 } from "../codex-install-utils.mjs";
 
 const cfg = readJson(configPath());
+const onboard = readJson("/tmp/openclaw-onboard.json");
 const inspect = readJson("/tmp/openclaw-codex-inspect.json");
-const records = readInstallRecords(cfg.plugins?.installs);
-const codexRecord = records.codex || inspect.install;
+const records = readInstallRecords();
+const codexRecord = records.codex;
+if (onboard.ok !== true || onboard.mode !== "local" || onboard.authChoice !== "openai-api-key") {
+  throw new Error(`unexpected onboarding terminal result: ${JSON.stringify(onboard)}`);
+}
+if (cfg.plugins?.installs !== undefined) {
+  throw new Error("codex install record remained in config instead of the canonical SQLite index");
+}
 if (!codexRecord) {
   throw new Error(`missing codex install record: ${JSON.stringify(records)}`);
 }
 if (codexRecord.source !== "npm") {
   throw new Error(`expected npm codex install record, got ${codexRecord.source}`);
 }
-if (!String(codexRecord.spec || "").includes("@openclaw/codex")) {
+if (!codexRecord.spec?.includes("@openclaw/codex")) {
   throw new Error(`expected @openclaw/codex install spec, got ${codexRecord.spec}`);
 }
 
 const npmRoot = managedNpmRoot();
-const installPath = String(codexRecord.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
+const installPath = (codexRecord.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
 if (!installPath) {
   throw new Error(`missing codex installPath: ${JSON.stringify(codexRecord)}`);
 }
@@ -69,6 +77,24 @@ if (!fs.existsSync(codexBin)) {
   throw new Error(`missing managed Codex binary: ${codexBin}`);
 }
 assertPathInside(npmRoot, codexBin, "managed Codex binary");
+const codexVersion = spawnSync(process.execPath, [codexBin, "--version"], {
+  encoding: "utf8",
+  maxBuffer: 64 * 1024,
+  timeout: 15_000,
+  windowsHide: true,
+});
+const codexVersionStdout = codexVersion.stdout?.trim() ?? "";
+const codexVersionStderr = codexVersion.stderr?.trim() ?? "";
+if (codexVersion.error || codexVersion.status !== 0) {
+  const failure = codexVersion.error?.message ?? `exit status ${String(codexVersion.status)}`;
+  const output = codexVersionStderr || codexVersionStdout || "no output";
+  throw new Error(`managed Codex --version failed (${failure}): ${output}`);
+}
+if (!/^codex-cli\s+\S+$/u.test(codexVersionStdout)) {
+  throw new Error(
+    `unexpected managed Codex --version output: ${JSON.stringify(codexVersionStdout)}`,
+  );
+}
 
 const list = readJson("/tmp/openclaw-plugins-list.json");
 const plugin = (list.plugins || []).find((entry) => entry.id === "codex");

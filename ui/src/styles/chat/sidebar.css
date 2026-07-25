@@ -10,7 +10,7 @@
 }
 
 /* A collapsed rail renders nothing at all — the whole width goes back to the
-   thread. Reopen via the pane header / floating toggle or ⇧⌘B. */
+   thread. Reopen via the pane header or ⇧⌘B. */
 .chat-workbench--workspace-collapsed {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -48,49 +48,19 @@
   grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(230px, 280px);
 }
 
-/* Floating openers shown in single-pane mode while a rail is collapsed
-   (split panes host the same toggles in their header row instead). One
-   horizontal row inside the thread's titlebar band (see .chat-thread top
-   padding) so the buttons never cover the first message and the band stays
-   free as a window-drag surface in the native macOS app. */
-.chat-floating-toggles {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 12;
-  display: flex;
-  gap: 6px;
-}
-
-.chat-workspace-open,
-.chat-tasks-open,
-.chat-diff-open,
-.chat-open-split-view {
-  /* Match the 28px pane-header/split-view openers; .btn--icon's
-     min-width/height of 36px would win otherwise. */
+/* Compact icon button shared by the pane header actions. Sizing only — chrome
+   stays ghost; .btn--icon's 36px min-width/height would win otherwise. */
+.chat-icon-btn {
   width: 28px;
   min-width: 28px;
   height: 28px;
   min-height: 28px;
   padding: 5px;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
-/* The workspace rail adapts to the pane width (side column on wide panes,
-   bottom strip on narrow ones — chat-pane measures and flips the dock), so
-   its toggles stay available at every width. The background-tasks rail is
-   side-dock only, so its toggles still hide on narrow viewports until it
-   grows a narrow presentation. */
-@media (max-width: 1120px) {
-  .chat-tasks-open,
-  .chat-pane__actions .chat-tasks-toggle {
-    display: none;
-  }
-}
+/* Both rails adapt to the pane width (side column on wide panes, bottom strip
+   on narrow ones — chat-pane measures and flips the presentation), so their
+   toggles stay available at every width. */
 
 /* Positioning context for the badge on both the pane-header and floating
    variants (the floating buttons are static children of the toggle row). */
@@ -108,8 +78,8 @@
   height: 14px;
   padding: 0 3px;
   border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--primary-foreground, #fff);
+  background: var(--primary);
+  color: var(--primary-foreground);
   font-size: 9px;
   font-weight: 650;
   line-height: 14px;
@@ -192,12 +162,36 @@
 }
 
 .chat-main {
+  /* Positioning context for floating overlays and the optional session rail. */
+  position: relative;
   min-width: 312px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   /* Smooth transition when sidebar opens/closes */
   transition: flex 250ms ease-out;
+}
+
+.chat-main__conversation {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-main--rail-docked {
+  flex-direction: row;
+}
+
+.chat-main--rail-docked > openclaw-chat-session-rail {
+  display: block;
+  width: 400px;
+  min-width: 400px;
+  min-height: 0;
+  flex: 0 0 400px;
 }
 
 /* No border-left: the resizable divider rendered next to this panel draws
@@ -349,7 +343,7 @@
 }
 
 .chat-workspace-rail__state--error {
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .chat-workspace-rail__scroll {
@@ -475,7 +469,7 @@
 }
 
 .chat-workspace-rail__file-open:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent, #7dd3fc) 65%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
   outline-offset: -2px;
 }
 
@@ -512,8 +506,8 @@
 .chat-workspace-rail__file-badge {
   padding: 2px 6px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
-  color: var(--danger, #ef4444);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
   font-size: 12px; /* was 10px */
   line-height: 1.2;
 }
@@ -644,6 +638,7 @@
 
 .chat-tasks-rail__title {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -660,8 +655,29 @@
 }
 
 .chat-tasks-rail__title strong {
+  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tasks-rail__back {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+}
+
+.chat-tasks-rail__back svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
 }
 
 .chat-tasks-rail__actions {
@@ -687,7 +703,7 @@
 }
 
 .chat-tasks-rail__state--error {
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .chat-tasks-rail__scroll {
@@ -703,6 +719,7 @@
   flex: 0 1 auto;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
   padding-top: 8px;
 }
 
@@ -756,6 +773,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 62%, transparent);
+  cursor: pointer;
 }
 
 .chat-tasks-rail__task:hover,
@@ -768,6 +786,38 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.chat-tasks-rail__task-disclosure {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-tasks-rail__task-chevron {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--muted);
+}
+
+.chat-tasks-rail__task-chevron svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
 }
 
 /* openclaw-tooltip is display:contents, so the title span itself is the flex
@@ -791,7 +841,7 @@
   width: 7px;
   height: 7px;
   border-radius: var(--radius-full);
-  background: var(--warn, #f59e0b);
+  background: var(--warn);
   animation: chat-tasks-pulse 1.6s ease-in-out infinite;
 }
 
@@ -827,7 +877,7 @@
 .chat-tasks-rail__task-stop:focus-visible {
   border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .chat-tasks-rail__task-stop svg {
@@ -855,15 +905,15 @@
 }
 
 .chat-tasks-rail__task-status--ok {
-  color: var(--ok, #22c55e);
+  color: var(--ok);
 }
 
 .chat-tasks-rail__task-status--warn {
-  color: var(--warn, #f59e0b);
+  color: var(--warn);
 }
 
 .chat-tasks-rail__task-status--danger {
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .chat-tasks-rail__task-status--muted {
@@ -872,6 +922,13 @@
 
 .chat-tasks-rail__task-sep {
   opacity: 0.6;
+}
+
+/* Currently running tool name: lifted from the muted meta line so live
+   activity is scannable without reading the whole row. */
+.chat-tasks-rail__task-tool {
+  color: var(--text);
+  font-weight: 550;
 }
 
 .chat-tasks-rail__task-detail {
@@ -883,6 +940,128 @@
   font-size: var(--control-ui-text-xs);
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.chat-tasks-rail__detail {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px 12px 18px;
+}
+
+.chat-tasks-rail__detail-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-tasks-rail__detail-status-line {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.chat-tasks-rail__detail-status-line .chat-tasks-rail__task-meta {
+  flex: 1 1 auto;
+}
+
+.chat-tasks-rail__detail-stop {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  color: var(--danger);
+}
+
+.chat-tasks-rail__detail-stop svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+}
+
+.chat-tasks-rail__detail-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--warn) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
+}
+
+.chat-tasks-rail__detail-activity span {
+  color: var(--warn);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+}
+
+.chat-tasks-rail__detail-activity strong {
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chat-tasks-rail__detail-blocks {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-tasks-rail__task-inspector-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.chat-tasks-rail__task-inspector-label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-tasks-rail__task-inspector-block pre {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-tasks-rail__task-inspector-state {
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.chat-tasks-rail__task-inspector-state--error {
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+  color: var(--danger);
 }
 
 /* Quiet by default so a column of rows is not a column of accent links;
@@ -946,6 +1125,12 @@
   line-height: 1;
 }
 
+.sidebar-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .sidebar-title {
   font-weight: 600;
   font-size: var(--control-ui-text-md);
@@ -955,6 +1140,54 @@
   flex: 1;
   overflow: auto;
   padding: 16px;
+}
+
+.sidebar-content--discussion {
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* Host wrapper for full-height panel kinds: the discussion iframe has no
+   intrinsic height, so the wrapper must stretch for height:100% to resolve. */
+.sidebar-panel-host--fill {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+openclaw-session-discussion {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.session-discussion__empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--muted);
+}
+
+.session-discussion__open {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.session-discussion__frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--panel);
 }
 
 .sidebar-file-view {
@@ -1032,10 +1265,10 @@
 }
 
 .sidebar-file-view__editor-menu {
-  position: absolute;
   z-index: var(--z-dropdown);
-  top: calc(100% + 6px);
-  right: 0;
+}
+
+.sidebar-file-view__editor-menu::part(menu) {
   min-width: 132px;
   padding: 5px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
@@ -1045,23 +1278,9 @@
 }
 
 .sidebar-file-view__editor-item {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 30px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--text);
-  font: inherit;
   font-size: 13px;
   text-align: left;
-}
-
-.sidebar-file-view__editor-item:hover,
-.sidebar-file-view__editor-item:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
 .file-view__search {
@@ -1120,22 +1339,56 @@
 }
 
 .file-view {
+  position: relative;
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 8px 0;
+  overflow: hidden;
+}
+
+.file-view__mount,
+.sidebar-file-view .cm-editor {
+  height: 100%;
+  min-height: 0;
+}
+
+.sidebar-file-view .cm-editor {
+  background: transparent;
+  color: var(--text);
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.6;
+}
+
+.sidebar-file-view .cm-scroller {
+  overflow: auto;
+  font-family: inherit;
   tab-size: 2;
 }
 
-.file-view__line {
-  display: grid;
-  /* Fixed gutter width (digit count set per file): an auto gutter column would
-     absorb free space on short lines and indent their code past longer lines. */
-  grid-template-columns: calc(var(--file-view-ln-digits, 3) * 1ch + 18px) max-content;
+.sidebar-file-view .cm-content {
   min-width: max-content;
+  padding: 8px 0;
+  caret-color: var(--text);
+}
+
+.sidebar-file-view .cm-line {
+  padding: 0 12px 0 8px;
+}
+
+.sidebar-file-view .cm-gutters {
+  border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  background: var(--panel);
+  color: var(--muted);
+  user-select: none;
+}
+
+.sidebar-file-view .cm-lineNumbers .cm-gutterElement {
+  min-width: 3ch;
+  padding: 0 10px 0 8px;
+}
+
+.sidebar-file-view .cm-focused {
+  outline: none;
 }
 
 .file-view__line--target {
@@ -1150,128 +1403,119 @@
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.file-view__ln {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  padding: 0 10px 0 8px;
-  color: var(--muted);
-  background: var(--panel);
-  text-align: right;
-  user-select: none;
-}
-
-.file-view__line--target .file-view__ln,
-.file-view__line--match .file-view__ln {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-}
-
-.file-view__line--current .file-view__ln {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
-}
-
-.file-view__lc {
-  padding-right: 12px;
-  white-space: pre;
-}
-
-.file-view :where(.hljs-comment, .hljs-quote) {
+/* Code syntax palette (dark below, light overrides further down): deliberate
+   literal hexes tuned for code legibility, not theme tokens — the UI palette
+   has no per-token-kind roles and retinting per theme family is not wanted. */
+.file-view .tok-comment {
   color: var(--muted);
   font-style: italic;
 }
 
-.file-view :where(.hljs-keyword, .hljs-selector-tag, .hljs-subst) {
+.file-view .tok-keyword {
   color: #ff8a80;
 }
 
 .file-view
-  :where(
-    .hljs-number,
-    .hljs-literal,
-    .hljs-variable,
-    .hljs-template-variable,
-    .hljs-tag .hljs-attr
-  ) {
+  :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
   color: #79c0ff;
 }
 
-.file-view :where(.hljs-string, .hljs-doctag) {
+.file-view :where(.tok-string, .tok-string2) {
   color: #a5d6ff;
 }
 
-.file-view :where(.hljs-title, .hljs-section, .hljs-selector-id, .hljs-function .hljs-title) {
+.file-view :where(.tok-heading, .tok-definition) {
   color: #d2a8ff;
 }
 
-.file-view :where(.hljs-type, .hljs-class .hljs-title, .hljs-built_in, .hljs-builtin-name) {
+.file-view :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
   color: #ffa657;
 }
 
-.file-view
-  :where(
-    .hljs-attr,
-    .hljs-attribute,
-    .hljs-name,
-    .hljs-selector-class,
-    .hljs-selector-attr,
-    .hljs-selector-pseudo
-  ) {
+.file-view :where(.tok-propertyName, .tok-labelName) {
   color: #7ee787;
 }
 
-.file-view :where(.hljs-symbol, .hljs-bullet, .hljs-link) {
+.file-view :where(.tok-link, .tok-url) {
   color: var(--accent-2);
 }
 
-.file-view .hljs-deletion {
+.file-view .tok-meta {
+  color: #c9d1d9;
+}
+
+.file-view .tok-deleted {
   color: #ffa198;
   background: rgba(248, 81, 73, 0.12);
 }
 
-.file-view .hljs-addition {
+.file-view .tok-inserted {
   color: #7ee787;
   background: rgba(46, 160, 67, 0.12);
 }
 
-:root[data-theme-mode="light"] .file-view :where(.hljs-keyword, .hljs-selector-tag, .hljs-subst) {
+.file-view .tok-emphasis {
+  font-style: italic;
+}
+
+.file-view .tok-strong {
+  font-weight: 600;
+}
+
+:root[data-theme-mode="light"] .file-view .tok-keyword {
   color: #cf222e;
 }
 
 :root[data-theme-mode="light"]
   .file-view
-  :where(.hljs-number, .hljs-literal, .hljs-variable, .hljs-template-variable) {
+  :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
   color: #0550ae;
 }
 
-:root[data-theme-mode="light"] .file-view :where(.hljs-string, .hljs-doctag) {
+:root[data-theme-mode="light"] .file-view :where(.tok-string, .tok-string2) {
   color: #0a3069;
 }
 
-:root[data-theme-mode="light"]
-  .file-view
-  :where(.hljs-title, .hljs-section, .hljs-selector-id, .hljs-function .hljs-title) {
+:root[data-theme-mode="light"] .file-view :where(.tok-heading, .tok-definition) {
   color: #8250df;
 }
 
 :root[data-theme-mode="light"]
   .file-view
-  :where(.hljs-type, .hljs-class .hljs-title, .hljs-built_in, .hljs-builtin-name) {
+  :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
   color: #953800;
 }
 
-:root[data-theme-mode="light"]
-  .file-view
-  :where(
-    .hljs-attr,
-    .hljs-attribute,
-    .hljs-name,
-    .hljs-selector-class,
-    .hljs-selector-attr,
-    .hljs-selector-pseudo
-  ) {
+:root[data-theme-mode="light"] .file-view :where(.tok-propertyName, .tok-labelName) {
   color: #116329;
+}
+
+:root[data-theme-mode="light"] .file-view .tok-meta {
+  color: #57606a;
+}
+
+.file-view__loading {
+  position: absolute;
+  inset: 12px;
+  pointer-events: none;
+}
+
+.file-view__save-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
+  color: var(--text);
+  font-size: 12px;
+}
+
+.file-view__save-notice-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 .sidebar-file-view__footer {
@@ -1279,12 +1523,6 @@
   justify-content: flex-end;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
-}
-
-.sidebar-markdown {
-  font-size: var(--control-ui-text-md);
-  line-height: 1.6;
-  color: var(--text);
 }
 
 .sidebar-markdown-shell {
@@ -1379,227 +1617,6 @@
   line-height: 1.45;
 }
 
-/* ── Headings ── */
-
-.sidebar-markdown :where(h1) {
-  font-size: 1.65em;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  margin: 1.6em 0 0.6em;
-  padding-bottom: 0.35em;
-  border-bottom: 1px solid var(--border);
-  line-height: 1.25;
-  text-wrap: balance;
-  scroll-margin-top: 80px;
-}
-
-.sidebar-markdown :where(h2) {
-  font-size: 1.35em;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  margin: 1.4em 0 0.5em;
-  padding-bottom: 0.25em;
-  border-bottom: 1px solid var(--border);
-  line-height: 1.3;
-  text-wrap: balance;
-  scroll-margin-top: 80px;
-}
-
-.sidebar-markdown :where(h3) {
-  font-size: 1.15em;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  margin: 1.2em 0 0.4em;
-  line-height: 1.35;
-  text-wrap: balance;
-  scroll-margin-top: 80px;
-}
-
-.sidebar-markdown :where(h4, h5, h6) {
-  font-size: 1em;
-  font-weight: 600;
-  margin: 1em 0 0.35em;
-  line-height: 1.4;
-  color: var(--text-strong);
-}
-
-.sidebar-markdown > :where(h1, h2, h3, h4, h5, h6):first-child {
-  margin-top: 0;
-}
-
-/* ── Paragraphs & spacing ── */
-
-.sidebar-markdown :where(p, ul, ol, pre, blockquote, table, details) {
-  margin: 0;
-}
-
-.sidebar-markdown :where(p + p, p + ul, p + ol, p + pre, p + blockquote, p + table, p + details) {
-  margin-top: 0.75em;
-}
-
-.sidebar-markdown :where(h1 + p, h2 + p, h3 + p, h4 + p) {
-  margin-top: 0;
-}
-
-/* ── Lists ── */
-
-.sidebar-markdown :where(ul, ol) {
-  padding-left: 1.6em;
-}
-
-.sidebar-markdown :where(li + li) {
-  margin-top: 0.3em;
-}
-
-.sidebar-markdown :where(li > p) {
-  margin-top: 0.25em;
-}
-
-.sidebar-markdown :where(li > ul, li > ol) {
-  margin-top: 0.25em;
-}
-
-/* ── Links ── */
-
-.sidebar-markdown :where(a) {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  transition: text-decoration-color var(--duration-fast) ease;
-}
-
-.sidebar-markdown :where(a:hover) {
-  text-decoration-color: var(--accent);
-}
-
-/* ── Inline code ── */
-
-.sidebar-markdown code {
-  font-family: var(--mono);
-  font-size: 0.88em;
-}
-
-.sidebar-markdown :where(:not(pre) > code) {
-  padding: 0.15em 0.4em;
-  border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.12);
-  border: 1px solid var(--border);
-}
-
-:root[data-theme-mode="light"] .sidebar-markdown :where(:not(pre) > code) {
-  background: rgba(0, 0, 0, 0.06);
-}
-
-/* ── Code blocks ── */
-
-.sidebar-markdown pre {
-  background: rgba(0, 0, 0, 0.12);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 14px 16px;
-  font-family: var(--mono);
-  overflow-x: auto;
-  margin-top: 0.75em;
-}
-
-:root[data-theme-mode="light"] .sidebar-markdown pre {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.sidebar-markdown pre:has(> code.markdown-block-art) {
-  background: var(--bg);
-}
-
-.sidebar-markdown :where(pre code) {
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-  font-size: 12.5px;
-  line-height: 1.55;
-}
-
-.sidebar-markdown :where(pre code.markdown-block-art) {
-  display: block;
-  min-width: 100%;
-  width: max-content;
-  color: var(--text);
-  font-size: 12px;
-  font-variant-ligatures: none;
-  letter-spacing: 0;
-  line-height: 0.86;
-  overflow-wrap: normal;
-  white-space: pre;
-  word-break: normal;
-}
-
-/* ── Blockquotes ── */
-
-.sidebar-markdown :where(blockquote) {
-  border-left: 3px solid var(--border-strong);
-  padding: 8px 14px;
-  margin-left: 0;
-  margin-top: 0.75em;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-:root[data-theme-mode="light"] .sidebar-markdown :where(blockquote) {
-  background: rgba(0, 0, 0, 0.025);
-}
-
-.sidebar-markdown :where(blockquote blockquote) {
-  margin-top: 8px;
-}
-
-/* ── Tables ── */
-
-.sidebar-markdown :where(table) {
-  margin-top: 0.75em;
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 13px;
-  display: block;
-  overflow-x: auto;
-}
-
-.sidebar-markdown :where(th, td) {
-  border: 1px solid var(--border);
-  padding: 8px 12px;
-  text-align: left;
-  vertical-align: top;
-}
-
-.sidebar-markdown :where(th) {
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--muted);
-  background: var(--secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.sidebar-markdown :where(tbody tr:hover) {
-  background: var(--bg-hover);
-}
-
-/* ── Horizontal rules ── */
-
-.sidebar-markdown :where(hr) {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 1.5em 0;
-}
-
-/* ── Bold / italic ── */
-
-.sidebar-markdown :where(strong) {
-  font-weight: 600;
-  color: var(--text-strong);
-}
-
 .sidebar-markdown-reader.sidebar-markdown :where(h1, h2) {
   font-family: var(--md-preview-serif);
   letter-spacing: -0.03em;
@@ -1616,47 +1633,6 @@
 
 .sidebar-markdown-reader.sidebar-markdown :where(p, ul, ol, pre, blockquote, table, details) {
   margin-bottom: 0.95em;
-}
-
-/* ── Images ── */
-
-.sidebar-markdown .markdown-inline-image {
-  display: block;
-  max-width: 100%;
-  max-height: 420px;
-  width: auto;
-  height: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--secondary) 70%, transparent);
-  object-fit: contain;
-  margin-top: 0.75em;
-}
-
-/* ── Details / summary ── */
-
-.sidebar-markdown :where(details) {
-  margin-top: 0.75em;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  overflow: hidden;
-}
-
-.sidebar-markdown :where(summary) {
-  padding: 8px 12px;
-  font-weight: 500;
-  font-size: 13px;
-  user-select: none;
-  transition: background var(--duration-fast) ease;
-}
-
-.sidebar-markdown :where(summary:hover) {
-  background: var(--bg-hover);
-}
-
-.sidebar-markdown :where(details[open] > :not(summary)) {
-  padding: 0 12px 10px;
 }
 
 @media (max-width: 720px) {
@@ -1693,27 +1669,52 @@
   min-height: 160px;
 }
 
-/* The background-tasks rail has no narrow presentation yet; hide it with its
-   toggles on narrow viewports (the workspace rail adapts instead). The hidden
-   rail must also release its reserved grid track, so the tasks-open templates
-   collapse back to the workspace-only shapes here. */
-@media (max-width: 1120px) {
-  .chat-tasks-rail {
-    display: none;
-  }
+/* Narrow pane: the tasks rail mirrors the workspace rail's bottom strip.
+   chat-view only sets --tasks-open for the side column, so the column
+   templates never fire here; these rules add the strip row instead. */
+.chat-workbench--tasks-dock-bottom {
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
+}
 
-  .chat-workbench--tasks-open.chat-workbench--workspace-collapsed,
-  .chat-workbench--tasks-open.chat-workbench--dock-bottom {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* Both strips open: workspace row 2, tasks row 3. */
+.chat-workbench--tasks-dock-bottom.chat-workbench--dock-bottom {
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px) minmax(160px, 236px);
+}
 
-  /* Mirrors the three-column selector's specificity so the two-column shape
-     wins while the tasks rail is hidden. */
-  .chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-    .chat-workbench--dock-bottom
-  ) {
-    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
-  }
+/* A collapsed workspace rail renders nothing, so its strip row must not stay
+   reserved under the tasks strip. */
+.chat-workbench--tasks-dock-bottom.chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
+}
+
+/* -2 is the second-from-last grid line, so the strip always lands in the last
+   row whether or not the workspace strip sits above it. */
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail {
+  grid-column: 1 / -1;
+  grid-row: -2;
+  border-left: none;
+  border-top: 1px solid var(--border);
+}
+
+/* Bottom strip is short and wide: sections sit side by side as their own
+   scroll columns, matching the workspace rail's bottom dock. */
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail__scroll {
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail__scroll > .chat-tasks-rail__section {
+  flex: 1 0 260px;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.chat-workbench--tasks-dock-bottom
+  .chat-tasks-rail__scroll
+  > .chat-tasks-rail__section
+  + .chat-tasks-rail__section {
+  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
 }
 
 /* Mobile: Full-screen modal */
@@ -1743,9 +1744,6 @@
 }
 
 /* ── Session diff panel (sessions.diff sidebar content) ── */
-
-/* The floating diff opener sits in the .chat-floating-toggles row and shares
-   the .chat-workspace-open sizing/chrome rules near the top of this file. */
 
 .session-diff {
   display: flex;
@@ -1833,19 +1831,19 @@
 }
 
 .session-diff__status--added {
-  background: var(--ok, #22c55e);
+  background: var(--ok);
 }
 
 .session-diff__status--deleted {
-  background: var(--destructive, #ef4444);
+  background: var(--destructive);
 }
 
 .session-diff__status--renamed {
-  background: var(--accent, #a855f7);
+  background: var(--accent);
 }
 
 .session-diff__status--modified {
-  background: var(--warning, #eab308);
+  background: var(--warn);
 }
 
 .session-diff__path {

@@ -1,11 +1,14 @@
 // Runtime plan tool tests cover schema normalization and diagnostics when the
 // runtime plan owns tool policy, with legacy provider fallback still available.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
   createParameterFreeTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
 import {
@@ -228,13 +231,37 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(result[0]).toBe(normalized);
-    expect(getPluginToolMeta(result[0])).toMatchObject({
+    expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toMatchObject({
       pluginId: "bundle-mcp",
       mcp: {
         serverName: "fixture",
         toolName: "lookup_note",
       },
     });
+  });
+
+  it("preserves declared output schemas when runtime normalization clones tools", () => {
+    const outputSchema = Type.Object(
+      { id: Type.String(), ready: Type.Boolean() },
+      { additionalProperties: false },
+    );
+    const tool = {
+      ...createParameterFreeTool("fixture_status"),
+      outputSchema,
+    } as unknown as AgentTool;
+    const normalized = {
+      ...createParameterFreeTool("fixture_status"),
+      parameters: normalizedParameterFreeSchema(),
+    } as unknown as AgentTool;
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+
+    const result = normalizeAgentRuntimeTools({
+      tools: [tool],
+      provider: "openai",
+    });
+
+    expect(result[0]).toBe(normalized);
+    expect(result[0]?.outputSchema).toBe(outputSchema);
   });
 
   it("preserves private execution metadata when provider normalization clones tools", () => {
@@ -267,8 +294,12 @@ describe("AgentRuntimePlan tool policy helpers", () => {
 
     expect(result[0]).toBe(normalized);
     expect((result[0] as AnyAgentTool).catalogMode).toBe("direct-only");
-    expect(isToolWrappedWithBeforeToolCallHook(result[0])).toBe(true);
-    expect(getToolTerminalPresentation(result[0])).toBe(formatter);
+    expect(
+      isToolWrappedWithBeforeToolCallHook(expectDefined(result[0], "result[0] test invariant")),
+    ).toBe(true);
+    expect(getToolTerminalPresentation(expectDefined(result[0], "result[0] test invariant"))).toBe(
+      formatter,
+    );
   });
 
   it("does not reread quarantined tools while preserving normalized metadata", () => {
@@ -306,7 +337,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(result).toEqual([normalized]);
-    expect(getPluginToolMeta(result[0])).toMatchObject({
+    expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toMatchObject({
       pluginId: "bundle-mcp",
       mcp: {
         serverName: "fixture",

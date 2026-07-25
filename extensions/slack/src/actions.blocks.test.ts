@@ -1,9 +1,70 @@
 // Slack tests cover actions.blocks plugin behavior.
 import { describe, expect, it } from "vitest";
-import { createSlackEditTestClient } from "./blocks.test-helpers.js";
+import { createSlackEditTestClient, createSlackSendTestClient } from "./blocks.test-helpers.js";
 
-const { editSlackMessage } = await import("./actions.js");
+const { editSlackMessage, sendSlackMessage } = await import("./actions.js");
 const SLACK_TEXT_LIMIT = 8000;
+const SLACK_EDIT_TEXT_LIMIT = 4000;
+
+function readFirstChatUpdatePayload(client: ReturnType<typeof createSlackEditTestClient>): {
+  text?: string;
+} {
+  const [call] = client.chat.update.mock.calls;
+  if (!call) {
+    throw new Error("expected Slack chat.update call");
+  }
+  const [payload] = call;
+  if (!payload || typeof payload !== "object") {
+    throw new Error("expected Slack chat.update payload");
+  }
+  return payload as { text?: string };
+}
+
+describe("sendSlackMessage blocks", () => {
+  it("uses the original action text once when a native table is rejected", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const blocks = [
+      {
+        type: "data_table",
+        caption: "Pipeline",
+        rows: [
+          [
+            { type: "raw_text", text: "Account" },
+            { type: "raw_text", text: "ARR" },
+          ],
+          [
+            { type: "raw_text", text: "Acme" },
+            { type: "raw_number", value: 125000, text: "125000" },
+          ],
+        ],
+      },
+    ] as never;
+
+    await sendSlackMessage(
+      "channel:C123",
+      "Pipeline summary\n\nPipeline (table)\n- Account: Acme; ARR: 125000",
+      {
+        cfg: { channels: { slack: { botToken: "xoxb-test" } } },
+        token: "xoxb-test",
+        client,
+        blocks,
+        nativeDataFallbackBaseText: "Pipeline summary",
+      },
+    );
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    const fallback = client.chat.postMessage.mock.calls[1]?.[0] as
+      | { blocks?: unknown; mrkdwn?: boolean; text?: string }
+      | undefined;
+    expect(fallback).toMatchObject({
+      mrkdwn: false,
+      text: "Pipeline summary\n\nPipeline (table)\nAccount\tARR\nAcme\t125000",
+    });
+    expect(fallback?.blocks).toBeUndefined();
+    expect(fallback?.text?.match(/Acme/gu)).toHaveLength(1);
+  });
+});
 
 describe("editSlackMessage blocks", () => {
   it("preserves long plain-text edits", async () => {
@@ -121,7 +182,7 @@ describe("editSlackMessage blocks", () => {
     });
   });
 
-  it("retries rejected native charts as visible fallback blocks", async () => {
+  it("retries rejected native charts with text fallback and surviving blocks", async () => {
     const client = createSlackEditTestClient();
     client.chat.update.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
     const blocks = [
@@ -161,16 +222,15 @@ describe("editSlackMessage blocks", () => {
         {
           type: "section",
           text: {
-            type: "mrkdwn",
+            type: "plain_text",
             text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
-            verbatim: true,
           },
         },
       ],
     });
   });
 
-  it("retries rejected native tables once with visible complete fallback blocks", async () => {
+  it("retries rejected native tables once with complete text and surviving blocks", async () => {
     const client = createSlackEditTestClient();
     client.chat.update.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
     const blocks = [
@@ -195,13 +255,15 @@ describe("editSlackMessage blocks", () => {
         row_header_column_index: 0,
       },
     ] as never;
-    const fallback = [
+    const firstAttemptFallback = [
       "Overview",
       "",
       "Pipeline report (table)",
       "- Account: Acme; ARR: $125k",
       "- Account: Globex; ARR: $82k",
     ].join("\n");
+    const retryFallback =
+      "Overview\n\nPipeline report (table)\nAccount\tARR\nAcme\t$125k\nGlobex\t$82k";
 
     await editSlackMessage("C123", "171234.567", "Overview", {
       token: "xoxb-test",
@@ -213,92 +275,24 @@ describe("editSlackMessage blocks", () => {
     expect(client.chat.update).toHaveBeenNthCalledWith(1, {
       channel: "C123",
       ts: "171234.567",
-      text: fallback,
+      text: firstAttemptFallback,
       blocks,
     });
     expect(client.chat.update).toHaveBeenNthCalledWith(2, {
       channel: "C123",
       ts: "171234.567",
-      text: fallback,
+      text: retryFallback,
       blocks: [
         blocks[0],
         {
           type: "section",
           text: {
-            type: "mrkdwn",
-            text: [
-              "Pipeline report (table)",
-              "- Account: Acme; ARR: $125k",
-              "- Account: Globex; ARR: $82k",
-            ].join("\n"),
-            verbatim: true,
+            type: "plain_text",
+            text: "Pipeline report (table)\nAccount\tARR\nAcme\t$125k\nGlobex\t$82k",
           },
         },
       ],
     });
-  });
-
-  it("includes every raw block and control in edit accessibility text", async () => {
-    const client = createSlackEditTestClient();
-    const blocks = [
-      { type: "section", text: { type: "mrkdwn", text: "Details" } },
-      {
-        type: "actions",
-        elements: [
-          {
-            type: "button",
-            action_id: "approve",
-            text: { type: "plain_text", text: "Approve" },
-            value: "approve",
-          },
-        ],
-      },
-    ];
-
-    await editSlackMessage("C123", "171234.567", "Summary", {
-      token: "xoxb-test",
-      client,
-      blocks,
-    });
-
-    expect(client.chat.update).toHaveBeenCalledWith({
-      channel: "C123",
-      ts: "171234.567",
-      text: "Summary\n\nDetails\n\n- Approve",
-      blocks,
-    });
-  });
-
-  it("fails closed when edit fallback expansion would drop 48 siblings", async () => {
-    const client = createSlackEditTestClient();
-    client.chat.update.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
-    const categories = Array.from(
-      { length: 20 },
-      (_entry, index) => `category-${String(index)}-${"x".repeat(80)}`,
-    );
-
-    await expect(
-      editSlackMessage("C123", "171234.567", "", {
-        token: "xoxb-test",
-        client,
-        blocks: [
-          ...Array.from({ length: 48 }, () => ({ type: "divider" })),
-          {
-            type: "data_visualization",
-            title: "Large chart",
-            chart: {
-              type: "bar",
-              axis_config: { categories },
-              series: Array.from({ length: 4 }, (_entry, index) => ({
-                name: `Series ${String(index)}`,
-                data: categories.map((label) => ({ label, value: index })),
-              })),
-            },
-          },
-        ] as never,
-      }),
-    ).rejects.toThrow(/fallback requires .* blocks to retain every sibling/i);
-    expect(client.chat.update).toHaveBeenCalledOnce();
   });
 
   it("rejects table edits whose complete fallback cannot fit one message", async () => {
@@ -323,46 +317,43 @@ describe("editSlackMessage blocks", () => {
         client,
         blocks,
       }),
-    ).rejects.toThrow(
-      "Slack block accessibility fallback exceeds OpenClaw's 8000-character per-edit limit",
-    );
+    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-character edit limit");
     expect(client.chat.update).not.toHaveBeenCalled();
   });
 
-  it("rejects chart edits whose complete fallback cannot fit one message", async () => {
+  it("rejects native chart edits whose complete fallback cannot fit one message", async () => {
     const client = createSlackEditTestClient();
     const categories = Array.from({ length: 20 }, (_entry, index) =>
       `Category-${String(index)}`.padEnd(20, "x"),
     );
+    const blocks = [
+      {
+        type: "data_visualization",
+        title: "Maximum series chart",
+        chart: {
+          type: "bar",
+          series: Array.from({ length: 12 }, (_entry, seriesIndex) => ({
+            name: `Series-${String(seriesIndex)}`.padEnd(20, "x"),
+            data: categories.map((label) => ({ label, value: Number.MAX_VALUE })),
+          })),
+          axis_config: { categories },
+        },
+      },
+    ] as never;
 
     await expect(
       editSlackMessage("C123", "171234.567", "", {
         token: "xoxb-test",
         client,
-        blocks: [
-          {
-            type: "data_visualization",
-            title: "Large revenue report",
-            chart: {
-              type: "bar",
-              axis_config: { categories },
-              series: Array.from({ length: 12 }, (_entry, index) => ({
-                name: `Series-${String(index)}`.padEnd(20, "x"),
-                data: categories.map((label) => ({ label, value: Number.MAX_VALUE })),
-              })),
-            },
-          },
-        ] as never,
+        blocks,
       }),
-    ).rejects.toThrow(
-      "Slack block accessibility fallback exceeds OpenClaw's 8000-character per-edit limit",
-    );
+    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-character edit limit");
     expect(client.chat.update).not.toHaveBeenCalled();
   });
 
-  it("rejects raw-block edits whose accessibility text cannot fit one message", async () => {
+  it("caps long block fallback text while preserving edit blocks", async () => {
     const client = createSlackEditTestClient();
-    const longContextText = "a".repeat(3000);
+    const longContextText = "a".repeat(1500);
     const blocks = [
       {
         type: "context",
@@ -374,16 +365,19 @@ describe("editSlackMessage blocks", () => {
       },
     ];
 
-    await expect(
-      editSlackMessage("C123", "171234.567", "", {
-        token: "xoxb-test",
-        client,
-        blocks,
-      }),
-    ).rejects.toThrow(
-      `Slack block accessibility fallback exceeds OpenClaw's ${String(SLACK_TEXT_LIMIT)}-character per-edit limit`,
-    );
-    expect(client.chat.update).not.toHaveBeenCalled();
+    await editSlackMessage("C123", "171234.567", "", {
+      token: "xoxb-test",
+      client,
+      blocks,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "171234.567",
+      text: `${longContextText} ${longContextText} ${"a".repeat(SLACK_EDIT_TEXT_LIMIT - longContextText.length * 2 - 3)}…`,
+      blocks,
+    });
+    expect(readFirstChatUpdatePayload(client).text).toHaveLength(SLACK_EDIT_TEXT_LIMIT);
   });
 
   it("rejects empty blocks arrays", async () => {
@@ -427,5 +421,29 @@ describe("editSlackMessage blocks", () => {
     ).rejects.toThrow(/cannot exceed 50 items/i);
 
     expect(client.chat.update).not.toHaveBeenCalled();
+  });
+
+  it("checks escaped native edit fallback text against Slack's edit limit", async () => {
+    const client = createSlackEditTestClient();
+    client.chat.update.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
+      { type: "section", text: { type: "mrkdwn", text: "<".repeat(1000) } },
+      {
+        type: "data_visualization",
+        title: "Chart",
+        chart: { type: "bar", series: [] },
+      },
+    ];
+
+    await expect(
+      editSlackMessage("C123", "171234.567", "Overview", {
+        token: "xoxb-test",
+        client,
+        blocks,
+      }),
+    ).rejects.toThrow(/fallback exceeds the 4000-character edit limit/u);
+
+    expect(client.chat.update).toHaveBeenCalledTimes(1);
   });
 });

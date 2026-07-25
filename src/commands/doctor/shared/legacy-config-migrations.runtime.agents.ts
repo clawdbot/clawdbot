@@ -44,11 +44,31 @@ type LegacyAgentRuntimeIntent = {
   runtime: string;
 };
 
+const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
+  { legacyKey: "chunkSize", parentKey: "chunking", canonicalKey: "tokens" },
+  { legacyKey: "chunkOverlap", parentKey: "chunking", canonicalKey: "overlap" },
+  { legacyKey: "maxResults", parentKey: "query", canonicalKey: "maxResults" },
+] as const;
+
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
   message:
-    'top-level memorySearch was moved; use agents.defaults.memorySearch instead. Run "openclaw doctor --fix".',
+    'top-level memorySearch was moved; use memory.search instead. Run "openclaw doctor --fix".',
 };
+
+const AGENT_MEMORY_SEARCH_OWNER_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "memorySearch"],
+    message: 'agents.defaults.memorySearch moved to memory.search. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch moved to agents.list[].memory.search. Run "openclaw doctor --fix".',
+    match: (value) =>
+      Array.isArray(value) && value.some((agent) => getRecord(agent)?.memorySearch !== undefined),
+  },
+];
 
 const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
   {
@@ -58,9 +78,9 @@ const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
     match: isLegacyMemorySearchAutoProvider,
   },
   {
-    path: ["agents", "defaults", "memorySearch", "provider"],
+    path: ["memory", "search", "provider"],
     message:
-      'agents.defaults.memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+      'memory.search.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
     match: isLegacyMemorySearchAutoProvider,
   },
   {
@@ -78,9 +98,9 @@ const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
       'memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
   },
   {
-    path: ["agents", "defaults", "memorySearch", "store", "path"],
+    path: ["memory", "search", "store", "path"],
     message:
-      'agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+      'memory.search.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
   },
   {
     path: ["agents", "list"],
@@ -89,6 +109,43 @@ const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
     match: hasAgentListMemorySearchStorePath,
   },
 ];
+
+const LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["memory", "search"],
+    message:
+      'memory.search uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
+    match: hasLegacyMemorySearchFlatKeys,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
+    match: hasAgentListLegacyMemorySearchFlatKeys,
+  },
+];
+
+function hasLegacyMemorySearchFlatKeys(value: unknown): boolean {
+  const memorySearch = getRecord(value);
+  return Boolean(
+    memorySearch &&
+    LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS.some(({ legacyKey }) =>
+      Object.hasOwn(memorySearch, legacyKey),
+    ),
+  );
+}
+
+function getAgentMemorySearchRecord(agent: unknown): Record<string, unknown> | null {
+  const record = getRecord(agent);
+  return getRecord(record?.memorySearch) ?? getRecord(getRecord(record?.memory)?.search);
+}
+
+function hasAgentListLegacyMemorySearchFlatKeys(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((agent) => hasLegacyMemorySearchFlatKeys(getAgentMemorySearchRecord(agent)))
+  );
+}
 
 const HEARTBEAT_RULE: LegacyConfigRule = {
   path: ["heartbeat"],
@@ -410,7 +467,7 @@ function hasAgentListLegacyMemorySearchAutoProvider(value: unknown): boolean {
     return false;
   }
   return value.some((agent) =>
-    isLegacyMemorySearchAutoProvider(getRecord(getRecord(agent)?.memorySearch)?.provider),
+    isLegacyMemorySearchAutoProvider(getAgentMemorySearchRecord(agent)?.provider),
   );
 }
 
@@ -421,8 +478,42 @@ function hasMemorySearchStorePath(value: unknown): boolean {
 function hasAgentListMemorySearchStorePath(value: unknown): boolean {
   return (
     Array.isArray(value) &&
-    value.some((agent) => hasMemorySearchStorePath(getRecord(agent)?.memorySearch))
+    value.some((agent) => hasMemorySearchStorePath(getAgentMemorySearchRecord(agent)))
   );
+}
+
+function migrateLegacyMemorySearchFlatKeys(
+  memorySearch: Record<string, unknown> | null,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!memorySearch) {
+    return;
+  }
+  for (const { legacyKey, parentKey, canonicalKey } of LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS) {
+    if (!Object.hasOwn(memorySearch, legacyKey)) {
+      continue;
+    }
+    const legacyValue = memorySearch[legacyKey];
+    if (memorySearch[parentKey] === undefined) {
+      memorySearch[parentKey] = { [canonicalKey]: legacyValue };
+      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${parentKey}.${canonicalKey}.`);
+      delete memorySearch[legacyKey];
+      continue;
+    }
+    const canonicalParent = getRecord(memorySearch[parentKey]);
+    if (!canonicalParent) {
+      changes.push(`Removed ${pathLabel}.${legacyKey} (${pathLabel}.${parentKey} already set).`);
+    } else if (canonicalParent[canonicalKey] === undefined) {
+      canonicalParent[canonicalKey] = legacyValue;
+      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${parentKey}.${canonicalKey}.`);
+    } else {
+      changes.push(
+        `Removed ${pathLabel}.${legacyKey} (${pathLabel}.${parentKey}.${canonicalKey} already set).`,
+      );
+    }
+    delete memorySearch[legacyKey];
+  }
 }
 
 function removeLegacyMemorySearchStorePath(
@@ -1348,26 +1439,80 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
   defineLegacyConfigMigration({
-    id: "memorySearch->agents.defaults.memorySearch",
-    describe: "Move top-level memorySearch to agents.defaults.memorySearch",
-    legacyRules: [MEMORY_SEARCH_RULE],
+    id: "memorySearch->memory.search",
+    describe: "Move memory search config to its canonical memory owner",
+    legacyRules: [MEMORY_SEARCH_RULE, ...AGENT_MEMORY_SEARCH_OWNER_RULES],
     apply: (raw, changes) => {
-      const legacyMemorySearch = getRecord(raw.memorySearch);
-      if (!legacyMemorySearch) {
-        return;
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      const legacyDefaults = getRecord(defaults?.memorySearch);
+      const legacyTopLevel = getRecord(raw.memorySearch);
+      const memory = getRecord(raw.memory);
+      const canonical = getRecord(memory?.search);
+
+      if (legacyDefaults || legacyTopLevel) {
+        const target = structuredClone(canonical ?? {});
+        if (legacyDefaults) {
+          mergeMissing(target, legacyDefaults);
+          delete defaults!.memorySearch;
+        }
+        if (legacyTopLevel) {
+          mergeMissing(target, legacyTopLevel);
+          delete raw.memorySearch;
+        }
+        ensureRecord(raw, "memory").search = target;
+        changes.push(
+          canonical
+            ? "Merged legacy memorySearch defaults → memory.search (kept explicit memory.search values)."
+            : "Moved legacy memorySearch defaults → memory.search.",
+        );
       }
 
-      mergeLegacyIntoDefaults({
-        raw,
-        rootKey: "agents",
-        fieldKey: "memorySearch",
-        legacyValue: legacyMemorySearch,
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, rawAgent] of agents.list.entries()) {
+        const agent = getRecord(rawAgent);
+        const legacy = getRecord(agent?.memorySearch);
+        if (!agent || !legacy) {
+          continue;
+        }
+        const agentMemory = ensureRecord(agent, "memory");
+        const existing = getRecord(agentMemory.search);
+        const target = structuredClone(existing ?? {});
+        mergeMissing(target, legacy);
+        agentMemory.search = target;
+        delete agent.memorySearch;
+        changes.push(
+          existing
+            ? `Merged agents.list.${index}.memorySearch → agents.list.${index}.memory.search (kept explicit memory.search values).`
+            : `Moved agents.list.${index}.memorySearch → agents.list.${index}.memory.search.`,
+        );
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "memorySearch.flat-fields->nested-fields",
+    describe: "Move legacy flat memory search fields to canonical nested fields",
+    legacyRules: LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES,
+    apply: (raw, changes) => {
+      migrateLegacyMemorySearchFlatKeys(
+        getRecord(getRecord(raw.memory)?.search),
+        "memory.search",
         changes,
-        movedMessage: "Moved memorySearch → agents.defaults.memorySearch.",
-        mergedMessage:
-          "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-      });
-      delete raw.memorySearch;
+      );
+
+      const agents = getRecord(raw.agents);
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        migrateLegacyMemorySearchFlatKeys(
+          getRecord(getRecord(getRecord(agent)?.memory)?.search),
+          `agents.list.${index}.memory.search`,
+          changes,
+        );
+      }
     },
   }),
   defineLegacyConfigMigration({
@@ -1375,20 +1520,20 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     describe: 'Rewrite legacy memorySearch provider "auto" to "openai"',
     legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
     apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
       rewriteLegacyMemorySearchAutoProvider(
-        getRecord(getRecord(agents?.defaults)?.memorySearch),
-        "agents.defaults.memorySearch",
+        getRecord(getRecord(raw.memory)?.search),
+        "memory.search",
         changes,
       );
 
+      const agents = getRecord(raw.agents);
       if (!Array.isArray(agents?.list)) {
         return;
       }
       for (const [index, agent] of agents.list.entries()) {
         rewriteLegacyMemorySearchAutoProvider(
-          getRecord(getRecord(agent)?.memorySearch),
-          `agents.list.${index}.memorySearch`,
+          getRecord(getRecord(getRecord(agent)?.memory)?.search),
+          `agents.list.${index}.memory.search`,
           changes,
         );
       }
@@ -1399,25 +1544,49 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     describe: "Remove legacy memory search sidecar index paths",
     legacyRules: LEGACY_MEMORY_SEARCH_STORE_PATH_RULES,
     apply: (raw, changes) => {
-      removeLegacyMemorySearchStorePath(getRecord(raw.memorySearch), "memorySearch", changes);
-
-      const agents = getRecord(raw.agents);
       removeLegacyMemorySearchStorePath(
-        getRecord(getRecord(agents?.defaults)?.memorySearch),
-        "agents.defaults.memorySearch",
+        getRecord(getRecord(raw.memory)?.search),
+        "memory.search",
         changes,
       );
 
+      const agents = getRecord(raw.agents);
       if (!Array.isArray(agents?.list)) {
         return;
       }
       for (const [index, agent] of agents.list.entries()) {
         removeLegacyMemorySearchStorePath(
-          getRecord(getRecord(agent)?.memorySearch),
-          `agents.list[${index}].memorySearch`,
+          getRecord(getRecord(getRecord(agent)?.memory)?.search),
+          `agents.list[${index}].memory.search`,
           changes,
         );
       }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "session.typingMode->agents.defaults.typingMode",
+    describe: "Move session typing mode to agent defaults",
+    legacyRules: [
+      {
+        path: ["session", "typingMode"],
+        message:
+          'session.typingMode moved to agents.defaults.typingMode. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      const session = getRecord(raw.session);
+      if (!session || !Object.hasOwn(session, "typingMode")) {
+        return;
+      }
+      const defaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+      const replacedDefault = defaults.typingMode !== undefined;
+      defaults.typingMode = session.typingMode;
+      changes.push(
+        replacedDefault
+          ? "Moved session.typingMode → agents.defaults.typingMode (replaced the previously shadowed agent default)."
+          : "Moved session.typingMode → agents.defaults.typingMode.",
+      );
+      delete session.typingMode;
     },
   }),
   defineLegacyConfigMigration({
@@ -1465,3 +1634,4 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
 ];
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

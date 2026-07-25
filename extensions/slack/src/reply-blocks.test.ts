@@ -1,23 +1,15 @@
+import {
+  presentationToInteractiveControlsReply,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveSlackReplyRenderPlan, resolveSlackReplyText } from "./reply-blocks.js";
+import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
+import { resolveSlackReplyBlockResolution } from "./reply-blocks.js";
 
-describe("resolveSlackReplyText", () => {
-  it("leaves long plain Markdown on the normal text chunking path", () => {
-    const text = `[link](https://example.com) ${"x".repeat(8_100)}`;
-    const plan = resolveSlackReplyRenderPlan({ text });
-
-    expect(plan.mode).toBe("single");
-    if (plan.mode !== "single") {
-      return;
-    }
-    expect(plan.blocks).toBeUndefined();
-    expect(plan.text).toBe(text);
-    expect(plan.textIsSlackMrkdwn).toBeUndefined();
-  });
-
+describe("renderSlackMessagePresentationFallbackText", () => {
   it("includes complete portable table data in Slack accessibility text", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         text: "Pipeline summary",
         presentation: {
           blocks: [
@@ -40,7 +32,7 @@ describe("resolveSlackReplyText", () => {
 
   it("keeps raw table values literal without changing authored Slack text", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         text: "Intentional <!here>",
         presentation: {
           title: "Report <@U999>",
@@ -61,7 +53,7 @@ describe("resolveSlackReplyText", () => {
 
   it("keeps plain-text controls literal when they accompany structured data", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         presentation: {
           blocks: [
             { type: "table", caption: "Data", headers: ["Value"], rows: [[1]] },
@@ -92,7 +84,7 @@ describe("resolveSlackReplyText", () => {
         "- Value: 1",
         "",
         "- Notify &lt;!here&gt;: https://example.com/?a=1&amp;b=2",
-        "- Run &lt;@U1&gt;: `/say &lt;!channel&gt;`",
+        "- Run &lt;@U1&gt;: `/say <!channel>`",
         "",
         "Owner &lt;!channel&gt;:",
         "- &lt;@U2&gt;",
@@ -100,9 +92,94 @@ describe("resolveSlackReplyText", () => {
     );
   });
 
-  it("marks non-native portable tables for text fallback while retaining native blocks", () => {
+  it("marks command fallbacks with backticks as not copyable", () => {
+    const rendered = renderSlackMessagePresentationFallbackText({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Run",
+                action: {
+                  type: "command",
+                  command: "/run foo_bar C:\\tools\\run ` <!channel> <@U1>",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const codeSpans = [...rendered.matchAll(/`([^`]*)`/gs)];
+    expect(codeSpans).toHaveLength(1);
+    expect(codeSpans[0]?.[1]).toBe("/run foo_bar C:\\tools\\run [backtick] <!channel> <@U1>");
+    expect(rendered).toContain("Run [not copyable: contains backtick]");
+    expect(rendered).not.toMatch(/[\u02cb\uff40]/u);
+    expect(rendered.replace(/`[^`]*`/gs, "")).not.toMatch(/<!channel>|<@U1>/);
+  });
+
+  it("keeps safe command fallback bytes exact", () => {
+    expect(
+      renderSlackMessagePresentationFallbackText({
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Run",
+                  action: {
+                    type: "command",
+                    command: "/run foo_bar C:\\tools\\run <!channel> <@U1>",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toBe("- Run: `/run foo_bar C:\\tools\\run <!channel> <@U1>`");
+  });
+
+  it("keeps non-native table text between raw, portable, and legacy blocks", () => {
     const payload = {
-      channelData: { slack: { blocks: [{ type: "divider" }] } },
+      channelData: {
+        slack: {
+          blocks: [
+            {
+              type: "actions",
+              block_id: "openclaw_reply_buttons_1",
+              elements: [
+                {
+                  type: "button",
+                  action_id: "existing_button",
+                  text: { type: "plain_text", text: "Existing" },
+                  value: "existing",
+                },
+              ],
+            },
+            {
+              type: "actions",
+              block_id: "openclaw_reply_select_1",
+              elements: [
+                {
+                  type: "static_select",
+                  action_id: "existing_select",
+                  placeholder: { type: "plain_text", text: "Existing" },
+                  options: [
+                    {
+                      text: { type: "plain_text", text: "Existing" },
+                      value: "existing",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
       presentation: {
         blocks: [
           {
@@ -112,6 +189,229 @@ describe("resolveSlackReplyText", () => {
             rows: Array.from({ length: 100 }, (_entry, index) => [
               `account-${String(index)} ${"x".repeat(110)}`,
             ]),
+          },
+          {
+            type: "buttons" as const,
+            buttons: [{ label: "Stage", value: "stage" }],
+          },
+          {
+            type: "select" as const,
+            placeholder: "Lane",
+            options: [{ label: "Production", value: "production" }],
+          },
+        ],
+      },
+      interactive: {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [{ label: "Refresh", value: "refresh" }],
+          },
+          {
+            type: "select" as const,
+            placeholder: "Window",
+            options: [{ label: "Recent", value: "recent" }],
+          },
+        ],
+      },
+    };
+
+    const { segments } = resolveSlackReplyBlockResolution(payload);
+    expect(segments).toHaveLength(3);
+    expect(segments[0]).toMatchObject({
+      kind: "blocks",
+      blocks: [
+        { type: "actions", block_id: "openclaw_reply_buttons_1" },
+        { type: "actions", block_id: "openclaw_reply_select_1" },
+      ],
+    });
+    expect(segments[1]).toMatchObject({ kind: "text" });
+    expect(segments[1]?.kind === "text" ? segments[1].text : "").toContain("- Account: account-99");
+    expect(segments[2]).toMatchObject({
+      kind: "blocks",
+      blocks: [
+        {
+          type: "actions",
+          block_id: "openclaw_reply_buttons_2",
+          elements: [{ action_id: "openclaw:reply_button:2:1", value: "stage" }],
+        },
+        {
+          type: "actions",
+          block_id: "openclaw_reply_select_2",
+          elements: [{ action_id: "openclaw:reply_select:2" }],
+        },
+        {
+          type: "actions",
+          block_id: "openclaw_reply_buttons_3",
+          elements: [{ action_id: "openclaw:reply_button:3:1", value: "refresh" }],
+        },
+        {
+          type: "actions",
+          block_id: "openclaw_reply_select_3",
+          elements: [{ action_id: "openclaw:reply_select:3" }],
+        },
+      ],
+    });
+    expect(renderSlackMessagePresentationFallbackText(payload)).toContain("- Account: account-99");
+  });
+
+  it("coalesces adjacent fallbacks without changing their authored order", () => {
+    const payload = {
+      presentation: {
+        blocks: [
+          {
+            type: "table" as const,
+            caption: "Large pipeline",
+            headers: ["Account"],
+            rows: Array.from({ length: 100 }, (_entry, index) => [
+              `account-${String(index)} ${"x".repeat(110)}`,
+            ]),
+          },
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "Run",
+                action: { type: "command" as const, command: "/say <@U1>_now" },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const { segments } = resolveSlackReplyBlockResolution(payload);
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.kind).toBe("text");
+    const fallback = segments[0]?.kind === "text" ? segments[0].text : "";
+    expect(fallback.indexOf("Large pipeline (table)")).toBeLessThan(fallback.indexOf("- Run"));
+    expect(fallback).toContain("- Account: account-99");
+    expect(fallback).toContain("- Run: `/say <@U1>_now`");
+  });
+
+  it("marks fallback segments as literal text without Slack entity escaping", () => {
+    const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
+    const values = headers.map((_header, index) =>
+      index === 20 ? "<@U1> & <!channel>" : `Value ${String(index)}`,
+    );
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation: {
+        blocks: [
+          { type: "table", caption: "Owners", headers, rows: [values] },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Run",
+                action: { type: "command", command: "/say ` <!channel>" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0]).toMatchObject({ kind: "text", mrkdwn: false });
+    const fallback = segments[0]?.kind === "text" ? segments[0].text : "";
+    expect(fallback).toContain("<@U1> & <!channel>");
+    expect(fallback).toContain("/say ` <!channel>");
+    expect(fallback).not.toContain("&lt;");
+  });
+
+  it("recognizes authored text already carried by a fallback segment", () => {
+    const title = "This chart title is too long for Slack native chart rendering";
+    const text = `${title} (pie chart)\n- Open: 5`;
+    const resolution = resolveSlackReplyBlockResolution({
+      text,
+      presentation: {
+        blocks: [
+          {
+            type: "chart",
+            chartType: "pie",
+            title,
+            segments: [{ label: "Open", value: 5 }],
+          },
+        ],
+      },
+    });
+
+    expect(resolution.authoredTextPlacement).toBe("blocks");
+    expect(resolution.segments).toContainEqual({ kind: "text", text, mrkdwn: false });
+  });
+
+  it("materializes authored text blocks as verbatim mrkdwn", () => {
+    const resolution = resolveSlackReplyBlockResolution(
+      {
+        text: "<@U123> literal",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] }],
+        },
+      },
+      { materializeAuthoredText: true },
+    );
+
+    expect(resolution.segments[0]?.kind).toBe("blocks");
+    const blocks = resolution.segments[0]?.kind === "blocks" ? resolution.segments[0].blocks : [];
+    expect(blocks[0]).toMatchObject({
+      type: "section",
+      text: { type: "mrkdwn", text: "<@U123> literal", verbatim: true },
+    });
+  });
+
+  it("recognizes authored text already represented by native chart data", () => {
+    const resolution = resolveSlackReplyBlockResolution({
+      text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      presentation: {
+        blocks: [
+          {
+            type: "chart",
+            chartType: "pie",
+            title: "Revenue mix",
+            segments: [
+              { label: "Product", value: 60 },
+              { label: "Services", value: 40 },
+            ],
+          },
+          { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+        ],
+      },
+    });
+
+    expect(resolution.authoredTextPlacement).toBe("blocks");
+  });
+
+  it("preserves mixed chart, table, and control order across native and text segments", () => {
+    const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
+    const payload = {
+      presentation: {
+        blocks: [
+          {
+            type: "chart" as const,
+            chartType: "pie" as const,
+            title: "Issue share",
+            segments: [{ label: "Open", value: 5 }],
+          },
+          {
+            type: "table" as const,
+            caption: "Wide pipeline",
+            headers,
+            rows: [headers.map((_header, index) => `Value ${String(index)}`)],
+          },
+          {
+            type: "buttons" as const,
+            buttons: [{ label: "Stage", value: "stage" }],
+          },
+          {
+            type: "chart" as const,
+            chartType: "pie" as const,
+            title: "This chart title cannot fit Slack's native chart title limit",
+            segments: [{ label: "Closed", value: 8 }],
+          },
+          {
+            type: "select" as const,
+            placeholder: "Lane",
+            options: [{ label: "Production", value: "production" }],
           },
         ],
       },
@@ -125,33 +425,65 @@ describe("resolveSlackReplyText", () => {
       },
     };
 
-    expect(resolveSlackReplyRenderPlan(payload)).toEqual({
-      mode: "split",
-      blockPart: {
-        text: "- Refresh",
+    const { segments } = resolveSlackReplyBlockResolution(payload);
+    expect(segments.map((segment) => segment.kind)).toEqual([
+      "blocks",
+      "text",
+      "blocks",
+      "text",
+      "blocks",
+    ]);
+    expect(segments[0]).toMatchObject({
+      kind: "blocks",
+      blocks: [{ type: "data_visualization", title: "Issue share" }],
+    });
+    expect(segments[1]).toMatchObject({ kind: "text" });
+    expect(segments[1]?.kind === "text" ? segments[1].text : "").toContain("Column 20: Value 20");
+    expect(segments[2]).toMatchObject({
+      kind: "blocks",
+      blocks: [{ block_id: "openclaw_reply_buttons_1", elements: [{ value: "stage" }] }],
+    });
+    expect(segments[3]).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("Closed: 8"),
+    });
+    expect(segments[4]).toMatchObject({
+      kind: "blocks",
+      blocks: [
+        { block_id: "openclaw_reply_select_1" },
+        { block_id: "openclaw_reply_buttons_2", elements: [{ value: "refresh" }] },
+      ],
+    });
+  });
+
+  it("keeps complete unsupported chart data beyond Slack's section text limit", () => {
+    const categories = Array.from(
+      { length: 4 },
+      (_entry, index) => `category-${String(index)}-${"x".repeat(1_000)}`,
+    );
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation: {
         blocks: [
-          { type: "divider" },
           {
-            type: "actions",
-            block_id: "openclaw_reply_buttons_1",
-            elements: [
-              {
-                type: "button",
-                action_id: "openclaw:reply_button:1:1",
-                text: { type: "plain_text", text: "Refresh", emoji: true },
-                value: "refresh",
-              },
-            ],
+            type: "chart",
+            chartType: "line",
+            title: "Long labels",
+            categories,
+            series: [{ name: "Requests", values: [1, 2, 3, 4] }],
           },
         ],
       },
-      fallbackText: expect.stringContaining("- Account: account-99"),
-      hookText: expect.stringContaining("- Account: account-99"),
     });
-    expect(resolveSlackReplyText(payload)).toContain("- Account: account-99");
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.kind).toBe("text");
+    const fallback = segments[0]?.kind === "text" ? segments[0].text : "";
+    expect(fallback.length).toBeGreaterThan(3_000);
+    expect(fallback).toContain(categories.at(-1));
+    expect(fallback).toContain("category-3-");
   });
 
-  it("rejects over-limit table fallbacks instead of dropping authored blocks", () => {
+  it("starts a new native segment instead of dropping blocks beyond the message budget", () => {
     const payload = {
       channelData: {
         slack: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
@@ -176,634 +508,208 @@ describe("resolveSlackReplyText", () => {
       },
     };
 
-    expect(() => resolveSlackReplyRenderPlan(payload)).toThrow(
-      /Slack blocks cannot exceed 50 items/i,
+    const { segments } = resolveSlackReplyBlockResolution(payload);
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toMatchObject({ kind: "blocks" });
+    expect(segments[0]?.kind === "blocks" ? segments[0].blocks : []).toHaveLength(50);
+    expect(segments[1]).toMatchObject({
+      kind: "blocks",
+      blocks: [
+        { type: "data_table", caption: "Accounts" },
+        { block_id: "openclaw_reply_buttons_1", elements: [{ value: "refresh" }] },
+      ],
+    });
+  });
+
+  it("subtracts exact legacy mirrors for every typed action family", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Command",
+              action: { type: "command", command: "/approve req-1 allow-once" },
+            },
+            { label: "Callback", action: { type: "callback", value: "callback-button" } },
+            {
+              label: "Approval",
+              action: {
+                type: "approval",
+                approvalId: "plugin:req-1",
+                approvalKind: "plugin",
+                decision: "allow-once",
+              },
+            },
+            { label: "URL", action: { type: "url", url: "https://example.com/docs" } },
+            {
+              label: "Web app",
+              action: { type: "web-app", url: "https://example.com/app" },
+            },
+          ],
+        },
+        {
+          type: "select",
+          placeholder: "Command select",
+          options: [
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve req-2 deny" },
+            },
+          ],
+        },
+        {
+          type: "select",
+          placeholder: "Callback select",
+          options: [{ label: "Retry", action: { type: "callback", value: "callback-select" } }],
+        },
+      ],
+    } satisfies MessagePresentation;
+
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation,
+      interactive: presentationToInteractiveControlsReply(presentation),
+    });
+    const blocks = segments[0]?.kind === "blocks" ? segments[0].blocks : [];
+    const actionIds = blocks.flatMap((block) =>
+      block.type === "actions"
+        ? ((block as { elements?: Array<{ action_id?: string }> }).elements ?? []).flatMap(
+            (element) => (element.action_id ? [element.action_id] : []),
+          )
+        : [],
     );
+
+    expect(segments).toHaveLength(1);
+    expect(blocks).toHaveLength(3);
+    expect(actionIds).toEqual([
+      "openclaw:reply_button:1:1",
+      "openclaw:callback_button:1:2",
+      "openclaw:approval_button:1:3",
+      "openclaw:reply_link:1:4",
+      "openclaw:reply_link:1:5",
+      "openclaw:reply_select:1",
+      "openclaw:callback_select:2",
+    ]);
   });
 
-  it("does not create an empty fallback message for non-textual overflow", () => {
-    const plan = resolveSlackReplyRenderPlan({
-      channelData: {
-        slack: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
-      },
-      presentation: { blocks: [{ type: "divider" }] },
-    });
-
-    expect(plan.mode).toBe("single");
-    if (plan.mode !== "single") {
-      return;
-    }
-    expect(plan.blocks).toHaveLength(50);
-    expect(plan.text).toBe("Shared a Block Kit message");
-  });
-
-  it("keeps authored text visible before a native table", () => {
-    const plan = resolveSlackReplyRenderPlan({
-      text: "[Pipeline](https://example.com)",
-      presentation: {
-        blocks: [{ type: "table", caption: "Pipeline", headers: ["Account"], rows: [["Acme"]] }],
-      },
-    });
-
-    expect(plan.mode).toBe("single");
-    if (plan.mode !== "single") {
-      return;
-    }
-    expect(plan.blocks?.[0]).toEqual({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "<https://example.com|Pipeline>",
-        verbatim: true,
-      },
-    });
-    expect(plan.blocks?.[1]).toMatchObject({ type: "data_table", caption: "Pipeline" });
-  });
-
-  it("moves long presentation text beside a table to complete fallback", () => {
-    const longText = `start-${"x".repeat(3980)}-tail`;
-    const plan = resolveSlackReplyRenderPlan({
-      presentation: {
-        blocks: [
-          { type: "text", text: longText },
-          { type: "table", caption: "Pipeline", headers: ["Account"], rows: [["Acme"]] },
-        ],
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart).toBeUndefined();
-    expect(plan.fallbackText).toContain("-tail");
-    expect(plan.fallbackText).toContain("Pipeline (table)");
-  });
-
-  it("moves standalone overlong presentation text to complete fallback", () => {
-    const longText = `standalone-${"x".repeat(3980)}-tail`;
-    const plan = resolveSlackReplyRenderPlan({
-      presentation: {
-        blocks: [
-          { type: "text", text: longText },
-          { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
-        ],
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart?.text).toBe("- Refresh");
-    expect(plan.fallbackText).toContain("-tail");
-    expect(plan.fallbackText).not.toContain("- Refresh");
-  });
-
-  it("moves an over-limit presentation control row to text fallback", () => {
-    const plan = resolveSlackReplyRenderPlan({
-      presentation: {
-        blocks: [
-          { type: "table", caption: "Pipeline", headers: ["Account"], rows: [["Acme"]] },
-          {
-            type: "buttons",
-            buttons: Array.from({ length: 26 }, (_entry, index) => ({
-              label: `Action ${String(index + 1)}`,
-              value: `action-${String(index + 1)}`,
-            })),
-          },
-        ],
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart).toBeUndefined();
-    expect(plan.fallbackText).toContain("- Action 26");
-  });
-
-  it("moves standalone over-limit controls to complete text fallback", () => {
-    const plan = resolveSlackReplyRenderPlan({
+  it("keeps transport-distinct controls with the same visible content", () => {
+    const { segments } = resolveSlackReplyBlockResolution({
       presentation: {
         blocks: [
           {
             type: "buttons",
-            buttons: Array.from({ length: 26 }, (_entry, index) => ({
-              label: `Action ${String(index + 1)}`,
-              value: `action-${String(index + 1)}`,
-            })),
+            buttons: [{ label: "Run", action: { type: "callback", value: "same" } }],
           },
         ],
       },
+      interactive: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Run", value: "same" }] }],
+      },
     });
+    const blocks = segments[0]?.kind === "blocks" ? segments[0].blocks : [];
 
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart).toBeUndefined();
-    expect(plan.fallbackText).toContain("- Action 26");
+    expect(blocks).toHaveLength(2);
+    expect(
+      blocks.map(
+        (block) => (block as { elements?: Array<{ action_id?: string }> }).elements?.[0]?.action_id,
+      ),
+    ).toEqual(["openclaw:callback_button:1:1", "openclaw:reply_button:2:1"]);
   });
 
-  it("preserves safe command bytes and drops unsafe code-span fallbacks", () => {
-    const plan = resolveSlackReplyRenderPlan({
-      presentation: {
+  it("subtracts mirrors as a multiset and keeps surplus or changed rows", () => {
+    const repeated = {
+      type: "buttons" as const,
+      buttons: [{ label: "Run", action: { type: "callback" as const, value: "same" } }],
+    };
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation: { blocks: [repeated, repeated] },
+      interactive: {
         blocks: [
+          repeated,
+          repeated,
+          repeated,
           {
             type: "buttons",
             buttons: [
               {
-                label: "Deny",
-                action: {
-                  type: "command",
-                  command: "/approve req_1 deny & <@U123>",
-                },
+                label: "Run",
+                action: { type: "callback", value: "same" },
+                style: "danger",
               },
-              {
-                label: "Backtick",
-                action: { type: "command", command: "/run `unsafe` <!channel>" },
-              },
-              {
-                label: "Multiline",
-                action: { type: "command", command: "/run\n<!channel>" },
-              },
-              {
-                label: "Overlong",
-                action: { type: "command", command: `/${"x".repeat(3_000)}` },
-              },
-              {
-                label: "Backslash",
-                action: { type: "command", command: "/path\\" },
-              },
-              {
-                label: "Line\nbreak",
-                action: { type: "command", command: "/status" },
-              },
-              ...Array.from({ length: 20 }, (_entry, index) => ({
-                label: `Action ${String(index + 7)}`,
-                value: `action-${String(index + 7)}`,
-              })),
             ],
           },
         ],
       },
     });
+    const blocks = segments[0]?.kind === "blocks" ? segments[0].blocks : [];
 
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.fallbackText).toContain("- Deny: `/approve req_1 deny &amp; &lt;@U123&gt;`");
-    expect(plan.fallbackText).not.toContain("req\\_1");
-    expect(plan.fallbackText).toContain("- Backtick");
-    expect(plan.fallbackText).toContain("- Multiline");
-    expect(plan.fallbackText).toContain("- Overlong");
-    expect(plan.fallbackText).toContain("- Backslash");
-    expect(plan.fallbackText).toContain("- Line\nbreak");
-    expect(plan.fallbackText).not.toContain("`unsafe`");
-    expect(plan.fallbackText).not.toContain("<!channel>");
-    expect(plan.fallbackText).not.toContain("x".repeat(3_000));
-    expect(plan.fallbackText).not.toContain("/path\\");
-    expect(plan.fallbackText).not.toContain("`/status`");
+    expect(blocks).toHaveLength(4);
+    expect(
+      blocks.map(
+        (block) => (block as { elements?: Array<{ style?: string }> }).elements?.[0]?.style,
+      ),
+    ).toEqual([undefined, undefined, undefined, "danger"]);
   });
 
-  it("splits a valid native chart when its complete fallback exceeds 8k", () => {
-    const categories = Array.from({ length: 20 }, (_entry, index) =>
-      `Category-${String(index)}`.padEnd(20, "x"),
-    );
-    const plan = resolveSlackReplyRenderPlan({
-      presentation: {
-        blocks: [
-          {
-            type: "chart",
-            chartType: "bar",
-            title: "Large revenue report",
-            categories,
-            series: Array.from({ length: 12 }, (_entry, index) => ({
-              name: `Series-${String(index)}`.padEnd(20, "x"),
-              values: categories.map(() => Number.MAX_VALUE),
-            })),
-          },
-        ],
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart).toBeUndefined();
-    expect(plan.fallbackText).toContain("Series-11");
-    expect(plan.fallbackText.length).toBeGreaterThan(8_000);
-  });
-
-  it("keeps the first two charts native and falls back only the overflow", () => {
-    const plan = resolveSlackReplyRenderPlan({
-      presentation: {
-        blocks: [
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Revenue mix",
-            segments: [{ label: "Product", value: 60 }],
-          },
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Active accounts",
-            segments: [{ label: "Paid", value: 40 }],
-          },
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Active sessions",
-            segments: [{ label: "Desktop", value: 30 }],
-          },
-        ],
-      },
-    });
-
-    expect(plan.mode).toBe("single");
-    if (plan.mode !== "single") {
-      return;
-    }
-    expect(plan.blocks?.map((block) => block.type)).toEqual([
-      "data_visualization",
-      "data_visualization",
-      "context",
-    ]);
-    expect(plan.blocks?.[2]).toMatchObject({
-      type: "context",
-      elements: [{ text: expect.stringContaining("Active sessions") }],
-    });
-    expect(plan.text).toContain("Revenue mix");
-    expect(plan.text).toContain("Active accounts");
-    expect(plan.text).toContain("Active sessions");
-  });
-
-  it("counts raw charts before retaining portable charts", () => {
-    const plan = resolveSlackReplyRenderPlan({
-      channelData: {
-        slack: {
-          blocks: [
-            {
-              type: "data_visualization",
-              title: "Raw traffic",
-              chart: {
-                type: "pie",
-                segments: [{ label: "Direct", value: 50 }],
-              },
-            },
-          ],
+  it("keeps legacy controls when their presentation mirror falls back to text", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: Array.from({ length: 26 }, (_entry, index) => ({
+            label: `Action ${String(index + 1)}`,
+            action: { type: "callback" as const, value: `action-${String(index + 1)}` },
+          })),
         },
-      },
-      presentation: {
+      ],
+    } satisfies MessagePresentation;
+    const { segments } = resolveSlackReplyBlockResolution({
+      presentation,
+      interactive: presentationToInteractiveControlsReply(presentation),
+    });
+
+    expect(segments.map((segment) => segment.kind)).toEqual(["text", "blocks"]);
+    const blocks = segments[1]?.kind === "blocks" ? segments[1].blocks : [];
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { elements?: unknown[] }).elements).toHaveLength(25);
+  });
+
+  it("subtracts mirrors before enforcing each Slack message block limit", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+        },
+      ],
+    } satisfies MessagePresentation;
+    const interactive = presentationToInteractiveControlsReply(presentation);
+    const channelData = {
+      slack: { blocks: Array.from({ length: 49 }, () => ({ type: "divider" })) },
+    };
+
+    const exact = resolveSlackReplyBlockResolution({ channelData, presentation, interactive });
+    expect(exact.segments).toHaveLength(1);
+    expect(exact.segments[0]?.kind === "blocks" ? exact.segments[0].blocks : []).toHaveLength(50);
+
+    const withUniqueRow = resolveSlackReplyBlockResolution({
+      channelData,
+      presentation,
+      interactive: {
         blocks: [
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Revenue mix",
-            segments: [{ label: "Product", value: 60 }],
-          },
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Active sessions",
-            segments: [{ label: "Desktop", value: 30 }],
-          },
+          ...(interactive?.blocks ?? []),
+          { type: "buttons", buttons: [{ label: "Later", value: "later" }] },
         ],
       },
     });
-
-    expect(plan.mode).toBe("single");
-    if (plan.mode !== "single") {
-      return;
-    }
-    expect(plan.blocks?.map((block) => block.type)).toEqual([
-      "data_visualization",
-      "data_visualization",
-      "context",
-    ]);
-    expect(plan.blocks?.[2]).toMatchObject({
-      type: "context",
-      elements: [{ text: expect.stringContaining("Active sessions") }],
-    });
-    expect(plan.text).toContain("Raw traffic");
-    expect(plan.text).toContain("Revenue mix");
-    expect(plan.text).toContain("Active sessions");
-  });
-
-  it("keeps a native-eligible table when its rendered fallback exceeds 8k", () => {
-    const rows = Array.from({ length: 100 }, (_entry, index) => [
-      index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(65)}`,
-    ]);
-    const plan = resolveSlackReplyRenderPlan({
-      text: "Pipeline summary",
-      presentation: {
-        title: "Quarterly report",
-        blocks: [
-          { type: "context", text: "Confidential" },
-          { type: "table", caption: "Pipeline", headers: ["Account"], rows },
-          { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
-        ],
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart?.blocks.map((block) => block.type)).toEqual(["data_table", "actions"]);
-    expect(plan.blockPart?.text).toBe("Pipeline (table)\n\n- Refresh");
-    expect(plan.blockPart?.text.length).toBeLessThanOrEqual(8_000);
-    expect(plan.fallbackText).toContain("Quarterly report");
-    expect(plan.fallbackText).toContain("Confidential");
-    expect(plan.fallbackText).toContain("- Account: account-99");
-    expect(plan.fallbackText.match(/Pipeline \(table\)/g)).toHaveLength(1);
-    expect(plan.fallbackText).not.toContain("- Refresh");
-  });
-
-  it("compacts native table accessibility text at the active chunk limit", () => {
-    const header = "H".repeat(1_000);
-    const plan = resolveSlackReplyRenderPlan(
+    expect(withUniqueRow.segments).toHaveLength(2);
+    expect(
+      withUniqueRow.segments[1]?.kind === "blocks" ? withUniqueRow.segments[1].blocks : [],
+    ).toMatchObject([
       {
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline",
-              headers: [header],
-              rows: Array.from({ length: 5 }, (_entry, index) => [String(index)]),
-            },
-          ],
-        },
+        block_id: "openclaw_reply_buttons_3",
+        elements: [{ action_id: "openclaw:reply_button:3:1", value: "later" }],
       },
-      undefined,
-      { textLimit: 4_000 },
-    );
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart?.text).toBe("Pipeline (table)");
-    expect(plan.blockPart?.text.length).toBeLessThanOrEqual(4_000);
-    expect(plan.fallbackText).toContain(": 4");
-  });
-
-  it("falls back a native-eligible table when its compact caption exceeds 8k", () => {
-    const caption = "c".repeat(8_100);
-    const plan = resolveSlackReplyRenderPlan({
-      presentation: {
-        blocks: [
-          { type: "table", caption, headers: ["Account"], rows: [["Acme"]] },
-          { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
-        ],
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart?.blocks.map((block) => block.type)).toEqual(["actions"]);
-    expect(plan.blockPart?.text).toBe("- Refresh");
-    expect(plan.fallbackText).toContain(`${caption} (table)`);
-    expect(plan.fallbackText).toContain("- Account: Acme");
-  });
-
-  it("escapes plain-text control labels in split accessibility fallbacks", () => {
-    const plan = resolveSlackReplyRenderPlan({
-      presentation: {
-        blocks: [
-          {
-            type: "table",
-            caption: "Pipeline",
-            headers: ["Account"],
-            rows: Array.from({ length: 100 }, (_entry, index) => [
-              `account-${String(index)}-${"x".repeat(110)}`,
-            ]),
-          },
-          { type: "buttons", buttons: [{ label: "<!here>", value: "refresh" }] },
-        ],
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart?.text).toBe("- &lt;!here&gt;");
-    expect(plan.blockPart?.text).not.toContain("<!here>");
-  });
-
-  it("keeps section fields and rich text in split accessibility fallbacks", () => {
-    const plan = resolveSlackReplyRenderPlan({
-      channelData: {
-        slack: {
-          blocks: [
-            {
-              type: "section",
-              fields: [
-                { type: "plain_text", text: "Owner <!here>" },
-                { type: "mrkdwn", text: "*Ready*" },
-              ],
-            },
-            {
-              type: "rich_text",
-              elements: [
-                {
-                  type: "rich_text_section",
-                  elements: [
-                    { type: "text", text: "Rich <!channel> " },
-                    { type: "user", user_id: "U123" },
-                  ],
-                },
-              ],
-            },
-            {
-              type: "section",
-              text: { type: "mrkdwn", text: "Overview" },
-              accessory: {
-                type: "button",
-                action_id: "open",
-                text: { type: "plain_text", text: "Open" },
-                value: "open",
-              },
-            },
-          ],
-        },
-      },
-      presentation: {
-        blocks: [
-          {
-            type: "table",
-            caption: "Pipeline",
-            headers: ["Account"],
-            rows: Array.from({ length: 100 }, (_entry, index) => [
-              `account-${String(index)}-${"x".repeat(110)}`,
-            ]),
-          },
-        ],
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart?.text).toBe(
-      "Owner &lt;!here&gt;\n*Ready*\n\nRich &lt;!channel&gt; <@U123>\n\nOverview\n- Open",
-    );
-  });
-
-  it("fails closed when retained raw-block accessibility exceeds 8k", () => {
-    const blocks = Array.from({ length: 3 }, (_entry, index) => ({
-      type: "image",
-      image_url: `https://example.com/${String(index)}.png`,
-      alt_text: `${String(index)}${"x".repeat(2999)}`,
-    }));
-
-    expect(() =>
-      resolveSlackReplyRenderPlan({
-        channelData: { slack: { blocks } },
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Large pipeline",
-              headers: ["Account"],
-              rows: Array.from({ length: 100 }, (_entry, index) => [
-                `account-${String(index)} ${"x".repeat(110)}`,
-              ]),
-            },
-          ],
-        },
-      }),
-    ).toThrow(/retained-block accessibility fallback exceeds/i);
-  });
-
-  it("moves overlong raw text blocks to visible fallback chunks", () => {
-    const blocks = Array.from({ length: 3 }, (_entry, index) => ({
-      type: "section",
-      text: { type: "mrkdwn", text: `${String(index)}${"x".repeat(2999)}-tail` },
-    }));
-
-    const plan = resolveSlackReplyRenderPlan({ channelData: { slack: { blocks } } });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart).toBeUndefined();
-    expect(plan.fallbackText).toContain("2xxx");
-    expect(plan.fallbackText).toContain("-tail");
-    expect(plan.fallbackText.length).toBeGreaterThan(8_000);
-  });
-
-  it("retains image and mixed-media contexts when sibling text moves to fallback", () => {
-    const imageOnlyContext = {
-      type: "context",
-      elements: [
-        {
-          type: "image",
-          image_url: "https://example.com/status.png",
-          alt_text: "Status",
-        },
-      ],
-    };
-    const mixedContext = {
-      type: "context",
-      elements: [
-        { type: "mrkdwn", text: "Status summary" },
-        {
-          type: "image",
-          image_url: "https://example.com/detail.png",
-          alt_text: "Detail",
-        },
-      ],
-    };
-    const textBlocks = Array.from({ length: 3 }, (_entry, index) => ({
-      type: "section",
-      text: { type: "mrkdwn", text: `${String(index)}${"x".repeat(2994)}-tail` },
-    }));
-
-    const plan = resolveSlackReplyRenderPlan({
-      channelData: {
-        slack: { blocks: [imageOnlyContext, mixedContext, ...textBlocks] },
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart).toEqual({
-      blocks: [imageOnlyContext, mixedContext],
-      text: "Status summary",
-    });
-    expect(plan.fallbackText).toContain("2xxx");
-    expect(plan.fallbackText).toContain("-tail");
-    expect(plan.fallbackText).not.toContain("Status summary");
-  });
-
-  it("converts authored Markdown before splitting around raw blocks", () => {
-    const plan = resolveSlackReplyRenderPlan({
-      text: `[docs](https://example.com) ${"x".repeat(8_100)}`,
-      channelData: {
-        slack: {
-          blocks: [
-            {
-              type: "actions",
-              elements: [
-                {
-                  type: "button",
-                  action_id: "refresh",
-                  text: { type: "plain_text", text: "Refresh" },
-                  value: "refresh",
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart?.text).toBe("- Refresh");
-    expect(plan.fallbackText).toContain("<https://example.com|docs>");
-    expect(plan.fallbackText).not.toContain("[docs](https://example.com)");
-  });
-
-  it("keeps a long portable sibling complete beside a raw native table", () => {
-    const longText = `raw-table-sibling-${"x".repeat(3980)}-tail`;
-    const plan = resolveSlackReplyRenderPlan({
-      channelData: {
-        slack: {
-          blocks: [
-            {
-              type: "data_table",
-              caption: "Raw pipeline",
-              rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
-            },
-          ],
-        },
-      },
-      presentation: { blocks: [{ type: "text", text: longText }] },
-    });
-
-    expect(plan.mode).toBe("split");
-    if (plan.mode !== "split") {
-      return;
-    }
-    expect(plan.blockPart).toBeUndefined();
-    expect(plan.fallbackText).toContain("-tail");
-    expect(plan.fallbackText).toContain("Raw pipeline (table)");
-    expect(plan.hookText).toContain("-tail");
+    ]);
   });
 });

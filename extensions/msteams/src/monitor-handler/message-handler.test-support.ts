@@ -1,8 +1,8 @@
 // Msteams plugin module implements message handler support behavior.
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { installMSTeamsTestRuntime } from "../monitor-handler.test-helpers.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 
 export const channelConversationId = "19:general@thread.tacv2";
 
@@ -65,7 +65,6 @@ export function createMessageHandlerDeps(
     list: vi.fn(async () => []),
     remove: vi.fn(async () => false),
     findPreferredDmByUserId: vi.fn(async () => null),
-    findByUserId: vi.fn(async () => null),
   } satisfies MSTeamsMessageHandlerDeps["conversationStore"];
 
   const deps: MSTeamsMessageHandlerDeps = {

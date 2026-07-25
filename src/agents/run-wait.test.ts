@@ -15,7 +15,6 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 import {
-  testing,
   isRecoverableAgentWaitError,
   readLatestAssistantReply,
   readLatestAssistantReplySnapshot,
@@ -77,9 +76,6 @@ function expectAgentWaitRequest(
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
-    testing.setDepsForTest({
-      callGateway: async (opts) => await callGatewayMock(opts),
-    });
   });
 
   it("returns the most recent assistant message when compaction markers trail history", async () => {
@@ -279,9 +275,6 @@ describe("readLatestAssistantReply", () => {
 describe("waitForAgentRun", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
-    testing.setDepsForTest({
-      callGateway: async (opts) => await callGatewayMock(opts),
-    });
   });
 
   it("maps gateway timeouts to timeout status", async () => {
@@ -465,9 +458,6 @@ describe("waitForAgentRun", () => {
 describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
-    testing.setDepsForTest({
-      callGateway: async (opts) => await callGatewayMock(opts),
-    });
   });
 
   it("returns undefined when the latest assistant fingerprint matches the baseline", async () => {
@@ -934,9 +924,6 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
 describe("waitForAgentRunsToDrain", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
-    testing.setDepsForTest({
-      callGateway: async (opts) => await callGatewayMock(opts),
-    });
   });
 
   it("waits across rounds until descendant runs stop changing", async () => {
@@ -1067,5 +1054,29 @@ describe("waitForAgentRunsToDrain", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("isRecoverableAgentWaitError", () => {
+  it.each([
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "EPIPE",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "EAI_AGAIN",
+  ])("recovers from %s connection failures", (code) => {
+    expect(isRecoverableAgentWaitError(`connect ${code} 127.0.0.1:443`)).toBe(true);
+  });
+
+  it.each([
+    undefined,
+    "",
+    "gateway timeout",
+    "ENOENT: no such file",
+    "getaddrinfo ENOTFOUND gateway.example.com",
+  ])("does not recover from %s", (error) => {
+    expect(isRecoverableAgentWaitError(error)).toBe(false);
   });
 });

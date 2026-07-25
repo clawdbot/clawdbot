@@ -4,10 +4,13 @@
  * Truncates and reshapes portable presentation blocks to match per-channel limits.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationTableFallbackText,
   resolveMessagePresentationActionValue,
+  resolveMessagePresentationButtonAction,
+  resolveMessagePresentationOptionAction,
 } from "../../../interactive/payload.js";
 import type {
   MessagePresentation,
@@ -71,7 +74,7 @@ function truncatePresentationText(value: string, limits: TextLimits | undefined)
     return truncateUtf8Bytes(value, limit);
   }
   if (limits?.encoding === "utf16-units") {
-    return value.length > limit ? value.slice(0, limit) : value;
+    return truncateUtf16Safe(value, limit);
   }
   const chars = Array.from(value);
   return chars.length > limit ? chars.slice(0, limit).join("") : value;
@@ -142,8 +145,13 @@ function buttonFallbackLabel(
   maxLabelLength: number | undefined,
 ): string {
   const label = truncateText(button.label, maxLabelLength);
-  const target = button.url ?? button.webApp?.url ?? button.web_app?.url;
-  return target ? `${label}: ${target}` : label;
+  if (button.disabled) {
+    return label;
+  }
+  const action = resolveMessagePresentationButtonAction(button);
+  return action?.type === "url" || (action?.type === "web-app" && action.url)
+    ? `${label}: ${action.url}`
+    : label;
 }
 
 function actionCapacity(limits: ActionLimits | undefined): number | undefined {
@@ -244,15 +252,16 @@ function adaptButton(
   button: MessagePresentationButton,
   limits: ActionLimits | undefined,
 ): MessagePresentationButton | undefined {
-  const hasLinkTarget = Boolean(button.url || button.webApp || button.web_app);
-  const actionValue = resolveMessagePresentationActionValue(button.action);
-  const valueFits =
-    button.value === undefined || fitsByteLimit(button.value, limits?.maxValueBytes);
+  const hasExplicitAction = button.action !== undefined;
+  const action = resolveMessagePresentationButtonAction(button);
+  if (!action) {
+    return undefined;
+  }
+  const actionValue = resolveMessagePresentationActionValue(action);
   const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
-  const hasRenderableControl =
-    (button.value !== undefined && valueFits) || (actionValue !== undefined && actionFits);
+  const legacyValueFits = fitsByteLimit(button.value, limits?.maxValueBytes);
   if (
-    (!hasRenderableControl && !hasLinkTarget) ||
+    (hasExplicitAction ? !actionFits : action.type === "callback" && !legacyValueFits) ||
     (button.disabled === true && limits?.supportsDisabled !== true)
   ) {
     return undefined;
@@ -261,11 +270,8 @@ function adaptButton(
     ...button,
     label: truncateText(button.label, limits?.maxLabelLength),
   };
-  if (!valueFits) {
+  if (!legacyValueFits) {
     delete adapted.value;
-  }
-  if (!actionFits) {
-    delete adapted.action;
   }
   if (limits?.supportsStyles === false) {
     delete adapted.style;
@@ -345,22 +351,23 @@ function adaptOption(
   option: MessagePresentationOption,
   limits: SelectLimits | undefined,
 ): MessagePresentationOption | undefined {
-  const actionValue = resolveMessagePresentationActionValue(option.action);
-  const valueFits =
-    option.value === undefined || fitsByteLimit(option.value, limits?.maxValueBytes);
+  const hasExplicitAction = option.action !== undefined;
+  const action = resolveMessagePresentationOptionAction(option);
+  if (!action) {
+    return undefined;
+  }
+  const actionValue = resolveMessagePresentationActionValue(action);
   const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
-  if (!(option.value !== undefined && valueFits) && !(actionValue !== undefined && actionFits)) {
+  const legacyValueFits = fitsByteLimit(option.value, limits?.maxValueBytes);
+  if (hasExplicitAction ? !actionFits : !legacyValueFits) {
     return undefined;
   }
   const adapted: MessagePresentationOption = {
     ...option,
     label: truncateText(option.label, limits?.maxLabelLength),
   };
-  if (!valueFits) {
+  if (!legacyValueFits) {
     delete adapted.value;
-  }
-  if (!actionFits) {
-    delete adapted.action;
   }
   return adapted;
 }
@@ -402,7 +409,9 @@ function adaptSelectBlock(
   const blocks: MessagePresentationBlock[] = [
     {
       type: "select",
-      placeholder: truncateText(block.placeholder ?? "", limits?.maxLabelLength) || undefined,
+      ...(block.placeholder
+        ? { placeholder: truncateText(block.placeholder, limits?.maxLabelLength) }
+        : {}),
       options,
     },
   ];

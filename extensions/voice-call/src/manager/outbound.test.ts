@@ -183,13 +183,14 @@ describe("voice-call outbound helpers", () => {
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
   });
 
-  it("assigns per-call session keys to outbound calls when configured", async () => {
+  it("persists the configured agent on outbound call records", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", initiateCall: initiateProviderCall },
       config: {
+        agentId: "operator",
         maxConcurrentCalls: 3,
         outbound: { defaultMode: "conversation" },
         fromNumber: "+14155550100",
@@ -205,9 +206,9 @@ describe("voice-call outbound helpers", () => {
     expect(result.callId).toBeTypeOf("string");
     expect(result.callId).not.toBe("");
     expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(
-      `agent:main:voice:call:${result.callId}`,
+      `agent:operator:voice:call:${result.callId}`,
     );
-    expect(ctx.activeCalls.get(result.callId)?.agentId).toBe("main");
+    expect(ctx.activeCalls.get(result.callId)?.agentId).toBe("operator");
   });
 
   it("uses the per-call agent for explicit session normalization", async () => {

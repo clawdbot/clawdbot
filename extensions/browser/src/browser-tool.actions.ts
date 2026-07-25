@@ -29,6 +29,7 @@ import {
   resolveRuntimeImageSanitization,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
+import { resolveBrowserActRequestTimeoutMs } from "./browser/act-policy.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
@@ -47,7 +48,6 @@ const browserToolActionDeps = {
   imageResultFromFile,
 };
 
-const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
@@ -90,7 +90,6 @@ function existingSessionRejectsActTimeout(request: BrowserActRequest): boolean {
     case "drag":
     case "select":
     case "fill":
-    case "evaluate":
       return true;
     default:
       return false;
@@ -121,55 +120,12 @@ function withConfiguredActTimeout(
     return request;
   }
 
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const configuredTimeout =
-    normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
-  return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
+  return { ...typedRequest, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS } as BrowserActRequest;
 }
 
 function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {
-  const candidateTimeouts: number[] = [];
-  const explicitTimeout = normalizePositiveTimeoutMs(
-    (request as BrowserActRequestWithTimeout).timeoutMs,
-  );
-  if (explicitTimeout !== undefined) {
-    candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
-  }
-  if (request.kind === "wait") {
-    const waitDuration = normalizeNonNegativeDurationMs(request.timeMs);
-    if (waitDuration !== undefined) {
-      candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
-    }
-  }
-  return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
+  return resolveBrowserActRequestTimeoutMs(request);
 }
-
-export const testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      browserAct: typeof browserAct;
-      browserConsoleMessages: typeof browserConsoleMessages;
-      browserDownload: typeof browserDownload;
-      browserSnapshot: typeof browserSnapshot;
-      browserTabs: typeof browserTabs;
-      browserWaitForDownload: typeof browserWaitForDownload;
-      imageResultFromFile: typeof imageResultFromFile;
-      getRuntimeConfig: typeof getRuntimeConfig;
-    }> | null,
-  ) {
-    browserToolActionDeps.browserAct = overrides?.browserAct ?? browserAct;
-    browserToolActionDeps.browserConsoleMessages =
-      overrides?.browserConsoleMessages ?? browserConsoleMessages;
-    browserToolActionDeps.browserDownload = overrides?.browserDownload ?? browserDownload;
-    browserToolActionDeps.browserSnapshot = overrides?.browserSnapshot ?? browserSnapshot;
-    browserToolActionDeps.browserTabs = overrides?.browserTabs ?? browserTabs;
-    browserToolActionDeps.browserWaitForDownload =
-      overrides?.browserWaitForDownload ?? browserWaitForDownload;
-    browserToolActionDeps.imageResultFromFile =
-      overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolActionDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
-  },
-};
 
 type BrowserProxyRequest = (opts: {
   method: string;
@@ -347,6 +303,7 @@ export async function executeTabsAction(params: {
   profile?: string;
   timeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
+  targetId?: string;
 }): Promise<AgentToolResult<unknown>> {
   const { baseUrl, profile, timeoutMs, proxyRequest } = params;
   if (proxyRequest) {
@@ -356,10 +313,16 @@ export async function executeTabsAction(params: {
       profile,
       timeoutMs,
     });
-    const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
+    const tabs = ((result as { tabs?: unknown[] }).tabs ?? []).filter(
+      (tab) =>
+        !params.targetId ||
+        readStringValue((tab as { targetId?: unknown } | undefined)?.targetId) === params.targetId,
+    );
     return formatTabsToolResult(tabs);
   }
-  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs });
+  const tabs = (await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs })).filter(
+    (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
+  );
   return formatTabsToolResult(tabs);
 }
 
@@ -496,6 +459,7 @@ export async function executeSnapshotAction(params: {
       targetId: snapshot.targetId,
       url: snapshot.url,
       truncated: snapshot.truncated,
+      newElements: snapshot.newElements,
       stats: snapshot.stats,
       refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
       labels: snapshot.labels,
@@ -683,7 +647,7 @@ export async function executeActAction(params: {
       readStringValue((result as { targetId?: unknown }).targetId) ??
         readStringValue(effectiveRequest.targetId),
     );
-    return jsonResult(result);
+    return formatActToolResult(result);
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
       const tabs = proxyRequest
@@ -725,7 +689,7 @@ export async function executeActAction(params: {
           readStringValue((retryResult as { targetId?: unknown }).targetId) ??
             readStringValue(retryRequest.targetId),
         );
-        return jsonResult(retryResult);
+        return formatActToolResult(retryResult);
       }
       if (!tabs.length) {
         throw new Error(
@@ -741,4 +705,37 @@ export async function executeActAction(params: {
     throw err;
   }
 }
-export { testing as __testing };
+
+function formatActToolResult(result: unknown): AgentToolResult<unknown> {
+  const formatted = jsonResult(result);
+  if (!result || typeof result !== "object") {
+    return formatted;
+  }
+  const aborted = (result as { aborted?: unknown }).aborted;
+  if (!aborted || typeof aborted !== "object") {
+    return formatted;
+  }
+  const summary = aborted as {
+    reason?: unknown;
+    afterAction?: unknown;
+    url?: unknown;
+    skipped?: unknown;
+  };
+  if (
+    (summary.reason !== "navigation" && summary.reason !== "closed") ||
+    typeof summary.afterAction !== "number" ||
+    typeof summary.url !== "string" ||
+    typeof summary.skipped !== "number"
+  ) {
+    return formatted;
+  }
+  const reason =
+    summary.reason === "navigation"
+      ? `the page navigated to ${summary.url}`
+      : "the page or browser context closed";
+  const note = `Batch aborted after action ${summary.afterAction} because ${reason}; ${summary.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
+  return {
+    ...formatted,
+    content: [...formatted.content, { type: "text", text: note }],
+  };
+}

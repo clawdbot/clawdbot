@@ -2,23 +2,26 @@
  * ACPX process ownership checks and cleanup. The reaper only terminates
  * OpenClaw-owned wrapper trees after validating paths, packages, and lease ids.
  */
-import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { CODEX_ACP_PACKAGE, LEGACY_CODEX_ACP_PACKAGE } from "./codex-adapter.js";
 import { splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
-const execFileAsync = promisify(execFile);
 const requireFromHere = createRequire(import.meta.url);
 const GENERATED_WRAPPER_BASENAMES = new Set([
   "codex-acp-wrapper.mjs",
   "claude-agent-acp-wrapper.mjs",
 ]);
 const OPENCLAW_PLUGIN_DEPS_MARKER = "/plugin-runtime-deps/";
+const ACPX_PROCESS_LIST_TIMEOUT_MS = 2_000;
 const OWNED_ACP_PACKAGE_NAMES = [
-  "@zed-industries/codex-acp",
+  CODEX_ACP_PACKAGE,
+  // Shipped Zed adapter processes can survive a gateway upgrade. Keep cleanup
+  // recognition until their OpenClaw-owned wrapper/process tree is gone.
+  LEGACY_CODEX_ACP_PACKAGE,
   "@zed-industries/codex-acp-darwin-arm64",
   "@zed-industries/codex-acp-darwin-x64",
   "@zed-industries/codex-acp-linux-arm64",
@@ -28,13 +31,25 @@ const OWNED_ACP_PACKAGE_NAMES = [
   "@agentclientprotocol/claude-agent-acp",
   "acpx",
 ];
+const PLUGIN_DEPS_CODEX_PACKAGE_NAMES = [
+  "@openai/codex",
+  "@openai/codex-darwin-arm64",
+  "@openai/codex-darwin-x64",
+  "@openai/codex-linux-arm64",
+  "@openai/codex-linux-x64",
+  "@openai/codex-win32-arm64",
+  "@openai/codex-win32-x64",
+];
+// Codex app-server is also owned by the native Codex plugin. Recognize its
+// package only inside ACPX's isolated plugin-runtime-deps tree.
 const ACP_PACKAGE_MARKERS = [
   ...OWNED_ACP_PACKAGE_NAMES.map((packageName) => `/node_modules/${packageName}/`),
+  ...PLUGIN_DEPS_CODEX_PACKAGE_NAMES.map((packageName) => `/node_modules/${packageName}/`),
   "/acpx/dist/",
 ];
 
 /** Minimal process-table row used by ACPX cleanup. */
-export type AcpxProcessInfo = {
+type AcpxProcessInfo = {
   pid: number;
   ppid: number;
   command: string;
@@ -168,7 +183,7 @@ function liveCommandMatchesLeaseIdentity(params: {
 }
 
 /** Check whether a command is owned by OpenClaw ACPX runtime packages or wrappers. */
-export function isOpenClawOwnedAcpxProcessCommand(params: {
+function isOpenClawOwnedAcpxProcessCommand(params: {
   command: string | undefined;
   wrapperRoot?: string;
 }): boolean {
@@ -198,13 +213,16 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
   const processes: AcpxProcessInfo[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     const match = /^\s*(?<pid>\d+)\s+(?<ppid>\d+)\s+(?<command>.+?)\s*$/.exec(line);
-    if (!match?.groups) {
+    const pid = match?.groups?.pid;
+    const ppid = match?.groups?.ppid;
+    const command = match?.groups?.command;
+    if (!pid || !ppid || !command) {
       continue;
     }
     processes.push({
-      pid: Number.parseInt(match.groups.pid, 10),
-      ppid: Number.parseInt(match.groups.ppid, 10),
-      command: match.groups.command,
+      pid: Number.parseInt(pid, 10),
+      ppid: Number.parseInt(ppid, 10),
+      command,
     });
   }
   return processes;
@@ -215,8 +233,10 @@ async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   if (process.platform === "win32") {
     return [];
   }
-  const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid=,command="], {
+  const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
+    logOutput: false,
     maxBuffer: 8 * 1024 * 1024,
+    timeoutMs: ACPX_PROCESS_LIST_TIMEOUT_MS,
   });
   return parseProcessList(stdout);
 }

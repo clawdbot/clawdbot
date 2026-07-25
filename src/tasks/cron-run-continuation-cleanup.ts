@@ -7,6 +7,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "./task-status-access.js";
@@ -29,10 +30,25 @@ function canRemoveCronRunContinuation(marker: SessionEntry["cronRunContinuation"
   );
 }
 
-export async function removeCronRunContinuationSessionIfIdle(sessionKey: string): Promise<void> {
+export async function removeCronRunContinuationSessionIfIdle(
+  sessionKey: string,
+  settledDeliveryId?: string,
+): Promise<void> {
   if (
     !parseCronRunScopeSuffix(sessionKey).runId ||
     hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
+  ) {
+    return;
+  }
+  const pendingSessionDeliveries = await loadPendingSessionDeliveries();
+  if (
+    pendingSessionDeliveries.some(
+      (entry) =>
+        entry.sessionKey === sessionKey &&
+        entry.id !== settledDeliveryId &&
+        entry.settlementOutcome === undefined &&
+        entry.acknowledgedAt === undefined,
+    )
   ) {
     return;
   }

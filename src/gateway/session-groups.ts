@@ -12,12 +12,13 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
 // Write transactions must run on the same env-scoped handle as their
 // statements; a bare transaction would open the default state DB while the
 // SQL hits the override, losing atomicity under OPENCLAW_STATE_DIR overrides.
 
-export type SessionGroupRecord = { name: string; position: number };
+type SessionGroupRecord = { name: string; position: number };
 
 type SessionGroupsDatabase = Pick<OpenClawStateKyselyDatabase, "session_groups">;
 
@@ -167,6 +168,7 @@ async function updateMemberCategories(
   from: string,
   to: string | undefined,
   env: NodeJS.ProcessEnv,
+  assertTargetCurrent?: (target: { agentId: string; sessionKey: string }) => void,
 ): Promise<number> {
   let updated = 0;
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
@@ -176,6 +178,16 @@ async function updateMemberCategories(
         const replacements = entries.flatMap(({ sessionKey, entry }) => {
           if (entry.category?.trim() !== from) {
             return [];
+          }
+          try {
+            assertTargetCurrent?.({ agentId: target.agentId, sessionKey });
+          } catch (error) {
+            if (error instanceof SessionMutationAuthorizationChangedError) {
+              // Group membership spans separate agent databases. Once the catalog commit starts,
+              // skip a concurrently replaced target instead of failing after earlier stores wrote.
+              return [];
+            }
+            throw error;
           }
           const next = { ...entry };
           if (to === undefined) {
@@ -197,6 +209,8 @@ export async function renameSessionGroup(params: {
   name: string;
   to: string;
   env?: NodeJS.ProcessEnv;
+  assertCurrent?: () => void;
+  assertTargetCurrent?: (target: { agentId: string; sessionKey: string }) => void;
 }): Promise<{ groups: SessionGroupRecord[]; updatedSessions: number }> {
   const env = params.env ?? process.env;
   const from = normalizeOptionalString(params.name);
@@ -205,9 +219,13 @@ export async function renameSessionGroup(params: {
     throw new Error("group rename requires non-empty names");
   }
   if (from !== to) {
+    params.assertCurrent?.();
     renameCatalogEntry(from, to, env);
   }
-  const updatedSessions = from === to ? 0 : await updateMemberCategories(params.cfg, from, to, env);
+  const updatedSessions =
+    from === to
+      ? 0
+      : await updateMemberCategories(params.cfg, from, to, env, params.assertTargetCurrent);
   return { groups: listSessionGroups(env), updatedSessions };
 }
 
@@ -215,12 +233,15 @@ export async function deleteSessionGroup(params: {
   cfg: OpenClawConfig;
   name: string;
   env?: NodeJS.ProcessEnv;
+  assertCurrent?: () => void;
+  assertTargetCurrent?: (target: { agentId: string; sessionKey: string }) => void;
 }): Promise<{ groups: SessionGroupRecord[]; updatedSessions: number }> {
   const env = params.env ?? process.env;
   const name = normalizeOptionalString(params.name);
   if (!name) {
     throw new Error("group delete requires a non-empty name");
   }
+  params.assertCurrent?.();
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       executeSqliteQuerySync(
@@ -230,6 +251,12 @@ export async function deleteSessionGroup(params: {
     },
     { env },
   );
-  const updatedSessions = await updateMemberCategories(params.cfg, name, undefined, env);
+  const updatedSessions = await updateMemberCategories(
+    params.cfg,
+    name,
+    undefined,
+    env,
+    params.assertTargetCurrent,
+  );
   return { groups: listSessionGroups(env), updatedSessions };
 }

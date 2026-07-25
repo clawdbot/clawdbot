@@ -205,7 +205,7 @@ export function trimLeadingEnv(words: string[]): string[] {
     return words.slice(index);
   }
 
-  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])) {
+  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words.at(index) ?? "")) {
     index += 1;
   }
   return words.slice(index);
@@ -331,7 +331,7 @@ export function scanTopLevelChars(
   let pendingHeredocs: HeredocMarker[] = [];
 
   for (let i = 0; i < command.length; i += 1) {
-    const char = command[i];
+    const char = command.charAt(i);
 
     if (escaped) {
       escaped = false;

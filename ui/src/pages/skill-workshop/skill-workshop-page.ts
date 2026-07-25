@@ -1,15 +1,11 @@
-// Skill Workshop page owns its Control UI render glue.
 import { consume } from "@lit/context";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { renderPluginsHubTabs } from "../../components/plugins-hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
@@ -17,6 +13,17 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
+import {
+  loadSkillWorkshopPageData,
+  runSkillWorkshopPageHistoryScan,
+} from "./history-scan-page-controller.ts";
+import type {
+  SkillWorkshopProposal,
+  SkillWorkshopRenderContext,
+  SkillWorkshopRevisionRequest,
+} from "./page-types.ts";
+import { selectPluginsHubTab } from "./plugins-hub-navigation.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
@@ -24,44 +31,18 @@ import {
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
-  type SkillWorkshopContext,
   type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
+import { resolveSelfLearning, setSelfLearningEnabled } from "./self-learning.ts";
 import {
-  loadSkillWorkshopMode,
-  loadSkillWorkshopUseCurrentChatForRevisions,
-  saveSkillWorkshopMode,
-  saveSkillWorkshopUseCurrentChatForRevisions,
-} from "./storage.ts";
+  captureSkillWorkshopSourceScope,
+  isCurrentSkillWorkshopSourceScope,
+  type SkillWorkshopPageContext,
+  type SkillWorkshopSourceScope,
+} from "./source-scope.ts";
+import { loadSkillWorkshopMode, loadSkillWorkshopUseCurrentChatForRevisions } from "./storage.ts";
 import { renderSkillWorkshop } from "./view.ts";
-
-type SkillWorkshopPageContext = ApplicationContext & SkillWorkshopContext;
-
-type SkillWorkshopRevisionRequest = (
-  instructions: string,
-  proposal: SkillWorkshopState["skillWorkshopProposals"][number],
-  proposalAgentId: string,
-) => Promise<void>;
-
-type SkillWorkshopRenderContext = {
-  context: SkillWorkshopPageContext;
-  workshopAgentName: string;
-  onRevisionRequest?: SkillWorkshopRevisionRequest;
-};
-
-type SkillWorkshopProposal = SkillWorkshopState["skillWorkshopProposals"][number];
-
-type SkillWorkshopSourceScope = {
-  state: SkillWorkshopState;
-  context: SkillWorkshopPageContext;
-  epoch: number;
-  gateway: SkillWorkshopPageContext["gateway"];
-  agentSelection: SkillWorkshopPageContext["agentSelection"];
-  sessions: SkillWorkshopPageContext["sessions"];
-  revision: SkillWorkshopPageContext["skillWorkshopRevision"];
-  navigate: SkillWorkshopPageContext["navigate"];
-};
 
 function findRevisionSessionRow(
   result: SessionsListResult | null,
@@ -110,105 +91,24 @@ async function resolveRevisionSessionKey(
   });
   const sessionKey = resolveSessionKey(createdKey, gatewayHello).trim();
   if (!sessionKey) {
-    throw new Error(context.sessions.state.error ?? "Could not prepare a Skill Workshop session.");
+    throw new Error(context.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
   }
   return sessionKey;
 }
 
-function setSkillWorkshopUseCurrentChatForRevisions(
-  state: SkillWorkshopState,
-  enabled: boolean,
-  requestUpdate: () => void,
-): void {
-  if (state.skillWorkshopUseCurrentChatForRevisions === enabled) {
-    return;
-  }
-  state.skillWorkshopUseCurrentChatForRevisions = enabled;
-  saveSkillWorkshopUseCurrentChatForRevisions(enabled);
-  requestUpdate();
-}
-
-function setSkillWorkshopMode(
-  state: SkillWorkshopState,
-  mode: SkillWorkshopState["skillWorkshopMode"],
-  requestUpdate: () => void,
-) {
-  if (state.skillWorkshopMode === mode) {
-    return;
-  }
-  state.skillWorkshopMode = mode;
-  saveSkillWorkshopMode(mode);
-  requestUpdate();
-}
-
-function renderSkillWorkshopHeaderControls(state: SkillWorkshopState, requestUpdate: () => void) {
-  const useCurrentChatLabel = t("skillWorkshop.header.useCurrentChat");
-  return html`
-    <div class="sw-header-controls">
-      <label
-        class="sw-revision-session-toggle"
-        title=${t("skillWorkshop.header.useCurrentChatTooltip")}
-      >
-        <input
-          type="checkbox"
-          aria-label=${t("skillWorkshop.header.useCurrentChatAria")}
-          .checked=${state.skillWorkshopUseCurrentChatForRevisions}
-          @change=${(event: Event) =>
-            setSkillWorkshopUseCurrentChatForRevisions(
-              state,
-              (event.currentTarget as HTMLInputElement).checked,
-              requestUpdate,
-            )}
-        />
-        <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
-        <span class="sw-revision-session-toggle__label">${useCurrentChatLabel}</span>
-      </label>
-      <div
-        class="sw-mode-switch"
-        role="tablist"
-        aria-label="Workshop view"
-        data-mode=${state.skillWorkshopMode}
-      >
-        <button
-          type="button"
-          class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
-          role="tab"
-          aria-selected=${state.skillWorkshopMode === "board" ? "true" : "false"}
-          @click=${() => setSkillWorkshopMode(state, "board", requestUpdate)}
-        >
-          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
-            <rect x="3" y="4" width="7" height="16" rx="1.5" />
-            <rect x="14" y="4" width="7" height="9" rx="1.5" />
-            <rect x="14" y="15" width="7" height="5" rx="1.5" />
-          </svg>
-          <span>Board</span>
-        </button>
-        <button
-          type="button"
-          class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
-          role="tab"
-          aria-selected=${state.skillWorkshopMode === "today" ? "true" : "false"}
-          @click=${() => setSkillWorkshopMode(state, "today", requestUpdate)}
-        >
-          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
-            <circle cx="12" cy="12" r="4" />
-            <path
-              d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
-            />
-          </svg>
-          <span>Today</span>
-        </button>
-        <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
-      </div>
-    </div>
-  `;
-}
-
 function renderSkillWorkshopPage(
   state: SkillWorkshopState,
-  { context, workshopAgentName, onRevisionRequest }: SkillWorkshopRenderContext,
+  renderContext: SkillWorkshopRenderContext,
   requestUpdate: () => void,
 ) {
+  const {
+    context,
+    workshopAgentName,
+    onRevisionRequest,
+    selfLearning,
+    onSelfLearningToggle,
+    onHistoryScan,
+  } = renderContext;
   const pageClass =
     state.skillWorkshopMode === "today"
       ? "content--skill-workshop content--skill-workshop-today"
@@ -216,143 +116,186 @@ function renderSkillWorkshopPage(
 
   return html`
     <section class=${pageClass}>
-      <section class="content-header">
+      <section class="content-header content-header--page plugins-content-header">
         <div>
-          <div class="page-title">${t("tabs.skillWorkshop")}</div>
-          <div class="page-sub">${t("subtitles.skillWorkshop")}</div>
+          <h1 class="page-title">${t("tabs.skillWorkshop")}</h1>
         </div>
-        <div class="page-meta">${renderSkillWorkshopHeaderControls(state, requestUpdate)}</div>
+        <div class="page-meta">
+          ${renderSkillWorkshopHeaderControls(state, renderContext, requestUpdate)}
+        </div>
       </section>
-      ${(() => {
-        const visibleProposals = filterSkillWorkshopProposals(
-          state.skillWorkshopProposals,
-          state.skillWorkshopStatusFilter,
-          state.skillWorkshopQuery,
-        );
-        const selectedIndex = visibleProposals.findIndex(
-          (proposal) => proposal.key === state.skillWorkshopSelectedKey,
-        );
-        const selectProposal = (key: string) => {
-          state.skillWorkshopFilePreviewKey = null;
-          void selectSkillWorkshopProposal(state, context, key).finally(requestUpdate);
-          requestUpdate();
-        };
-        const selectRelativeProposal = (delta: -1 | 1) => {
-          if (visibleProposals.length === 0) {
-            return;
-          }
-          const nextIndex =
-            selectedIndex < 0
-              ? 0
-              : (selectedIndex + delta + visibleProposals.length) % visibleProposals.length;
-          selectProposal(visibleProposals[nextIndex].key);
-        };
-        const selectVisibleFallback = (proposals: typeof visibleProposals) => {
-          if (
-            proposals.length === 0 ||
-            proposals.some((proposal) => proposal.key === state.skillWorkshopSelectedKey)
-          ) {
-            return;
-          }
-          selectProposal(proposals[0].key);
-        };
-        return renderSkillWorkshop({
-          loading: state.skillWorkshopLoading,
-          error: state.skillWorkshopError,
-          inspectingKey: state.skillWorkshopInspectingKey,
-          proposals: state.skillWorkshopProposals,
-          selectedKey: state.skillWorkshopSelectedKey,
-          statusFilter: state.skillWorkshopStatusFilter,
-          query: state.skillWorkshopQuery,
-          filePreviewKey: state.skillWorkshopFilePreviewKey,
-          filePreviewQuery: state.skillWorkshopFilePreviewQuery,
-          queueWidth: state.skillWorkshopQueueWidth,
-          mode: state.skillWorkshopMode,
-          actionBusy: state.skillWorkshopActionBusy,
-          actionNotice: state.skillWorkshopActionNotice,
-          revisionKey: state.skillWorkshopRevisionKey,
-          revisionDraft: state.skillWorkshopRevisionDraft,
-          assistantName: context.config.current.assistantIdentity.name,
-          workshopAgentName,
-          counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
-          onStatusFilterChange: (status) => {
-            state.skillWorkshopStatusFilter = status;
-            requestUpdate();
-            selectVisibleFallback(
-              filterSkillWorkshopProposals(
-                state.skillWorkshopProposals,
-                status,
-                state.skillWorkshopQuery,
-              ),
-            );
-          },
-          onQueryChange: (query) => {
-            state.skillWorkshopQuery = query;
-            requestUpdate();
-            selectVisibleFallback(
-              filterSkillWorkshopProposals(
-                state.skillWorkshopProposals,
-                state.skillWorkshopStatusFilter,
-                query,
-              ),
-            );
-          },
-          onFilePreviewQueryChange: (query) => {
-            state.skillWorkshopFilePreviewQuery = query;
-            requestUpdate();
-          },
-          onQueueWidthChange: (width) => {
-            state.skillWorkshopQueueWidth = width;
-            requestUpdate();
-          },
-          onModeChange: (mode) => setSkillWorkshopMode(state, mode, requestUpdate),
-          onSelect: selectProposal,
-          onPrev: () => selectRelativeProposal(-1),
-          onNext: () => selectRelativeProposal(1),
-          onApply: (key) => {
-            void runSkillWorkshopLifecycleAction(state, context, "apply", key).finally(
-              requestUpdate,
-            );
-            requestUpdate();
-          },
-          onRevise: (key) => {
-            state.skillWorkshopRevisionKey = key;
-            state.skillWorkshopRevisionDraft = "";
-            requestUpdate();
-          },
-          onReject: (key) => {
-            void runSkillWorkshopLifecycleAction(state, context, "reject", key).finally(
-              requestUpdate,
-            );
-            requestUpdate();
-          },
-          onRevisionDraftChange: (draft) => {
-            state.skillWorkshopRevisionDraft = draft;
-            requestUpdate();
-          },
-          onRevisionCancel: () => {
-            state.skillWorkshopRevisionKey = null;
-            state.skillWorkshopRevisionDraft = "";
-            requestUpdate();
-          },
-          onRevisionSubmit: (key) =>
-            onRevisionRequest
-              ? void requestSkillWorkshopRevision(state, context, key, onRevisionRequest).finally(
-                  requestUpdate,
-                )
-              : undefined,
-          onPreviewFile: (key, path) => {
-            state.skillWorkshopSelectedKey = key;
-            state.skillWorkshopFilePreviewKey = path;
-            requestUpdate();
-          },
-          onClosePreview: () => {
+      <div class="plugins-hub-tabs-row">
+        ${renderPluginsHubTabs({
+          active: "workshop",
+          onSelect: (tab) => selectPluginsHubTab(context, tab),
+        })}
+      </div>
+      <wa-tab-panel
+        id="plugins-hub-panel"
+        class="sw-hub-panel"
+        name="workshop"
+        active
+        aria-labelledby="plugins-tab-workshop"
+      >
+        ${(() => {
+          const visibleProposals = filterSkillWorkshopProposals(
+            state.skillWorkshopProposals,
+            state.skillWorkshopStatusFilter,
+            state.skillWorkshopQuery,
+          );
+          const selectedIndex = visibleProposals.findIndex(
+            (proposal) => proposal.key === state.skillWorkshopSelectedKey,
+          );
+          const selectProposal = (key: string) => {
             state.skillWorkshopFilePreviewKey = null;
-            state.skillWorkshopFilePreviewQuery = "";
+            void selectSkillWorkshopProposal(state, context, key).finally(requestUpdate);
             requestUpdate();
-          },
-        });
-      })()}
+          };
+          const selectRelativeProposal = (delta: -1 | 1) => {
+            if (visibleProposals.length === 0) {
+              return;
+            }
+            const nextIndex =
+              selectedIndex < 0
+                ? 0
+                : (selectedIndex + delta + visibleProposals.length) % visibleProposals.length;
+            const nextProposal = visibleProposals[nextIndex];
+            if (nextProposal) {
+              selectProposal(nextProposal.key);
+            }
+          };
+          const selectVisibleFallback = (proposals: typeof visibleProposals) => {
+            if (
+              proposals.length === 0 ||
+              proposals.some((proposal) => proposal.key === state.skillWorkshopSelectedKey)
+            ) {
+              return;
+            }
+            const firstProposal = proposals[0];
+            if (firstProposal) {
+              selectProposal(firstProposal.key);
+            }
+          };
+          return html`<wa-tab-panel
+            id="skill-workshop-mode-panel"
+            name=${state.skillWorkshopMode}
+            active
+            aria-labelledby=${`skill-workshop-mode-tab-${state.skillWorkshopMode}`}
+          >
+            ${renderSkillWorkshop({
+              loading: state.skillWorkshopLoading,
+              error: state.skillWorkshopError,
+              inspectingKey: state.skillWorkshopInspectingKey,
+              proposals: state.skillWorkshopProposals,
+              selectedKey: state.skillWorkshopSelectedKey,
+              statusFilter: state.skillWorkshopStatusFilter,
+              query: state.skillWorkshopQuery,
+              filePreviewKey: state.skillWorkshopFilePreviewKey,
+              filePreviewQuery: state.skillWorkshopFilePreviewQuery,
+              queueWidth: state.skillWorkshopQueueWidth,
+              mode: state.skillWorkshopMode,
+              actionBusy: state.skillWorkshopActionBusy,
+              actionNotice: state.skillWorkshopActionNotice,
+              revisionKey: state.skillWorkshopRevisionKey,
+              revisionDraft: state.skillWorkshopRevisionDraft,
+              assistantName: context.config.current.assistantIdentity.name,
+              workshopAgentName,
+              selfLearning,
+              historyScan: state.skillWorkshopHistoryScan,
+              counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
+              onRetry: () => {
+                // Force past the loaded/error latch; the loading guard still
+                // prevents duplicate in-flight requests.
+                void loadSkillWorkshopProposals(state, context, { force: true }).finally(
+                  requestUpdate,
+                );
+                requestUpdate();
+              },
+              onStatusFilterChange: (status) => {
+                state.skillWorkshopStatusFilter = status;
+                requestUpdate();
+                selectVisibleFallback(
+                  filterSkillWorkshopProposals(
+                    state.skillWorkshopProposals,
+                    status,
+                    state.skillWorkshopQuery,
+                  ),
+                );
+              },
+              onQueryChange: (query) => {
+                state.skillWorkshopQuery = query;
+                requestUpdate();
+                selectVisibleFallback(
+                  filterSkillWorkshopProposals(
+                    state.skillWorkshopProposals,
+                    state.skillWorkshopStatusFilter,
+                    query,
+                  ),
+                );
+              },
+              onFilePreviewQueryChange: (query) => {
+                state.skillWorkshopFilePreviewQuery = query;
+                requestUpdate();
+              },
+              onQueueWidthChange: (width) => {
+                state.skillWorkshopQueueWidth = width;
+                requestUpdate();
+              },
+              onModeChange: (mode) => setSkillWorkshopMode(state, mode, requestUpdate),
+              onSelect: selectProposal,
+              onPrev: () => selectRelativeProposal(-1),
+              onNext: () => selectRelativeProposal(1),
+              onApply: (key) => {
+                void runSkillWorkshopLifecycleAction(state, context, "apply", key).finally(
+                  requestUpdate,
+                );
+                requestUpdate();
+              },
+              onRevise: (key) => {
+                state.skillWorkshopRevisionKey = key;
+                state.skillWorkshopRevisionDraft = "";
+                requestUpdate();
+              },
+              onReject: (key) => {
+                void runSkillWorkshopLifecycleAction(state, context, "reject", key).finally(
+                  requestUpdate,
+                );
+                requestUpdate();
+              },
+              onRevisionDraftChange: (draft) => {
+                state.skillWorkshopRevisionDraft = draft;
+                requestUpdate();
+              },
+              onRevisionCancel: () => {
+                state.skillWorkshopRevisionKey = null;
+                state.skillWorkshopRevisionDraft = "";
+                requestUpdate();
+              },
+              onRevisionSubmit: (key) =>
+                onRevisionRequest
+                  ? void requestSkillWorkshopRevision(
+                      state,
+                      context,
+                      key,
+                      onRevisionRequest,
+                    ).finally(requestUpdate)
+                  : undefined,
+              onPreviewFile: (key, path) => {
+                state.skillWorkshopSelectedKey = key;
+                state.skillWorkshopFilePreviewKey = path;
+                requestUpdate();
+              },
+              onClosePreview: () => {
+                state.skillWorkshopFilePreviewKey = null;
+                state.skillWorkshopFilePreviewQuery = "";
+                requestUpdate();
+              },
+              onSelfLearningToggle,
+              onHistoryScan,
+            })}
+          </wa-tab-panel>`;
+        })()}
+      </wa-tab-panel>
     </section>
   `;
 }
@@ -375,6 +318,8 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   private selectedAgentId?: string | null;
   private hasBoundSessions = false;
   private sessionsSource?: SkillWorkshopPageContext["sessions"];
+  private selfLearningBusy = false;
+  private selfLearningError: string | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context,
@@ -386,7 +331,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
           const gateway = context.gateway;
           this.gatewaySource = gateway;
           this.gatewayClient = gateway.snapshot.client;
-          this.gatewayConnected = gateway.snapshot.connected;
+          this.gatewayConnected = gateway.snapshot.phase === "connected";
           this.agentSelectionSource = context.agentSelection;
           this.selectedAgentId = context.agentSelection.state.selectedId;
           this.sessionsSource = context.sessions;
@@ -403,7 +348,8 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         const clientChanged =
           this.gatewaySource !== undefined && this.gatewayClient !== snapshot.client;
         const connectionChanged =
-          this.gatewaySource !== undefined && this.gatewayConnected !== snapshot.connected;
+          this.gatewaySource !== undefined &&
+          this.gatewayConnected !== (snapshot.phase === "connected");
         this.applyGatewaySnapshot(
           gateway,
           snapshot,
@@ -415,7 +361,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
           }
           const sourceEpochChanged =
             nextSnapshot.client !== this.gatewayClient ||
-            nextSnapshot.connected !== this.gatewayConnected;
+            (nextSnapshot.phase === "connected") !== this.gatewayConnected;
           this.applyGatewaySnapshot(gateway, nextSnapshot, sourceEpochChanged);
         });
         return cleanup;
@@ -470,6 +416,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.agentIdentity,
       (agentIdentity, notify) => agentIdentity.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
     );
 
   private readonly handleRevisionRequest: SkillWorkshopRevisionRequest = async (
@@ -499,7 +449,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       return;
     }
     if (!sessionKey) {
-      throw new Error(scope.sessions.state.error ?? "Could not prepare a Skill Workshop session.");
+      throw new Error(scope.sessions.state.error ?? "Could not prepare a Skill Workshop thread.");
     }
     try {
       scope.revision.prepare({
@@ -530,10 +480,29 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   }
 
   override updated() {
-    if (this.gatewayConnected && !this.state?.skillWorkshopLoaded) {
+    // Only kick a load when none is in flight and the last attempt did not
+    // fail: loadProposals early-returns resolve immediately and their finally
+    // schedules another update, so re-kicking here would spin forever when a
+    // load stays pending or the gateway keeps erroring.
+    const state = this.state;
+    const canLoad =
+      state &&
+      !state.skillWorkshopLoaded &&
+      !state.skillWorkshopLoading &&
+      !state.skillWorkshopError;
+    if (this.gatewayConnected && canLoad) {
       this.loadProposals(false);
     }
     this.ensureWorkshopAgentIdentity();
+    const runtimeConfig = this.context?.runtimeConfig;
+    if (
+      runtimeConfig &&
+      this.gatewayConnected &&
+      !runtimeConfig.state.configSnapshot &&
+      !runtimeConfig.state.configLoading
+    ) {
+      void runtimeConfig.ensureLoaded();
+    }
   }
 
   private readonly requestPageUpdate = () => {
@@ -568,53 +537,78 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   ) {
     this.gatewaySource = gateway;
     this.gatewayClient = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (sourceEpochChanged) {
       this.resetSourceState();
     }
-    if (snapshot.connected && (sourceEpochChanged || !this.state?.skillWorkshopLoaded)) {
+    if (
+      snapshot.phase === "connected" &&
+      (sourceEpochChanged || !this.state?.skillWorkshopLoaded)
+    ) {
       this.loadProposals(sourceEpochChanged);
     }
   }
 
   private captureSourceScope(): SkillWorkshopSourceScope | null {
-    const state = this.state;
-    const context = this.context;
-    if (!state || !context) {
-      return null;
-    }
-    return {
-      state,
-      context,
+    return captureSkillWorkshopSourceScope({
+      state: this.state,
+      context: this.context,
       epoch: this.sourceEpoch,
-      gateway: context.gateway,
-      agentSelection: context.agentSelection,
-      sessions: context.sessions,
-      revision: context.skillWorkshopRevision,
-      navigate: context.navigate,
-    };
+    });
   }
 
   private isCurrentSourceScope(scope: SkillWorkshopSourceScope): boolean {
-    return (
-      this.state === scope.state &&
-      this.context === scope.context &&
-      this.sourceEpoch === scope.epoch &&
-      this.context.gateway === scope.gateway &&
-      this.context.agentSelection === scope.agentSelection &&
-      this.context.sessions === scope.sessions &&
-      this.context.skillWorkshopRevision === scope.revision &&
-      this.context.navigate === scope.navigate
-    );
+    return isCurrentSkillWorkshopSourceScope(scope, {
+      state: this.state,
+      context: this.context,
+      epoch: this.sourceEpoch,
+    });
   }
 
   private loadProposals(force: boolean) {
     const state = this.state;
     const context = this.context;
-    if (!state || !context || !context.gateway.snapshot.connected) {
+    if (!state || !context || context.gateway.snapshot.phase !== "connected") {
       return;
     }
-    void loadSkillWorkshopProposals(state, context, { force }).finally(this.requestPageUpdate);
+    void loadSkillWorkshopPageData({ state, context, force }).finally(this.requestPageUpdate);
+  }
+
+  private readonly handleHistoryScan = () => {
+    const scope = this.captureSourceScope();
+    if (!scope) {
+      return;
+    }
+    void runSkillWorkshopPageHistoryScan({
+      state: scope.state,
+      context: scope.context,
+      current: () => {
+        const state = this.state;
+        const context = this.context;
+        return state && context ? { state, context } : undefined;
+      },
+    }).finally(this.requestPageUpdate);
+    this.requestPageUpdate();
+  };
+
+  private readonly handleSelfLearningToggle = (enabled: boolean) => {
+    void this.applySelfLearningToggle(enabled);
+  };
+
+  private async applySelfLearningToggle(enabled: boolean): Promise<void> {
+    const runtimeConfig = this.context?.runtimeConfig;
+    if (!runtimeConfig || this.selfLearningBusy) {
+      return;
+    }
+    this.selfLearningBusy = true;
+    this.selfLearningError = null;
+    this.requestPageUpdate();
+    try {
+      this.selfLearningError = await setSelfLearningEnabled(runtimeConfig, enabled);
+    } finally {
+      this.selfLearningBusy = false;
+      this.requestPageUpdate();
+    }
   }
 
   private ensureWorkshopAgentIdentity(): void {
@@ -641,6 +635,13 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
             workshopAgentName:
               this.context.agentIdentity.get(this.state.skillWorkshopAgentId)?.name?.trim() ?? "",
             onRevisionRequest: this.onRevisionRequest ?? this.handleRevisionRequest,
+            selfLearning: resolveSelfLearning(
+              this.context.runtimeConfig,
+              this.selfLearningBusy,
+              this.selfLearningError,
+            ),
+            onSelfLearningToggle: this.handleSelfLearningToggle,
+            onHistoryScan: this.handleHistoryScan,
           },
           this.requestPageUpdate,
         )

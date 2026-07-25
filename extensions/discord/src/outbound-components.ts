@@ -9,8 +9,11 @@ import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./co
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
 type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
 
-export const DISCORD_PRESENTATION_TEXT_LIMIT = 2000;
 const DISCORD_MESSAGE_COMPONENT_LIMIT = 40;
+const DISCORD_TEXT_DISPLAY_LIMIT = 2000;
+const DISCORD_CONTEXT_PREFIX_LENGTH = Array.from("-# ").length;
+
+const DISCORD_PRESENTATION_TEXT_LIMIT = DISCORD_TEXT_DISPLAY_LIMIT - DISCORD_CONTEXT_PREFIX_LENGTH;
 
 export const DISCORD_PRESENTATION_CAPABILITIES = {
   supported: true,
@@ -112,6 +115,9 @@ export function isDiscordComponentSpecWithinMessageLimit(params: {
   includesMedia?: boolean;
 }): boolean {
   const countedSpec = addPayloadTextFallback(params.spec, { text: params.fallbackText });
+  if (countedSpec.text && Array.from(countedSpec.text).length > DISCORD_TEXT_DISPLAY_LIMIT) {
+    return false;
+  }
   return (
     countDiscordMessageComponents({
       spec: countedSpec,

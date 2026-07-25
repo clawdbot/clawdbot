@@ -129,7 +129,7 @@ improves subsequent results. Max 1000 chars on `parallel`; the free
 
 <ParamField path="client_model" type="string">
 Optional identifier of the model making the call (e.g. `claude-opus-4-7`,
-`gpt-5.5`), max 100 chars. Lets Parallel tailor default settings for your
+`gpt-5.6-sol`), max 100 chars. Lets Parallel tailor default settings for your
 model's capabilities. Pass the exact active model slug; do not shorten to a
 family alias.
 </ParamField>

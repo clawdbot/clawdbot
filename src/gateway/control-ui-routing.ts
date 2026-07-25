@@ -23,6 +23,23 @@ export function isControlUiPluginManagerRequest(params: {
   return params.pathname === path || params.pathname === `${path}/`;
 }
 
+/** Core-owned standalone approval document namespace, before plugin routing. */
+export function isControlUiApprovalDocumentPath(params: {
+  basePath: string;
+  pathname: string;
+}): boolean {
+  const root = `${params.basePath}/approve`;
+  if (params.pathname === root || params.pathname === `${root}/`) {
+    return true;
+  }
+  const prefix = `${root}/`;
+  if (!params.pathname.startsWith(prefix)) {
+    return false;
+  }
+  const encodedId = params.pathname.slice(prefix.length);
+  return encodedId.length > 0 && !encodedId.includes("/");
+}
+
 /** Classify an HTTP request as Control UI serving, redirect, 404, or non-Control-UI. */
 export function classifyControlUiRequest(params: {
   basePath: string;
@@ -46,6 +63,10 @@ export function classifyControlUiRequest(params: {
       return { kind: "not-control-ui" };
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
+      return { kind: "not-control-ui" };
+    }
+    // Disabled OpenAI-compatible endpoints must return 404, not the SPA HTML.
+    if (pathname === "/v1" || pathname.startsWith("/v1/")) {
       return { kind: "not-control-ui" };
     }
     if (!isReadHttpMethod(method)) {

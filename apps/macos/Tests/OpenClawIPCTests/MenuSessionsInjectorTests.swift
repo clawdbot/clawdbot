@@ -94,16 +94,14 @@ struct MenuSessionsInjectorTests {
                     provider: "anthropic",
                     displayName: "Claude",
                     windows: [GatewayUsageWindow(label: "5h", usedPercent: 12, resetAt: nil)],
-                    plan: "Pro",
-                    error: nil),
+                    plan: "Pro"),
                 GatewayUsageProvider(
                     provider: "openai",
                     displayName: "Codex",
                     windows: [GatewayUsageWindow(label: "day", usedPercent: 3, resetAt: nil)],
-                    plan: nil,
-                    error: nil),
+                    plan: nil),
             ])
-        injector.setTestingUsageSummary(usage, errorText: nil)
+        injector.setTestingUsageSummary(usage)
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Header", action: nil, keyEquivalent: ""))

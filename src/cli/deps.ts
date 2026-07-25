@@ -1,12 +1,8 @@
 // Default CLI dependency surface with lazy outbound channel send adapters.
 import { normalizeChannelId } from "../channels/registry.js";
-import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { CliDeps } from "./deps.types.js";
-import {
-  CLI_OUTBOUND_SEND_FACTORY,
-  createOutboundSendDepsFromCliSource,
-} from "./outbound-send-mapping.js";
+import { CLI_OUTBOUND_SEND_FACTORY } from "./outbound-send-mapping.js";
 
 /**
  * Lazy-loaded per-channel send functions, keyed by channel ID.
@@ -118,6 +114,4 @@ export function createDefaultDeps(): CliDeps {
   });
 }
 
-export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
-  return createOutboundSendDepsFromCliSource(deps);
-}
+export { createOutboundSendDeps } from "./outbound-send-deps.js";

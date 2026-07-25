@@ -58,8 +58,6 @@ public enum WakeWordGate {
         let normalized: String
         let start: TimeInterval
         let end: TimeInterval
-        let range: Range<String.Index>?
-        let text: String
     }
 
     private struct TriggerTokens {
@@ -212,9 +210,7 @@ public enum WakeWordGate {
             return Token(
                 normalized: normalized,
                 start: segment.start,
-                end: segment.end,
-                range: segment.range,
-                text: segment.text)
+                end: segment.end)
         }
     }
 

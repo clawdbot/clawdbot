@@ -1,11 +1,11 @@
 /** macOS Chrome-family cookie database decryption and Playwright mapping. */
-import { execFile } from "node:child_process";
 import crypto from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type SystemBrowser = "chrome" | "brave" | "edge" | "chromium";
 
-export type PlaywrightCookie = {
+type PlaywrightCookie = {
   name: string;
   value: string;
   domain: string;
@@ -16,7 +16,7 @@ export type PlaywrightCookie = {
   sameSite?: "Strict" | "Lax" | "None";
 };
 
-export type ChromeCookieRow = {
+type ChromeCookieRow = {
   host_key: string;
   top_frame_site_key: string;
   name: string;
@@ -30,7 +30,7 @@ export type ChromeCookieRow = {
   samesite: number | bigint;
 };
 
-export type CookieImportCounts = {
+type CookieImportCounts = {
   total: number;
   imported: number;
   failed: number;
@@ -38,7 +38,7 @@ export type CookieImportCounts = {
 };
 
 type KeychainEntry = { service: string; account: string };
-export type KeychainSecretReader = (entry: KeychainEntry) => Promise<Buffer>;
+export type KeychainSecretReader = (entry: KeychainEntry, signal?: AbortSignal) => Promise<Buffer>;
 
 const KEYCHAIN_ENTRIES: Record<SystemBrowser, KeychainEntry> = {
   chrome: { service: "Chrome Safe Storage", account: "Chrome" },
@@ -67,44 +67,51 @@ function isAsciiWhitespace(value: number): boolean {
 }
 
 /** Read the browser Safe Storage secret. The OS consent prompt is intentional. */
-export async function readKeychainSecret(entry: KeychainEntry): Promise<Buffer> {
-  return await new Promise((resolve, reject) => {
-    execFile(
-      "security",
-      ["find-generic-password", "-w", "-s", entry.service, "-a", entry.account],
-      { encoding: "buffer" },
-      (error, stdout) => {
-        if (error) {
-          reject(
-            new Error(
-              `could not read ${entry.service} from macOS Keychain; approve the prompt and retry`,
-            ),
-          );
-          return;
-        }
-        const raw = Buffer.from(stdout);
-        let start = 0;
-        let end = raw.length;
-        while (start < end && isAsciiWhitespace(raw[start])) {
-          start += 1;
-        }
-        while (end > start && isAsciiWhitespace(raw[end - 1])) {
-          end -= 1;
-        }
-        const secret = Buffer.from(raw.subarray(start, end));
-        raw.fill(0);
-        if (secret.length === 0) {
-          reject(new Error(`macOS Keychain returned an empty ${entry.service} secret`));
-          return;
-        }
-        resolve(secret);
+async function readKeychainSecret(entry: KeychainEntry, signal?: AbortSignal): Promise<Buffer> {
+  signal?.throwIfAborted();
+  let stdout: Buffer;
+  try {
+    const result = await runCommandBuffered(
+      ["security", "find-generic-password", "-w", "-s", entry.service, "-a", entry.account],
+      {
+        signal,
+        maxOutputBytes: 1024 * 1024,
       },
     );
-  });
+    if (result.termination !== "exit" || result.code !== 0) {
+      throw result.error ?? new Error(`security exited with code ${result.code ?? "unknown"}`);
+    }
+    stdout = result.stdout;
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error("Browser cookie import aborted.", { cause: signal.reason ?? error });
+    }
+    throw new Error(
+      `could not read ${entry.service} from macOS Keychain; approve the prompt and retry`,
+      { cause: error },
+    );
+  }
+  const raw = stdout;
+  let start = 0;
+  let end = raw.length;
+  while (start < end && isAsciiWhitespace(raw.readUInt8(start))) {
+    start += 1;
+  }
+  while (end > start && isAsciiWhitespace(raw.readUInt8(end - 1))) {
+    end -= 1;
+  }
+  const secret = Buffer.from(raw.subarray(start, end));
+  raw.fill(0);
+  if (secret.length === 0) {
+    throw new Error(`macOS Keychain returned an empty ${entry.service} secret`);
+  }
+  return secret;
 }
 
 /** Convert Chromium's Windows-epoch microseconds to Unix seconds. */
-export function chromeFiletimeToUnixSeconds(value: number | bigint): number | undefined {
+function chromeFiletimeToUnixSeconds(value: number | bigint): number | undefined {
   if (typeof value === "bigint") {
     const seconds = value / 1_000_000n - BigInt(CHROME_EPOCH_OFFSET_SECONDS);
     return seconds > 0n && seconds <= 9_999_999_999n ? Number(seconds) : undefined;
@@ -117,7 +124,7 @@ export function chromeFiletimeToUnixSeconds(value: number | bigint): number | un
 }
 
 /** Map Chrome SameSite storage values to Playwright's cookie contract. */
-export function mapChromeSameSite(
+function mapChromeSameSite(
   value: number | bigint,
   secure: boolean,
 ): PlaywrightCookie["sameSite"] | undefined {
@@ -187,11 +194,12 @@ function matchesDomain(hostKey: string, domains: readonly string[] | undefined):
 }
 
 /** Decrypt and map cookie rows without exposing any cookie values in the result metadata. */
-export async function decryptChromeCookieRows(params: {
+async function decryptChromeCookieRows(params: {
   browser: SystemBrowser;
   rows: readonly ChromeCookieRow[];
   domains?: readonly string[];
   readSecret?: KeychainSecretReader;
+  signal?: AbortSignal;
 }): Promise<{ cookies: PlaywrightCookie[]; counts: CookieImportCounts; domains: string[] }> {
   const counts: CookieImportCounts = {
     total: params.rows.length,
@@ -216,13 +224,14 @@ export async function decryptChromeCookieRows(params: {
   }
 
   const readSecret = params.readSecret ?? readKeychainSecret;
-  const secret = await readSecret(KEYCHAIN_ENTRIES[params.browser]);
+  const secret = await readSecret(KEYCHAIN_ENTRIES[params.browser], params.signal);
   let key: Buffer | undefined;
   const cookies: PlaywrightCookie[] = [];
   try {
     const decryptionKey = crypto.pbkdf2Sync(secret, "saltysalt", 1003, 16, "sha1");
     key = decryptionKey;
     for (const row of selected) {
+      params.signal?.throwIfAborted();
       const encrypted = Buffer.from(row.encrypted_value);
       if (encrypted.length > 0 && !encrypted.subarray(0, 3).equals(V10_PREFIX)) {
         counts.skipped += 1;
@@ -254,8 +263,9 @@ export async function readChromeCookiesDatabase(params: {
   databasePath: string;
   domains?: readonly string[];
   readSecret?: KeychainSecretReader;
+  signal?: AbortSignal;
 }) {
-  const database = new DatabaseSync(params.databasePath, { readOnly: true });
+  const database = openNodeSqliteDatabase(params.databasePath, { readOnly: true });
   try {
     const statement = database.prepare(COOKIE_QUERY);
     statement.setReadBigInts(true);
@@ -265,6 +275,7 @@ export async function readChromeCookiesDatabase(params: {
       rows,
       domains: params.domains,
       readSecret: params.readSecret,
+      signal: params.signal,
     });
   } finally {
     database.close();

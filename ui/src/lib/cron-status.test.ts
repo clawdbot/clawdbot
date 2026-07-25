@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { isCronJobActiveFailure } from "./cron-status.ts";

@@ -1,7 +1,7 @@
 /** Tests before-tool-call hook ordering, mutation, and cancellation behavior. */
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks } from "./hooks.test-helpers.js";
+import { addStaticTestHooks } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginHookToolContext } from "./types.js";
 import type { PluginHookBeforeToolCallResult } from "./types.js";

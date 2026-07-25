@@ -46,23 +46,6 @@ export function resolveMatrixCredentialsPath(params: {
   );
 }
 
-export function resolveMatrixLegacyFlatStoreRoot(stateDir: string): string {
-  return path.join(stateDir, "matrix");
-}
-
-export function resolveMatrixLegacyFlatStoragePaths(stateDir: string): {
-  rootDir: string;
-  storagePath: string;
-  cryptoPath: string;
-} {
-  const rootDir = resolveMatrixLegacyFlatStoreRoot(stateDir);
-  return {
-    rootDir,
-    storagePath: path.join(rootDir, "bot-storage.json"),
-    cryptoPath: path.join(rootDir, "crypto"),
-  };
-}
-
 export function resolveMatrixAccountStorageRoot(params: {
   stateDir: string;
   homeserver: string;

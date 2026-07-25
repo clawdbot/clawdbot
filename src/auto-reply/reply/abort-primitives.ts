@@ -122,11 +122,3 @@ export function setAbortMemory(key: string, value: boolean): void {
   ABORT_MEMORY.set(normalized, true);
   pruneAbortMemory();
 }
-
-export function getAbortMemorySizeForTest(): number {
-  return ABORT_MEMORY.size;
-}
-
-export function resetAbortMemoryForTest(): void {
-  ABORT_MEMORY.clear();
-}

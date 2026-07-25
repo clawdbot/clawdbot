@@ -1,9 +1,11 @@
 // Memory Core plugin module implements manager embedding ops behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,
+  isEmbeddingBatchUnavailableError,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -118,7 +120,7 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
   );
 }
 
-export function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[][] {
+function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[][] {
   const limit = Math.max(1, Math.floor(maxRequests));
   const batches: T[][] = [];
   for (let start = 0; start < chunks.length; start += limit) {
@@ -127,7 +129,7 @@ export function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: numb
   return batches;
 }
 
-export function resolveEmbeddingTimeoutMs(params: {
+function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
   providerId?: string;
   providerRuntime?: Pick<
@@ -159,7 +161,7 @@ export function resolveEmbeddingTimeoutMs(params: {
     : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
 }
 
-export function resolveMemoryIndexConcurrency(params: {
+function resolveMemoryIndexConcurrency(params: {
   batch: { enabled: boolean; concurrency: number };
   configuredNonBatchConcurrency?: number;
   providerId?: string;
@@ -174,7 +176,7 @@ export function resolveMemoryIndexConcurrency(params: {
   return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
-export async function runEmbeddingOperationWithTimeout<T>(params: {
+async function runEmbeddingOperationWithTimeout<T>(params: {
   timeoutMs: number;
   message: string;
   /** Caller-owned cancellation, merged with the per-call watchdog abort. */
@@ -304,7 +306,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected computeProviderKey(): string {
-    return this.resolveProviderIndexIdentities()[0].providerKey;
+    return expectDefined(
+      this.resolveProviderIndexIdentities().at(0),
+      "primary memory provider identity",
+    ).providerKey;
   }
 
   protected resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[] {
@@ -676,7 +681,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     const message = formatErrorMessage(result.error);
-    const forceDisable = /asyncBatchEmbedContent not available/i.test(message);
+    const forceDisable = isEmbeddingBatchUnavailableError(result.error);
     const failure = await this.recordBatchFailure({
       provider: params.provider,
       message,
@@ -699,15 +704,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private clearIndexedFileData(pathname: string, source: MemorySource): void {
-    if (this.vector.enabled) {
-      try {
-        this.db
-          .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
-          )
-          .run(pathname, source);
-      } catch {}
-    }
+    this.deleteVectorRowsForSource(pathname, source);
     if (this.fts.enabled && this.fts.available) {
       try {
         deleteMemoryFtsRows({
@@ -756,10 +753,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     vectorReady: boolean,
   ): void {
     const now = Date.now();
+    const needsVectorRebuild = !vectorReady && embeddings.some((embedding) => embedding.length > 0);
     runSqliteImmediateTransactionSync(this.db, () => {
       this.clearIndexedFileData(entry.path, source);
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
+      for (const [i, chunk] of chunks.entries()) {
         const embedding = embeddings[i] ?? [];
         const id = hashText(
           `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
@@ -805,6 +802,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }
       }
       this.upsertFileRecord(entry, source);
+      if (needsVectorRebuild) {
+        this.markVectorRebuildRequired();
+      }
     });
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
       vectorEnabled: this.vector.enabled,
@@ -1034,3 +1034,4 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

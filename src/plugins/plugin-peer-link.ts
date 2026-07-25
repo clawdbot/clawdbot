@@ -340,13 +340,24 @@ export async function linkOpenClawPeerDependencies(params: {
 export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
   npmRoot: string;
   logger: PluginPeerLinkLogger;
+  onPackageReadError?: (error: unknown, packageDir: string) => void;
 }): Promise<RelinkManagedNpmRootResult> {
   let checked = 0;
   let attempted = 0;
   let repaired = 0;
   let skipped = 0;
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
-    const peerDependencies = await readPackagePeerDependencies(packageDir);
+    let peerDependencies: Record<string, string>;
+    try {
+      peerDependencies = await readPackagePeerDependencies(packageDir);
+    } catch (error) {
+      if (!params.onPackageReadError) {
+        throw error;
+      }
+      params.onPackageReadError(error, packageDir);
+      skipped += 1;
+      continue;
+    }
     if (!Object.hasOwn(peerDependencies, "openclaw")) {
       continue;
     }
@@ -365,6 +376,7 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
 
 export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
   npmRoot: string;
+  onPackageReadError?: (error: unknown, packageDir: string) => void;
 }): Promise<AuditManagedNpmRootResult> {
   const hostRoot = resolveOpenClawPackageRootSync({
     argv1: process.argv[1],
@@ -378,7 +390,16 @@ export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
   let checked = 0;
   const issues: OpenClawPeerLinkAuditIssue[] = [];
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
-    const peerDependencies = await readPackagePeerDependencies(packageDir);
+    let peerDependencies: Record<string, string>;
+    try {
+      peerDependencies = await readPackagePeerDependencies(packageDir);
+    } catch (error) {
+      if (!params.onPackageReadError) {
+        throw error;
+      }
+      params.onPackageReadError(error, packageDir);
+      continue;
+    }
     if (!Object.hasOwn(peerDependencies, "openclaw")) {
       continue;
     }

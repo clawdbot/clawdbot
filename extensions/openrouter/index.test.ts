@@ -57,6 +57,9 @@ function createOpenRouterDoneStreamWithoutGeneration() {
 }
 
 type OpenRouterManifest = {
+  modelCatalog?: {
+    discovery?: Record<string, string>;
+  };
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -76,6 +79,10 @@ function readManifest(): OpenRouterManifest {
 }
 
 describe("openrouter provider hooks", () => {
+  it("declares runtime text catalog discovery", () => {
+    expect(readManifest().modelCatalog?.discovery).toEqual({ openrouter: "runtime" });
+  });
+
   it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
     const {
       providers,
@@ -279,6 +286,40 @@ describe("openrouter provider hooks", () => {
       "Analysis models: google/gemini-3.5-flash, moonshotai/kimi-k2.6, deepseek/deepseek-v4-pro.",
     );
     expect(contribution?.dynamicSuffix).toContain("Final Fusion model: google/gemini-3.5-flash.");
+  });
+
+  it("keeps bounded Fusion model IDs on valid UTF-16 boundaries", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const boundaryModelId = `${"a".repeat(255)}😀tail`;
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        analysis_models: [boundaryModelId],
+                        model: boundaryModelId,
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(contribution?.dynamicSuffix).toContain(`Analysis models: ${"a".repeat(255)}.`);
+    expect(contribution?.dynamicSuffix).toContain(`Final Fusion model: ${"a".repeat(255)}.`);
   });
 
   it("describes Fusion config from the canonical OpenRouter model key", async () => {
@@ -524,12 +565,6 @@ describe("openrouter provider hooks", () => {
         modelId: "openrouter/deepseek/deepseek-v4-flash",
       } as never)?.defaultLevel,
     ).toBe("high");
-    expect(
-      provider.supportsXHighThinking?.({
-        provider: "openrouter",
-        modelId: "openrouter/deepseek/deepseek-v4-pro",
-      } as never),
-    ).toBe(true);
     expect(
       provider.resolveThinkingProfile?.({
         provider: "openrouter",
@@ -1198,3 +1233,4 @@ describe("openrouter provider hooks", () => {
     expect(payloads[1]?.reasoning).toEqual({ effort: "high" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

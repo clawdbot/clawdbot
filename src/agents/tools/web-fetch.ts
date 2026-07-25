@@ -15,6 +15,8 @@ import { resolveWebProviderConfig } from "../../../packages/web-content-core/src
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
+import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -62,7 +64,7 @@ const WEB_FETCH_PROGRESS_THRESHOLD_MS = 5_000;
 const WEB_FETCH_PROGRESS_TEXT = "Fetching page content...";
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
-export const WEB_FETCH_SPILL_MAX_CHARS = 2_000_000;
+const WEB_FETCH_SPILL_MAX_CHARS = 2_000_000;
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -83,6 +85,46 @@ const WebFetchSchema = Type.Object({
     }),
   ),
 });
+
+const WebFetchOutputSchema = Type.Object(
+  {
+    url: Type.String(),
+    finalUrl: Type.String(),
+    status: Type.Integer({ minimum: 0 }),
+    contentType: Type.Optional(Type.String()),
+    title: Type.Optional(Type.String()),
+    extractMode: stringEnum(EXTRACT_MODES),
+    extractor: Type.String(),
+    externalContent: Type.Object(
+      {
+        untrusted: Type.Literal(true),
+        source: Type.Literal("web_fetch"),
+        wrapped: Type.Literal(true),
+        provider: Type.Optional(Type.String()),
+      },
+      { additionalProperties: false },
+    ),
+    truncated: Type.Boolean(),
+    length: Type.Integer({ minimum: 0 }),
+    rawLength: Type.Integer({ minimum: 0 }),
+    spill: Type.Optional(
+      Type.Object(
+        {
+          path: Type.String(),
+          chars: Type.Integer({ minimum: 0 }),
+          truncated: Type.Optional(Type.Literal(true)),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    fetchedAt: Type.String(),
+    tookMs: Type.Integer({ minimum: 0 }),
+    text: Type.String(),
+    warning: Type.Optional(Type.String()),
+    cached: Type.Optional(Type.Literal(true)),
+  },
+  { additionalProperties: false },
+);
 
 type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { fetch?: infer Fetch }
@@ -253,7 +295,7 @@ function formatWebFetchTerminalPresentation(result: unknown): { text: string } |
 
 function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedContent {
   if (maxChars <= 0) {
-    return { text: "", truncated: true, rawLength: value.length, wrappedLength: 0 };
+    return { text: "", truncated: true, rawLength: value.length, length: 0 };
   }
   const includeWarning = maxChars >= WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD;
   const wrapperOverhead = includeWarning
@@ -268,7 +310,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
       text: truncatedWrapper.text,
       truncated: true,
       rawLength: value.length,
-      wrappedLength: truncatedWrapper.text.length,
+      length: truncatedWrapper.text.length,
     };
   }
   const maxInner = Math.max(0, maxChars - wrapperOverhead);
@@ -290,7 +332,7 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
     text: wrappedText,
     truncated: truncated.truncated,
     rawLength: value.length,
-    wrappedLength: wrappedText.length,
+    length: wrappedText.length,
   };
 }
 
@@ -298,10 +340,12 @@ type WebFetchWrappedContent = {
   text: string;
   truncated: boolean;
   rawLength: number;
-  wrappedLength: number;
-  fullOutputPath?: string;
-  spilledChars?: number;
-  spillTruncated?: boolean;
+  length: number;
+  spill?: {
+    path: string;
+    chars: number;
+    truncated?: true;
+  };
 };
 
 async function spillWebFetchContent(
@@ -316,19 +360,19 @@ async function spillWebFetchContent(
   // maxChars/maxCharsCap bound the model-visible return text. Recoverable spill
   // uses this fixed file cap so vanished pages can still be read after truncation.
   const content = truncateUtf16Safe(value, WEB_FETCH_SPILL_MAX_CHARS);
-  const spilledChars = content.length;
-  const fullOutputPath = await writePrivateTempFile(
+  const spillChars = content.length;
+  const spillPath = await writePrivateTempFile(
     "openclaw-web-fetch",
     wrapWebContent(content, "web_fetch"),
   );
   const spillCapped = value.length > WEB_FETCH_SPILL_MAX_CHARS;
-  const spillTruncated = sourceTruncated || spillCapped;
+  const isSpillTruncated = sourceTruncated || spillCapped;
   const spillNote = sourceTruncated
     ? " Spilled available content from truncated response."
     : spillCapped
-      ? ` Spilled first ${spilledChars} chars.`
+      ? ` Spilled first ${spillChars} chars.`
       : "";
-  const fullOutputFooter = formatFullOutputFooter(fullOutputPath);
+  const fullOutputFooter = formatFullOutputFooter(spillPath);
   const footer = `\n\n[Showing truncated web_fetch content. ${fullOutputFooter}.${spillNote}]`;
   const compactFooter = `[${fullOutputFooter}]`;
   let visible = wrapped;
@@ -337,17 +381,19 @@ async function spillWebFetchContent(
     visible = wrapWebFetchContent(value, maxChars - footer.length);
     text = `${visible.text}${footer}`;
   } else if (compactFooter.length <= maxChars) {
-    visible = { ...wrapped, text: "", wrappedLength: 0 };
+    visible = { ...wrapped, text: "", length: 0 };
     text = compactFooter;
   }
   return {
     ...visible,
     truncated: true,
     text,
-    wrappedLength: text.length,
-    fullOutputPath,
-    spilledChars,
-    spillTruncated,
+    length: text.length,
+    spill: {
+      path: spillPath,
+      chars: spillChars,
+      ...(isSpillTruncated ? { truncated: true } : {}),
+    },
   };
 }
 
@@ -364,7 +410,12 @@ function normalizeContentType(value: string | null | undefined): string | undefi
   }
   const [raw] = value.split(";");
   const trimmed = raw?.trim();
-  return trimmed || undefined;
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function isJsonMediaType(value: string): boolean {
+  // Structured +json subtypes are single JSON documents; sequence formats are not.
+  return value === "application/json" || value.endsWith("+json");
 }
 
 type WebFetchRuntimeParams = {
@@ -428,7 +479,7 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
  * throw. Path and query whitespace is intentionally preserved — the WHATWG URL
  * parser percent-encodes those characters correctly per RFC 3986.
  */
-export function sanitizeWebFetchUrl(raw: string): string {
+function sanitizeWebFetchUrl(raw: string): string {
   let end = raw.length;
   while (end > 0 && raw.charCodeAt(end - 1) <= 0x20) {
     end -= 1;
@@ -436,6 +487,12 @@ export function sanitizeWebFetchUrl(raw: string): string {
   const trimmed = raw.slice(0, end).replace(/^\s+/, "");
   const repaired = trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
   return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.webFetchTestApi")] = {
+    sanitizeWebFetchUrl,
+  };
 }
 
 async function normalizeProviderWebFetchPayload(params: {
@@ -489,12 +546,9 @@ async function normalizeProviderWebFetchPayload(params: {
       provider: params.providerId,
     },
     truncated: wrapped.truncated,
-    length: wrapped.wrappedLength,
+    length: wrapped.length,
     rawLength: providerRawLength,
-    wrappedLength: wrapped.wrappedLength,
-    ...(wrapped.fullOutputPath ? { fullOutputPath: wrapped.fullOutputPath } : {}),
-    ...(wrapped.spilledChars !== undefined ? { spilledChars: wrapped.spilledChars } : {}),
-    ...(wrapped.spillTruncated ? { spillTruncated: true } : {}),
+    ...(wrapped.spill ? { spill: wrapped.spill } : {}),
     fetchedAt:
       typeof payload.fetchedAt === "string" && payload.fetchedAt
         ? payload.fetchedAt
@@ -547,14 +601,6 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           ...(allowIpv6UniqueLocalRange ? { allowIpv6UniqueLocalRange } : {}),
         }
       : undefined;
-  const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
-  );
-  const cached = readCache(FETCH_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
-
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(params.url);
@@ -563,6 +609,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
+  }
+  const cacheKey = normalizeCacheKey(
+    `fetch:${parsedUrl.href}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
+  );
+  const cached = readCache(FETCH_CACHE, cacheKey);
+  if (cached) {
+    return { ...cached.value, cached: true };
   }
 
   const start = Date.now();
@@ -655,13 +708,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     let title: string | undefined;
     let extractor = "raw";
     let text = body;
-    if (contentType.includes("text/markdown")) {
+    if (normalizedContentType === "text/markdown") {
       // Cloudflare Markdown for Agents: server returned pre-rendered markdown
       extractor = "cf-markdown";
       if (params.extractMode === "text") {
         text = markdownToText(body);
       }
-    } else if (contentType.includes("text/html")) {
+    } else if (normalizedContentType === "text/html") {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
@@ -718,7 +771,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
         );
       }
-    } else if (contentType.includes("application/json")) {
+    } else if (isJsonMediaType(normalizedContentType)) {
       try {
         text = JSON.stringify(JSON.parse(body), null, 2);
         extractor = "json";
@@ -742,7 +795,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       finalUrl, // Keep raw
       status: res.status,
       contentType: normalizedContentType, // Protocol metadata, don't wrap
-      title: wrappedTitle,
+      ...(wrappedTitle ? { title: wrappedTitle } : {}),
       extractMode: params.extractMode,
       extractor,
       externalContent: {
@@ -751,16 +804,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         wrapped: true,
       },
       truncated: wrapped.truncated,
-      length: wrapped.wrappedLength,
+      length: wrapped.length,
       rawLength: wrapped.rawLength, // Actual content length, not wrapped
-      wrappedLength: wrapped.wrappedLength,
-      ...(wrapped.fullOutputPath ? { fullOutputPath: wrapped.fullOutputPath } : {}),
-      ...(wrapped.spilledChars !== undefined ? { spilledChars: wrapped.spilledChars } : {}),
-      ...(wrapped.spillTruncated ? { spillTruncated: true } : {}),
+      ...(wrapped.spill ? { spill: wrapped.spill } : {}),
       fetchedAt: new Date().toISOString(),
       tookMs: Date.now() - start,
       text: wrapped.text,
-      warning: wrappedWarning,
+      ...(wrappedWarning ? { warning: wrappedWarning } : {}),
     };
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -785,20 +835,25 @@ export function createWebFetchTool(options?: {
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
-    description:
-      "Fetch URL and extract readable markdown/text. Lightweight page access; no browser automation.",
+    description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
+    outputSchema: WebFetchOutputSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(
-        {
+      const { config, preferRuntimeProviders, providerSelectionId, runtimeWebFetch } =
+        resolveWebFetchToolRuntimeContext({
           config: options?.config,
           lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
           runtimeWebFetch: options?.runtimeWebFetch,
-        },
-      );
+        });
       const executionFetch = resolveFetchConfig(config);
       if (!resolveFetchEnabled({ fetch: executionFetch, sandboxed: options?.sandboxed })) {
         throw new Error("web_fetch is disabled.");
+      }
+      if (providerSelectionId) {
+        assertSecretOwnerAvailable(
+          "capability",
+          runtimeWebSecretOwnerId("fetch", providerSelectionId),
+        );
       }
       const providerCacheKey =
         normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??
@@ -883,3 +938,4 @@ export function createWebFetchTool(options?: {
     formatWebFetchTerminalPresentation(result),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

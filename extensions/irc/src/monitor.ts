@@ -5,8 +5,11 @@ import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { handleIrcInbound } from "./inbound.js";
-import { isChannelTarget } from "./normalize.js";
-import { makeIrcMessageId } from "./protocol.js";
+import {
+  createIrcIngressMonitor,
+  type IrcIngressLifecycle,
+  type IrcIngressMonitor,
+} from "./irc-ingress.js";
 import type { RuntimeEnv } from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -18,25 +21,14 @@ type IrcMonitorOptions = {
   abortSignal?: AbortSignal;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
+  ingressQueue?: NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 };
 
 const IRC_MONITOR_RECONNECT_DELAY_MS = 1000;
 
-export function resolveIrcInboundTarget(params: { target: string; senderNick: string }): {
-  isGroup: boolean;
-  target: string;
-  rawTarget: string;
-} {
-  const rawTarget = params.target;
-  const isGroup = isChannelTarget(rawTarget);
-  if (isGroup) {
-    return { isGroup: true, target: rawTarget, rawTarget };
-  }
-  const senderNick = params.senderNick.trim();
-  return { isGroup: false, target: senderNick || rawTarget, rawTarget };
-}
-
-export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ stop: () => void }> {
+export async function monitorIrcProvider(
+  opts: IrcMonitorOptions,
+): Promise<{ stop: () => Promise<void> }> {
   const core = getIrcRuntime();
   const cfg = opts.config ?? (core.config.current() as CoreConfig);
   const account = resolveIrcAccount({
@@ -61,6 +53,8 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
   });
 
   let client: IrcClient | null = null;
+  let activeConnectionEpoch: string | null = null;
+  let ingressPause: Promise<void> = Promise.resolve();
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   const monitorAbort = new AbortController();
@@ -74,6 +68,68 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
       removeAbortListener = () => opts.abortSignal?.removeEventListener("abort", forwardAbort);
     }
   }
+
+  const ingress: IrcIngressMonitor = createIrcIngressMonitor({
+    accountId: account.accountId,
+    runtime,
+    ...(opts.ingressQueue ? { queue: opts.ingressQueue } : {}),
+    dispatch: async (
+      message,
+      turnAdoptionLifecycle: IrcIngressLifecycle,
+      context: { connectedNick: string; connectionEpoch: string },
+    ) => {
+      const activeClient = client;
+      if (!activeClient || stopped || monitorAbort.signal.aborted) {
+        return {
+          kind: "failed-retryable",
+          error: new Error("IRC transport disconnected before ingress dispatch."),
+        };
+      }
+      if (
+        normalizeLowercaseStringOrEmpty(message.senderNick) ===
+        normalizeLowercaseStringOrEmpty(context.connectedNick)
+      ) {
+        return { kind: "completed" };
+      }
+      // IRC nicknames can change owners between connections. Channel replay is
+      // safe, but a stale DM recipient cannot be revalidated after reconnect.
+      if (!message.isGroup && context.connectionEpoch !== activeConnectionEpoch) {
+        logger.warn?.(
+          `[${account.accountId}] dropping replayed IRC DM after the connection changed`,
+        );
+        return { kind: "completed" };
+      }
+      if (opts.onMessage) {
+        await opts.onMessage(message, activeClient);
+        return { kind: "completed" };
+      }
+      return await handleIrcInbound({
+        message,
+        account,
+        config: cfg,
+        runtime,
+        connectedNick: context.connectedNick,
+        turnAdoptionLifecycle,
+        sendReply: async (target, text) => {
+          const replyClient = client;
+          if (!replyClient || !replyClient.isReady() || stopped || monitorAbort.signal.aborted) {
+            throw new Error("IRC transport disconnected before reply send.");
+          }
+          if (!message.isGroup && context.connectionEpoch !== activeConnectionEpoch) {
+            throw new Error("IRC connection changed before private reply send.");
+          }
+          replyClient.sendPrivmsg(target, text);
+          opts.statusSink?.({ lastOutboundAt: Date.now() });
+          core.channel.activity.record({
+            channel: "irc",
+            accountId: account.accountId,
+            direction: "outbound",
+          });
+        },
+        statusSink: opts.statusSink,
+      });
+    },
+  });
 
   function scheduleReconnect() {
     if (stopped || monitorAbort.signal.aborted || reconnectTimer) {
@@ -96,6 +152,7 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     if (stopped || monitorAbort.signal.aborted) {
       return;
     }
+    const ingressConnection = ingress.openConnection();
     const nextClient = await connectIrcClient(
       buildIrcConnectOptions(account, {
         channels: account.config.channels,
@@ -117,6 +174,10 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
           if (stopped || monitorAbort.signal.aborted) {
             return;
           }
+          ingressPause = ingress.pause();
+          if (activeConnectionEpoch === ingressConnection.connectionEpoch) {
+            activeConnectionEpoch = null;
+          }
           client = null;
           logger.warn?.(
             `[${account.accountId}] IRC connection closed; reconnecting in ${IRC_MONITOR_RECONNECT_DELAY_MS}ms`,
@@ -124,60 +185,18 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
           scheduleReconnect();
         },
         onPrivmsg: async (event) => {
-          if (!client) {
-            return;
-          }
+          await ingressConnection.accept(event.rawLine, event.connectedNick);
           if (
             normalizeLowercaseStringOrEmpty(event.senderNick) ===
-            normalizeLowercaseStringOrEmpty(client.nick)
+            normalizeLowercaseStringOrEmpty(event.connectedNick)
           ) {
             return;
           }
-
-          const inboundTarget = resolveIrcInboundTarget({
-            target: event.target,
-            senderNick: event.senderNick,
-          });
-          const message: IrcInboundMessage = {
-            messageId: makeIrcMessageId(),
-            target: inboundTarget.target,
-            rawTarget: inboundTarget.rawTarget,
-            senderNick: event.senderNick,
-            senderUser: event.senderUser,
-            senderHost: event.senderHost,
-            text: event.text,
-            timestamp: Date.now(),
-            isGroup: inboundTarget.isGroup,
-          };
-
           core.channel.activity.record({
             channel: "irc",
             accountId: account.accountId,
             direction: "inbound",
-            at: message.timestamp,
-          });
-
-          if (opts.onMessage) {
-            await opts.onMessage(message, client);
-            return;
-          }
-
-          await handleIrcInbound({
-            message,
-            account,
-            config: cfg,
-            runtime,
-            connectedNick: client.nick,
-            sendReply: async (target, text) => {
-              client?.sendPrivmsg(target, text);
-              opts.statusSink?.({ lastOutboundAt: Date.now() });
-              core.channel.activity.record({
-                channel: "irc",
-                accountId: account.accountId,
-                direction: "outbound",
-              });
-            },
-            statusSink: opts.statusSink,
+            at: Date.now(),
           });
         },
       }),
@@ -187,28 +206,50 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
       return;
     }
     client = nextClient;
+    activeConnectionEpoch = ingressConnection.connectionEpoch;
+    await ingressPause;
+    if (client !== nextClient || !nextClient.isReady()) {
+      if (activeConnectionEpoch === ingressConnection.connectionEpoch) {
+        activeConnectionEpoch = null;
+      }
+      return;
+    }
+    ingress.start();
 
     logger.info(
       `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${nextClient.nick}`,
     );
   }
 
-  await connect();
+  try {
+    await connect();
+  } catch (error) {
+    removeAbortListener?.();
+    removeAbortListener = null;
+    await ingress.stop();
+    throw error;
+  }
 
+  let stopTask: Promise<void> | undefined;
   return {
     stop: () => {
-      stopped = true;
-      removeAbortListener?.();
-      removeAbortListener = null;
-      if (!monitorAbort.signal.aborted) {
-        monitorAbort.abort();
-      }
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      client?.quit("shutdown");
-      client = null;
+      stopTask ??= (async () => {
+        stopped = true;
+        removeAbortListener?.();
+        removeAbortListener = null;
+        if (!monitorAbort.signal.aborted) {
+          monitorAbort.abort();
+        }
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        client?.quit("shutdown");
+        client = null;
+        activeConnectionEpoch = null;
+        await ingress.stop();
+      })();
+      return stopTask;
     },
   };
 }

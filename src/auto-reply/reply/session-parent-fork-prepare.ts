@@ -1,4 +1,5 @@
 // Prepares parent-context fork metadata for guarded reply session initialization.
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery-clear.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
 
@@ -52,10 +53,17 @@ export async function prepareReplySessionParentFork(params: {
       `parentTokens=${decision.parentTokens ?? "unknown"}`,
   );
   params.warn(`forked session created: file=${fork.sessionFile}`);
+  // The fork replaces this thread's transcript identity; recovery state from
+  // the preseed row must not govern a later interruption of the fork.
   return {
     ...params.sessionEntry,
+    ...buildMainSessionRecoveryClearPatch(params.sessionEntry),
     sessionId: fork.sessionId,
     sessionFile: fork.sessionFile,
+    forkSource: {
+      sessionKey: params.parentSessionKey,
+      sessionId: parentEntry.sessionId,
+    },
     forkedFromParent: true,
     totalTokens: undefined,
     totalTokensFresh: false,

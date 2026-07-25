@@ -18,8 +18,8 @@ import {
 } from "../../net.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
-export const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
-export const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
+const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
+const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 type PairingLocalityKind =
   | "direct_local"
   | "cli_container_local"
@@ -42,6 +42,16 @@ type HandshakeConnectAuth = {
   approvalRuntimeToken?: string;
   agentRuntimeIdentityToken?: string;
 };
+
+export function isNativeAppUiClient(client: ConnectParams["client"]): boolean {
+  return (
+    client.mode === GATEWAY_CLIENT_MODES.UI &&
+    (client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.LINUX_APP ||
+      client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.ANDROID_APP)
+  );
+}
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
   const trimmedOrigin = requestOrigin?.trim();

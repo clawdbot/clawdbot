@@ -44,7 +44,7 @@ private enum VoiceWakeAudioError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidInputFormat:
-            "Microphone input format unavailable"
+            String(localized: "Microphone input format unavailable")
         }
     }
 }
@@ -227,7 +227,7 @@ final class VoiceWakeManager: NSObject {
                 self.tearDownRecognitionPipeline()
             }
             if self.isEnabled {
-                self.statusText = "Paused"
+                self.statusText = String(localized: "Paused")
             }
         } else if self.isEnabled {
             self.scheduleStart()
@@ -263,7 +263,7 @@ final class VoiceWakeManager: NSObject {
 
         guard self.suppressionReasons.isEmpty else {
             self.isListening = false
-            self.statusText = "Paused"
+            self.statusText = String(localized: "Paused")
             return
         }
 
@@ -273,15 +273,16 @@ final class VoiceWakeManager: NSObject {
             // The iOS Simulator’s audio stack is unreliable for long-running microphone capture.
             // (We’ve observed CoreAudio deadlocks after TCC permission prompts.)
             self.isListening = false
-            self.statusText = "Voice Wake isn’t supported on Simulator"
+            self.statusText = String(localized: "Voice Wake isn’t supported on Simulator")
             return
         }
 
-        self.statusText = "Requesting permissions…"
+        self.statusText = String(localized: "Requesting permissions…")
 
         let micOk = await Self.requestMicrophonePermission()
         guard micOk else {
-            self.statusText = Self.microphonePermissionMessage(kind: "Microphone")
+            self.statusText = Self.microphonePermissionMessage(
+                kind: String(localized: "Microphone"))
             self.isListening = false
             return
         }
@@ -289,7 +290,7 @@ final class VoiceWakeManager: NSObject {
         let speechOk = await Self.requestSpeechPermission()
         guard speechOk else {
             self.statusText = Self.permissionMessage(
-                kind: "Speech recognition",
+                kind: String(localized: "Speech recognition"),
                 status: SFSpeechRecognizer.authorizationStatus())
             self.isListening = false
             return
@@ -297,14 +298,16 @@ final class VoiceWakeManager: NSObject {
 
         self.speechRecognizer = SFSpeechRecognizer()
         guard self.speechRecognizer != nil else {
-            self.statusText = "Speech recognizer unavailable"
+            self.statusText = String(localized: "Speech recognizer unavailable")
             self.isListening = false
             return
         }
 
         guard self.isEnabled, self.suppressionReasons.isEmpty else {
             self.isListening = false
-            self.statusText = self.isEnabled ? "Paused" : "Off"
+            self.statusText = self.isEnabled
+                ? String(localized: "Paused")
+                : String(localized: "Off")
             return
         }
 
@@ -312,18 +315,20 @@ final class VoiceWakeManager: NSObject {
             try self.configureOwnedAudioSession()
             try self.startRecognition()
             self.isListening = true
-            self.statusText = "Listening"
+            self.statusText = String(localized: "Listening")
         } catch {
             self.isListening = false
             self.tearDownRecognitionPipeline()
-            self.statusText = "Start failed: \(error.localizedDescription)"
+            self.statusText = String(
+                format: String(localized: "Start failed: %@"),
+                error.localizedDescription)
         }
     }
 
     func stop() {
         self.isEnabled = false
         self.isListening = false
-        self.statusText = "Off"
+        self.statusText = String(localized: "Off")
         self.cancelScheduledStart()
         self.tearDownRecognitionPipeline()
     }
@@ -437,7 +442,9 @@ final class VoiceWakeManager: NSObject {
     {
         guard self.recognitionGeneration == recognitionGeneration else { return }
         if let errorText {
-            self.statusText = "Recognizer error: \(errorText)"
+            self.statusText = String(
+                format: String(localized: "Recognizer error: %@"),
+                errorText)
             self.isListening = false
             self.tearDownRecognitionPipeline()
             self.scheduleStart(after: self.recognitionErrorRestartDelayNs)
@@ -450,7 +457,7 @@ final class VoiceWakeManager: NSObject {
         if cmd == self.lastDispatched { return }
         self.lastDispatched = cmd
         self.lastTriggeredCommand = cmd
-        self.statusText = "Triggered"
+        self.statusText = String(localized: "Triggered")
 
         self.commandGeneration &+= 1
         let commandGeneration = self.commandGeneration
@@ -606,23 +613,37 @@ final class VoiceWakeManager: NSObject {
     {
         switch status {
         case .denied:
-            return "\(kind) permission denied"
+            return String(
+                format: String(localized: "%@ permission denied"),
+                kind)
         case .restricted:
-            return "\(kind) permission restricted"
+            return String(
+                format: String(localized: "%@ permission restricted"),
+                kind)
         case .notDetermined:
-            return "\(kind) permission not granted"
+            return String(
+                format: String(localized: "%@ permission not granted"),
+                kind)
         case .authorized:
-            return "\(kind) permission denied"
+            return String(
+                format: String(localized: "%@ permission denied"),
+                kind)
         @unknown default:
-            return "\(kind) permission denied"
+            return String(
+                format: String(localized: "%@ permission denied"),
+                kind)
         }
     }
 
     private nonisolated static func deniedByDefaultPermissionMessage(kind: String, isUndetermined: Bool) -> String {
         if isUndetermined {
-            return "\(kind) permission not granted"
+            return String(
+                format: String(localized: "%@ permission not granted"),
+                kind)
         }
-        return "\(kind) permission denied"
+        return String(
+            format: String(localized: "%@ permission denied"),
+            kind)
     }
 }
 

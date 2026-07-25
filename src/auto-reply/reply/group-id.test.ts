@@ -55,28 +55,70 @@ describe("extractSimpleExplicitGroupId", () => {
 });
 
 describe("extractExplicitGroupId", () => {
-  it("strips Telegram numeric topic shorthand after target normalization", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "telegram",
-              capabilities: { chatTypes: ["group"] },
-            }),
-            messaging: {
-              normalizeTarget: () => "telegram:-100200300:77",
-              inferTargetChatType: () => "group",
+  it.each([
+    {
+      name: "declared inferred shorthand",
+      channel: "telegram",
+      declaresNumericShorthand: true,
+      path: "inferred" as const,
+      expected: "-100200300",
+    },
+    {
+      name: "undeclared inferred shorthand",
+      channel: "plainchat",
+      declaresNumericShorthand: false,
+      path: "inferred" as const,
+      expected: "-100200300:77",
+    },
+    {
+      name: "declared parser shorthand",
+      channel: "telegram",
+      declaresNumericShorthand: true,
+      path: "parser" as const,
+      expected: "-100200300",
+    },
+    {
+      name: "undeclared parser shorthand",
+      channel: "plainchat",
+      declaresNumericShorthand: false,
+      path: "parser" as const,
+      expected: "-100200300:77",
+    },
+  ])(
+    "uses $name metadata after target normalization",
+    ({ channel, declaresNumericShorthand, path, expected }) => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: channel,
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: channel,
+                capabilities: { chatTypes: ["group"] },
+              }),
+              messaging: {
+                ...(declaresNumericShorthand ? { numericTopicShorthand: true as const } : {}),
+                ...(path === "inferred"
+                  ? {
+                      normalizeTarget: () => `${channel}:-100200300:77`,
+                      inferTargetChatType: () => "group" as const,
+                    }
+                  : {
+                      parseExplicitTarget: () => ({
+                        to: "group:-100200300:77",
+                        chatType: "group" as const,
+                      }),
+                    }),
+              },
             },
           },
-        },
-      ]),
-    );
+        ]),
+      );
 
-    expect(extractExplicitGroupId("telegram:-100200300:77")).toBe("-100200300");
-  });
+      expect(extractExplicitGroupId(`${channel}:-100200300:77`)).toBe(expected);
+    },
+  );
 
   it("keeps legacy parser-only group target extraction quarantined", () => {
     setActivePluginRegistry(

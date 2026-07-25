@@ -4,7 +4,8 @@ import {
   completeTaskRunByRunId,
   createRunningTaskRun,
 } from "../../../tasks/detached-task-runtime.js";
-import { resetTaskRegistryForTests, type TaskRecord } from "../../../tasks/runtime-internal.js";
+import type { TaskRecord } from "../../../tasks/runtime-internal.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   shouldWaitForCompletionRequiredAsyncTasks,

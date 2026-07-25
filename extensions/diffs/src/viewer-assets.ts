@@ -4,10 +4,10 @@ import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 export const VIEWER_ASSET_PREFIX = "/plugins/diffs/assets/";
-export const VIEWER_LOADER_PATH = `${VIEWER_ASSET_PREFIX}viewer.js`;
+const VIEWER_LOADER_PATH = `${VIEWER_ASSET_PREFIX}viewer.js`;
 export const VIEWER_RUNTIME_PATH = `${VIEWER_ASSET_PREFIX}viewer-runtime.js`;
 export const LANGUAGE_PACK_VIEWER_ASSET_PREFIX = "/plugins/diffs-language-pack/assets/";
-export const LANGUAGE_PACK_VIEWER_LOADER_PATH = `${LANGUAGE_PACK_VIEWER_ASSET_PREFIX}viewer.js`;
+const LANGUAGE_PACK_VIEWER_LOADER_PATH = `${LANGUAGE_PACK_VIEWER_ASSET_PREFIX}viewer.js`;
 const LANGUAGE_PACK_VIEWER_RUNTIME_PATH = `${LANGUAGE_PACK_VIEWER_ASSET_PREFIX}viewer-runtime.js`;
 const VIEWER_RUNTIME_RELATIVE_IMPORT_PATH = "./viewer-runtime.js";
 const VIEWER_RUNTIME_CANDIDATE_RELATIVE_PATHS = [
@@ -42,9 +42,7 @@ function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-export async function resolveViewerRuntimeFileUrl(
-  params: ViewerRuntimeFileUrlParams = {},
-): Promise<URL> {
+async function resolveViewerRuntimeFileUrl(params: ViewerRuntimeFileUrlParams = {}): Promise<URL> {
   const baseUrl = params.baseUrl ?? import.meta.url;
   const stat = params.stat ?? ((path: string) => fs.stat(path));
   let missingFileError: NodeJS.ErrnoException | null = null;

@@ -1,8 +1,6 @@
-// Agent Core module implements uuid behavior.
 let lastTimestamp = -Infinity;
 let sequence = 0;
 
-// Small UUIDv7 generator for browser/node package builds without a runtime dep.
 function fillRandomBytes(bytes: Uint8Array): void {
   const crypto = globalThis.crypto;
   if (crypto?.getRandomValues) {
@@ -21,11 +19,9 @@ export function uuidv7(): string {
   const timestamp = Date.now();
 
   if (timestamp > lastTimestamp) {
-    sequence = random[6] * 0x1000000 + random[7] * 0x10000 + random[8] * 0x100 + random[9];
+    sequence = new DataView(random.buffer, random.byteOffset + 6, 4).getUint32(0);
     lastTimestamp = timestamp;
   } else {
-    // Same-ms calls increment the sequence so generated ids remain sortable and
-    // unique even when random bytes repeat.
     sequence = (sequence + 1) >>> 0;
     if (sequence === 0) {
       lastTimestamp++;
@@ -43,12 +39,12 @@ export function uuidv7(): string {
   bytes[7] = (sequence >>> 20) & 0xff;
   bytes[8] = 0x80 | ((sequence >>> 14) & 0x3f);
   bytes[9] = (sequence >>> 6) & 0xff;
-  bytes[10] = ((sequence & 0x3f) << 2) | (random[10] & 0x03);
-  bytes[11] = random[11];
-  bytes[12] = random[12];
-  bytes[13] = random[13];
-  bytes[14] = random[14];
-  bytes[15] = random[15];
+  const randomLowBits = random.at(10);
+  if (randomLowBits === undefined) {
+    throw new Error("UUID random buffer is shorter than 11 bytes");
+  }
+  bytes[10] = ((sequence & 0x3f) << 2) | (randomLowBits & 0x03);
+  bytes.set(random.subarray(11), 11);
 
   return formatUuid(bytes);
 }

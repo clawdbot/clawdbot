@@ -1,14 +1,15 @@
-/** File-backed implementation for plugin host-owned session-state cleanup. */
+/** Shared predicates and mutations for plugin host-owned session-state cleanup. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
-import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 /** Cleanup variants owned by plugin host lifecycle paths. */
-export type PluginHostSessionCleanupMode = "plugin-owned-state" | "promoted-slots";
+type PluginHostSessionCleanupMode = "plugin-owned-state" | "promoted-slots";
 
 export type PluginHostSessionCleanupStoreParams = {
+  /** Agent that owns the resolved session store target. */
+  agentId?: string;
   /** Cleanup mode chosen by the plugin host lifecycle reason. */
   mode: PluginHostSessionCleanupMode;
   /** Plugin owner to clear. Omit only for session-scoped all-plugin cleanup. */
@@ -17,10 +18,10 @@ export type PluginHostSessionCleanupStoreParams = {
   sessionKey?: string;
   /** Promoted SessionEntry slots declared by the plugin registry. */
   sessionEntrySlotKeys?: ReadonlySet<string>;
+  /** Locked-harness ids whose sessions this cleanup must leave untouched. */
+  preserveLockedHarnessIds?: ReadonlySet<string>;
   /** Per-store file-backed transaction boundary. */
   storePath: string;
-  /** Harness ids whose locked durable sessions survive plugin disable cleanup. */
-  preserveLockedHarnessIds?: ReadonlySet<string>;
   /** Cancels the cleanup before persistence when host lifecycle state changes. */
   shouldCleanup?: () => boolean;
 };
@@ -180,7 +181,7 @@ function hasPluginOwnedSessionState(
   );
 }
 
-function matchesCleanupSession(
+export function matchesPluginHostCleanupSession(
   entryKey: string,
   entry: SessionEntry,
   sessionKey?: string,
@@ -195,14 +196,16 @@ function matchesCleanupSession(
   );
 }
 
-function shouldSkipCleanupStore(params: PluginHostSessionCleanupStoreParams): boolean {
+export function shouldSkipPluginHostCleanupStore(
+  params: PluginHostSessionCleanupStoreParams,
+): boolean {
   if (!params.pluginId && !params.sessionKey) {
     return true;
   }
   return params.mode === "promoted-slots" && (params.sessionEntrySlotKeys?.size ?? 0) === 0;
 }
 
-function hasCleanupTarget(
+export function hasPluginHostCleanupTarget(
   entry: SessionEntry,
   params: PluginHostSessionCleanupStoreParams,
 ): boolean {
@@ -212,7 +215,7 @@ function hasCleanupTarget(
   return hasPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys);
 }
 
-function isLockedHarnessSessionOwnedByPlugin(
+export function isLockedHarnessSessionOwnedByPlugin(
   entry: SessionEntry,
   preserveLockedHarnessIds: ReadonlySet<string> | undefined,
 ): boolean {
@@ -223,7 +226,7 @@ function isLockedHarnessSessionOwnedByPlugin(
   return harnessId !== undefined && preserveLockedHarnessIds.has(harnessId);
 }
 
-function clearCleanupTarget(
+export function clearPluginHostCleanupTarget(
   entry: SessionEntry,
   params: PluginHostSessionCleanupStoreParams,
 ): void {
@@ -235,45 +238,4 @@ function clearCleanupTarget(
     return;
   }
   clearPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys);
-}
-
-/** Clears plugin host-owned session state in one store transaction. */
-export async function cleanupPluginHostSessionStore(
-  params: PluginHostSessionCleanupStoreParams,
-): Promise<number> {
-  if (shouldSkipCleanupStore(params) || (params.shouldCleanup && !params.shouldCleanup())) {
-    return 0;
-  }
-  return await updateSessionStore(
-    params.storePath,
-    (store) => {
-      if (params.shouldCleanup && !params.shouldCleanup()) {
-        return 0;
-      }
-      let clearedInStore = 0;
-      const now = Date.now();
-      for (const [entryKey, entry] of Object.entries(store)) {
-        // Disabling an owning harness stops execution; it does not release its
-        // durable conversation. Keep the plugin marker so re-enable can recover
-        // the same binding instead of leaving a locked, undiscoverable session.
-        if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
-          continue;
-        }
-        if (
-          !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
-          !hasCleanupTarget(entry, params)
-        ) {
-          continue;
-        }
-        clearCleanupTarget(entry, params);
-        entry.updatedAt = now;
-        clearedInStore += 1;
-      }
-      return clearedInStore;
-    },
-    {
-      skipSaveWhenResult: (clearedInStore) => clearedInStore === 0,
-      takeCacheOwnership: true,
-    },
-  );
 }

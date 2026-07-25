@@ -203,7 +203,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
-export async function resolveStatusLastHeartbeat(params: {
+async function resolveStatusLastHeartbeat(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayReachable: boolean;
@@ -241,7 +241,7 @@ type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSum
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
 /** Resolves optional usage/deep runtime details plus service summaries for status output. */
-export async function resolveStatusRuntimeDetails(params: {
+async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   usage?: boolean;

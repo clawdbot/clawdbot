@@ -113,6 +113,7 @@ export async function prepareSessionManagerForRun(params: {
     fileEntries: Array<SessionHeaderEntry | SessionMessageEntry | { type: string }>;
     byId?: Map<string, unknown>;
     labelsById?: Map<string, unknown>;
+    labelTimestampsById?: Map<string, unknown>;
     leafId?: string | null;
     wasRecoveredFromCorruptHeader?: () => boolean;
     clearPreservedOpaqueFileEntries?: () => void;
@@ -166,7 +167,9 @@ export async function prepareSessionManagerForRun(params: {
     sm.fileEntries = [header];
     sm.clearPreservedOpaqueFileEntries?.();
     sm.byId?.clear?.();
+    // Labels and timestamps form one index; neither half may survive this reset.
     sm.labelsById?.clear?.();
+    sm.labelTimestampsById?.clear?.();
     sm.leafId = null;
     sm.flushed = false;
     return;

@@ -4,7 +4,7 @@ import {
   getLoadedRuntimePluginRegistry,
   listLoadedRuntimePluginIdsAcrossSurfaces,
 } from "./active-runtime-registry.js";
-import { testing, clearPluginLoaderCache } from "./loader.js";
+import { clearPluginLoaderCache } from "./loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -146,40 +146,6 @@ describe("getLoadedRuntimePluginRegistry", () => {
       getLoadedRuntimePluginRegistry({
         workspaceDir: "/tmp/ws",
         requiredPluginIds: ["demo"],
-      }),
-    ).toBeUndefined();
-  });
-
-  it("validates full loader cache compatibility when load options are provided", () => {
-    const registry = createRegistryWithPlugin("demo");
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-        },
-      },
-      onlyPluginIds: ["demo"],
-      workspaceDir: "/tmp/ws",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "default", "/tmp/ws");
-
-    expect(
-      getLoadedRuntimePluginRegistry({
-        loadOptions,
-      }),
-    ).toBe(registry);
-
-    expect(
-      getLoadedRuntimePluginRegistry({
-        loadOptions: {
-          ...loadOptions,
-          config: {
-            plugins: {
-              allow: ["other"],
-            },
-          },
-        },
       }),
     ).toBeUndefined();
   });

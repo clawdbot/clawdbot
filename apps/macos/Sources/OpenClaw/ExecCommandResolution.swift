@@ -1,4 +1,15 @@
+import CryptoKit
 import Foundation
+
+struct ExecAllowAlwaysPattern: Sendable, Hashable {
+    let pattern: String
+    let argPattern: String?
+
+    init(pattern: String, argPattern: String? = nil) {
+        self.pattern = pattern
+        self.argPattern = argPattern
+    }
+}
 
 struct ExecCommandResolution {
     let rawExecutable: String
@@ -22,20 +33,6 @@ struct ExecCommandResolution {
         self.executableName = executableName
         self.cwd = cwd
         self.argv = argv
-    }
-
-    static func resolve(
-        command: [String],
-        rawCommand: String?,
-        cwd: String?,
-        env: [String: String]?) -> ExecCommandResolution?
-    {
-        let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedRaw.isEmpty, let token = parseFirstToken(trimmedRaw) {
-            let argv = command.isEmpty ? nil : [token] + Array(command.dropFirst())
-            return self.resolveExecutable(rawExecutable: token, argv: argv, cwd: cwd, env: env)
-        }
-        return self.resolve(command: command, cwd: cwd, env: env)
     }
 
     static func resolveForAllowlist(
@@ -87,10 +84,10 @@ struct ExecCommandResolution {
         command: [String],
         cwd: String?,
         env: [String: String]?,
-        rawCommand: String? = nil) -> [String]
+        rawCommand: String? = nil) -> [ExecAllowAlwaysPattern]
     {
-        var patterns: [String] = []
-        var seen = Set<String>()
+        var patterns: [ExecAllowAlwaysPattern] = []
+        var seen = Set<ExecAllowAlwaysPattern>()
         self.collectAllowAlwaysPatterns(
             command: command,
             cwd: cwd,
@@ -287,8 +284,8 @@ struct ExecCommandResolution {
         env: [String: String]?,
         rawCommand: String?,
         depth: Int,
-        patterns: inout [String],
-        seen: inout Set<String>)
+        patterns: inout [ExecAllowAlwaysPattern],
+        seen: inout Set<ExecAllowAlwaysPattern>)
     {
         guard depth < 3, !command.isEmpty else {
             return
@@ -353,12 +350,24 @@ struct ExecCommandResolution {
 
         guard let resolution = resolve(command: command, cwd: cwd, env: env),
               !self.isInterpreterLikePersistentGrantTarget(resolution),
-              let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution),
-              seen.insert(pattern).inserted
+              let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution)
         else {
             return
         }
-        patterns.append(pattern)
+        let candidate = ExecAllowAlwaysPattern(
+            pattern: pattern,
+            argPattern: self.hashedArgPattern(argv: command))
+        guard seen.insert(candidate).inserted else { return }
+        patterns.append(candidate)
+    }
+
+    private static func hashedArgPattern(argv: [String]) -> String {
+        let arguments = Array(argv.dropFirst())
+        let subject = "\(arguments.count)\0" + arguments
+            .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
+            .joined()
+        let digest = SHA256.hash(data: Data(subject.utf8))
+        return "sha256:argv:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Path-only durable grants are too broad for tools that can execute code
@@ -430,20 +439,6 @@ struct ExecCommandResolution {
             return nil
         }
         return Array(argv[appletIndex...])
-    }
-
-    private static func parseFirstToken(_ command: String) -> String? {
-        let trimmed = self.trimmingShellWordSeparators(command)
-        guard !trimmed.isEmpty else { return nil }
-        guard let first = trimmed.first else { return nil }
-        if first == "\"" || first == "'" {
-            let rest = trimmed.dropFirst()
-            if let end = rest.firstIndex(of: first) {
-                return String(rest[..<end])
-            }
-            return String(rest)
-        }
-        return trimmed.split(whereSeparator: self.isShellWordSeparator).first.map(String.init)
     }
 
     private static let unsafeReusableDispatchCarrierNames = Set([

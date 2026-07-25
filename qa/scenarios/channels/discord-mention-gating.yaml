@@ -1,0 +1,19 @@
+title: Discord unmentioned message does not trigger
+scenario:
+  id: discord-mention-gating
+  surface: channels
+  coverage:
+    primary:
+      - discord.mention-gating
+  execution:
+    profiles: { "discord:adapter": 1, "discord:default": 1 }
+    kind: flow
+    channel: discord
+    timeoutMs: 8000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { discordScenarioId: discord-mention-gating }
+flow:
+  module: ./live-transports/discord/scenario-runtime.js
+  call: runDiscordMentionGatingScenario
+  args: [{ expr: discordScenarioContext }]

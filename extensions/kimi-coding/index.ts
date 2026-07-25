@@ -6,6 +6,7 @@ import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
+import { isKimiK3ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
 import { wrapKimiProviderStream } from "./stream.js";
 
@@ -41,7 +42,7 @@ export default definePluginEntry({
           providerId: PROVIDER_ID,
           methodId: "api-key",
           label: "Kimi Code API key (subscription)",
-          hint: "Kimi K2.6 + Kimi",
+          hint: "Kimi Code membership · https://www.kimi.com/membership/pricing",
           optionKey: "kimiCodeApiKey",
           flagName: "--kimi-code-api-key",
           envVar: "KIMI_API_KEY",
@@ -51,15 +52,15 @@ export default definePluginEntry({
           applyConfig: (cfg) => applyKimiCodeConfig(cfg),
           noteMessage: [
             "Kimi uses a dedicated coding endpoint and API key.",
-            "Get your API key at: https://www.kimi.com/code/en",
+            "Get your API key at: https://www.kimi.com/code/console",
           ].join("\n"),
           noteTitle: "Kimi",
           wizard: {
             choiceId: "kimi-code-api-key",
             choiceLabel: "Kimi Code API key (subscription)",
             groupId: "moonshot",
-            groupLabel: "Moonshot AI (Kimi K2.6)",
-            groupHint: "Kimi K2.6",
+            groupLabel: "Moonshot AI (Kimi)",
+            groupHint: "Kimi Code membership · https://www.kimi.com/membership/pricing",
           },
         }),
       ],
@@ -101,13 +102,9 @@ export default definePluginEntry({
         const normalizedId = normalizeKimiCodingModelId(model.id);
         return normalizedId === model.id ? undefined : { ...model, id: normalizedId };
       },
-      resolveThinkingProfile: () => ({
-        levels: [
-          { id: "off", label: "off" },
-          { id: "low", label: "on" },
-        ],
-        defaultLevel: "off",
-      }),
+      resolveThinkingProfile,
+      wrapSimpleCompletionStreamFn: (ctx) =>
+        isKimiK3ModelId(ctx.modelId) ? wrapKimiProviderStream(ctx) : ctx.streamFn,
       wrapStreamFn: wrapKimiProviderStream,
     });
   },

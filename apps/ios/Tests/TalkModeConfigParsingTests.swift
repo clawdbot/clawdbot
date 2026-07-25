@@ -1,11 +1,127 @@
 import AVFoundation
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import Testing
 @testable import OpenClaw
 
 @MainActor
 struct TalkModeManagerTests {
+    private struct CloseError: Error {}
+
+    @Test func `encodes realtime client voice session identity`() throws {
+        let params = TalkRealtimeClientCreateParams(
+            sessionKey: "agent:main:main",
+            voiceSessionId: "voice-1",
+            provider: "openai",
+            model: "gpt-realtime-2",
+            voice: "marin",
+            capabilities: ["voice-transcript"])
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+
+        #expect(object["sessionKey"] as? String == "agent:main:main")
+        #expect(object["voiceSessionId"] as? String == "voice-1")
+        #expect(object["capabilities"] as? [String] == ["voice-transcript"])
+    }
+
+    @Test func `decodes optional realtime client voice session id`() throws {
+        let session = try JSONDecoder().decode(
+            TalkRealtimeClientSession.self,
+            from: Data(
+                #"{"provider":"openai","transport":"webrtc","voiceSessionId":"voice-1","clientSecret":"secret"}"#.utf8))
+
+        #expect(session.voiceSessionId == "voice-1")
+
+        let serverOwned = try JSONDecoder().decode(
+            TalkRealtimeClientSession.self,
+            from: Data(#"{"provider":"openai","transport":"gateway-relay","clientSecret":"secret"}"#.utf8))
+        #expect(serverOwned.voiceSessionId == nil)
+    }
+
+    @Test func `config invalidation closes and clears an adopted realtime prefetch`() async throws {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let gateway = GatewayNodeSession()
+        manager.attachGateway(gateway)
+        var closeRequests: [(method: String, paramsJSON: String?)] = []
+        manager._test_setRealtimeVoiceSessionCloseRequest { method, paramsJSON in
+            closeRequests.append((method, paramsJSON))
+        }
+        manager._test_preparePrefetchedRealtimeVoiceSession("vs-A")
+
+        await manager._test_invalidatePrefetchedRealtimeSession()
+
+        #expect(manager._test_activeRealtimeVoiceSessionId() == nil)
+        #expect(!manager._test_hasPrefetchedRealtimeSession())
+        let request = try #require(closeRequests.first)
+        #expect(closeRequests.count == 1)
+        #expect(request.method == "talk.client.close")
+        let json = try #require(request.paramsJSON?.data(using: .utf8))
+        let params = try #require(JSONSerialization.jsonObject(with: json) as? [String: String])
+        #expect(params["voiceSessionId"] == "vs-A")
+        #expect(params["sessionKey"] == "main")
+    }
+
+    @Test func `config invalidation preserves a live realtime voice session`() async {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let gateway = GatewayNodeSession()
+        manager.attachGateway(gateway)
+        var closeRequestCount = 0
+        manager._test_setRealtimeVoiceSessionCloseRequest { _, _ in
+            closeRequestCount += 1
+        }
+        manager._test_prepareLiveRealtimeVoiceSession(
+            gateway: gateway,
+            voiceSessionId: "vs-live",
+            prefetchedVoiceSessionId: "vs-unused")
+
+        await manager._test_invalidatePrefetchedRealtimeSession()
+
+        #expect(manager._test_activeRealtimeVoiceSessionId() == "vs-live")
+        #expect(!manager._test_hasPrefetchedRealtimeSession())
+        #expect(closeRequestCount == 0)
+        manager._test_clearRealtimeSession()
+    }
+
+    @Test func `retries realtime voice session close three times`() async throws {
+        var attempts = 0
+
+        try await TalkModeManager._test_retryRealtimeVoiceSessionClose {
+            attempts += 1
+            if attempts < 3 {
+                throw CloseError()
+            }
+        }
+
+        #expect(attempts == 3)
+    }
+
+    @Test func `encodes transcript entry id as a decimal string`() throws {
+        let params = TalkRealtimeTranscriptParams(
+            sessionKey: "agent:main:main",
+            voiceSessionId: "voice-1",
+            entryId: "1",
+            role: .assistant,
+            text: "hello",
+            timestamp: 1234)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+
+        #expect(object["entryId"] as? String == "1")
+    }
+
+    @Test func `surfaces voice confirmation id for a follow up consult`() throws {
+        let error = GatewayResponseError(
+            method: "talk.client.toolCall",
+            code: "INVALID_REQUEST",
+            message: "VOICE_CONFIRMATION_REQUIRED:confirm_123 Ask the user to confirm.",
+            details: nil)
+
+        let instruction = try #require(TalkRealtimeWebRTCSession.voiceConfirmationInstruction(from: error))
+        #expect(instruction.contains("VOICE_CONFIRMATION_REQUIRED:confirm_123"))
+        #expect(instruction.contains("confirmationId confirm_123"))
+    }
+
     @Test func `recognizes open AI maximum duration errors as terminal`() throws {
         let event = try JSONDecoder().decode(
             TalkRealtimeServerEvent.self,
@@ -394,6 +510,38 @@ struct TalkModeManagerTests {
         #expect(manager._test_gatewayTalkActiveModeSubtitle() == nil)
     }
 
+    @Test func `realtime failures remain visible on the watch`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Realtime disconnected")
+        #expect(manager.watchPresentation == .localized("Realtime disconnected"))
+
+        manager._test_handleRealtimeRelayStatus("Backend rejected realtime request")
+        #expect(manager.watchPresentation == .verbatim("Backend rejected realtime request"))
+
+        manager._test_handleRealtimeRelayStatus("Confirmation needed")
+        #expect(manager.statusText == String(localized: "Confirmation needed"))
+        #expect(manager.watchPresentation == .localized("Confirmation needed"))
+
+        manager._test_handleRealtimeRelayStatus("Reconnecting")
+        #expect(manager.phase == .connecting)
+        #expect(manager.watchPresentation == .phase)
+    }
+
+    @Test func `WebRTC progress remains semantic on the watch`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Connecting")
+        #expect(manager.phase == .connecting)
+        #expect(manager.watchPresentation == .phase)
+
+        for status in ["Asking OpenClaw", "Still asking OpenClaw", "Updating OpenClaw"] {
+            manager._test_handleRealtimeRelayStatus(status)
+            #expect(manager.phase == .thinking)
+            #expect(manager.watchPresentation == .phase)
+        }
+    }
+
     @Test func `relay close restarts enabled continuous realtime`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_prepareEnabledRealtimeSessionForClose()
@@ -584,6 +732,20 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 3) == nil)
     }
 
+    @Test @MainActor func `speech restart clears only the presentation revision it owns`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
+        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
+        #expect(manager.statusText == String(localized: "Listening"))
+        #expect(manager.phase == .listening)
+
+        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
+        manager.statusText = "Neue Statusmeldung"
+        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
+        #expect(manager.statusText == "Neue Statusmeldung")
+        #expect(manager.phase == .idle)
+    }
+
     @Test func `keeps provider web socket realtime transport on gateway relay`() {
         let config: [String: Any] = [
             "talk": [
@@ -606,14 +768,15 @@ struct TalkModeManagerTests {
         #expect(parsed.executionMode == .realtimeRelay)
     }
 
-    @Test func `leaves native mode for unsupported realtime brain`() {
+    @Test(arguments: ["direct-tools", "none"])
+    func `leaves native mode for unsupported realtime brain`(brain: String) {
         let config: [String: Any] = [
             "talk": [
                 "realtime": [
                     "provider": "google",
                     "mode": "realtime",
                     "transport": "gateway-relay",
-                    "brain": "direct-tools",
+                    "brain": brain,
                 ],
             ],
         ]
@@ -900,6 +1063,26 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_latestAssistantText(
             messages: messages,
             runId: "missing-run") == nil)
+    }
+
+    @Test func `native Talk chat request inherits thinking policy`() {
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "agent:main:main",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: "hello",
+            thinking: TalkModeManager.chatThinkingOverride,
+            idempotencyKey: "talk-1",
+            attachments: [],
+            runTimeoutMs: 30000)
+
+        #expect(TalkModeManager.chatThinkingOverride == nil)
+        #expect(request.method == "chat.send")
+        #expect(request.params["message"]?.value as? String == "hello")
+        #expect(request.params["sessionKey"]?.value as? String == "agent:main:main")
+        #expect(request.params["idempotencyKey"]?.value as? String == "talk-1")
+        #expect(request.params["thinking"] == nil)
+        #expect(request.params["timeoutMs"]?.value as? Int == 30000)
     }
 
     @Test func `subscribes before sending chat completion request`() throws {

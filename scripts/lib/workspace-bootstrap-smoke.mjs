@@ -17,13 +17,14 @@ export const WORKSPACE_TEMPLATE_PACK_PATHS = [
   "docs/reference/templates/BOOTSTRAP.md",
 ];
 
+// HEARTBEAT.md ships in the template pack for docs/doctor context but is no
+// longer seeded into new workspaces; heartbeat context lives in cron scratch.
 const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = [
   "AGENTS.md",
   "SOUL.md",
   "TOOLS.md",
   "IDENTITY.md",
   "USER.md",
-  "HEARTBEAT.md",
   "BOOTSTRAP.md",
 ];
 

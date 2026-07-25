@@ -193,6 +193,9 @@ export function deriveSessionName(command: string): string | undefined {
     return undefined;
   }
   const verb = tokens[0];
+  if (!verb) {
+    return "";
+  }
   let target = tokens.slice(1).find((t) => !t.startsWith("-"));
   if (!target) {
     target = tokens[1];

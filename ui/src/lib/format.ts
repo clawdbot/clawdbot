@@ -1,14 +1,18 @@
 // Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
+import {
+  formatDurationCompact,
+  formatDurationHuman,
+} from "../../../src/infra/format-time/format-duration.ts";
 import {
   formatRelativeTimestamp,
   formatTimeAgo,
 } from "../../../src/infra/format-time/format-relative.ts";
 import { t } from "../i18n/index.ts";
 
-export { formatRelativeTimestamp, formatTimeAgo, formatDurationHuman };
+export { formatByteSize } from "@openclaw/normalization-core";
+export { formatRelativeTimestamp, formatTimeAgo, formatDurationCompact, formatDurationHuman };
 
 export function formatUnknownText(
   value: unknown,

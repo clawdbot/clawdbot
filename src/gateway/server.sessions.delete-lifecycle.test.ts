@@ -2,22 +2,27 @@
 // active-run cleanup, hooks, thread bindings, and browser/MCP cleanup.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import { loadSessionStore } from "../config/sessions/store.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -113,22 +118,25 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
   });
 }
 
-test("sessions.delete removes clean session worktrees and keeps dirty ones", async () => {
-  const root = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-delete-worktree-"),
-  );
+test("sessions.delete snapshots and removes session worktrees", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-delete-worktree-",
+  });
+  const root = openClawState.root;
   const workspace = await initializeRemoteBackedGitWorkspace(root);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
   let dirtyWorktreeId: string | undefined;
   try {
     const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+    await fs.writeFile(path.join(workspace, "local-base.txt"), "inherited local commit\n");
+    await execFileAsync("git", ["-C", workspace, "add", "local-base.txt"]);
+    await execFileAsync("git", ["-C", workspace, "commit", "-m", "local base"]);
     const clean = await directSessionReq<{
       key: string;
-      worktree: { id: string; path: string };
+      worktree: { id: string; path: string; branch: string };
     }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
     expect(clean.ok).toBe(true);
     const cleanKey = clean.payload?.key;
@@ -143,10 +151,26 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
       removedAt: expect.any(Number),
       snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
     });
+    const registered = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "worktree",
+      "list",
+      "--porcelain",
+    ]);
+    expect(registered.stdout).not.toContain(cleanWorktree!.path);
+    const branch = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "branch",
+      "--list",
+      cleanWorktree!.branch,
+    ]);
+    expect(branch.stdout.trim()).toBe("");
 
     const dirty = await directSessionReq<{
       key: string;
-      worktree: { id: string; path: string };
+      worktree: { id: string; path: string; branch: string };
     }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
     expect(dirty.ok).toBe(true);
     const dirtyKey = dirty.payload?.key;
@@ -156,8 +180,12 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
 
     await expectSessionDeleteSucceeds({ key: dirtyKey! });
 
-    await expect(fs.access(dirtyWorktree!.path)).resolves.toBeUndefined();
-    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)?.removedAt).toBeUndefined();
+    await expect(fs.access(dirtyWorktree!.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    dirtyWorktreeId = undefined;
   } finally {
     if (
       dirtyWorktreeId &&
@@ -166,13 +194,8 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
       await managedWorktrees.remove({ id: dirtyWorktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     testState.agentConfig = undefined;
-    await fs.rm(root, { recursive: true, force: true });
+    await openClawState.cleanup();
   }
 });
 
@@ -252,9 +275,7 @@ test("sessions.delete preserves locked archived sessions and deletes ordinary ar
       [ordinaryKey]: sessionStoreEntry(ordinarySessionId, { archivedAt: Date.now() }),
     },
   });
-  const lockedEntryBefore = structuredClone(
-    loadSessionStore(storePath, { skipCache: true })[lockedKey],
-  );
+  const lockedEntryBefore = structuredClone(loadSessionEntry({ storePath, sessionKey: lockedKey }));
   const lockedTranscriptPath = path.join(dir, `${lockedSessionId}.jsonl`);
   const lockedTranscriptBefore = await fs.readFile(lockedTranscriptPath, "utf8");
 
@@ -267,13 +288,64 @@ test("sessions.delete preserves locked archived sessions and deletes ordinary ar
     code: "INVALID_REQUEST",
     message: "This session cannot be deleted while model selection is locked.",
   });
-  expect(loadSessionStore(storePath, { skipCache: true })[lockedKey]).toEqual(lockedEntryBefore);
+  expect(loadSessionEntry({ storePath, sessionKey: lockedKey })).toEqual(lockedEntryBefore);
   expect(await fs.readFile(lockedTranscriptPath, "utf8")).toBe(lockedTranscriptBefore);
 
   await expectSessionDeleteSucceeds({ key: ordinaryKey, archivedOnly: true });
-  const storedAfterOrdinaryDelete = loadSessionStore(storePath, { skipCache: true });
-  expect(storedAfterOrdinaryDelete[ordinaryKey]).toBeUndefined();
-  expect(storedAfterOrdinaryDelete[lockedKey]).toEqual(lockedEntryBefore);
+  expect(loadSessionEntry({ storePath, sessionKey: ordinaryKey })).toBeUndefined();
+  expect(loadSessionEntry({ storePath, sessionKey: lockedKey })).toEqual(lockedEntryBefore);
+});
+
+test("sessions.delete removes a locked plugin-owned session from its persisted alias", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const requestedKey = "agent:main:catalog-owned";
+  const persistedKey = "catalog-owned";
+  const canonicalSessionId = "sess-catalog-owned-canonical";
+  const aliasSessionId = "sess-catalog-owned-alias";
+  await writeSessionStore({
+    entries: {
+      [requestedKey]: sessionStoreEntry(canonicalSessionId, {
+        modelSelectionLocked: true,
+        pluginOwnerId: "anthropic",
+        updatedAt: 2,
+      }),
+    },
+  });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: persistedKey, storePath },
+    sessionStoreEntry(aliasSessionId, {
+      modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
+      updatedAt: 1,
+    }),
+  );
+  for (const sessionId of [canonicalSessionId, aliasSessionId]) {
+    await replaceSqliteTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
+      { type: "session", id: sessionId, content: sessionId },
+    ]);
+  }
+
+  const deleted = await directSessionReq<{ archived: string[]; deleted: boolean; ok: true }>(
+    "sessions.delete",
+    {
+      key: persistedKey,
+    },
+  );
+
+  expect(deleted.ok).toBe(true);
+  expect(loadSessionEntry({ storePath, sessionKey: requestedKey })).toBeUndefined();
+  expect(loadSessionEntry({ storePath, sessionKey: persistedKey })).toBeUndefined();
+  expect(deleted.payload?.archived).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining(`${canonicalSessionId}.jsonl.deleted.`),
+      expect.stringContaining(`${aliasSessionId}.jsonl.deleted.`),
+    ]),
+  );
+  for (const sessionId of [canonicalSessionId, aliasSessionId]) {
+    await expect(
+      loadTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }),
+    ).resolves.toEqual([]);
+  }
 });
 
 test("sessions.delete interrupts work admitted before runtime registration", async () => {
@@ -396,44 +468,19 @@ test("sessions.delete rechecks its expected id before interrupting replacement w
   }
 });
 
-test("sessions.delete accepts a matching lifecycle revision for a non-resumable stub", async () => {
-  const sessionKey = "agent:main:cron:cleanup";
-  const lifecycleRevision = "run-revision";
-  const updatedAt = 1_737_600_000_000;
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry("discarded-before-persist", {
-        sessionId: undefined,
-        lifecycleRevision,
-        updatedAt,
-      }),
-    },
-  });
-
-  const deleted = await expectSessionDeleteSucceeds({
-    key: sessionKey,
-    expectedSessionId: "in-memory-run-id",
-    expectedLifecycleRevision: lifecycleRevision,
-    expectedSessionUpdatedAt: updatedAt,
-  });
-
-  expect(deleted.payload?.deleted).toBe(true);
-});
-
-test("sessions.delete rejects an ID-less replacement with the same updated-at timestamp", async () => {
+test("sessions.delete rejects a replacement with the same updated-at timestamp", async () => {
   const sessionKey = "agent:main:cron:cleanup";
   const updatedAt = 1_737_600_000_000;
   const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry("discarded-before-persist", {
-        sessionId: undefined,
+  await replaceSessionEntry(
+    { sessionKey, storePath },
+    {
+      ...sessionStoreEntry("replacement-run", {
         lifecycleRevision: "replacement-revision",
         updatedAt,
       }),
     },
-  });
+  );
   let interrupted = false;
   const admission = await beginSessionWorkAdmission({
     scope: storePath,
@@ -454,8 +501,9 @@ test("sessions.delete rejects an ID-less replacement with the same updated-at ti
 
     expect(deleted.ok).toBe(false);
     expect(interrupted).toBe(false);
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       lifecycleRevision: "replacement-revision",
+      sessionId: "replacement-run",
       updatedAt,
     });
   } finally {
@@ -494,7 +542,7 @@ test("sessions.delete includes cleanup-owned row changes in its guarded deletion
   });
 
   expect(deleted.payload?.deleted).toBe(true);
-  expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
 });
 
 test("sessions.delete serializes a patch behind asynchronous runtime cleanup", async () => {
@@ -539,7 +587,7 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
   expect(deleted.ok).toBe(true);
   expect(patched.ok).toBe(false);
   expect(patched.error?.message).toBe(`Session ${sessionKey} changed before patch. Retry.`);
-  expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
 });
 
 test("sessions.patch waits for an in-flight session lifecycle mutation", async () => {
@@ -581,9 +629,7 @@ test("sessions.patch waits for an in-flight session lifecycle mutation", async (
 
   const [patched] = await Promise.all([patch, mutation]);
   expect(patched.ok).toBe(true);
-  expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]?.label).toBe(
-    "after lifecycle mutation",
-  );
+  expect(loadSessionEntry({ sessionKey, storePath })?.label).toBe("after lifecycle mutation");
 });
 
 test("sessions.delete keeps lifecycle admission blocked through session unbinding", async () => {
@@ -725,14 +771,20 @@ test("sessions.delete scopes selected global deletes to the requested agent", as
     agentId: "work",
     deleteTranscript: false,
   });
-  const mainStore = JSON.parse(await fs.readFile(globalStores.mainStorePath, "utf-8")) as {
-    global?: { sessionId?: string };
-  };
-  const workStore = JSON.parse(await fs.readFile(globalStores.workStorePath, "utf-8")) as {
-    global?: { sessionId?: string };
-  };
-  expect(mainStore.global?.sessionId).toBe("sess-main-global");
-  expect(workStore.global).toBeUndefined();
+  expect(
+    loadSessionEntry({
+      agentId: "main",
+      sessionKey: "global",
+      storePath: globalStores.mainStorePath,
+    })?.sessionId,
+  ).toBe("sess-main-global");
+  expect(
+    loadSessionEntry({
+      agentId: "work",
+      sessionKey: "global",
+      storePath: globalStores.workStorePath,
+    }),
+  ).toBeUndefined();
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
@@ -846,23 +898,11 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
 test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
-  const transcriptPath = path.join(dir, "sess-delete.jsonl");
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: "m-delete",
-      message: { role: "user", content: "delete me" },
-    })}\n`,
-    "utf-8",
-  );
 
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main"),
-      "discord:group:delete": sessionStoreEntry("sess-delete", {
-        sessionFile: transcriptPath,
-      }),
+      "discord:group:delete": sessionStoreEntry("sess-delete"),
     },
   });
 
@@ -880,14 +920,43 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
     "agent:main:discord:group:delete",
   );
   expect((event as { reason?: string } | undefined)?.reason).toBe("deleted");
-  expect((event as { transcriptArchived?: boolean } | undefined)?.transcriptArchived).toBe(true);
-  expect((event as { sessionFile?: string } | undefined)?.sessionFile).toContain(".jsonl.deleted.");
+  expect(
+    (event as { transcriptArchived?: boolean } | undefined)?.transcriptArchived,
+  ).toBeUndefined();
+  expect((event as { sessionFile?: string } | undefined)?.sessionFile).toBeUndefined();
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
   expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
   expect((context as { sessionKey?: string } | undefined)?.sessionKey).toBe(
     "agent:main:discord:group:delete",
   );
   expect((context as { agentId?: string } | undefined)?.agentId).toBe("main");
+});
+
+test("sessions.delete sessions.changed event always carries the resolved owner", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-side", "hello");
+  await writeSessionStore({ entries: { "agent:main:side": sessionStoreEntry("sess-side") } });
+  const broadcastToConnIds = vi.fn();
+
+  const deleted = await directSessionReq<{ deleted: boolean }>(
+    "sessions.delete",
+    { key: "agent:main:side", deleteTranscript: true },
+    {
+      client: { connect: { scopes: ["operator.admin"] } } as never,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      },
+    },
+  );
+
+  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+  expect(broadcastToConnIds).toHaveBeenCalledWith(
+    "sessions.changed",
+    expect.objectContaining({ sessionKey: "agent:main:side", agentId: "main", reason: "delete" }),
+    new Set(["conn-1"]),
+    { agentId: "main", dropIfSlow: true },
+  );
 });
 
 test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
@@ -961,6 +1030,11 @@ test("sessions.delete returns unavailable when active run does not stop", async 
 
   embeddedRunMock.activeIds.add("sess-active");
   embeddedRunMock.waitResults.set("sess-active", false);
+  const waitCallCountsAtRetirement: number[] = [];
+  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
+    waitCallCountsAtRetirement.push(embeddedRunMock.waitCalls.length);
+    return true;
+  });
 
   const { ws } = await openClient();
 
@@ -975,13 +1049,22 @@ test("sessions.delete returns unavailable when active run does not stop", async 
     ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
     "sess-active",
   );
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledWith({
+    sessionId: "sess-active",
+    reason: "gateway-session-cleanup",
+    preserveActiveLeases: true,
+    retainAcrossReuse: true,
+    onError: expect.any(Function),
+  });
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(2);
+  expect(waitCallCountsAtRetirement).toEqual([0, 1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
-  expect(store["agent:main:discord:group:dev"]?.sessionId).toBe("sess-active");
+  const storedEntry = loadSessionEntry({
+    sessionKey: "agent:main:discord:group:dev",
+    storePath,
+  });
+  expect(storedEntry?.sessionId).toBe("sess-active");
   const filesAfterDeleteAttempt = await fs.readdir(dir);
   expect(
     filesAfterDeleteAttempt.filter((fileName) => fileName.startsWith("sess-active.jsonl.deleted.")),

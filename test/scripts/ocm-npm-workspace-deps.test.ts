@@ -24,6 +24,7 @@ describe("OCM npm workspace dependency adapter", () => {
     expect(resolveNpmEnvironment(["install"], env)).toBe(env);
     expect(resolveNpmEnvironment(["pack", "--silent"], env)).toEqual({
       KEEP: "value",
+      OCM_INTERNAL_NPM_BIN: adapterPath,
       OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1",
     });
   });

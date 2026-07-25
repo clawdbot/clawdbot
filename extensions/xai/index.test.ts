@@ -1,6 +1,7 @@
 // Xai tests cover index plugin behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
@@ -494,6 +495,19 @@ describe("xai provider plugin", () => {
     expect(realtimeProvider.aliases).toContain("xai-realtime");
   });
 
+  it("registers xAI realtime voice for Talk gateway-relay", () => {
+    const captured = createCapturedPluginRegistration({
+      id: "xai",
+      name: "xAI Provider",
+      source: "test",
+    });
+    plugin.register(captured.api);
+    const realtimeVoiceProvider = requireEntry(captured.realtimeVoiceProviders, "xai");
+    expect(realtimeVoiceProvider.label).toBe("xAI Grok Voice");
+    expect(realtimeVoiceProvider.aliases).toContain("grok-voice");
+    expect(realtimeVoiceProvider.capabilities?.transports).toEqual(["gateway-relay"]);
+  });
+
   describe.each(["code_execution", "x_search"] as const)("%s exposure", (toolName) => {
     it.each([
       {
@@ -779,13 +793,11 @@ describe("xai provider plugin", () => {
     const normalizedCompat = normalized?.compat as
       | {
           toolSchemaProfile?: string;
-          nativeWebSearchTool?: boolean;
           toolCallArgumentsEncoding?: string;
           unsupportedToolSchemaKeywords?: string[];
         }
       | undefined;
     expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
-    expect(normalizedCompat?.nativeWebSearchTool).toBe(true);
     expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
     expect(normalizedCompat?.unsupportedToolSchemaKeywords).toEqual(["minContains", "maxContains"]);
   });

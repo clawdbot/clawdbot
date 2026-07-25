@@ -13,6 +13,19 @@
   --workboard-control-border-hover: color-mix(in srgb, var(--accent) 36%, var(--border-strong));
 }
 
+.workboard-page-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.workboard-board-glyph--header {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
 .workboard-main {
   display: flex;
   flex-direction: column;
@@ -50,7 +63,6 @@
 
 .workboard-toolbar__filters,
 .workboard-toolbar__actions,
-.workboard-auto-refresh,
 .workboard-draft__meta,
 .workboard-template-strip,
 .workboard-card__actions,
@@ -71,17 +83,6 @@
 .workboard-toolbar__filters {
   flex: 1;
   min-width: 260px;
-}
-
-.workboard-auto-refresh {
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
-.workboard-auto-refresh select.input {
-  width: 82px;
 }
 
 .workboard-refresh-status {
@@ -264,27 +265,13 @@
   width: 15px;
   height: 15px;
   margin: 0;
-  accent-color: var(--accent);
-}
-
-.workboard-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: grid;
-  place-items: center;
-  padding: 28px;
-  overflow: hidden;
-  overscroll-behavior: contain;
-  background: color-mix(in srgb, #000 60%, transparent);
-  backdrop-filter: blur(8px);
 }
 
 .workboard-draft {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
-  width: min(1120px, calc(100vw - 56px));
+  width: 100%;
   height: min(860px, calc(100vh - 56px));
   min-height: 0;
   overflow: hidden;
@@ -370,7 +357,7 @@
   min-width: 0;
 }
 
-.workboard-field span {
+.workboard-field > span {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 650;
@@ -384,9 +371,9 @@
 }
 
 .workboard-select {
-  position: relative;
   width: 100%;
   min-width: 0;
+  --wa-form-control-activated-color: var(--accent);
 }
 
 .workboard-select--toolbar {
@@ -394,77 +381,57 @@
   max-width: 176px;
 }
 
-.workboard-select--toolbar-agent {
+.workboard-agent-select--toolbar {
   width: min(236px, 100%);
   max-width: 236px;
 }
 
-.workboard-select > summary {
-  list-style: none;
+.workboard-select--toolbar-board {
+  width: min(224px, 100%);
+  max-width: 224px;
 }
 
-.workboard-select > summary::-webkit-details-marker {
-  display: none;
+.workboard-agent-select {
+  width: 100%;
+  min-width: 0;
 }
 
-.workboard-select__trigger.input {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+.workboard-agent-select .agent-select__trigger {
+  min-height: var(--workboard-control-height);
+  border-color: var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  font-weight: 600;
+}
+
+.workboard-agent-select--toolbar .agent-select__trigger {
+  height: var(--workboard-control-height);
+}
+.workboard-select::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.workboard-select::part(combobox) {
   min-height: var(--workboard-control-height);
   width: 100%;
-  padding: 0 9px 0 10px;
-  user-select: none;
+  border-color: var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  color: var(--text);
 }
 
-.workboard-select__value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workboard-select__chevron,
-.workboard-select__check {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-
-.workboard-select__chevron,
-.workboard-select__chevron svg {
-  width: 16px;
-  height: 16px;
-}
-
-.workboard-select__check,
-.workboard-select__check svg {
-  width: 18px;
-  height: 18px;
-}
-
-.workboard-select[open] .workboard-select__trigger {
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 5%, transparent),
-    0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-.workboard-select[open] .workboard-select__chevron {
-  transform: rotate(180deg);
-}
-
-.workboard-select__menu {
-  position: fixed;
-  z-index: 1100;
-  top: var(--workboard-select-menu-top, 0);
-  left: var(--workboard-select-menu-left, 0);
-  display: none;
-  visibility: hidden;
-  gap: 2px;
-  width: var(--workboard-select-menu-width, 100%);
-  max-height: var(--workboard-select-menu-max-height, min(320px, calc(100vh - 220px)));
-  overflow: auto;
+.workboard-select::part(listbox) {
+  /* Keep Web Awesome's collision-aware bound in the cap; replacing it outright
+     would let the listbox overflow when the popup has little room to open. */
+  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 86%, transparent);
   border-radius: 8px;
@@ -474,44 +441,13 @@
     inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
 }
 
-.workboard-select[open] .workboard-select__menu {
-  display: grid;
-}
-
 .workboard-select__option {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 8px;
-  align-items: start;
-  width: 100%;
-  min-height: 34px;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-}
-
-.workboard-select__option:hover,
-.workboard-select__option:focus-visible {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  outline: none;
-}
-
-.workboard-select__option.is-selected {
-  background: color-mix(in srgb, var(--accent) 17%, transparent);
   color: var(--text);
 }
 
-.workboard-select__option:disabled {
-  cursor: not-allowed;
-  opacity: 0.46;
-}
-
-.workboard-select__option:disabled:hover {
-  background: transparent;
+.workboard-select [slot="start"] {
+  display: inline-flex;
+  align-items: center;
 }
 
 .workboard-select__label {
@@ -796,6 +732,16 @@
 
 .workboard-card--archived {
   opacity: 0.72;
+}
+
+.workboard-card.workboard-card--dragging {
+  opacity: 0.45;
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent),
+    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+  transform: scale(0.985);
+  cursor: grabbing;
 }
 
 .workboard-card h3 {
@@ -1331,13 +1277,10 @@
 }
 
 .workboard-detail-drawer {
-  position: fixed;
-  inset: 0 0 0 auto;
-  z-index: 900;
   display: flex;
   justify-content: flex-end;
-  width: min(460px, 100vw);
-  pointer-events: none;
+  width: 100%;
+  height: 100%;
 }
 
 .workboard-detail {
@@ -1348,7 +1291,6 @@
   min-height: 0;
   padding: 16px;
   overflow: auto;
-  pointer-events: auto;
   border-left: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
   background: color-mix(in srgb, var(--panel) 98%, var(--bg) 2%);
   box-shadow: var(--shadow-xl);
@@ -1393,6 +1335,90 @@
   font-size: 0.86rem;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+openclaw-workboard-card-dashboard {
+  display: block;
+}
+
+.workboard-card-dashboard {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.workboard-card-dashboard__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.workboard-card-dashboard__toggle:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid color-mix(in srgb, var(--accent) 68%, transparent);
+  outline-offset: 4px;
+}
+
+.workboard-card-dashboard__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.workboard-card-dashboard__title svg,
+.workboard-card-dashboard__chevron svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.workboard-card-dashboard__chevron {
+  display: inline-flex;
+  transition: transform 140ms ease;
+}
+
+.workboard-card-dashboard__toggle[aria-expanded="true"] .workboard-card-dashboard__chevron {
+  transform: rotate(180deg);
+}
+
+.workboard-card-dashboard__body {
+  min-width: 0;
+  padding-top: 10px;
+}
+
+.workboard-card-dashboard__body[hidden] {
+  display: none;
+}
+
+.workboard-card-dashboard__body .board-view {
+  gap: 9px;
+}
+
+.workboard-card-dashboard__body .board-grid {
+  gap: 8px;
+  grid-auto-rows: 44px;
+}
+
+.workboard-detail__section p.workboard-card-dashboard__empty,
+.workboard-detail__section p.workboard-card-dashboard__collapsed-empty {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.workboard-detail__section p.workboard-card-dashboard__collapsed-empty {
+  margin-top: -2px;
 }
 
 .workboard-detail__grid {
@@ -1514,13 +1540,8 @@
 }
 
 @media (max-width: 860px) {
-  .workboard-modal {
-    padding: 0;
-    place-items: stretch;
-  }
-
   .workboard-draft {
-    width: 100vw;
+    width: 100%;
     height: 100dvh;
     max-height: none;
     border: 0;
@@ -1552,13 +1573,14 @@
   .workboard-toolbar__filters .input[type="search"],
   .workboard-toolbar__filters .input,
   .workboard-select--toolbar,
+  .workboard-agent-select--toolbar,
   .workboard-draft__meta .input {
     width: 100%;
     max-width: none;
   }
 
-  .workboard-select__menu {
-    max-height: min(260px, var(--workboard-select-menu-max-height, 260px));
+  .workboard-select::part(listbox) {
+    max-height: min(260px, var(--auto-size-available-height, calc(100vh - 48px)));
   }
 
   .workboard-draft__meta {
@@ -1603,8 +1625,7 @@
   }
 
   .workboard-detail-drawer {
-    inset: 0;
-    width: 100vw;
+    width: 100%;
     height: 100dvh;
     max-height: none;
   }

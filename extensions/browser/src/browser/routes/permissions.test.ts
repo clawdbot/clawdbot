@@ -39,7 +39,11 @@ vi.mock("../cdp.helpers.js", () => ({
   withCdpSocket: cdpMocks.withCdpSocket,
 }));
 
-const { registerBrowserPermissionRoutes, testing } = await import("./permissions.js");
+vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: pwMocks.getPwAiModule,
+}));
+
+const { registerBrowserPermissionRoutes } = await import("./permissions.js");
 
 function createProfileContext(overrides: Record<string, unknown> = {}) {
   return {
@@ -106,7 +110,6 @@ describe("browser permission routes", () => {
     cdpMocks.getChromeWebSocketUrl.mockClear();
     cdpMocks.send.mockReset().mockResolvedValue({});
     cdpMocks.withCdpSocket.mockClear();
-    testing.setDepsForTest(null);
     pwMocks.getPwAiModule.mockReset().mockResolvedValue(null);
     pwMocks.getPageForTargetId.mockClear();
     pwMocks.grantPermissions.mockClear();
@@ -116,7 +119,6 @@ describe("browser permission routes", () => {
     pwMocks.getPwAiModule.mockResolvedValue({
       getPageForTargetId: pwMocks.getPageForTargetId,
     } as never);
-    testing.setDepsForTest({ getPwAiModule: pwMocks.getPwAiModule as never });
 
     const { response } = await callGrant({
       origin: "https://meet.google.com/abc-defg-hij",
@@ -269,7 +271,6 @@ describe("browser permission routes", () => {
       {
         allowPrivateNetwork: true,
         allowedHostnames: ["browser.example"],
-        hostnameAllowlist: ["browser.example"],
       },
     );
   });

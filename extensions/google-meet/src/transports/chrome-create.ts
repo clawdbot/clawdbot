@@ -5,11 +5,11 @@ import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
   callBrowserProxyOnNode,
-  forceMeetEnglishUi,
   readBrowserTab,
   resolveChromeNode,
   type BrowserTab,
 } from "./chrome-browser-proxy.js";
+import { forceMeetEnglishUi } from "./google-meet-urls.js";
 import type { GoogleMeetChromeHealth } from "./types.js";
 
 const GOOGLE_MEET_NEW_URL = "https://meet.google.com/new";
@@ -32,6 +32,7 @@ type GoogleMeetBrowserCreateResult = {
   meetingUri: string;
   nodeId: string;
   targetId?: string;
+  openedByPlugin: boolean;
   browserUrl?: string;
   browserTitle?: string;
   notes?: string[];
@@ -164,7 +165,7 @@ function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
   };
 }
 
-export const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
+const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   const meetUrlPattern = /^https:\\/\\/meet\\.google\\.com\\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i;
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const current = () => location.href;
@@ -272,6 +273,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     params.config.chrome.joinTimeoutMs,
   );
   const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
+  let openedByPlugin = false;
   let tab = await findGoogleMeetCreateTab({
     runtime: params.runtime,
     nodeId,
@@ -318,6 +320,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         timeoutMs: stepTimeoutMs,
       }),
     );
+    openedByPlugin = Boolean(tab?.targetId);
   }
   const targetId = tab?.targetId;
   if (!targetId) {
@@ -351,6 +354,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
           source: "browser",
           nodeId,
           targetId,
+          openedByPlugin,
           meetingUri: result.meetingUri,
           browserUrl: result.browserUrl,
           browserTitle: result.browserTitle,

@@ -21,6 +21,8 @@ import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "./common.
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
+const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
+
 interface EmbeddedGatewayRuntime {
   resolveSessionAgentId: (opts: {
     sessionKey: string;
@@ -28,6 +30,23 @@ interface EmbeddedGatewayRuntime {
     agentId?: string;
   }) => string;
   getRuntimeConfig: () => OpenClawConfig;
+  resolveDefaultAgentId: (config: OpenClawConfig) => string;
+  resolveSessionStoreKey: (params: { cfg: OpenClawConfig; sessionKey: string }) => string;
+  resolveStoredSessionKeyForAgentStore: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey: string;
+  }) => string;
+  searchSessionTranscripts: (params: {
+    agentId: string;
+    limit?: number;
+    query: string;
+    sessionKeys?: string[];
+  }) => {
+    hits: unknown[];
+    indexing: boolean;
+    truncated: boolean;
+  };
   augmentChatHistoryWithCliSessionImports: (opts: {
     entry: unknown;
     provider: string | undefined;
@@ -204,6 +223,64 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
     return { ok: false };
   }
   return { ok: true, key: resolved.key };
+}
+
+async function handleSessionsSearch(params: Record<string, unknown>) {
+  const rt = await getRuntime();
+  const cfg = rt.getRuntimeConfig();
+  const query = typeof params.query === "string" ? params.query.trim() : "";
+  if (!query) {
+    throw new Error("query must not be empty");
+  }
+  if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
+    throw new Error(`query must not exceed ${SESSIONS_SEARCH_MAX_QUERY_CHARS} characters`);
+  }
+  if (params.agentId !== undefined && params.sessionKeys === undefined) {
+    throw new Error("agentId requires sessionKeys");
+  }
+  const requestedSessionKeys = Array.isArray(params.sessionKeys)
+    ? params.sessionKeys.filter(
+        (sessionKey): sessionKey is string => typeof sessionKey === "string",
+      )
+    : undefined;
+  // Mirror the gateway protocol validator: an explicit sessionKeys filter must
+  // stay non-empty, or an empty array would silently widen to an unfiltered
+  // agent-wide search.
+  if (params.sessionKeys !== undefined && (requestedSessionKeys?.length ?? 0) === 0) {
+    throw new Error("sessionKeys must be a non-empty array of session keys");
+  }
+  const requestedAgentId = typeof params.agentId === "string" ? params.agentId.trim() : undefined;
+  const sessionKeys = requestedSessionKeys?.map((sessionKey) =>
+    requestedAgentId
+      ? rt.resolveStoredSessionKeyForAgentStore({ cfg, agentId: requestedAgentId, sessionKey })
+      : rt.resolveSessionStoreKey({ cfg, sessionKey }),
+  );
+  const agentIds = new Set(
+    sessionKeys?.map((sessionKey) =>
+      requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
+        ? requestedAgentId
+        : rt.resolveSessionAgentId({ sessionKey, config: cfg }),
+    ),
+  );
+  if (
+    agentIds.size > 1 ||
+    (requestedAgentId && [...agentIds].some((agentId) => agentId !== requestedAgentId))
+  ) {
+    throw new Error("sessions.search supports one agent per call");
+  }
+  const agentId =
+    requestedAgentId ?? agentIds.values().next().value ?? rt.resolveDefaultAgentId(cfg);
+  const result = rt.searchSessionTranscripts({
+    agentId,
+    query,
+    limit: readPositiveIntegerParam(params, "limit"),
+    ...(sessionKeys ? { sessionKeys } : {}),
+  });
+  return {
+    results: result.hits,
+    ...(result.indexing ? { indexing: true } : {}),
+    ...(result.truncated ? { truncated: true } : {}),
+  };
 }
 
 async function handleChatHistory(params: Record<string, unknown>): Promise<{
@@ -406,6 +483,8 @@ export function createEmbeddedCallGateway(): EmbeddedCallGateway {
         return (await handleSessionsList(params)) as T;
       case "sessions.resolve":
         return (await handleSessionsResolve(params)) as T;
+      case "sessions.search":
+        return (await handleSessionsSearch(params)) as T;
       case "chat.history":
         return (await handleChatHistory(params)) as T;
       default:

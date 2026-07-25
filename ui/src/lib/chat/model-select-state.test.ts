@@ -1,4 +1,6 @@
+// @vitest-environment node
 // Control UI tests cover chat model select state behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   createModelCatalog,
@@ -35,8 +37,9 @@ function resolveFastModeState(params: {
     model: "model",
     modelProvider: params.provider,
   });
+  const session = expectDefined(sessionsResult.sessions[0], "fast-mode session fixture");
   sessionsResult.sessions[0] = {
-    ...sessionsResult.sessions[0],
+    ...session,
     ...(params.fastMode === undefined ? {} : { fastMode: params.fastMode }),
     ...(params.effectiveFastMode === undefined
       ? {}

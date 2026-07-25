@@ -1,6 +1,7 @@
 package ai.openclaw.app.node
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -9,6 +10,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class MotionHandlerTest : NodeHandlerRobolectricTest() {
@@ -88,6 +90,46 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
       assertFalse(result.ok)
       assertEquals("MOTION_UNAVAILABLE", result.error?.code)
       assertTrue(result.error?.message?.contains("PEDOMETER_RANGE_UNAVAILABLE") == true)
+    }
+
+  @Test
+  fun handleMotionActivity_propagatesParentCancellation() =
+    runTest {
+      val handler =
+        MotionHandler.forTesting(
+          appContext(),
+          FakeMotionDataSource(
+            hasPermission = true,
+            activityError = CancellationException("invoke retired"),
+          ),
+        )
+
+      try {
+        handler.handleMotionActivity(null)
+        fail("expected cancellation to propagate")
+      } catch (err: CancellationException) {
+        assertEquals("invoke retired", err.message)
+      }
+    }
+
+  @Test
+  fun handleMotionPedometer_propagatesParentCancellation() =
+    runTest {
+      val handler =
+        MotionHandler.forTesting(
+          appContext(),
+          FakeMotionDataSource(
+            hasPermission = true,
+            pedometerError = CancellationException("invoke retired"),
+          ),
+        )
+
+      try {
+        handler.handleMotionPedometer(null)
+        fail("expected cancellation to propagate")
+      } catch (err: CancellationException) {
+        assertEquals("invoke retired", err.message)
+      }
     }
 }
 

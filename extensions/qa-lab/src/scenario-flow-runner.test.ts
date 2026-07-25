@@ -1,7 +1,13 @@
 // Qa Lab tests cover scenario flow runner plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { readQaScenarioById, type QaScenarioFlow } from "./scenario-catalog.js";
+import {
+  readQaScenarioById,
+  readQaScenarioPack,
+  type QaScenarioExecution,
+  type QaScenarioFlow,
+  type QaSeedScenarioWithSource,
+} from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 
 type QaFlowStep = {
@@ -21,6 +27,7 @@ async function runLoadedScenarioFlow(
   params: {
     flow?: QaScenarioFlow;
     api?: Record<string, unknown>;
+    state?: ReturnType<typeof createQaBusState>;
     omitOutboundSequence?: boolean;
     onWaitForOutboundMessage?: (params: {
       waitCount: number;
@@ -34,9 +41,10 @@ async function runLoadedScenarioFlow(
     throw new Error(`scenario has no flow: ${scenarioId}`);
   }
 
-  const state = createQaBusState();
+  const state = params.state ?? createQaBusState();
   let waitCount = 0;
   const transport = {
+    accountId: "qa-channel",
     state,
     reset: async () => {
       state.reset();
@@ -73,6 +81,10 @@ async function runLoadedScenarioFlow(
             (!input.textIncludes || candidate.text.includes(input.textIncludes)),
         );
       if (match) {
+        state.resolvePollCursor({
+          accountId: "qa-channel",
+          cursor: state.getSnapshot().cursor,
+        });
         return match;
       }
       throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
@@ -86,7 +98,14 @@ async function runLoadedScenarioFlow(
         }),
   };
   const api = {
-    env: { providerMode: "mock-openai" },
+    env: {
+      providerMode: "mock-openai",
+      gateway: {
+        restartAfterStateMutation: async (mutate: (context: unknown) => Promise<void>) => {
+          await mutate({});
+        },
+      },
+    },
     transport,
     state,
     scenario,
@@ -97,6 +116,15 @@ async function runLoadedScenarioFlow(
     waitForTransportReady: async () => undefined,
     waitForQaChannelReady: async () => undefined,
     waitForNoOutbound: async () => undefined,
+    waitForCondition: async <T>(check: () => T | Promise<T | undefined>) => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const value = await check();
+        if (value !== undefined) {
+          return value;
+        }
+      }
+      throw new Error("test condition was not met");
+    },
     sleep: async () => undefined,
     reset: async () => {
       state.reset();
@@ -206,7 +234,238 @@ async function runWebchatTranscriptWait(
   });
 }
 
+const planningEvidenceCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
+
+type PlanningEvidenceScenario = QaSeedScenarioWithSource & {
+  execution: Extract<QaScenarioExecution, { kind: "flow" }> & { flow?: QaScenarioFlow };
+};
+
+function isPlanningEvidenceScenario(
+  scenario: QaSeedScenarioWithSource,
+): scenario is PlanningEvidenceScenario {
+  return (
+    scenario.execution.kind === "flow" &&
+    [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])].some(
+      (coverageId) => planningEvidenceCoverageIds.has(coverageId),
+    )
+  );
+}
+
+type PlanningEvidenceFixture = {
+  currentSummary: Record<string, unknown>;
+  failureMessage: string;
+  outboundText: string;
+  scenario: PlanningEvidenceScenario;
+};
+
+function readPlanningEvidenceFlow(scenario: PlanningEvidenceScenario): QaScenarioFlow {
+  const step = scenario.execution.flow?.steps.find((candidate) =>
+    candidate.actions.some(
+      (action) =>
+        typeof action === "object" &&
+        action !== null &&
+        "call" in action &&
+        action.call === "runAgentPrompt",
+    ),
+  );
+  if (!step) {
+    throw new Error(`planning scenario has no agent turn: ${scenario.id}`);
+  }
+  const artifactIndex = step.actions.findIndex(
+    (action) =>
+      typeof action === "object" &&
+      action !== null &&
+      "set" in action &&
+      action.set === "artifactPath",
+  );
+  const evidenceActions = artifactIndex >= 0 ? step.actions.slice(0, artifactIndex) : step.actions;
+  return {
+    steps: [
+      {
+        name: "proves current-attempt planning evidence",
+        actions: [
+          { set: "selected", value: { provider: "openai", model: "gpt-5.6-luna" } },
+          ...evidenceActions,
+        ],
+      },
+    ],
+  };
+}
+
+function createPlanningEvidenceFixture(
+  scenario: PlanningEvidenceScenario,
+): PlanningEvidenceFixture {
+  const config = scenario.execution.config ?? {};
+  const artifactFile = typeof config.artifactFile === "string" ? config.artifactFile : undefined;
+  const expectedReply = typeof config.expectedReply === "string" ? config.expectedReply : undefined;
+  const internalMarker =
+    typeof config.internalMarker === "string" ? config.internalMarker : undefined;
+
+  if (scenario.execution.runtime === "codex" && expectedReply && internalMarker) {
+    return {
+      scenario,
+      outboundText: expectedReply,
+      failureMessage: "missing marked Codex internal plan/reasoning mirror evidence",
+      currentSummary: {
+        eventCursor: 9,
+        assistantMirrors: [
+          { identity: "current-turn:plan", text: `Codex plan:\n${internalMarker}` },
+          { identity: "current-turn:assistant", text: expectedReply },
+        ],
+        successfulToolCallCounts: {},
+      },
+    };
+  }
+  if (scenario.execution.runtime === "codex" && artifactFile) {
+    const outboundText = `Built ${artifactFile}`;
+    return {
+      scenario,
+      outboundText,
+      failureMessage: "missing Codex App Server plan signal",
+      currentSummary: {
+        eventCursor: 9,
+        assistantMirrors: [
+          { identity: "current-turn:plan", text: "Codex plan:\n- build the game" },
+          { identity: "current-turn:assistant", text: outboundText },
+        ],
+        successfulToolCallCounts: {},
+      },
+    };
+  }
+  if (scenario.execution.runtime === "openclaw" && artifactFile) {
+    return {
+      scenario,
+      outboundText: `Built ${artifactFile}`,
+      failureMessage: "missing OpenClaw update_plan signal",
+      currentSummary: {
+        eventCursor: 9,
+        successfulToolCallCounts: { update_plan: 1 },
+      },
+    };
+  }
+  throw new Error(`unsupported planning evidence metadata: ${scenario.id}`);
+}
+
+function runPlanningEvidenceFixture(
+  fixture: PlanningEvidenceFixture,
+  currentSummary = fixture.currentSummary,
+) {
+  const state = createQaBusState();
+  const readOptions: unknown[] = [];
+  const summaries = [
+    {
+      eventCursor: 7,
+      assistantMirrors: [
+        { identity: "old-turn:plan", text: "Codex plan:\nQA_INTERNAL_PLAN_DO_NOT_SEND" },
+        { identity: "old-turn:assistant", text: fixture.outboundText },
+      ],
+      successfulToolCallCounts: { update_plan: 1 },
+    },
+    currentSummary,
+  ];
+  let readIndex = 0;
+  const result = runLoadedScenarioFlow(fixture.scenario.id, {
+    flow: readPlanningEvidenceFlow(fixture.scenario),
+    state,
+    onWaitForOutboundMessage: ({ state: currentState }) => {
+      currentState.addOutboundMessage({
+        accountId: "qa-channel",
+        to: "dm:qa-operator",
+        text: fixture.outboundText,
+      });
+    },
+    api: {
+      env: {
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+      },
+      readSessionTranscriptSummary: async (...args: unknown[]) => {
+        readOptions.push(args[2]);
+        const summary = summaries[readIndex];
+        readIndex += 1;
+        if (!summary) {
+          throw new Error("unexpected transcript summary read");
+        }
+        return summary;
+      },
+      resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
+      normalizeLowercaseStringOrEmpty: (value: unknown) =>
+        typeof value === "string" ? value.trim().toLowerCase() : "",
+      runAgentPrompt: async () => ({ started: { runId: "current-run" }, waited: { status: "ok" } }),
+    },
+  });
+  return { readOptions, result };
+}
+
+const planningEvidenceFixtures = readQaScenarioPack()
+  .scenarios.filter(isPlanningEvidenceScenario)
+  .map(createPlanningEvidenceFixture);
+
 describe("scenario-flow-runner", () => {
+  it.each(planningEvidenceFixtures)(
+    "accepts current-attempt planning evidence for $scenario.id",
+    async (fixture) => {
+      const { readOptions, result } = runPlanningEvidenceFixture(fixture);
+
+      await expect(result).resolves.toMatchObject({ status: "pass" });
+      expect(readOptions).toEqual([{ allowEmpty: true }, { afterEventCursor: 7 }]);
+    },
+  );
+
+  it.each(planningEvidenceFixtures)(
+    "rejects stale prior-attempt planning evidence for $scenario.id",
+    async (fixture) => {
+      const currentSummary = {
+        eventCursor: 8,
+        ...(fixture.scenario.execution.runtime === "codex"
+          ? {
+              assistantMirrors: [
+                { identity: "current-turn:assistant", text: fixture.outboundText },
+              ],
+            }
+          : {}),
+        successfulToolCallCounts: {},
+      };
+      const { readOptions, result } = runPlanningEvidenceFixture(fixture, currentSummary);
+
+      await expect(result).rejects.toThrow(fixture.failureMessage);
+      expect(readOptions).toEqual([{ allowEmpty: true }, { afterEventCursor: 7 }]);
+    },
+  );
+
+  it("runs the canonical reaction lifecycle with target-bound actions", async () => {
+    const state = createQaBusState();
+    const actionTargets: unknown[] = [];
+    const result = await runLoadedScenarioFlow("reaction-edit-delete", {
+      state,
+      api: {
+        handleQaAction: async (params: {
+          action: "delete" | "edit" | "react";
+          args: Record<string, unknown>;
+        }) => {
+          actionTargets.push(params.args.to);
+          const messageId = String(params.args.messageId);
+          if (params.action === "react") {
+            return state.reactToMessage({
+              messageId,
+              emoji: String(params.args.emoji),
+            });
+          }
+          if (params.action === "edit") {
+            return state.editMessage({
+              messageId,
+              text: String(params.args.text),
+            });
+          }
+          return state.deleteMessage({ messageId });
+        },
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    expect(actionTargets).toEqual(["channel:qa-room", "channel:qa-room", "channel:qa-room"]);
+  });
+
   it("fails when a flow calls a transport method the adapter does not implement", async () => {
     await expect(
       runLoadedScenarioFlow("channel-message-flows", {
@@ -252,6 +511,7 @@ describe("scenario-flow-runner", () => {
         },
       },
       scenarioTitle: "qa-import",
+      vars: { preparedValue: "ready" },
       flow: {
         steps: [
           {
@@ -268,6 +528,7 @@ describe("scenario-flow-runner", () => {
                   expr: 'basename === "SKILL.md"',
                 },
               },
+              { assert: 'preparedValue === "ready"' },
             ],
             detailsExpr: "basename",
           },
@@ -336,7 +597,7 @@ describe("scenario-flow-runner", () => {
               },
               {
                 assert: {
-                  expr: 'typeof plugin.createCodexPluginInstallGate === "function"',
+                  expr: 'typeof plugin.evaluateCodexPluginLifecycle === "function"',
                 },
               },
             ],
@@ -348,92 +609,6 @@ describe("scenario-flow-runner", () => {
 
     expect(result.status).toBe("pass");
     expect(result.steps[0]?.details).toBe("loaded");
-  });
-
-  it("can hold a gated promise across later flow actions", async () => {
-    const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-gated-promise",
-          title: "qa-gated-promise",
-          sourcePath: "qa/scenarios/qa-gated-promise.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: { expectedText: "QA_CODEX_PLUGIN_TURN_OK" },
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
-          const stepResults = [];
-          for (const step of steps) {
-            const details = await step.run();
-            stepResults.push({
-              name: step.name,
-              status: "pass" as const,
-              ...(details !== undefined ? { details } : {}),
-            });
-          }
-          return {
-            name: "qa-gated-promise",
-            status: "pass" as const,
-            steps: stepResults,
-          };
-        },
-      },
-      scenarioTitle: "qa-gated-promise",
-      flow: {
-        steps: [
-          {
-            name: "uses deferred promise wrapper",
-            actions: [
-              {
-                set: "plugin",
-                value: {
-                  expr: 'await qaImport("./codex-plugin.fixture.js")',
-                },
-              },
-              {
-                set: "gate",
-                value: {
-                  expr: "plugin.createCodexPluginInstallGate()",
-                },
-              },
-              {
-                set: "turn",
-                value: {
-                  expr: "({ promise: gate.runFirstTurnAfterInstall({ inputTokens: 17, run: () => config.expectedText }) })",
-                },
-              },
-              {
-                assert: {
-                  expr: 'JSON.stringify(gate.events) === JSON.stringify(["agent-turn:waiting-for-codex-plugin"])',
-                },
-              },
-              { call: "gate.markInstalled" },
-              {
-                set: "completed",
-                value: {
-                  expr: "await turn.promise",
-                },
-              },
-              {
-                assert: {
-                  expr: "completed.text === config.expectedText && completed.responseCount === 1 && completed.inputTokens === 17",
-                },
-              },
-            ],
-            detailsExpr: "completed.text",
-          },
-        ],
-      },
-    });
-
-    expect(result.status).toBe("pass");
-    expect(result.steps[0]?.details).toBe("QA_CODEX_PLUGIN_TURN_OK");
   });
 
   it.each([

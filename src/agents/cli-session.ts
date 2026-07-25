@@ -48,6 +48,7 @@ export function setCliSessionBinding(
     [normalized]: {
       sessionId: trimmed,
       ...(binding.forceReuse === true ? { forceReuse: true } : {}),
+      ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
       ...(normalizeOptionalString(binding.authProfileId)
         ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
         : {}),

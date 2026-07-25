@@ -2,10 +2,11 @@ title: Telegram commands list reply
 
 scenario:
   id: telegram-commands-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify Telegram renders the full native command catalog.
   successCriteria:
     - The command list is returned through the Telegram group command path.
@@ -14,6 +15,13 @@ scenario:
     - src/auto-reply/reply/commands-core.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "telegram:adapter": 4,
+        "telegram:all": 3,
+        "telegram:mock-release": 3,
+        "telegram:release": 3,
+      }
     kind: flow
     channel: telegram
     summary: Request the Telegram command catalog and verify representative entries.
@@ -29,13 +37,13 @@ flow:
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
-            conversation: { id: telegram-command-room, kind: channel }
+            conversation: { id: telegram-command-room, kind: group }
             senderId: qa-command-operator
             senderName: QA Command Operator
             text:
               expr: "transport.id === 'telegram' ? '/commands@openclaw' : '/commands'"
         - waitForOutbound:
-            conversation: { id: telegram-command-room, kind: channel }
+            conversation: { id: telegram-command-room, kind: group }
             sinceIndex: { ref: startIndex }
             timeoutMs: 60000
         - call: sleep

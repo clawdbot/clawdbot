@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   pathExistsSync,
@@ -206,7 +206,7 @@ function mediaFileTypeForKind(mediaKind: QQBotMediaKind): MediaFileType {
 
 function senderKindForLoadedMedia(
   mediaKind: QQBotMediaKind,
-  loadedKind: "image" | "audio" | "video" | "document" | undefined,
+  loadedKind: MediaKind | undefined,
 ): "image" | "video" | "file" | null {
   if (mediaKind === "image") {
     return loadedKind === "image" ? "image" : null;
@@ -961,3 +961,4 @@ async function downloadToFallbackDir(httpUrl: string, caller: string): Promise<s
     return null;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

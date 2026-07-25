@@ -26,7 +26,7 @@ const DEFAULT_SPAWN_RUNTIME: CodexAppServerSpawnRuntime = {
 };
 
 /** Resolves the concrete command/argv/shell settings used to spawn Codex app-server. */
-export function resolveCodexAppServerSpawnInvocation(
+function resolveCodexAppServerSpawnInvocation(
   options: CodexAppServerStartOptions,
   runtime: CodexAppServerSpawnRuntime = DEFAULT_SPAWN_RUNTIME,
 ): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
@@ -75,7 +75,7 @@ export function resolveCodexAppServerSpawnEnv(
 }
 
 /** Keeps QA-owned app-server processes inside the gateway process-group cleanup boundary. */
-export function resolveCodexAppServerDetachedMode(
+function resolveCodexAppServerDetachedMode(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
 ): boolean {

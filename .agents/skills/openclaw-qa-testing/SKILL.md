@@ -68,17 +68,14 @@ Langfuse, or external collector credentials.
 profiles for faster CI/release proof:
 
 ```bash
-OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
-pnpm openclaw qa matrix --profile fast --fail-fast
+pnpm openclaw qa matrix --profile release
 ```
 
-- `fast`: release-critical transport contract, excluding generated image and
-  deep E2EE recovery inventory.
-- `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, `e2ee-cli`: sharded full
-  Matrix coverage.
-- `QA-Lab - All Lanes` uses explicit `fast` Matrix on scheduled runs. Manual
-  dispatch keeps `matrix_profile=all` as the default and always shards that full
-  Matrix selection.
+- `fast` and `release`: focused release-critical scenarios.
+- `transport`: transport and routing coverage.
+- `all`: the full Matrix profile.
+- `QA-Lab - All Lanes` fans manual `all` runs across the transport, media, and
+  E2EE profiles. Release checks use the focused reusable Matrix job.
 
 ## QA credentials and 1Password
 

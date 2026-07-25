@@ -3,20 +3,20 @@ import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-regi
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
-import { getSuspensionVisibleCronTaskRunCount } from "../tasks/cron-task-cancel.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import {
   type ActiveTaskRestartBlocker,
   formatActiveTaskRestartBlocker,
 } from "../tasks/task-restart-blocker.js";
 
-export type GatewayActiveWorkCounts = {
+type GatewayActiveWorkCounts = {
   queueSize: number;
   pendingReplies: number;
   embeddedRuns: number;

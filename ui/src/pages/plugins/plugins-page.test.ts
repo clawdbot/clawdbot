@@ -1,33 +1,26 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginCatalogItem,
+  PluginListResult,
+  PluginMutationResult,
+} from "../../lib/plugins/index.ts";
+import {
+  createApplicationContextProvider,
+  type ApplicationContextProvider,
+} from "../../test-helpers/application-context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 import "./plugins-page.ts";
-
-const PROVIDER_TAG = "test-plugins-page-context-provider";
-
-class PluginsPageContextProvider extends LitElement {
-  private readonly provider = new ContextProvider(this, { context: applicationContext });
-
-  setContext(context: ApplicationContext) {
-    this.provider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_TAG)) {
-  customElements.define(PROVIDER_TAG, PluginsPageContextProvider);
-}
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
@@ -42,6 +35,8 @@ type TestPluginsPage = HTMLElement & {
   result: PluginListResult | null;
   loading: boolean;
   busy: Record<string, boolean>;
+  activeTab: "installed" | "discover";
+  applyMutationResult: (result: PluginMutationResult) => void;
 };
 
 type RuntimeConfigTestState = {
@@ -54,7 +49,7 @@ function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalog
   return {
     id: "workboard",
     name: "Workboard",
-    description: "Agent work queue and session handoff.",
+    description: "Agent work queue and thread handoff.",
     origin: "bundled",
     installed: true,
     enabled: false,
@@ -83,8 +78,8 @@ function createSnapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
+    offlineStable: false,
     hello: {
       type: "hello-ok",
       protocol: 1,
@@ -137,6 +132,7 @@ type RuntimeConfigTestHarness = {
     patch: ReturnType<
       typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
     >;
+    patchFromSnapshot: ApplicationContext["runtimeConfig"]["patchFromSnapshot"];
     subscribe: (listener: (state: RuntimeConfigTestState) => void) => () => void;
   };
   notify: () => void;
@@ -147,13 +143,23 @@ function createRuntimeConfigHarness(
   runtimeConfigState: RuntimeConfigTestState,
 ): RuntimeConfigTestHarness {
   const listeners = new Set<(state: RuntimeConfigTestState) => void>();
+  const patch = vi.fn<
+    (options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>
+  >(async () => true);
   const runtimeConfig = {
     state: runtimeConfigState,
     refresh: refreshConfig,
     ensureLoaded: vi.fn(async () => undefined),
-    patch: vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>(
-      async () => true,
-    ),
+    patch,
+    patchFromSnapshot: vi.fn(async (build) => {
+      const config = runtimeConfigState.configSnapshot?.sourceConfig ?? {};
+      const built = build(config);
+      if ("error" in built) {
+        runtimeConfigState.lastError = built.error;
+        return false;
+      }
+      return patch(built.options);
+    }),
     subscribe(listener: (state: RuntimeConfigTestState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -182,17 +188,17 @@ function createContext(
     gateway,
     basePath: "",
     runtimeConfig: harness.runtimeConfig,
+    navigate: vi.fn(),
   } as unknown as ApplicationContext;
 }
 
 async function mountPage(
   context: ApplicationContext,
   routeData?: PluginsRouteData,
-): Promise<{ page: TestPluginsPage; provider: PluginsPageContextProvider }> {
-  const provider = document.createElement(PROVIDER_TAG) as PluginsPageContextProvider;
+): Promise<{ page: TestPluginsPage; provider: ApplicationContextProvider }> {
+  const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-plugins-page") as unknown as TestPluginsPage;
   page.routeData = routeData;
-  provider.setContext(context);
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -207,13 +213,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function clickMenuItem(page: TestPluginsPage, pluginSelector: string, label: string) {
-  page.querySelector<HTMLButtonElement>(`${pluginSelector} .plugins-kebab`)?.click();
-  await page.updateComplete;
-  const item = [
-    ...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} .plugins-menu__item`),
-  ].find((element) => element.textContent?.includes(label));
-  item?.click();
+async function clickRowAction(page: TestPluginsPage, pluginSelector: string, label: string) {
+  const button = [...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} button`)].find(
+    (element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
+  );
+  button?.click();
   await page.updateComplete;
 }
 
@@ -226,6 +230,7 @@ describe("PluginsPage", () => {
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("accepts matching route data without issuing a duplicate list request", async () => {
@@ -235,6 +240,7 @@ describe("PluginsPage", () => {
     const routeData: PluginsRouteData = {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
       result,
       error: null,
     };
@@ -253,6 +259,192 @@ describe("PluginsPage", () => {
     expect(page.querySelector("h1")?.textContent).toBe("Plugins");
   });
 
+  it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
+    const createObjectURL = vi.fn(() => "blob:firecrawl-icon");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(
+          new Blob(
+            [
+              new Uint8Array([
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52,
+                0, 0, 0, 2, 0, 0, 0, 1,
+              ]),
+            ],
+            { type: "image/png" },
+          ),
+          {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    harness.gateway.connection.token = "first";
+    harness.gateway.connection.password = "second";
+    const result = createResult(
+      createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true }),
+    );
+    const routeData: PluginsRouteData = {
+      gateway: harness.gateway,
+      gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
+      result,
+      error: null,
+    };
+
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      routeData,
+    );
+
+    await waitForFast(() => {
+      expect(
+        page.querySelector('[data-plugin-id="remote-icon"] img.plugins-icon')?.getAttribute("src"),
+      ).toBe("blob:firecrawl-icon");
+    });
+    expect(
+      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(["Bearer first", "Bearer second"]);
+    page.applyMutationResult({
+      ok: true,
+      plugin: createPlugin({ id: "other-plugin", name: "Other Plugin" }),
+      restartRequired: false,
+    });
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    page.remove();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
+  });
+
+  it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
+    const createObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          new Blob(
+            [
+              `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><filter id="work"><feTurbulence /></filter><path filter="url(#work)" d="M0 0h24v24H0z"/></svg>`,
+            ],
+            { type: "image/svg+xml" },
+          ),
+          { status: 200, headers: { "content-type": "image/svg+xml" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const result = createResult(
+      createPlugin({ id: "unsafe-icon", name: "Unsafe Icon", hasIcon: true }),
+    );
+
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      {
+        gateway: harness.gateway,
+        gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
+        result,
+        error: null,
+      },
+    );
+
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(
+      page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("UI");
+  });
+
+  it("applies a ?tab=discover deep link from route data", async () => {
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    const routeData: PluginsRouteData = {
+      gateway: harness.gateway,
+      gatewaySnapshot: harness.gateway.snapshot,
+      result: createResult(),
+      error: null,
+      initialTab: "discover",
+    };
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      routeData,
+    );
+
+    expect(page.activeTab).toBe("discover");
+    const tabGroup = page.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "wa-tab-group",
+    );
+    await tabGroup?.updateComplete;
+    expect(
+      page.querySelector<HTMLElement & { active: boolean }>("#plugins-tab-discover")?.active,
+    ).toBe(true);
+  });
+
+  it("routes the skills and workshop hub tabs through navigation", async () => {
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    const context = createContext(
+      harness.gateway,
+      vi.fn(async () => undefined),
+    );
+    const routeData: PluginsRouteData = {
+      gateway: harness.gateway,
+      gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
+      result: createResult(),
+      error: null,
+    };
+    const { page } = await mountPage(context, routeData);
+
+    page.querySelector<HTMLButtonElement>("#plugins-tab-skills")?.click();
+    expect(context.navigate).toHaveBeenCalledWith("skills");
+    page.querySelector<HTMLButtonElement>("#plugins-tab-workshop")?.click();
+    expect(context.navigate).toHaveBeenCalledWith("skill-workshop");
+    expect(page.activeTab).toBe("installed");
+
+    // Catalog tabs switch locally for instant feedback and keep the URL in
+    // sync with the ?tab=discover deep link.
+    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    expect(page.activeTab).toBe("discover");
+    expect(context.navigate).toHaveBeenCalledWith("plugins", { search: "?tab=discover" });
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>("#plugins-tab-installed")?.click();
+    expect(page.activeTab).toBe("installed");
+    expect(context.navigate).toHaveBeenCalledWith("plugins", undefined);
+  });
+
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {
     const refreshed = createResult(createPlugin({ enabled: true, state: "enabled" }));
     const { client, request } = createClient(async (method) => {
@@ -265,6 +457,7 @@ describe("PluginsPage", () => {
     const routeData: PluginsRouteData = {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
       result: createResult(),
       error: null,
     };
@@ -279,7 +472,7 @@ describe("PluginsPage", () => {
     harness.emit(client, false);
     harness.emit(client, true);
 
-    await vi.waitFor(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
+    await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
     expect(request).toHaveBeenCalledWith("plugins.list", {});
   });
 
@@ -300,6 +493,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -352,15 +546,16 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
     );
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
 
-    await vi.waitFor(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
-    await vi.waitFor(() => expect(refreshConfig).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
+    await waitForFast(() => expect(refreshConfig).toHaveBeenCalledOnce());
     expect(refreshConfig).toHaveBeenCalledWith();
     expect(runtimeConfigState.configFormDirty).toBe(true);
     expect(calls).toContainEqual(["plugins.setEnabled", { pluginId: "workboard", enabled: true }]);
@@ -384,18 +579,19 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
     );
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
-    await vi.waitFor(() =>
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("Enable failed"),
     );
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
-    await vi.waitFor(() => {
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await waitForFast(() => {
       const calls = request.mock.calls.filter(([method]) => method === "plugins.setEnabled");
       expect(calls).toHaveLength(2);
       expect(calls.map(([, params]) => params)).toEqual([
@@ -425,6 +621,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -470,6 +667,7 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -478,9 +676,9 @@ describe("PluginsPage", () => {
     page.querySelector<HTMLButtonElement>(".plugins-refresh")?.click();
     await page.updateComplete;
     expect(page.loading).toBe(true);
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
 
-    await vi.waitFor(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
+    await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
     expect(page.loading).toBe(false);
     expect(page.querySelector<HTMLButtonElement>(".plugins-refresh")?.disabled).toBe(false);
     manualRefresh.resolve(createResult());
@@ -514,20 +712,21 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
     );
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
-    await vi.waitFor(() =>
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await waitForFast(() =>
       expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
         "Could not refresh Control UI configuration: config.get failed",
       ),
     );
 
     page.querySelector<HTMLButtonElement>(".plugins-page-error button")?.click();
-    await vi.waitFor(() => expect(page.querySelector(".plugins-page-error")).toBeNull());
+    await waitForFast(() => expect(page.querySelector(".plugins-page-error")).toBeNull());
     expect(refreshConfig).toHaveBeenCalledTimes(2);
   });
 
@@ -563,17 +762,18 @@ describe("PluginsPage", () => {
     const { page } = await mountPage(createContext(harness.gateway, refreshConfig), {
       gateway: harness.gateway,
       gatewaySnapshot: harness.gateway.snapshot,
+      initialTab: null,
       result: disabledResult,
       error: null,
     });
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     harness.emit(replacementClient, true);
-    await vi.waitFor(() => expect(replacementListCount).toBe(1));
+    await waitForFast(() => expect(replacementListCount).toBe(1));
     await page.updateComplete;
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     staleMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
@@ -581,7 +781,7 @@ describe("PluginsPage", () => {
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     freshMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
-    await vi.waitFor(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
+    await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
   });
 
   it("uninstalls a removable plugin after inline confirmation", async () => {
@@ -617,22 +817,23 @@ describe("PluginsPage", () => {
       {
         gateway: harness.gateway,
         gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: null,
         result: { plugins: [createPlugin(), removable], diagnostics: [], mutationAllowed: true },
         error: null,
       },
     );
 
-    await clickMenuItem(page, '[data-plugin-id="community-thing"]', "Remove");
+    await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
     page
       .querySelector<HTMLButtonElement>(
         '[data-plugin-id="community-thing"] .plugins-remove-confirm .btn.danger',
       )
       ?.click();
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]),
     );
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".plugins-page-notice")?.textContent).toContain(
         "Removed community-thing",
       ),
@@ -667,25 +868,29 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
     );
 
     const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;
 
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
-    await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patchArgs = configHarness.runtimeConfig.patch.mock.calls[0][0] as {
+    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
+    const patchArgs = expectDefined(
+      expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP add patch call")[0],
+      "MCP add patch payload",
+    ) as {
       raw: Record<string, unknown>;
       note: string;
     };
@@ -697,7 +902,7 @@ describe("PluginsPage", () => {
         },
       },
     });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="status"].plugins-row-message')?.textContent).toContain(
         "Added MCP server context7",
       ),
@@ -735,16 +940,20 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
     );
 
     expect(page.querySelector('[data-mcp-name="github"]')).not.toBeNull();
-    await clickMenuItem(page, '[data-mcp-name="github"]', "Remove");
+    await clickRowAction(page, '[data-mcp-name="github"]', "Remove");
 
-    await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patchArgs = configHarness.runtimeConfig.patch.mock.calls[0][0] as {
+    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
+    const patchArgs = expectDefined(
+      expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP remove patch call")[0],
+      "MCP remove patch payload",
+    ) as {
       raw: Record<string, unknown>;
     };
     // RFC 7396 merge semantics: deletion must be an explicit null, not omission.
@@ -772,6 +981,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
@@ -781,17 +991,17 @@ describe("PluginsPage", () => {
     await page.updateComplete;
     page
       .querySelector<HTMLButtonElement>(
-        '[data-connector-id="context7"] .plugins-card__footer button',
+        '[data-connector-id="context7"] .settings-row__control button',
       )
       ?.click();
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(
         page.querySelector('[data-connector-id="context7"] [role="alert"]')?.textContent,
       ).toContain("rate limit exceeded"),
     );
     // The MCP-section message stays clear; the failure belongs to the card.
-    expect(page.querySelector("#plugins-group-mcp")).toBeNull();
+    expect(page.querySelector(".plugins-group-message")).toBeNull();
   });
 
   it("rejects invalid MCP server names before touching config", async () => {
@@ -811,22 +1021,23 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        initialTab: null,
         result: createResult(),
         error: null,
       },
     );
 
     const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "bad name!";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "https://x.example/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="alert"].plugins-row-message')?.textContent).toContain(
         "Server names use",
       ),

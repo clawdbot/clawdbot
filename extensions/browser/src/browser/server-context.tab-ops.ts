@@ -1,6 +1,7 @@
 /**
  * Browser tab listing, opening, labeling, and alias management for one profile.
  */
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
@@ -10,10 +11,17 @@ import {
   fetchJson,
   fetchOk,
   normalizeCdpHttpBaseForJsonEndpoints,
+  resolveCdpTabOwnership,
 } from "./cdp.helpers.js";
-import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
+import {
+  appendCdpPath,
+  createTargetViaCdp,
+  normalizeCdpWsUrl,
+  waitForCdpCommittedNavigationUrl,
+} from "./cdp.js";
 import type { CdpActionTimeouts } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
+import type { BrowserOpenResult } from "./client.types.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import {
@@ -37,23 +45,41 @@ import type {
   BrowserTab,
   ProfileRuntimeState,
 } from "./server-context.types.js";
-import { resolveTargetIdFromTabs } from "./target-id.js";
+import {
+  assignTabAlias,
+  assignTabAliases,
+  normalizeTabLabel,
+  resolveTargetIdFromTabs,
+} from "./target-id.js";
 
 type TabOpsDeps = {
   profile: ResolvedBrowserProfile;
   state: () => BrowserServerState;
-  getProfileState: () => ProfileRuntimeState;
+  runtime: ProfileRuntimeState;
 };
 
 type ProfileTabOps = {
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
-  openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
-  labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
+  openTab: (
+    url: string,
+    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+  ) => Promise<BrowserOpenResult>;
+  labelTab: (
+    targetId: string,
+    label: string,
+    options?: BrowserOperationOptions,
+  ) => Promise<BrowserTab>;
 };
 
-/**
- * Normalize a CDP WebSocket URL to use the correct base URL.
- */
+type CdpTarget = {
+  id?: string;
+  title?: string;
+  url?: string;
+  webSocketDebuggerUrl?: string;
+  type?: string;
+};
+
+/** Normalize a reported CDP WebSocket URL against the configured endpoint. */
 function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
   if (!raw) {
     return undefined;
@@ -65,130 +91,8 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
   }
 }
 
-type CdpTarget = {
-  id?: string;
-  title?: string;
-  url?: string;
-  webSocketDebuggerUrl?: string;
-  type?: string;
-};
-
-const TAB_LABEL_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
-
-function normalizeTabLabel(label: string): string {
-  const trimmed = label.trim();
-  if (!TAB_LABEL_PATTERN.test(trimmed)) {
-    throw new Error("tab label must be 1-64 chars and use only letters, numbers, _, ., :, or -");
-  }
-  return trimmed;
-}
-
-function getTabAliasState(
-  profileState: ProfileRuntimeState,
-): NonNullable<ProfileRuntimeState["tabAliases"]> {
-  profileState.tabAliases ??= { nextTabNumber: 1, byTargetId: {} };
-  return profileState.tabAliases;
-}
-
-function assignTabAlias(params: {
-  profileState: ProfileRuntimeState;
-  tab: BrowserTab;
-  label?: string;
-}): BrowserTab {
-  const aliases = getTabAliasState(params.profileState);
-  let entry = aliases.byTargetId[params.tab.targetId];
-  if (!entry) {
-    entry = { tabId: `t${aliases.nextTabNumber}` };
-    aliases.nextTabNumber += 1;
-    aliases.byTargetId[params.tab.targetId] = entry;
-  }
-  if (params.label) {
-    const label = normalizeTabLabel(params.label);
-    for (const [targetId, current] of Object.entries(aliases.byTargetId)) {
-      if (targetId !== params.tab.targetId && current.label === label) {
-        delete current.label;
-      }
-    }
-    entry.label = label;
-  }
-  entry.url = params.tab.url;
-  const labelFields = entry.label ? { label: entry.label } : {};
-  return {
-    ...params.tab,
-    suggestedTargetId: entry.label ?? entry.tabId,
-    tabId: entry.tabId,
-    ...labelFields,
-  };
-}
-
-type TabAliasEntry = NonNullable<ProfileRuntimeState["tabAliases"]>["byTargetId"][string];
-
-function normalizeReplacementUrl(url: string | undefined): string | undefined {
-  return url?.trim() || undefined;
-}
-
-function findConfidentReplacement(params: {
-  staleEntry: TabAliasEntry;
-  staleEntries: Array<[targetId: string, entry: TabAliasEntry]>;
-  newCandidates: BrowserTab[];
-}): BrowserTab | undefined {
-  const { staleEntry, staleEntries, newCandidates } = params;
-  // Preserve shipped form-submit continuity when the replacement set is one-for-one.
-  if (staleEntries.length === 1 && newCandidates.length === 1) {
-    return newCandidates[0];
-  }
-
-  const url = normalizeReplacementUrl(staleEntry.url);
-  if (!url) {
-    return undefined;
-  }
-  const staleMatches = staleEntries.filter(
-    ([, entry]) => normalizeReplacementUrl(entry.url) === url,
-  );
-  const candidates = newCandidates.filter((tab) => normalizeReplacementUrl(tab.url) === url);
-  // Duplicate URL buckets have no ordering contract, so only migrate an exact 1:1 bucket.
-  return staleMatches.length === 1 && candidates.length === 1 ? candidates[0] : undefined;
-}
-
-function assignTabAliases(
-  profileState: ProfileRuntimeState,
-  tabs: BrowserTab[],
-  migrateReplacements: boolean,
-): BrowserTab[] {
-  const aliases = getTabAliasState(profileState);
-  const liveTargetIds = new Set(tabs.map((tab) => tab.targetId));
-  const staleEntries = Object.entries(aliases.byTargetId).filter(
-    ([targetId]) => !liveTargetIds.has(targetId),
-  );
-  const newCandidates = tabs.filter((tab) => !aliases.byTargetId[tab.targetId]);
-  if (migrateReplacements) {
-    for (const [oldTargetId, staleEntry] of staleEntries) {
-      const candidate = findConfidentReplacement({ staleEntry, staleEntries, newCandidates });
-      if (!candidate) {
-        continue;
-      }
-      aliases.byTargetId[candidate.targetId] = staleEntry;
-      delete aliases.byTargetId[oldTargetId];
-      if (profileState.lastTargetId === oldTargetId) {
-        profileState.lastTargetId = candidate.targetId;
-      }
-    }
-  }
-
-  for (const targetId of Object.keys(aliases.byTargetId)) {
-    if (!liveTargetIds.has(targetId)) {
-      delete aliases.byTargetId[targetId];
-    }
-  }
-  return tabs.map((tab) => assignTabAlias({ profileState, tab }));
-}
-
 /** Builds list/open/label tab operations for one resolved browser profile. */
-export function createProfileTabOps({
-  profile,
-  state,
-  getProfileState,
-}: TabOpsDeps): ProfileTabOps {
+export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
   const getCdpControlPolicy = () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy);
@@ -278,20 +182,18 @@ export function createProfileTabOps({
     const tabs = await readTabs(options);
     // Chrome MCP target identity is authoritative. A replacement tab cannot
     // inherit an alias safely, even when its URL matches the closed tab.
-    return assignTabAliases(getProfileState(), tabs, !capabilities.usesChromeMcp);
+    return assignTabAliases(runtime, tabs, !capabilities.usesChromeMcp);
   };
 
-  const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {
-    const profileState = getProfileState();
-    if (
-      !capabilities.supportsManagedTabLimit ||
-      state().resolved.attachOnly ||
-      !profileState.running
-    ) {
+  const enforceManagedTabLimit = async (
+    keepTargetId: string,
+    options?: BrowserOperationOptions,
+  ): Promise<void> => {
+    if (!capabilities.supportsManagedTabLimit || state().resolved.attachOnly || !runtime.running) {
       return;
     }
 
-    const pageTabs = await listTabs()
+    const pageTabs = await listTabs(options)
       .then((tabs) => tabs.filter((tab) => (tab.type ?? "page") === "page"))
       .catch(() => [] as BrowserTab[]);
     if (pageTabs.length <= MANAGED_BROWSER_PAGE_TAB_LIMIT) {
@@ -301,7 +203,8 @@ export function createProfileTabOps({
     const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
-      void fetchOk(
+      options?.signal?.throwIfAborted();
+      await fetchOk(
         appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
         undefined,
         undefined,
@@ -312,23 +215,89 @@ export function createProfileTabOps({
     }
   };
 
-  const triggerManagedTabLimit = (keepTargetId: string): void => {
-    void enforceManagedTabLimit(keepTargetId).catch(() => {
-      // best-effort cleanup only
-    });
+  const triggerManagedTabLimit = (
+    keepTargetId: string,
+    options?: BrowserOperationOptions,
+  ): void => {
+    // This local-managed raw HTTP cleanup owns no browser process or adapter.
+    // Keep it best-effort so an unresponsive old target cannot block tab creation.
+    void enforceManagedTabLimit(keepTargetId, options).catch(() => {});
   };
 
-  const openTab = async (url: string, opts?: { label?: string }): Promise<BrowserTab> => {
+  const adoptValidatedTab = (
+    tab: BrowserTab,
+    options?: BrowserOperationOptions & { label?: string },
+  ): BrowserTab => {
+    options?.signal?.throwIfAborted();
+    // Rejected, aborted, or undiscovered opens must preserve the prior implicit target.
+    // Alias and sticky state therefore change only at this final validated adoption point.
+    const adopted = assignTabAlias({ profileState: runtime, tab, label: options?.label });
+    runtime.lastTargetId = tab.targetId;
+    triggerManagedTabLimit(tab.targetId, options);
+    return adopted;
+  };
+
+  const withTabOwnership = async (
+    tab: BrowserTab,
+    options?: BrowserOperationOptions,
+  ): Promise<BrowserOpenResult> => {
+    const cdpTimeouts = getRemoteCdpActionTimeouts();
+    let ownership: BrowserOpenResult["ownership"];
+    try {
+      ownership = await resolveCdpTabOwnership({
+        profileName: profile.name,
+        cdpUrl: profile.cdpUrl,
+        nativeTargetId: tab.targetId,
+        signal: options?.signal,
+        timeoutMs: cdpTimeouts?.httpTimeoutMs,
+        ssrfPolicy: getCdpControlPolicy(),
+      });
+    } catch (ownershipError) {
+      try {
+        // Ownership probing happens after target creation. Cleanup must not
+        // inherit a caller abort that would strand the new untracked page.
+        await fetchOk(
+          appendCdpPath(cdpHttpBase, `/json/close/${encodeURIComponent(tab.targetId)}`),
+          state().resolved.remoteCdpTimeoutMs,
+          undefined,
+          getCdpControlPolicy(),
+        );
+      } catch (closeError) {
+        throw Object.assign(
+          new Error("Failed to resolve browser tab ownership and close the new target", {
+            cause: ownershipError,
+          }),
+          { errors: [ownershipError, closeError] },
+        );
+      }
+      throw ownershipError;
+    }
+    return {
+      ...tab,
+      ownership,
+    };
+  };
+
+  const openTab = async (
+    url: string,
+    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<BrowserOpenResult> => {
+    opts?.signal?.throwIfAborted();
+    const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
     const ssrfPolicyOpts = getNavigationPolicy();
 
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
       const { openChromeMcpTab } = await getChromeMcpModule();
-      const page = await openChromeMcpTab(profile.name, url, profile);
-      const profileState = getProfileState();
-      profileState.lastTargetId = page.targetId;
+      const cdpTimeouts = getRemoteCdpActionTimeouts();
+      const page = await openChromeMcpTab(profile.name, url, profile, {
+        signal: opts?.signal,
+        timeoutMs: opts?.timeoutMs,
+        cdpPolicy: getCdpControlPolicy(),
+        ...(cdpTimeouts ? { cdpTimeouts } : {}),
+      });
       await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });
-      return assignTabAlias({ profileState, tab: page, label: opts?.label });
+      return adoptValidatedTab(page, { ...opts, label: normalizedLabel });
     }
 
     if (capabilities.usesPersistentPlaywright) {
@@ -341,19 +310,18 @@ export function createProfileTabOps({
           cdpPolicy: getCdpControlPolicy(),
           ...ssrfPolicyOpts,
         });
-        const profileState = getProfileState();
-        profileState.lastTargetId = page.targetId;
-        triggerManagedTabLimit(page.targetId);
-        return assignTabAlias({
-          profileState,
-          label: opts?.label,
-          tab: {
-            targetId: page.targetId,
-            title: page.title,
-            url: page.url,
-            type: page.type,
-          },
-        });
+        return adoptValidatedTab(
+          await withTabOwnership(
+            {
+              targetId: page.targetId,
+              title: page.title,
+              url: page.url,
+              type: page.type,
+            },
+            opts,
+          ),
+          { ...opts, label: normalizedLabel },
+        );
       }
     }
 
@@ -369,36 +337,63 @@ export function createProfileTabOps({
       cdpUrl: profile.cdpUrl,
       url,
       ssrfPolicy: getCdpControlPolicy(),
+      waitForNavigationResult: true,
     };
     if (cdpActionTimeouts) {
       createTargetOpts.timeouts = cdpActionTimeouts;
     }
-    const createdViaCdp = await createTargetViaCdp(createTargetOpts)
-      .then((r) => r.targetId)
-      .catch(() => null);
+    if (opts?.signal) {
+      createTargetOpts.signal = opts.signal;
+    }
+    const createdViaCdp = await createTargetViaCdp(createTargetOpts).catch(() => null);
+    opts?.signal?.throwIfAborted();
 
     if (createdViaCdp) {
-      const profileState = getProfileState();
-      profileState.lastTargetId = createdViaCdp;
+      if (!createdViaCdp.finalUrl) {
+        // The target exists, but its committed document is not authoritative.
+        // Preserve the explicit result without sticky, alias, or cleanup adoption.
+        return await withTabOwnership(
+          {
+            targetId: createdViaCdp.targetId,
+            title: "",
+            url,
+            type: "page",
+          },
+          opts,
+        );
+      }
+      await assertBrowserNavigationResultAllowed({
+        url: createdViaCdp.finalUrl,
+        ...ssrfPolicyOpts,
+      });
       const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
       while (Date.now() < deadline) {
-        const tabs = await listTabs().catch(() => [] as BrowserTab[]);
-        const found = tabs.find((t) => t.targetId === createdViaCdp);
+        opts?.signal?.throwIfAborted();
+        const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
+        const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);
         if (found) {
           await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
-          triggerManagedTabLimit(found.targetId);
-          return assignTabAlias({ profileState, tab: found, label: opts?.label });
+          // The attached target owns the committed URL; /json/list supplies the
+          // remaining metadata and may briefly lag that exact document snapshot.
+          return adoptValidatedTab(
+            await withTabOwnership({ ...found, url: createdViaCdp.finalUrl }, opts),
+            { ...opts, label: normalizedLabel },
+          );
         }
-        await new Promise((r) => {
-          setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS);
-        });
+        await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, opts?.signal);
       }
-      triggerManagedTabLimit(createdViaCdp);
-      return assignTabAlias({
-        profileState,
-        tab: { targetId: createdViaCdp, title: "", url, type: "page" },
-        label: opts?.label,
-      });
+      opts?.signal?.throwIfAborted();
+      // Preserve the explicit target-id result for callers, but do not adopt an
+      // undiscovered target into sticky, alias, or managed-cleanup state.
+      return await withTabOwnership(
+        {
+          targetId: createdViaCdp.targetId,
+          title: "",
+          url: createdViaCdp.finalUrl,
+          type: "page",
+        },
+        opts,
+      );
     }
 
     const encoded = encodeURIComponent(url);
@@ -409,6 +404,7 @@ export function createProfileTabOps({
           return endpointUrl.toString();
         })()
       : `${endpointUrl.toString()}?${encoded}`;
+    opts?.signal?.throwIfAborted();
     const created = await fetchJson<CdpTarget>(
       endpoint,
       cdpActionTimeouts?.httpTimeoutMs ?? CDP_JSON_NEW_TIMEOUT_MS,
@@ -428,37 +424,62 @@ export function createProfileTabOps({
       throw err;
     });
 
+    opts?.signal?.throwIfAborted();
     if (!created.id) {
       throw new Error("Failed to open tab (missing id)");
     }
-    const profileState = getProfileState();
-    profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
+    if (!isSelectableCdpBrowserTarget({ url: resolvedUrl, type: created.type })) {
+      throw new Error("Failed to open tab (non-selectable target)");
+    }
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     const wsUrl = normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl);
-    if (wsUrl) {
-      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy(), {
-        source: "discovered",
-        configuredUrl: profile.cdpUrl,
-      });
+    const committedUrl = wsUrl
+      ? await waitForCdpCommittedNavigationUrl({
+          wsUrl,
+          configuredCdpUrl: profile.cdpUrl,
+          cdpPolicy: getCdpControlPolicy(),
+          requestedUrl: url,
+          signal: opts?.signal,
+          timeouts: cdpActionTimeouts,
+        })
+      : undefined;
+    opts?.signal?.throwIfAborted();
+    if (!committedUrl) {
+      return await withTabOwnership(
+        {
+          targetId: created.id,
+          title: created.title ?? "",
+          url: resolvedUrl,
+          wsUrl,
+          type: created.type,
+        },
+        opts,
+      );
     }
-    triggerManagedTabLimit(created.id);
-    return assignTabAlias({
-      profileState,
-      label: opts?.label,
-      tab: {
-        targetId: created.id,
-        title: created.title ?? "",
-        url: resolvedUrl,
-        wsUrl,
-        type: created.type,
-      },
-    });
+    await assertBrowserNavigationResultAllowed({ url: committedUrl, ...ssrfPolicyOpts });
+    return adoptValidatedTab(
+      await withTabOwnership(
+        {
+          targetId: created.id,
+          title: created.title ?? "",
+          url: committedUrl,
+          wsUrl,
+          type: created.type,
+        },
+        opts,
+      ),
+      { ...opts, label: normalizedLabel },
+    );
   };
 
-  const labelTab = async (targetId: string, label: string): Promise<BrowserTab> => {
+  const labelTab = async (
+    targetId: string,
+    label: string,
+    options?: BrowserOperationOptions,
+  ): Promise<BrowserTab> => {
     const normalizedLabel = normalizeTabLabel(label);
-    const tabs = await listTabs();
+    const tabs = await listTabs(options);
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
       if (resolved.reason === "ambiguous") {
@@ -470,7 +491,7 @@ export function createProfileTabOps({
     if (!tab) {
       throw new BrowserTabNotFoundError({ input: targetId });
     }
-    return assignTabAlias({ profileState: getProfileState(), tab, label: normalizedLabel });
+    return assignTabAlias({ profileState: runtime, tab, label: normalizedLabel });
   };
 
   return {

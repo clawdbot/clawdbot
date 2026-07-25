@@ -9,4 +9,10 @@ describe("renderTelegramMiniAppPage", () => {
     expect(html).toContain("new URL(payload.controlUiUrl)");
     expect(html).not.toContain("const controlUiUrl =");
   });
+
+  it("escapes the nonce for its quoted HTML attribute", () => {
+    const html = renderTelegramMiniAppPage({ accountId: "ops", scriptNonce: `&<>"'` });
+
+    expect(html).toContain('nonce="&amp;&lt;&gt;&quot;&#39;"');
+  });
 });

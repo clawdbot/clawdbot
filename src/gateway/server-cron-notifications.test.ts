@@ -10,6 +10,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(async (_request: unknown) => ({ release: vi.fn() })),
@@ -34,6 +35,10 @@ import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
+
+function waitForFast(assertion: () => void | Promise<void>) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
@@ -90,6 +95,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
   afterEach(() => {
     resetGatewayWorkAdmission();
+    setActiveDegradedSecretOwners([]);
   });
 
   it("independently admits detached completion webhook delivery", async () => {
@@ -118,7 +124,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
           resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
         });
 
-        await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+        await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
         expect(getActiveGatewayRootWorkCount()).toBe(2);
       });
     } finally {
@@ -127,7 +133,45 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("keeps webhook delivery cold when its token owner is unavailable", async () => {
+    const logger = { warn: vi.fn() };
+    const job = createWebhookJob({
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "cron-webhook",
+        state: "unavailable",
+        paths: ["cron.webhookToken"],
+        refKeys: ["env:default:MISSING_WEBHOOK_TOKEN"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
+      job,
+      deps: {} as CliDeps,
+      logger,
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    await waitForFast(() =>
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: job.id,
+          err: expect.stringContaining("Secret owner capability:cron-webhook"),
+        }),
+        "cron: webhook delivery failed",
+      ),
+    );
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("independently admits immediate failure alerts", async () => {
@@ -148,7 +192,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       mode: "announce",
     });
 
-    await vi.waitFor(() => expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledOnce());
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
     await delivery;
@@ -176,7 +220,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
 
     expect(suspensionAdmission?.release()).toBe(true);
-    await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
   });
 
   it("independently admits failure destination webhook delivery", async () => {
@@ -202,10 +246,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
 
-    await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("independently admits failure destination announce delivery", async () => {
@@ -229,10 +273,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
 
-    await vi.waitFor(() => expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledTimes(1));
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("redacts invalid completion webhook targets in warnings", () => {
@@ -437,7 +481,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
 
-    await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
     const body = webhookRequestBody();
     expect(body.summary).toContain("[redacted-url]");
     expect(body.summary).toContain("[redacted-code]");
@@ -519,7 +563,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
     });
 
-    await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
     const body = webhookRequestBody();
     expect(body).toMatchObject({
       action: "finished",

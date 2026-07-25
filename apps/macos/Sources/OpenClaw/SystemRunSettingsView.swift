@@ -75,7 +75,8 @@ struct SystemRunSettingsView: View {
         SettingsCardGroup("Exec Approvals Unavailable") {
             SettingsCardRow(
                 title: "Settings could not be read",
-                subtitle: self.model.readErrorMessage ?? "Retry to load the persisted policy.",
+                subtitle: self.model.readErrorMessage.map(SettingsTextValue.verbatim) ??
+                    "Retry to load the persisted policy.",
                 showsDivider: false)
             {
                 Button("Retry") {
@@ -144,7 +145,7 @@ struct SystemRunSettingsView: View {
             SettingsCardGroup("Policy") {
                 SettingsCardRow(
                     title: "Command access",
-                    subtitle: self.model.security.policyDescription)
+                    subtitle: .localized(self.model.security.policyDescription))
                 {
                     Picker("Command access", selection: Binding(
                         get: { self.model.security },
@@ -161,7 +162,7 @@ struct SystemRunSettingsView: View {
 
                 SettingsCardRow(
                     title: "Prompt behavior",
-                    subtitle: self.model.ask.policyDescription)
+                    subtitle: .localized(self.model.ask.policyDescription))
                 {
                     Picker("Prompt behavior", selection: Binding(
                         get: { self.model.ask },

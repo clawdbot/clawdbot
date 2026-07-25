@@ -37,7 +37,7 @@ type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" |
  * Derives timeout failure reasons for logs that were built from timeout state
  * before the normal provider error classifier had a raw error to inspect.
  */
-export function normalizeFailoverDecisionObservationBase(
+function normalizeFailoverDecisionObservationBase(
   base: FailoverDecisionLoggerBase,
 ): FailoverDecisionLoggerBase {
   return {

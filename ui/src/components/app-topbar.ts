@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -37,7 +38,9 @@ class AppTopbar extends OpenClawLightDomContentsElement {
               <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
             </button>
           </openclaw-tooltip>
-          <div class="topnav-shell__content">
+          <!-- The Mac app used to float a native drag strip over this brand
+               row; the web now asks the host to move the window itself. -->
+          <div class="topnav-shell__content" @mousedown=${beginNativeWindowDrag}>
             <div class="topbar-brand" aria-label="OpenClaw">
               <img
                 class="topbar-brand__logo"

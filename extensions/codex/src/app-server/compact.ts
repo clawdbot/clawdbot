@@ -409,6 +409,9 @@ function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionP
     if (typeof entry.record.model === "string" && entry.record.model.trim()) {
       ignored.add(`${entry.path}.compaction.model`);
     }
+    if (typeof entry.record.thinkingLevel === "string" && entry.record.thinkingLevel.trim()) {
+      ignored.add(`${entry.path}.compaction.thinkingLevel`);
+    }
     if (providerPath) {
       ignored.add(providerPath);
     }
@@ -554,6 +557,17 @@ async function compactCodexNativeThread(
   }
   const shouldReleaseDefaultLease = !options.clientFactory;
   const clientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
+  const runtimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
+  const usesPreparedApiKey =
+    !usesSupervisionConnection && runtimeAuthPlan?.modelRoute?.authRequirement === "api-key";
+  const preparedApiKey = usesPreparedApiKey ? params.resolvedApiKey?.trim() : undefined;
+  if (usesPreparedApiKey && !preparedApiKey) {
+    return {
+      ok: false,
+      compacted: false,
+      reason: "Prepared Codex Platform compaction route is missing its resolved API key.",
+    };
+  }
   try {
     return await runExclusiveCodexNativeCompaction(
       binding.threadId,
@@ -561,7 +575,9 @@ async function compactCodexNativeThread(
       async () => {
         const client = await clientFactory({
           startOptions: appServer.start,
-          authProfileId: connection.clientAuthProfileId,
+          ...(preparedApiKey
+            ? { preparedAuth: { kind: "api-key" as const, apiKey: preparedApiKey } }
+            : { authProfileId: connection.clientAuthProfileId }),
           agentDir: params.agentDir,
           config: params.config,
         });
@@ -892,6 +908,13 @@ function isSameNativeCompactionBinding(
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
+  // codex-rs exposes no dedicated error code for a missing compaction thread:
+  // thread/compact/start returns generic INVALID_REQUEST (-32600), and the
+  // app-server's own contract/test asserts the "thread not found" MESSAGE as
+  // the discriminator (thread_processor.rs load_thread → invalid_request;
+  // compaction.rs asserts message.contains("thread not found")). So the message
+  // is the authoritative positive signal here, not the generic code. This is a
+  // self-heal recovery gate, not user-facing classification.
   return formatCompactionError(error).toLowerCase().includes("thread not found");
 }
 
@@ -901,3 +924,4 @@ function formatCompactionError(error: unknown): string {
   }
   return String(error);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

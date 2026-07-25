@@ -1,7 +1,7 @@
 // Minimax tests cover image generation provider plugin behavior.
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMinimaxImageGenerationProvider,
@@ -56,7 +56,9 @@ describe("minimax image-generation provider", () => {
   }
 
   function requireFirstPostJsonRequest(mock: ReturnType<typeof vi.fn>): {
+    allowPrivateNetwork?: boolean;
     body?: unknown;
+    headers?: unknown;
     ssrfPolicy?: unknown;
     url?: string;
   } {
@@ -68,7 +70,13 @@ describe("minimax image-generation provider", () => {
     if (!request || typeof request !== "object" || Array.isArray(request)) {
       throw new Error("expected MiniMax image request");
     }
-    return request as { body?: unknown; url?: string };
+    return request as {
+      allowPrivateNetwork?: boolean;
+      body?: unknown;
+      headers?: unknown;
+      ssrfPolicy?: unknown;
+      url?: string;
+    };
   }
 
   it("generates PNG buffers through the shared provider HTTP path", async () => {
@@ -205,6 +213,62 @@ describe("minimax image-generation provider", () => {
       n: 1,
     });
     expect(request.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+  });
+
+  it("passes portal image request policy through the provider HTTP helper", async () => {
+    mockMinimaxApiKey();
+    const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          data: { image_base64: [Buffer.from("png-data").toString("base64")] },
+          base_resp: { status_code: 0 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      finalUrl: "https://api.minimaxi.com/v1/image_generation",
+      release: async () => {},
+    });
+    const resolveHttpConfig = vi.spyOn(providerHttp, "resolveProviderHttpRequestConfig");
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-MiniMax-Image-Policy": "enabled" },
+    };
+
+    const provider = buildMinimaxPortalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "minimax-portal",
+      model: "image-01",
+      prompt: "draw a cat",
+      cfg: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://wrong.example/anthropic",
+              models: [],
+            },
+            "minimax-portal": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              models: [],
+              request: requestOverrides,
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveHttpConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://api.minimaxi.com",
+        provider: "minimax-portal",
+        capability: "image",
+        transport: "http",
+        request: requestOverrides,
+      }),
+    );
+    const request = requireFirstPostJsonRequest(postJsonRequest);
+    expect(request.url).toBe("https://api.minimaxi.com/v1/image_generation");
+    expect(request.allowPrivateNetwork).toBe(true);
+    expect((request.headers as Headers).get("x-minimax-image-policy")).toBe("enabled");
   });
 
   it("keeps the dedicated global image endpoint when text config uses the global API host", async () => {

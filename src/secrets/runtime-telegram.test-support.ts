@@ -1,9 +1,9 @@
 /** Test bootstrap shim for Telegram runtime-secret surface coverage. */
 import { vi } from "vitest";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 
 /** Test-only bootstrap registry mock for Telegram secret surface tests. */
-const telegramSecrets = loadBundledChannelSecretContractApi("telegram");
+const telegramSecrets = loadChannelSecretContractApi({ channelId: "telegram", config: {} });
 if (!telegramSecrets?.collectRuntimeConfigAssignments) {
   throw new Error("Missing Telegram secret contract api");
 }

@@ -17,7 +17,7 @@ import type { DedupeEntry } from "../server-shared.js";
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
 
-export type AgentJobTerminalSnapshot = {
+type AgentJobTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
   startedAt?: number;
   endedAt?: number;
@@ -581,42 +581,3 @@ export async function waitForAgentJob(params: {
 }
 
 ensureAgentRunListener();
-
-export const testing = {
-  getWaiterCount(runId?: string): number {
-    if (runId) {
-      return agentRunWaiters.get(runId)?.size ?? 0;
-    }
-    let total = 0;
-    for (const waiters of agentRunWaiters.values()) {
-      total += waiters.size;
-    }
-    return total;
-  },
-  getAgentRunCacheSize(): number {
-    return agentJobs.size;
-  },
-  resetAgentRunCache(): void {
-    agentJobs.clear();
-  },
-  resetAgentJobs(): void {
-    agentJobs.clear();
-    agentRunStarts.clear();
-    agentRunVersion = 0;
-    for (const pending of pendingAgentRunErrors.values()) {
-      clearTimeout(pending.timer);
-    }
-    for (const pending of pendingAgentRunTimeouts.values()) {
-      clearTimeout(pending.timer);
-    }
-    pendingAgentRunErrors.clear();
-    pendingAgentRunTimeouts.clear();
-    agentRunWaiters.clear();
-  },
-  getTerminalSnapshot(runId: string, source?: "chat"): AgentJobTerminalSnapshot | null {
-    const snapshot = getAgentRunSnapshot({ runId, source, afterVersion: -1 });
-    return snapshot ? publicSnapshot(snapshot) : null;
-  },
-  agentRunCacheMaxEntries: AGENT_RUN_CACHE_MAX_ENTRIES,
-};
-export { testing as __testing };

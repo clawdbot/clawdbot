@@ -2,6 +2,7 @@
 import { ModelSelectionLockedError } from "openclaw/plugin-sdk/model-session-runtime";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexAppServerClient } from "./app-server/client.js";
 import {
   isCodexFastServiceTier,
   resolveCodexModelBackedReviewerPolicyContext,
@@ -20,7 +21,11 @@ import {
 } from "./app-server/session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
+  releaseCodexAppServerClientLease,
   releaseLeasedSharedCodexAppServerClient,
+  withLeasedCodexAppServerClientStartSelectionRetry,
+  type CodexAppServerClientLease,
+  type CodexAppServerClientOptions,
 } from "./app-server/shared-client.js";
 import {
   resolveCodexAppServerRequestModelSelection,
@@ -30,6 +35,7 @@ import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
   identity: CodexAppServerBindingIdentity;
+  client?: CodexAppServerClient;
   threadId: string;
   turnId: string;
 };
@@ -91,12 +97,16 @@ export async function stopCodexConversationTurn(params: {
     pluginConfig: params.pluginConfig,
   });
   const runtime = connection.appServer;
-  const client = await getLeasedSharedCodexAppServerClient({
-    startOptions: runtime.start,
-    timeoutMs: runtime.requestTimeoutMs,
-    authProfileId: connection.clientAuthProfileId,
-    ...lookup,
-  });
+  // Turn ids are connection-local. Prefer the exact live client; ID-only
+  // records must resolve the binding-owned connection before dispatch.
+  const client =
+    active.client ??
+    (await getLeasedSharedCodexAppServerClient({
+      startOptions: runtime.start,
+      timeoutMs: runtime.requestTimeoutMs,
+      authProfileId: connection.clientAuthProfileId,
+      ...lookup,
+    }));
   try {
     await client.request(
       "turn/interrupt",
@@ -107,7 +117,9 @@ export async function stopCodexConversationTurn(params: {
       { timeoutMs: runtime.requestTimeoutMs },
     );
   } finally {
-    releaseLeasedSharedCodexAppServerClient(client);
+    if (!active.client) {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
   }
   return { stopped: true, message: "Codex stop requested." };
 }
@@ -142,12 +154,16 @@ export async function steerCodexConversationTurn(params: {
     pluginConfig: params.pluginConfig,
   });
   const runtime = connection.appServer;
-  const client = await getLeasedSharedCodexAppServerClient({
-    startOptions: runtime.start,
-    timeoutMs: runtime.requestTimeoutMs,
-    authProfileId: connection.clientAuthProfileId,
-    ...lookup,
-  });
+  // Turn ids are connection-local. Prefer the exact live client; ID-only
+  // records must resolve the binding-owned connection before dispatch.
+  const client =
+    active.client ??
+    (await getLeasedSharedCodexAppServerClient({
+      startOptions: runtime.start,
+      timeoutMs: runtime.requestTimeoutMs,
+      authProfileId: connection.clientAuthProfileId,
+      ...lookup,
+    }));
   try {
     await client.request(
       "turn/steer",
@@ -159,7 +175,9 @@ export async function steerCodexConversationTurn(params: {
       { timeoutMs: runtime.requestTimeoutMs },
     );
   } finally {
-    releaseLeasedSharedCodexAppServerClient(client);
+    if (!active.client) {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
   }
   return { steered: true, message: "Sent steer message to Codex." };
 }
@@ -211,7 +229,7 @@ export async function setCodexConversationModel(params: {
     authProfileId: binding.authProfileId,
     ...lookup,
   });
-  const response = await resumeThreadWithOverrides({
+  const resumed = await resumeThreadWithOverrides({
     runtime,
     threadId: binding.threadId,
     authProfileId: binding.authProfileId,
@@ -219,6 +237,7 @@ export async function setCodexConversationModel(params: {
     model: modelSelection.model,
     modelProvider: modelSelection.modelProvider,
   });
+  const response = resumed.response;
   const nextModel = response.model ?? modelSelection.model;
   const nextModelProvider = normalizeCodexAppServerBindingModelProvider({
     authProfileId: binding.authProfileId,
@@ -227,6 +246,7 @@ export async function setCodexConversationModel(params: {
   });
   const modelChanged = nextModel !== binding.model || nextModelProvider !== binding.modelProvider;
   await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
+    clientId: resumed.clientId,
     cwd: response.thread.cwd ?? binding.cwd,
     model: nextModel,
     modelProvider: nextModelProvider,
@@ -351,30 +371,41 @@ async function resumeThreadWithOverrides(params: {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
-}): Promise<CodexThreadResumeResponse> {
+}): Promise<{ response: CodexThreadResumeResponse; clientId: string }> {
   const runtime = params.runtime;
-  const client = await getLeasedSharedCodexAppServerClient({
+  const clientOptions = {
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
     authProfileId: params.authProfileId,
     ...buildBindingLookup(params),
-  });
+  } satisfies CodexAppServerClientOptions;
+  let client = await getLeasedSharedCodexAppServerClient(clientOptions);
+  const clientLease: CodexAppServerClientLease = { client };
   try {
-    return await client.request(
-      CODEX_CONTROL_METHODS.resumeThread,
-      {
-        threadId: params.threadId,
-        ...(params.model ? { model: params.model } : {}),
-        ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
-        approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
-        sandbox: params.sandbox ?? runtime.sandbox,
-        approvalsReviewer: runtime.approvalsReviewer,
-        ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
+    const response = await withLeasedCodexAppServerClientStartSelectionRetry({
+      lease: clientLease,
+      options: clientOptions,
+      run: async (requestClient, requestOptions) =>
+        await requestClient.request(
+          CODEX_CONTROL_METHODS.resumeThread,
+          {
+            threadId: params.threadId,
+            ...(params.model ? { model: params.model } : {}),
+            ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
+            approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
+            sandbox: params.sandbox ?? runtime.sandbox,
+            approvalsReviewer: runtime.approvalsReviewer,
+            ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
+          },
+          requestOptions,
+        ),
+      onClientChange: (nextClient) => {
+        client = nextClient;
       },
-      { timeoutMs: runtime.requestTimeoutMs },
-    );
+    });
+    return { response, clientId: client.getInstanceId() };
   } finally {
-    releaseLeasedSharedCodexAppServerClient(client);
+    releaseCodexAppServerClientLease(clientLease);
   }
 }
 

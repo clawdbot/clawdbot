@@ -1,11 +1,12 @@
 /** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { GatewayClient } from "../gateway/client.js";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { mcpContentBlockToAgentContent } from "../agents/mcp-content.js";
 import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
@@ -36,10 +37,20 @@ import {
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
 import {
-  decodeWindowsOutputBuffer,
-  resolveWindowsConsoleEncoding,
-} from "../infra/windows-encoding.js";
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_DEVICE_APPS_COMMAND,
+  NODE_MCP_TOOLS_CALL_COMMAND,
+} from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
+import type { NodeHostClient } from "./client.js";
+import {
+  handleClaudeCliNodeInvoke,
+  type NodeHostInvokeRuntime,
+} from "./invoke-agent-cli-claude-handler.js";
+import { invokeDeviceApps } from "./invoke-device-apps.js";
+import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -48,15 +59,27 @@ import {
 import type {
   ExecEventPayload,
   ExecFinishedEventParams,
+  NodeInvokeRequestPayload,
   RunResult,
   SkillBinsProvider,
   SystemRunParams,
 } from "./invoke-types.js";
-import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
+import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
+import { buildNodeEventParams } from "./node-event-params.js";
+import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
+import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const OUTPUT_CAP = 200_000;
+
+const MCP_TEXT_CONTENT_MAX_BYTES = 1024 * 1024;
+const MCP_TEXT_TRUNCATION_MARKER = "\n[truncated: MCP text content exceeded 1 MB]";
+
+const MCP_INVOKE_PAYLOAD_MAX_BYTES = 20 * 1024 * 1024;
+const MCP_PAYLOAD_TRUNCATION_MARKER = "[truncated: MCP result exceeded 20 MB]";
+
+const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
+
 const OUTPUT_EVENT_TAIL = 20_000;
-const STREAM_ERROR_KILL_GRACE_MS = 1_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const execHostEnforced =
@@ -67,6 +90,12 @@ const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
 type SystemWhichParams = {
   bins: string[];
+};
+
+type McpToolsCallParams = {
+  server: string;
+  tool: string;
+  arguments?: Record<string, unknown>;
 };
 
 type SystemExecApprovalsSetParams = {
@@ -93,6 +122,16 @@ type SystemRunPrepareEnv =
       ok: false;
       message: string;
     };
+
+function resolveNodeSkillCwdParam<T extends { cwd?: unknown }>(params: T, nodeId: string): T {
+  if (typeof params.cwd !== "string") {
+    return params;
+  }
+  // Resolve before approval planning so the plan, policy, and spawn all bind
+  // the same canonical node-local directory instead of trusting a URI at exec time.
+  const resolved = resolveNodeHostedSkillDirectory(params.cwd, nodeId);
+  return resolved ? { ...params, cwd: resolved } : params;
+}
 
 function buildEnvOverrideRejectionMessage(params: {
   rejectedOverrideBlockedKeys: string[];
@@ -197,16 +236,7 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-type NodeInvokeRequestPayload = {
-  id: string;
-  nodeId: string;
-  command: string;
-  paramsJSON?: string | null;
-  timeoutMs?: number | null;
-  idempotencyKey?: string | null;
-};
-
-export type { SkillBinsProvider } from "./invoke-types.js";
+export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
   return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
@@ -226,7 +256,7 @@ function resolveExecAsk(value?: string): ExecAsk {
 }
 
 /** Builds a sanitized execution environment with controlled PATH and approved overrides. */
-export function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
+function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
   return sanitizeHostExecEnv({ overrides, blockPathOverrides: true });
 }
 
@@ -235,14 +265,6 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
     return { text: raw, truncated: false };
   }
   return { text: `... (truncated) ${sliceUtf16Safe(raw, raw.length - maxChars)}`, truncated: true };
-}
-
-export function decodeCapturedOutputBuffer(params: {
-  buffer: Buffer;
-  platform?: NodeJS.Platform;
-  windowsEncoding?: string | null;
-}): string {
-  return decodeWindowsOutputBuffer(params);
 }
 
 function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -314,137 +336,39 @@ async function runCommand(
   env: Record<string, string> | undefined,
   timeoutMs: number | undefined,
 ): Promise<RunResult> {
-  return await new Promise((resolve) => {
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let outputLen = 0;
-    let truncated = false;
-    let timedOut = false;
-    let settled = false;
-    const windowsEncoding = resolveWindowsConsoleEncoding();
-
-    // A cwd that exists but is not a directory makes `spawn` throw ENOTDIR
-    // synchronously instead of emitting `error`. Keep that failure inside the
-    // node result because runner.ts intentionally dispatches invokes with `void`.
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(argv[0], argv.slice(1), {
-        cwd,
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
-    } catch (err) {
-      resolve({
-        exitCode: undefined,
-        timedOut: false,
-        success: false,
-        stdout: "",
-        stderr: "",
-        error: clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd),
-        truncated: false,
-      });
-      return;
-    }
-
-    const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {
-      if (outputLen >= OUTPUT_CAP) {
-        truncated = true;
-        return;
-      }
-      const remaining = OUTPUT_CAP - outputLen;
-      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-      outputLen += slice.length;
-      if (target === "stdout") {
-        stdoutChunks.push(slice);
-      } else {
-        stderrChunks.push(slice);
-      }
-      if (chunk.length > remaining) {
-        truncated = true;
-      }
-    };
-
-    child.stdout?.on("data", (chunk) => onChunk(chunk as Buffer, "stdout"));
-    child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
-
-    let timer: NodeJS.Timeout | undefined;
-    let streamError: Error | undefined;
-    let streamKillTimer: NodeJS.Timeout | undefined;
-    if (timeoutMs && timeoutMs > 0) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-      }, timeoutMs);
-    }
-
-    const finalize = (exitCode?: number, error?: string | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (streamKillTimer) {
-        clearTimeout(streamKillTimer);
-      }
-      const stdout = decodeCapturedOutputBuffer({
-        buffer: Buffer.concat(stdoutChunks),
-        windowsEncoding,
-      });
-      const stderr = decodeCapturedOutputBuffer({
-        buffer: Buffer.concat(stderrChunks),
-        windowsEncoding,
-      });
-      resolve({
-        exitCode,
-        timedOut,
-        success: exitCode === 0 && !timedOut && !error,
-        stdout,
-        stderr,
-        error: error ?? null,
-        truncated,
-      });
-    };
-
-    const onStreamError = (err: Error) => {
-      if (settled || streamError) {
-        return;
-      }
-      streamError = err;
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
-      // A reported system.run completion must not outlive its command. Escalate
-      // a pipe-failure shutdown, then let the child exit settle the result.
-      streamKillTimer = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-      }, STREAM_ERROR_KILL_GRACE_MS);
-      streamKillTimer.unref?.();
-    };
-
-    child.stdout?.on("error", onStreamError);
-    child.stderr?.on("error", onStreamError);
-    child.on("error", (err) => {
-      if (!streamError) {
-        finalize(undefined, clarifyNodeExecCwdSpawnError(err, cwd));
-      }
+  try {
+    const result = await runCommandWithTimeout(argv, {
+      baseEnv: env,
+      cwd,
+      killProcessTree: true,
+      maxCombinedOutputBytes: OUTPUT_CAP,
+      maxOutputBytes: OUTPUT_CAP,
+      outputCapture: "head",
+      input: Buffer.alloc(0),
+      timeoutMs: timeoutMs && timeoutMs > 0 ? timeoutMs : undefined,
     });
-    child.on("exit", (code) => {
-      finalize(code === null ? undefined : code, streamError?.message ?? null);
-    });
-  });
+    const timedOut = result.termination === "timeout";
+    const exitCode = result.code ?? undefined;
+    return {
+      exitCode,
+      timedOut,
+      success: exitCode === 0 && !timedOut,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      error: null,
+      truncated: Boolean(result.stdoutTruncatedBytes || result.stderrTruncatedBytes),
+    };
+  } catch (err) {
+    return {
+      exitCode: undefined,
+      timedOut: false,
+      success: false,
+      stdout: "",
+      stderr: "",
+      error: clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd),
+      truncated: false,
+    };
+  }
 }
 
 function resolveEnvPath(env?: Record<string, string>): string[] {
@@ -511,7 +435,7 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
 
 async function sendExecFinishedEvent(
   params: ExecFinishedEventParams & {
-    client: GatewayClient;
+    client: NodeHostClient;
   },
 ) {
   const combined = [params.result.stdout, params.result.stderr, params.result.error]
@@ -547,7 +471,7 @@ async function runViaMacAppExecHost(params: {
 }
 
 async function sendJsonPayloadResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   payload: unknown,
 ) {
@@ -557,8 +481,16 @@ async function sendJsonPayloadResult(
   });
 }
 
+async function sendMcpPayloadResult(
+  client: NodeHostClient,
+  frame: NodeInvokeRequestPayload,
+  payload: unknown,
+) {
+  await sendInvokeResult(client, frame, { ok: true, payload });
+}
+
 async function sendRawPayloadResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   payloadJSON: string,
 ) {
@@ -569,7 +501,7 @@ async function sendRawPayloadResult(
 }
 
 async function sendErrorResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   code: string,
   message: string,
@@ -581,7 +513,7 @@ async function sendErrorResult(
 }
 
 async function sendInvalidRequestResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   err: unknown,
 ) {
@@ -595,7 +527,7 @@ function classifyExecApprovalsStorageError(err: unknown): "TIMEOUT" | "UNAVAILAB
 }
 
 async function sendExecApprovalsStorageErrorResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   err: unknown,
 ) {
@@ -605,11 +537,13 @@ async function sendExecApprovalsStorageErrorResult(
 /** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
-  client: GatewayClient,
+  client: NodeHostClient,
   skillBins: SkillBinsProvider,
+  mcpManager?: NodeHostMcpManager,
+  runtime: NodeHostInvokeRuntime = {},
 ) {
   try {
-    await dispatchInvoke(frame, client, skillBins);
+    await dispatchInvoke(frame, client, skillBins, mcpManager, runtime);
   } catch (err) {
     // Gateway events launch this handler without awaiting it. Consume unexpected
     // failures here so one bad request cannot terminate the node-host process.
@@ -630,10 +564,26 @@ export async function handleInvoke(
 
 async function dispatchInvoke(
   frame: NodeInvokeRequestPayload,
-  client: GatewayClient,
+  client: NodeHostClient,
   skillBins: SkillBinsProvider,
+  mcpManager?: NodeHostMcpManager,
+  runtime: NodeHostInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
+  if (command === NODE_DEVICE_APPS_COMMAND) {
+    const result = await invokeDeviceApps({
+      paramsJSON: frame.paramsJSON,
+      sharingEnabled: runtime.installedAppsSharingEnabled === true,
+      ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
+      ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
+    });
+    if (result.ok) {
+      await sendJsonPayloadResult(client, frame, result.payload);
+    } else {
+      await sendErrorResult(client, frame, result.code, result.message);
+    }
+    return;
+  }
   if (command === "system.execApprovals.get") {
     try {
       const snapshot = await ensureExecApprovalsSnapshot();
@@ -726,10 +676,48 @@ async function dispatchInvoke(
     return;
   }
 
+  const fileCommand = await invokeNodeFileCommand(command, frame.paramsJSON);
+  if (fileCommand) {
+    if ("error" in fileCommand) {
+      await sendInvalidRequestResult(client, frame, fileCommand.error);
+    } else {
+      await sendJsonPayloadResult(client, frame, fileCommand.payload);
+    }
+    return;
+  }
+
+  if (command === NODE_MCP_TOOLS_CALL_COMMAND) {
+    await handleMcpToolsCall(frame, client, mcpManager);
+    return;
+  }
+
+  if (command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND) {
+    await handleClaudeCliNodeInvoke({
+      frame,
+      client,
+      skillBins,
+      runtime,
+      deps: {
+        sendErrorResult,
+        sendInvalidRequestResult,
+        sendInvokeResult,
+        resolveExecSecurity,
+        resolveExecAsk,
+        isCmdExeInvocation,
+        sanitizeEnv,
+        runViaMacAppExecHost,
+        buildExecEventPayload,
+      },
+    });
+    return;
+  }
   try {
-    const pluginNodeHostResult = await invokeRegisteredNodeHostCommand(command, frame.paramsJSON);
-    if (pluginNodeHostResult !== null) {
-      await sendRawPayloadResult(client, frame, pluginNodeHostResult);
+    const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
+    const invokeContext =
+      context && frame.sessionKey ? { ...context, sessionKey: frame.sessionKey } : context;
+    const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+    if (pluginResult !== null) {
+      await sendRawPayloadResult(client, frame, pluginResult);
       return;
     }
   } catch (err) {
@@ -739,7 +727,10 @@ async function dispatchInvoke(
 
   if (command === "system.run.prepare") {
     try {
-      const params = decodeParams<SystemRunPrepareParams>(frame.paramsJSON);
+      const params = resolveNodeSkillCwdParam(
+        decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
+        frame.nodeId,
+      );
       const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
@@ -795,7 +786,10 @@ async function dispatchInvoke(
 
   let params: SystemRunParams;
   try {
-    params = decodeParams<SystemRunParams>(frame.paramsJSON);
+    params = resolveNodeSkillCwdParam(
+      decodeParams<SystemRunParams>(frame.paramsJSON),
+      frame.nodeId,
+    );
   } catch (err) {
     await sendInvalidRequestResult(client, frame, err);
     return;
@@ -843,6 +837,180 @@ async function dispatchInvoke(
   });
 }
 
+function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
+  const value = decodeParams<unknown>(raw);
+  if (!isRecord(value)) {
+    throw new Error("INVALID_REQUEST: MCP tool params must be an object");
+  }
+  const server = typeof value.server === "string" ? value.server.trim() : "";
+  const tool = typeof value.tool === "string" ? value.tool.trim() : "";
+  if (!server || !tool) {
+    throw new Error("INVALID_REQUEST: server and tool required");
+  }
+  if (value.arguments !== undefined && !isRecord(value.arguments)) {
+    throw new Error("INVALID_REQUEST: arguments must be an object");
+  }
+  return {
+    server,
+    tool,
+    ...(value.arguments ? { arguments: value.arguments } : {}),
+  };
+}
+
+type McpInvokeContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
+function normalizeMcpContentBlock(block: unknown): McpInvokeContentBlock | null {
+  if (!isRecord(block)) {
+    return null;
+  }
+  return mcpContentBlockToAgentContent(block as ContentBlock);
+}
+
+function serializedJsonBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+
+/** Keeps MCP text/image content while bounding text sent through node.invoke. */
+function boundMcpToolResultPayload(result: {
+  content: readonly unknown[];
+  structuredContent?: Record<string, unknown>;
+}): { content: McpInvokeContentBlock[]; structuredContent?: Record<string, unknown> } {
+  const normalizedBlocks = result.content
+    .map(normalizeMcpContentBlock)
+    .filter((block): block is McpInvokeContentBlock => block !== null);
+  const totalTextBytes = normalizedBlocks.reduce<number>(
+    (total, block) =>
+      total +
+      (isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? Buffer.byteLength(block.text)
+        : 0),
+    0,
+  );
+  let remainingTextBytes =
+    totalTextBytes > MCP_TEXT_CONTENT_MAX_BYTES
+      ? MCP_TEXT_CONTENT_MAX_BYTES - Buffer.byteLength(MCP_TEXT_TRUNCATION_MARKER)
+      : MCP_TEXT_CONTENT_MAX_BYTES;
+  let markedTruncated = false;
+  const textBoundedContent: McpInvokeContentBlock[] = [];
+  for (const block of normalizedBlocks) {
+    if (
+      block.type === "image" &&
+      typeof block.data === "string" &&
+      typeof block.mimeType === "string"
+    ) {
+      textBoundedContent.push(block);
+      continue;
+    }
+    if (block.type !== "text" || typeof block.text !== "string") {
+      continue;
+    }
+    if (totalTextBytes <= MCP_TEXT_CONTENT_MAX_BYTES) {
+      textBoundedContent.push(block);
+      continue;
+    }
+    if (markedTruncated) {
+      continue;
+    }
+    const text = truncateUtf8Prefix(block.text, remainingTextBytes);
+    remainingTextBytes -= Buffer.byteLength(text);
+    const blockWasTruncated = text.length < block.text.length;
+    if (text || blockWasTruncated) {
+      textBoundedContent.push({
+        ...block,
+        text: blockWasTruncated ? `${text}${MCP_TEXT_TRUNCATION_MARKER}` : text,
+      });
+    }
+    if (blockWasTruncated || remainingTextBytes === 0) {
+      if (!blockWasTruncated) {
+        textBoundedContent.push({ type: "text", text: MCP_TEXT_TRUNCATION_MARKER.trimStart() });
+      }
+      markedTruncated = true;
+    }
+  }
+  const payloadMarker = { type: "text" as const, text: MCP_PAYLOAD_TRUNCATION_MARKER };
+  const reservedMarkerBytes = serializedJsonBytes(payloadMarker) + 1;
+  let usedBytes = Buffer.byteLength('{"content":[]}');
+  let payloadTruncated = false;
+  const content: McpInvokeContentBlock[] = [];
+  for (const block of textBoundedContent) {
+    const blockBytes = serializedJsonBytes(block) + (content.length > 0 ? 1 : 0);
+    if (usedBytes + blockBytes + reservedMarkerBytes > MCP_INVOKE_PAYLOAD_MAX_BYTES) {
+      payloadTruncated = true;
+      continue;
+    }
+    content.push(block);
+    usedBytes += blockBytes;
+  }
+  let structuredContent: Record<string, unknown> | undefined;
+  if (result.structuredContent) {
+    const structuredBytes =
+      Buffer.byteLength(',"structuredContent":') + serializedJsonBytes(result.structuredContent);
+    if (usedBytes + structuredBytes + reservedMarkerBytes <= MCP_INVOKE_PAYLOAD_MAX_BYTES) {
+      structuredContent = result.structuredContent;
+    } else {
+      payloadTruncated = true;
+    }
+  }
+  if (payloadTruncated) {
+    content.push(payloadMarker);
+  }
+  return { content, ...(structuredContent ? { structuredContent } : {}) };
+}
+
+function mcpToolErrorMessage(result: { content: readonly unknown[] }): string {
+  const text = result.content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        isRecord(block) && block.type === "text" && typeof block.text === "string",
+    )
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join("\n");
+  return truncateUtf16Safe(text || "MCP tool returned an error", 1_024);
+}
+
+async function handleMcpToolsCall(
+  frame: NodeInvokeRequestPayload,
+  client: NodeHostClient,
+  mcpManager: NodeHostMcpManager | undefined,
+): Promise<void> {
+  if (!mcpManager) {
+    await sendErrorResult(client, frame, "MCP_SERVER_UNAVAILABLE", "node host MCP is unavailable");
+    return;
+  }
+  let params: McpToolsCallParams;
+  try {
+    params = decodeMcpToolsCallParams(frame.paramsJSON);
+  } catch (error) {
+    await sendInvalidRequestResult(client, frame, error);
+    return;
+  }
+  try {
+    const result = await mcpManager.callMcpTool({
+      ...params,
+      timeoutMs: frame.timeoutMs ?? undefined,
+    });
+    if (result.isError) {
+      await sendErrorResult(client, frame, "MCP_TOOL_ERROR", mcpToolErrorMessage(result));
+      return;
+    }
+    await sendMcpPayloadResult(client, frame, boundMcpToolResultPayload(result));
+  } catch (error) {
+    if (error instanceof NodeHostMcpError) {
+      await sendErrorResult(client, frame, error.code, error.message);
+      return;
+    }
+    await sendErrorResult(
+      client,
+      frame,
+      "MCP_TOOL_ERROR",
+      truncateUtf16Safe(String(error), MCP_ERROR_MESSAGE_MAX_CHARS),
+    );
+  }
+}
+
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
 function decodeParams<T>(raw?: string | null): T {
   if (!raw) {
@@ -855,37 +1023,8 @@ function decodeParams<T>(raw?: string | null): T {
   }
 }
 
-export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const obj = payload as Record<string, unknown>;
-  const id = typeof obj.id === "string" ? obj.id.trim() : "";
-  const nodeId = typeof obj.nodeId === "string" ? obj.nodeId.trim() : "";
-  const command = typeof obj.command === "string" ? obj.command.trim() : "";
-  if (!id || !nodeId || !command) {
-    return null;
-  }
-  const paramsJSON =
-    typeof obj.paramsJSON === "string"
-      ? obj.paramsJSON
-      : obj.params !== undefined
-        ? JSON.stringify(obj.params)
-        : null;
-  const timeoutMs = typeof obj.timeoutMs === "number" ? obj.timeoutMs : null;
-  const idempotencyKey = typeof obj.idempotencyKey === "string" ? obj.idempotencyKey : null;
-  return {
-    id,
-    nodeId,
-    command,
-    paramsJSON,
-    timeoutMs,
-    idempotencyKey,
-  };
-}
-
 async function sendInvokeResult(
-  client: GatewayClient,
+  client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
   result: {
     ok: boolean;
@@ -901,7 +1040,7 @@ async function sendInvokeResult(
   }
 }
 
-export function buildNodeInvokeResultParams(
+function buildNodeInvokeResultParams(
   frame: NodeInvokeRequestPayload,
   result: {
     ok: boolean;
@@ -941,18 +1080,7 @@ export function buildNodeInvokeResultParams(
   return params;
 }
 
-export function buildNodeEventParams(
-  event: string,
-  payload: unknown,
-): { event: string; payloadJSON: string | null } {
-  const payloadJSON = payload === undefined ? undefined : JSON.stringify(payload);
-  return {
-    event,
-    payloadJSON: typeof payloadJSON === "string" ? payloadJSON : null,
-  };
-}
-
-async function sendNodeEvent(client: GatewayClient, event: string, payload: unknown) {
+async function sendNodeEvent(client: NodeHostClient, event: string, payload: unknown) {
   try {
     await client.request("node.event", buildNodeEventParams(event, payload));
   } catch {
@@ -960,8 +1088,15 @@ async function sendNodeEvent(client: GatewayClient, event: string, payload: unkn
   }
 }
 
-export const testing = {
-  STREAM_ERROR_KILL_GRACE_MS,
+const testing = {
+  MCP_TEXT_CONTENT_MAX_BYTES,
+  MCP_INVOKE_PAYLOAD_MAX_BYTES,
   clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostInvokeTestApi")] =
+    testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

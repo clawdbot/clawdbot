@@ -64,3 +64,26 @@ export function buildFirecrawlWebSearchProviderBase(): Omit<WebSearchProviderPlu
     getConfiguredCredentialFallback: getConfiguredFirecrawlFetchCredentialFallback,
   };
 }
+
+export function buildFirecrawlFreeWebSearchProviderBase(): Omit<
+  WebSearchProviderPlugin,
+  "createTool"
+> {
+  return {
+    id: "firecrawl-free",
+    label: "Firecrawl Search (Free)",
+    hint: "Free web search via Firecrawl's hosted starter tier — no API key required",
+    onboardingScopes: ["text-inference"],
+    requiresCredential: false,
+    envVars: [],
+    placeholder: "(no key needed)",
+    signupUrl: "https://www.firecrawl.dev/",
+    docsUrl: "https://docs.openclaw.ai/tools/firecrawl",
+    credentialPath: "",
+    ...createWebSearchProviderContractFields({
+      credentialPath: "",
+      searchCredential: { type: "scoped", scopeId: "firecrawl-free" },
+      selectionPluginId: "firecrawl",
+    }),
+  };
+}

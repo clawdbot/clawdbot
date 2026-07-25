@@ -62,6 +62,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     );
 
     const page = await context.newPage();
+    await page.clock.install();
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "controlUi.githubPreview": {
@@ -165,7 +166,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     await page.mouse.move(1, 1);
     await page.getByRole("link", { name: "repository" }).hover();
-    await page.waitForTimeout(300);
+    await page.clock.runFor(300);
     await expect.poll(() => card.count()).toBe(0);
 
     const missingLink = page.getByRole("link", { name: "missing item" });

@@ -1,10 +1,15 @@
+import { computeBackoffSchedule } from "../../packages/retry/src/index.js";
 import { sleep } from "../utils/sleep.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
-import { isPlatformMessageNotDispatchedError } from "./outbound/deliver-types.js";
+import {
+  isPlatformMessageNotDispatchedError,
+  isPlatformMessageRejectedError,
+  type PlatformMessageNotDispatchedError,
+} from "./outbound/deliver-types.js";
 import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
 
 const RECOVERY_BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
-export const RECOVERY_REPLAY_SPACING_MS = 250;
+const RECOVERY_REPLAY_SPACING_MS = 250;
 
 const PRE_CONNECT_ERROR_CODES = new Set([
   "ECONNREFUSED",
@@ -85,15 +90,20 @@ export function isProvenDeliveryNotSentError(err: unknown): boolean {
   return foundNotSentProof;
 }
 
-export function computeBackoffMs(retryCount: number): number {
-  if (retryCount <= 0) {
-    return 0;
+/** Finds a provider's permanent pre-dispatch rejection through delivery wrappers. */
+export function findPlatformMessageRejectedError(
+  err: unknown,
+): (PlatformMessageNotDispatchedError & { readonly retryable: false }) | undefined {
+  for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
+    if (isPlatformMessageRejectedError(candidate)) {
+      return candidate;
+    }
   }
-  return (
-    RECOVERY_BACKOFF_MS[Math.min(retryCount - 1, RECOVERY_BACKOFF_MS.length - 1)] ??
-    RECOVERY_BACKOFF_MS.at(-1) ??
-    0
-  );
+  return undefined;
+}
+
+export function computeBackoffMs(retryCount: number): number {
+  return computeBackoffSchedule(RECOVERY_BACKOFF_MS, retryCount);
 }
 
 export function getErrnoCode(err: unknown): string | null {

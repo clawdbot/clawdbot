@@ -7,10 +7,13 @@ import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
+  const cacheWrite1h = Math.min(usage.cacheWrite, Math.max(0, usage.cacheWrite1h ?? 0));
+  const cacheWrite5m = usage.cacheWrite - cacheWrite1h;
   usage.cost.input = (model.cost.input / 1000000) * usage.input;
   usage.cost.output = (model.cost.output / 1000000) * usage.output;
   usage.cost.cacheRead = (model.cost.cacheRead / 1000000) * usage.cacheRead;
-  usage.cost.cacheWrite = (model.cost.cacheWrite / 1000000) * usage.cacheWrite;
+  usage.cost.cacheWrite =
+    (model.cost.cacheWrite * cacheWrite5m + model.cost.input * 2 * cacheWrite1h) / 1000000;
   usage.cost.total =
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
   return usage.cost;
@@ -83,8 +86,7 @@ export function clampThinkingLevel<TApi extends Api>(
   // stronger levels so unsupported xhigh/max requests cannot increase cost.
   const thinkingLevelMap = resolveThinkingLevelMap(model);
   if ((level === "xhigh" || level === "max") && thinkingLevelMap?.[level] === null) {
-    for (let i = requestedIndex - 1; i >= 0; i--) {
-      const candidate = EXTENDED_THINKING_LEVELS[i];
+    for (const candidate of EXTENDED_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
       if (availableLevels.includes(candidate)) {
         return candidate;
       }
@@ -92,14 +94,12 @@ export function clampThinkingLevel<TApi extends Api>(
   }
 
   // Prefer the next stronger available level, then walk down if the request was above the model cap.
-  for (let i = requestedIndex; i < EXTENDED_THINKING_LEVELS.length; i++) {
-    const candidate = EXTENDED_THINKING_LEVELS[i];
+  for (const candidate of EXTENDED_THINKING_LEVELS.slice(requestedIndex)) {
     if (availableLevels.includes(candidate)) {
       return candidate;
     }
   }
-  for (let i = requestedIndex - 1; i >= 0; i--) {
-    const candidate = EXTENDED_THINKING_LEVELS[i];
+  for (const candidate of EXTENDED_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
     if (availableLevels.includes(candidate)) {
       return candidate;
     }

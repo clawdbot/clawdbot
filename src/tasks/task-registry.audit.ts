@@ -8,9 +8,9 @@ import {
   type TaskAuditSummary,
 } from "./task-registry.audit.shared.js";
 import type { TaskRecord } from "./task-registry.types.js";
-import { resolveEffectiveTaskCleanupAfter } from "./task-retention.js";
+import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
 
-export type TaskAuditOptions = {
+type TaskAuditOptions = {
   now?: number;
   tasks?: TaskRecord[];
   staleQueuedMs?: number;
@@ -24,7 +24,6 @@ export type RetainedLostTaskAuditSummary = {
 
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
-export { createEmptyTaskAuditSummary };
 export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
 
 let taskAuditTaskProvider: () => TaskRecord[] = () => [];
@@ -133,8 +132,11 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
     }
 
     if (task.status === "lost") {
+      const effectiveCleanupAfter = resolveEffectiveTaskCleanupAfter(task);
       const retainedUntilCleanup =
-        typeof task.cleanupAfter === "number" && resolveEffectiveTaskCleanupAfter(task) > now;
+        typeof task.cleanupAfter === "number" &&
+        effectiveCleanupAfter !== undefined &&
+        effectiveCleanupAfter > now;
       findings.push(
         createFinding({
           severity: retainedUntilCleanup ? "warn" : "error",
@@ -165,7 +167,8 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
       task.status !== "lost" &&
       task.status !== "queued" &&
       task.status !== "running" &&
-      typeof task.cleanupAfter !== "number"
+      typeof task.cleanupAfter !== "number" &&
+      resolveTaskCleanupAfter(task) !== undefined
     ) {
       findings.push(
         createFinding({
@@ -193,6 +196,7 @@ function isRetainedLostTaskAuditFinding(finding: TaskAuditFinding, now = Date.no
     finding.code === "lost" &&
     finding.task.status === "lost" &&
     typeof finding.task.cleanupAfter === "number" &&
+    typeof cleanupAfter === "number" &&
     cleanupAfter > now
   );
 }

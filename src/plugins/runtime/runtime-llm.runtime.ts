@@ -447,6 +447,7 @@ export function createRuntimeLlm(
         options: {
           maxTokens: finiteOption(params.maxTokens),
           temperature: finiteOption(params.temperature),
+          ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
           signal: params.signal,
         },
       });

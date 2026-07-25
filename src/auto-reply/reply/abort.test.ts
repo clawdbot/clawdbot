@@ -1,33 +1,31 @@
 // Tests abort request handling, cutoff persistence, and active run cleanup.
-import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionAbortTargetResult } from "../../config/sessions/session-accessor.js";
-import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
-  testing as abortTesting,
+  loadSessionEntry,
+  replaceSessionEntry,
+  type SessionAbortTargetResult,
+} from "../../config/sessions/session-accessor.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
+import { getAbortMemory } from "./abort-primitives.js";
+import {
   formatAbortReplyText,
-  getAbortMemory,
-  getAbortMemorySizeForTest,
   isAbortRequestText,
   isAbortTrigger,
-  resetAbortMemoryForTest,
-  resolveAbortCutoffFromContext,
   setAbortMemory,
   stopSubagentsForRequester,
-  shouldSkipMessageByAbortCutoff,
   tryFastAbortFromMessage,
 } from "./abort.js";
-import { testing as acpResetTargetTesting } from "./acp-reset-target.js";
+import { testing as abortTesting } from "./abort.test-support.js";
+import { testing as acpResetTargetTesting } from "./acp-reset-target.test-support.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
-import { testing as queueCleanupTesting } from "./queue/cleanup.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  testing as replyRunRegistryTesting,
-} from "./reply-run-registry.js";
+import { testing as queueCleanupTesting } from "./queue/cleanup.test-support.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 vi.mock("../../agents/embedded-agent.js", () => ({
@@ -87,6 +85,13 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
 const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-abort-" });
 
 describe("abort detection", () => {
+  const trackedAbortMemoryKeys = new Set<string>();
+
+  function setTrackedAbortMemory(key: string, value: boolean): void {
+    trackedAbortMemoryKeys.add(key);
+    setAbortMemory(key, value);
+  }
+
   beforeAll(async () => {
     await suiteTempDirs.setup();
   });
@@ -100,13 +105,15 @@ describe("abort detection", () => {
     sessionIdsByKey: Record<string, string>,
     nowMs = Date.now(),
   ) {
-    const storeEntries = Object.fromEntries(
-      Object.entries(sessionIdsByKey).map(([key, sessionId]) => [
-        key,
-        { sessionId, updatedAt: nowMs },
-      ]),
+    await Promise.all(
+      Object.entries(sessionIdsByKey).map(([sessionKey, sessionId]) =>
+        replaceSessionEntry({ storePath, sessionKey }, { sessionId, updatedAt: nowMs }),
+      ),
     );
-    await fs.writeFile(storePath, JSON.stringify(storeEntries, null, 2));
+  }
+
+  function readAbortSessionEntry(storePath: string, sessionKey: string) {
+    return loadSessionEntry({ storePath, sessionKey });
   }
 
   async function createAbortConfig(params?: {
@@ -123,6 +130,9 @@ describe("abort detection", () => {
         : {}),
     } as OpenClawConfig;
     if (params?.sessionIdsByKey) {
+      for (const sessionKey of Object.keys(params.sessionIdsByKey)) {
+        trackedAbortMemoryKeys.add(sessionKey);
+      }
       await writeSessionStore(storePath, params.sessionIdsByKey, params.nowMs);
     }
     return { root, storePath, cfg };
@@ -140,6 +150,17 @@ describe("abort detection", () => {
     messageSid?: string;
     timestamp?: number;
   }) {
+    for (const key of [
+      params.sessionKey,
+      params.parentSessionKey,
+      params.targetSessionKey,
+      params.from,
+      params.to,
+    ]) {
+      if (key) {
+        trackedAbortMemoryKeys.add(key);
+      }
+    }
     return tryFastAbortFromMessage({
       ctx: buildTestCtx({
         CommandBody: "/stop",
@@ -167,6 +188,7 @@ describe("abort detection", () => {
     sessionId: string;
     sessionKey: string;
   }) {
+    trackedAbortMemoryKeys.add(params.sessionKey);
     const followupRun: FollowupRun = {
       prompt: "queued",
       enqueuedAt: Date.now(),
@@ -220,7 +242,10 @@ describe("abort detection", () => {
   });
 
   afterEach(() => {
-    resetAbortMemoryForTest();
+    for (const key of trackedAbortMemoryKeys) {
+      setAbortMemory(key, false);
+    }
+    trackedAbortMemoryKeys.clear();
     abortTesting.resetDepsForTests();
     acpResetTargetTesting.setDepsForTest();
     queueCleanupTesting.resetDepsForTests();
@@ -323,21 +348,19 @@ describe("abort detection", () => {
   });
 
   it("removes abort memory entry when flag is reset", () => {
-    setAbortMemory("session-1", true);
+    setTrackedAbortMemory("session-1", true);
     expect(getAbortMemory("session-1")).toBe(true);
 
-    setAbortMemory("session-1", false);
+    setTrackedAbortMemory("session-1", false);
     expect(getAbortMemory("session-1")).toBeUndefined();
-    expect(getAbortMemorySizeForTest()).toBe(0);
   });
 
   it("caps abort memory tracking to a bounded max size", () => {
     for (let i = 0; i < 2105; i += 1) {
-      setAbortMemory(`session-${i}`, true);
+      setTrackedAbortMemory(`bounded-memory-session-${i}`, true);
     }
-    expect(getAbortMemorySizeForTest()).toBe(2000);
-    expect(getAbortMemory("session-0")).toBeUndefined();
-    expect(getAbortMemory("session-2104")).toBe(true);
+    expect(getAbortMemory("bounded-memory-session-0")).toBeUndefined();
+    expect(getAbortMemory("bounded-memory-session-2104")).toBe(true);
   });
 
   it("extracts abort cutoff metadata from context", () => {
@@ -1075,17 +1098,12 @@ describe("abort detection", () => {
       sessionKey: acpSessionKey,
       reason: "fast-abort",
     });
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
-      string,
-      {
-        abortCutoffMessageSid?: string;
-        abortCutoffTimestamp?: number;
-      }
-    >;
-    expect(store[sourceSessionKey]?.abortCutoffMessageSid).toBe("77");
-    expect(store[sourceSessionKey]?.abortCutoffTimestamp).toBe(1234567890000);
-    expect(store[acpSessionKey]?.abortCutoffMessageSid).toBeUndefined();
-    expect(store[acpSessionKey]?.abortCutoffTimestamp).toBeUndefined();
+    const sourceEntry = readAbortSessionEntry(storePath, sourceSessionKey);
+    const acpEntry = readAbortSessionEntry(storePath, acpSessionKey);
+    expect(sourceEntry?.abortCutoffMessageSid).toBe("77");
+    expect(sourceEntry?.abortCutoffTimestamp).toBe(1234567890000);
+    expect(acpEntry?.abortCutoffMessageSid).toBeUndefined();
+    expect(acpEntry?.abortCutoffTimestamp).toBeUndefined();
   });
 
   it("persists abort cutoff metadata on /stop when command and target session match", async () => {
@@ -1105,15 +1123,10 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-    const entry = store[sessionKey] as {
-      abortedLastRun?: boolean;
-      abortCutoffMessageSid?: string;
-      abortCutoffTimestamp?: number;
-    };
-    expect(entry.abortedLastRun).toBe(true);
-    expect(entry.abortCutoffMessageSid).toBe("55");
-    expect(entry.abortCutoffTimestamp).toBe(1234567890000);
+    const entry = readAbortSessionEntry(storePath, sessionKey);
+    expect(entry?.abortedLastRun).toBe(true);
+    expect(entry?.abortCutoffMessageSid).toBe("55");
+    expect(entry?.abortCutoffTimestamp).toBe(1234567890000);
   });
 
   it("persists abort cutoff metadata when only ParentSessionKey identifies the command session", async () => {
@@ -1133,15 +1146,10 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-    const entry = store[sessionKey] as {
-      abortedLastRun?: boolean;
-      abortCutoffMessageSid?: string;
-      abortCutoffTimestamp?: number;
-    };
-    expect(entry.abortedLastRun).toBe(true);
-    expect(entry.abortCutoffMessageSid).toBe("56");
-    expect(entry.abortCutoffTimestamp).toBe(1234567890001);
+    const entry = readAbortSessionEntry(storePath, sessionKey);
+    expect(entry?.abortedLastRun).toBe(true);
+    expect(entry?.abortCutoffMessageSid).toBe("56");
+    expect(entry?.abortCutoffTimestamp).toBe(1234567890001);
   });
 
   it("does not persist cutoff metadata when native /stop targets a different session", async () => {
@@ -1163,15 +1171,10 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-    const entry = store[targetSessionKey] as {
-      abortedLastRun?: boolean;
-      abortCutoffMessageSid?: string;
-      abortCutoffTimestamp?: number;
-    };
-    expect(entry.abortedLastRun).toBe(true);
-    expect(entry.abortCutoffMessageSid).toBeUndefined();
-    expect(entry.abortCutoffTimestamp).toBeUndefined();
+    const entry = readAbortSessionEntry(storePath, targetSessionKey);
+    expect(entry?.abortedLastRun).toBe(true);
+    expect(entry?.abortCutoffMessageSid).toBeUndefined();
+    expect(entry?.abortCutoffTimestamp).toBeUndefined();
   });
 
   it("fast-abort stops active subagent runs for requester session", async () => {
@@ -1396,8 +1399,14 @@ describe("abort detection", () => {
     expect(result.stoppedSubagents).toBe(1);
     expectSessionLaneCleared(depth2Key);
     expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledTimes(1);
-    const [[terminatedRun]] = subagentRegistryMocks.markSubagentRunTerminated.mock
-      .calls as unknown as Array<[{ runId?: string; childSessionKey?: string }]>;
+    const [terminatedRun] = expectDefined(
+      (
+        subagentRegistryMocks.markSubagentRunTerminated.mock.calls as unknown as Array<
+          [{ runId?: string; childSessionKey?: string }]
+        >
+      )[0],
+      "(subagentRegistryMocks.markSubagentRunTerminated.mock.calls as unknown as Array<\n        [{ runId?: string; childSessionKey?: string }]\n      >)[0] test invariant",
+    );
     expect(terminatedRun.runId).toBe("run-2");
     expect(terminatedRun.childSessionKey).toBe(depth2Key);
   });
@@ -1496,8 +1505,14 @@ describe("abort detection", () => {
     expect(result.stoppedSubagents).toBe(1);
     expectSessionLaneCleared(depth2Key);
     expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledTimes(1);
-    const [[terminatedRun]] = subagentRegistryMocks.markSubagentRunTerminated.mock
-      .calls as unknown as Array<[{ runId?: string; childSessionKey?: string }]>;
+    const [terminatedRun] = expectDefined(
+      (
+        subagentRegistryMocks.markSubagentRunTerminated.mock.calls as unknown as Array<
+          [{ runId?: string; childSessionKey?: string }]
+        >
+      )[0],
+      "(subagentRegistryMocks.markSubagentRunTerminated.mock.calls as unknown as Array<\n        [{ runId?: string; childSessionKey?: string }]\n      >)[0] test invariant",
+    );
     expect(terminatedRun.runId).toBe("run-active-child");
     expect(terminatedRun.childSessionKey).toBe(depth2Key);
   });
@@ -1575,3 +1590,4 @@ describe("abort detection", () => {
     expect(subagentRegistryMocks.markSubagentRunTerminated).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

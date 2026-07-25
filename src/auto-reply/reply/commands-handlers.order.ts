@@ -1,0 +1,48 @@
+// Keep command precedence inspectable without loading every handler module.
+// The runtime map must cover this complete union before it can build the list.
+export const commandHandlerOrder = [
+  // Plugin text commands must win before built-in auth routing handles /login.
+  "plugin",
+  "login",
+  "dock",
+  "btw",
+  "bash",
+  "activation",
+  "send-policy",
+  "fast",
+  "usage",
+  "session",
+  "restart",
+  "tts",
+  "help",
+  "commands-list",
+  // Keep deterministic /skill usage before broader tool/status fallthrough.
+  "skill-usage",
+  "tools",
+  "status",
+  "goal",
+  "learn",
+  "name",
+  "diagnostics",
+  "tasks",
+  "steer",
+  "allowlist",
+  "approve",
+  "context",
+  "export-session",
+  "export-trajectory",
+  "whoami",
+  "system-agent",
+  "subagents",
+  "acp",
+  "mcp",
+  "plugins",
+  "config",
+  "debug",
+  "models",
+  "stop",
+  "compact",
+  "abort-trigger",
+] as const;
+
+export type CommandHandlerId = (typeof commandHandlerOrder)[number];

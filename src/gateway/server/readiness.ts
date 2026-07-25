@@ -11,7 +11,7 @@ import type { ChannelManager } from "../server-channels.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 /** Snapshot returned by the gateway readiness probe. */
-export type ReadinessResult = {
+type ReadinessResult = {
   ready: boolean;
   failing: string[];
   suppressed?: string[];
@@ -81,7 +81,7 @@ export function createReadinessChecker(deps: {
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();
-    const autostartSuppressed = channelManager.getAutostartSuppression() !== null;
+    const globallyAutostartSuppressed = channelManager.getAutostartSuppression() !== null;
     const failing: string[] = [];
     const suppressed: string[] = [];
 
@@ -89,6 +89,8 @@ export function createReadinessChecker(deps: {
       if (!accounts) {
         continue;
       }
+      const autostartSuppressed =
+        globallyAutostartSuppressed || channelManager.isAmbientAutostartSuppressed(channelId);
       for (const accountSnapshot of Object.values(accounts)) {
         if (!accountSnapshot) {
           continue;

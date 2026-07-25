@@ -1,5 +1,7 @@
-// Ollama node inference exposes local models to agents through paired node hosts.
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Ollama node inference exposes local models to agents through paired node hosts.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   readFiniteNumberParam,
   readPositiveIntegerParam,
@@ -26,8 +28,8 @@ import {
 } from "./provider-models.js";
 
 const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
-export const OLLAMA_MODELS_COMMAND = "ollama.models";
-export const OLLAMA_CHAT_COMMAND = "ollama.chat";
+const OLLAMA_MODELS_COMMAND = "ollama.models";
+const OLLAMA_CHAT_COMMAND = "ollama.chat";
 const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] as const;
 
 const DEFAULT_INFERENCE_TIMEOUT_MS = 120_000;
@@ -93,10 +95,6 @@ function readNodeCommandParams(paramsJSON?: string | null): Record<string, unkno
   return parsed;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : String(error);
-}
-
 function durationMs(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return undefined;
@@ -120,10 +118,9 @@ async function requestOllamaJson<T>(params: {
   try {
     const guarded = await fetchWithSsrFGuard({
       url: `${apiBase}${params.path}`,
-      init: {
-        ...params.init,
-        signal: AbortSignal.timeout(params.timeoutMs),
-      },
+      init: params.init,
+      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+      timeoutMs: params.timeoutMs,
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext: `ollama-node-inference${params.path}`,
     });
@@ -388,7 +385,7 @@ function findNode(nodes: NodeSummary[], query: string): NodeSummary {
   if (matches.length > 1) {
     throw new Error(`node ${JSON.stringify(query)} is ambiguous; use its nodeId`);
   }
-  return matches[0];
+  return expectDefined(matches[0], "single matching Ollama inference node");
 }
 
 function parseInvokePayload(raw: unknown): Record<string, unknown> {

@@ -20,9 +20,6 @@ import {
   createReplyPrefixOptions as createChannelMessageReplyPrefixOptions,
   createReplyPrefixContext as createChannelMessageReplyPrefixContext,
   createTypingCallbacks as createChannelMessageTypingCallbacks,
-  dispatchChannelMessageReplyWithBase,
-  hasFinalChannelMessageReplyDispatch,
-  recordChannelMessageReplyDispatch,
   resolveChannelMessageSourceReplyDeliveryMode,
 } from "./channel-message.js";
 import {
@@ -35,6 +32,7 @@ import {
 import {
   hasFinalInboundReplyDispatch,
   hasVisibleInboundReplyDispatch,
+  dispatchInboundReplyWithBase,
   recordInboundSessionAndDispatchReply,
   resolveInboundReplyDispatchCounts,
 } from "./inbound-reply-dispatch.js";
@@ -75,7 +73,7 @@ describe("recordInboundSessionAndDispatchReply", () => {
       Surface: "test",
     } as FinalizedMsgContext;
 
-    await recordChannelMessageReplyDispatch({
+    await recordInboundSessionAndDispatchReply({
       cfg: {} as OpenClawConfig,
       channel: "test",
       accountId: "default",
@@ -180,7 +178,7 @@ describe("recordInboundSessionAndDispatchReply", () => {
       Surface: "telegram",
     } as FinalizedMsgContext;
 
-    await dispatchChannelMessageReplyWithBase({
+    await dispatchInboundReplyWithBase({
       cfg: {} as OpenClawConfig,
       channel: "telegram",
       accountId: "default",
@@ -309,7 +307,7 @@ describe("recordInboundSessionAndDispatchReply", () => {
     });
   });
 
-  it("keeps deprecated channel-message dispatch names as aliases for focused helpers", () => {
+  it("keeps channel-message pipeline names aligned with focused helpers", () => {
     expect(createChannelMessageReplyPipeline).toBe(createChannelReplyPipeline);
     expect(resolveChannelMessageSourceReplyDeliveryMode).toBe(
       resolveChannelSourceReplyDeliveryMode,
@@ -317,6 +315,5 @@ describe("recordInboundSessionAndDispatchReply", () => {
     expect(createChannelMessageReplyPrefixContext).toBe(createReplyPrefixContext);
     expect(createChannelMessageReplyPrefixOptions).toBe(createReplyPrefixOptions);
     expect(createChannelMessageTypingCallbacks).toBe(createTypingCallbacks);
-    expect(hasFinalChannelMessageReplyDispatch).toBe(hasFinalInboundReplyDispatch);
   });
 });

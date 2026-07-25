@@ -5,10 +5,10 @@ type FlagSpec<T extends FlagArgs> = {
     index: number,
     args: T,
   ): {
-    flag: string;
+    flag?: string;
     nextIndex: number;
-    repeatable: boolean;
-    apply(target: T): void;
+    repeatable?: boolean;
+    apply(target?: T): void;
   } | null;
 };
 
@@ -28,11 +28,6 @@ export function intFlag<T extends FlagArgs>(
   flag: string,
   key: string,
   options?: { min?: number },
-): FlagSpec<T>;
-export function floatFlag<T extends FlagArgs>(
-  flag: string,
-  key: string,
-  options?: { includeMin?: boolean; min?: number },
 ): FlagSpec<T>;
 export function booleanFlag<T extends FlagArgs>(
   flag: string,

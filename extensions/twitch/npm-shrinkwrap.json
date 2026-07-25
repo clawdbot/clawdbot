@@ -8,7 +8,7 @@
       "name": "@openclaw/twitch",
       "version": "2026.7.2",
       "dependencies": {
-        "@twurple/api": "8.1.4",
+        "@twurple/api-call": "8.1.4",
         "@twurple/auth": "8.1.4",
         "@twurple/chat": "8.1.4",
         "zod": "4.4.3"
@@ -125,30 +125,6 @@
         "url": "https://github.com/sponsors/d-fischer"
       }
     },
-    "node_modules/@twurple/api": {
-      "version": "8.1.4",
-      "resolved": "https://registry.npmjs.org/@twurple/api/-/api-8.1.4.tgz",
-      "integrity": "sha512-UA2eg5lyZRB0w55NjGvdhSmWPyIBaOthFKGPjg3L/jCQVYnY/FcmUuPipe2Op9U4Ej99c29cdjsmTSQI7P7Vqg==",
-      "license": "MIT",
-      "dependencies": {
-        "@d-fischer/cache-decorators": "^4.0.0",
-        "@d-fischer/detect-node": "^3.0.1",
-        "@d-fischer/logger": "^4.2.1",
-        "@d-fischer/rate-limiter": "^1.1.0",
-        "@d-fischer/shared-utils": "^3.6.1",
-        "@d-fischer/typed-event-emitter": "^3.3.3",
-        "@twurple/api-call": "8.1.4",
-        "@twurple/common": "8.1.4",
-        "retry": "^0.13.1",
-        "tslib": "^2.0.3"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/d-fischer"
-      },
-      "peerDependencies": {
-        "@twurple/auth": "8.1.4"
-      }
-    },
     "node_modules/@twurple/api-call": {
       "version": "8.1.4",
       "resolved": "https://registry.npmjs.org/@twurple/api-call/-/api-call-8.1.4.tgz",
@@ -236,9 +212,9 @@
       }
     },
     "node_modules/@types/ws/node_modules/@types/node": {
-      "version": "26.1.0",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.0.tgz",
-      "integrity": "sha512-O0A1G3xPGy4w7AgQdAQYUlQ+BKk2Oovw8eRpofyp5KdBZULnbe+WqaOVNrm705SHphCiG4XHsACrSmPu1f+Kgw==",
+      "version": "26.1.1",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.1.tgz",
+      "integrity": "sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw==",
       "license": "MIT",
       "dependencies": {
         "undici-types": "~8.3.0"
@@ -277,15 +253,6 @@
         "node": ">= 8"
       }
     },
-    "node_modules/retry": {
-      "version": "0.13.1",
-      "resolved": "https://registry.npmjs.org/retry/-/retry-0.13.1.tgz",
-      "integrity": "sha512-XQBQ3I8W1Cge0Seh+6gjj03LbmRFWuoszgK9ooCpwYIrhhoO80pfq4cUkU5DkknwfOfFteRwlZ56PYOGYyFWdg==",
-      "license": "MIT",
-      "engines": {
-        "node": ">= 4"
-      }
-    },
     "node_modules/tslib": {
       "version": "2.8.1",
       "resolved": "https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz",
@@ -299,9 +266,9 @@
       "license": "MIT"
     },
     "node_modules/ws": {
-      "version": "8.21.0",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
-      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
+      "version": "8.21.1",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.1.tgz",
+      "integrity": "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"

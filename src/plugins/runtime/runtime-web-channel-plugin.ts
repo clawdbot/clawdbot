@@ -37,7 +37,6 @@ type WebChannelLightRuntimeModule = {
     lid: string | null;
   };
   webAuthExists: (authDir?: string) => Promise<boolean>;
-  formatError: (error: unknown) => string;
   getStatusCode: (error: unknown) => number | undefined;
   pickWebChannel: (pref: string, authDir?: string) => Promise<string>;
   resolveDefaultWebAuthDir?: () => string;
@@ -55,7 +54,6 @@ type WebChannelHeavyRuntimeModule = {
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
   waitForWebLogin: (...args: unknown[]) => Promise<unknown>;
-  extractMediaPlaceholder: (...args: unknown[]) => unknown;
   extractText: (...args: unknown[]) => unknown;
 };
 
@@ -207,13 +205,6 @@ export function webAuthExists(
   return getLightExport("webAuthExists")(...args);
 }
 
-/** Formats a web-channel runtime error through the light runtime API. */
-export function formatError(
-  ...args: Parameters<WebChannelLightRuntimeModule["formatError"]>
-): ReturnType<WebChannelLightRuntimeModule["formatError"]> {
-  return getLightExport("formatError")(...args);
-}
-
 /** Reads a web-channel status code from the light runtime API. */
 export function getStatusCode(
   ...args: Parameters<WebChannelLightRuntimeModule["getStatusCode"]>
@@ -293,11 +284,6 @@ export async function waitForWebLogin(
 ): ReturnType<WebChannelHeavyRuntimeModule["waitForWebLogin"]> {
   return (await getHeavyExport("waitForWebLogin"))(...args);
 }
-
-/** Extracts media placeholders through the heavy runtime API. */
-export const extractMediaPlaceholder = (
-  ...args: Parameters<WebChannelHeavyRuntimeModule["extractMediaPlaceholder"]>
-) => loadCurrentHeavyModuleSync().extractMediaPlaceholder(...args);
 
 /** Extracts text through the heavy runtime API. */
 export const extractText = (...args: Parameters<WebChannelHeavyRuntimeModule["extractText"]>) =>

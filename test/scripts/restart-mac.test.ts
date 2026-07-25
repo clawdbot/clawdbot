@@ -99,6 +99,58 @@ function runCleanupFunction(fakePs: string) {
   return { killCalls, result };
 }
 
+function runManagedSupervisorClassifier(
+  records: Array<{ domain: string; label: string; program: string; properties?: string }>,
+  options: { failEnumeration?: boolean } = {},
+) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-supervisor-test-"));
+  tempRoots.push(root);
+  const recordsPath = join(root, "loaded-jobs.txt");
+  writeFileSync(
+    recordsPath,
+    records
+      .map(
+        (record) => `${record.domain}|${record.label}|${record.program}|${record.properties ?? ""}`,
+      )
+      .join("\n"),
+  );
+
+  const script = readFileSync(restartScriptPath, "utf8");
+  const classifierFunctions = script.slice(
+    script.indexOf("print_managed_openclaw_supervisor_label()"),
+    script.indexOf("kill_managed_openclaw()"),
+  );
+  const harnessPath = join(root, "supervisor-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      classifierFunctions,
+      "loaded_launch_jobs() {",
+      '  [[ "${OPENCLAW_TEST_FAIL_ENUMERATION:-0}" != "1" ]] || return 1',
+      "  cut -d'|' -f1,2 \"$OPENCLAW_TEST_LOADED_JOBS\"",
+      "}",
+      "launch_job_snapshot() {",
+      '  grep "^$1|$2|" "$OPENCLAW_TEST_LOADED_JOBS" |',
+      "    awk -F'|' '{ print \"program = \" $3; print \"properties = \" $4 }'",
+      "}",
+      'TARGET_EXECUTABLE="/worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      'INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      "managed_openclaw_supervisor_labels",
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+  return spawnSync("bash", [harnessPath], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_TEST_FAIL_ENUMERATION: options.failEnumeration ? "1" : "0",
+      OPENCLAW_TEST_LOADED_JOBS: recordsPath,
+    },
+  });
+}
+
 function runCanonicalizeAppBundle(appBundle: string) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
   tempRoots.push(root);
@@ -152,16 +204,61 @@ function runRestartArgParser(...args: string[]) {
       "SIGN=0",
       "AUTO_DETECT_SIGNING=1",
       "ATTACH_ONLY=1",
+      "BACKGROUND_ONLY=0",
       "TARGET_ONLY=0",
       'log() { printf "%s\\n" "$*"; }',
       'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
       parserBlock,
-      'printf "wait=%s no_sign=%s sign=%s attach_only=%s target_only=%s\\n" "$WAIT_FOR_LOCK" "$NO_SIGN" "$SIGN" "$ATTACH_ONLY" "$TARGET_ONLY"',
+      'printf "wait=%s no_sign=%s sign=%s attach_only=%s background_only=%s target_only=%s\\n" "$WAIT_FOR_LOCK" "$NO_SIGN" "$SIGN" "$ATTACH_ONLY" "$BACKGROUND_ONLY" "$TARGET_ONLY"',
     ].join("\n"),
   );
   chmodSync(harnessPath, 0o755);
 
   return spawnSync("bash", [harnessPath, ...args], { encoding: "utf8" });
+}
+
+function runLaunchArgBuilder(...args: string[]) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
+  tempRoots.push(root);
+
+  const script = readFileSync(restartScriptPath, "utf8");
+  const parserBlock = script.slice(
+    script.indexOf('for arg in "$@"; do'),
+    script.indexOf('if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]'),
+  );
+  const appLaunchArgBlock = script.slice(
+    script.indexOf("APP_LAUNCH_ARGS=()"),
+    script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("APP_LAUNCH_ARGS=()")),
+  );
+  const openArgBlock = script.slice(
+    script.indexOf('OPEN_ARGS=(-n "${APP_BUNDLE}")'),
+    script.indexOf("# 4) Launch"),
+  );
+  const harnessPath = join(root, "launch-arg-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/bin/bash",
+      "set -euo pipefail",
+      "WAIT_FOR_LOCK=0",
+      "NO_SIGN=0",
+      "SIGN=0",
+      "AUTO_DETECT_SIGNING=1",
+      "ATTACH_ONLY=1",
+      "BACKGROUND_ONLY=0",
+      "TARGET_ONLY=0",
+      'APP_BUNDLE="/tmp/OpenClaw.app"',
+      'log() { printf "%s\\n" "$*"; }',
+      'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
+      parserBlock,
+      appLaunchArgBlock,
+      openArgBlock,
+      'printf "<%s>\\n" "${OPEN_ARGS[@]}"',
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+
+  return spawnSync("/bin/bash", [harnessPath, ...args], { encoding: "utf8" });
 }
 
 function runRestartLockHarness(lockDir: string) {
@@ -243,11 +340,19 @@ describe("scripts/restart-mac.sh", () => {
   });
 
   it("parses restart mode flags before side effects", () => {
-    const result = runRestartArgParser("--wait", "--no-sign", "--target-only");
+    const result = runRestartArgParser("--wait", "--no-sign", "--background-only", "--target-only");
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("wait=1 no_sign=1 sign=0 attach_only=1 target_only=1");
+    expect(result.stdout.trim()).toBe(
+      "wait=1 no_sign=1 sign=0 attach_only=1 background_only=1 target_only=1",
+    );
     expect(result.stderr).toBe("");
+  });
+
+  it("fails closed when loaded launchd jobs cannot be enumerated", () => {
+    const result = runManagedSupervisorClassifier([], { failEnumeration: true });
+
+    expect(result.status).toBe(1);
   });
 
   it("fails the gateway verification when lsof finds no listener", () => {
@@ -280,6 +385,14 @@ describe("scripts/restart-mac.sh", () => {
       'run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" verify_gateway_port_listening "${GATEWAY_PORT}"',
     );
     expect(script).not.toContain("lsof -iTCP:${GATEWAY_PORT} -sTCP:LISTEN | head -n 5 || true");
+  });
+
+  it("avoids login-shell noise and early-exit pipe warnings", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).not.toContain("bash -lc");
+    expect(script).not.toContain(`printf '%s\\n' "\${job}" | /usr/bin/awk`);
+    expect(script).toContain("/usr/bin/awk -F ' = '");
   });
 
   it("keeps the default restart log scoped to the current worktree lock", () => {
@@ -377,7 +490,7 @@ describe("scripts/restart-mac.sh", () => {
       script.indexOf("else", script.indexOf("# 1)")),
     );
     const switchTargetBlock = script.slice(
-      script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("ATTACH_ONLY_ARGS")),
+      script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("APP_LAUNCH_ARGS")),
       script.indexOf("# 4) Launch"),
     );
 
@@ -390,6 +503,78 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).toContain('[[ "${executable}" == "${TARGET_EXECUTABLE}" ]] && continue');
     expect(script).toContain('process_pids_for_executable "${TARGET_EXECUTABLE}"');
     expect(script).toContain("target-only restart deferred");
+  });
+
+  it("passes background-only through to the launched app", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).toContain("APP_LAUNCH_ARGS+=(--background-only)");
+    expect(script).toContain('OPEN_ARGS+=(--args "${APP_LAUNCH_ARGS[@]}")');
+    expect(script).toContain('/usr/bin/open "${OPEN_ARGS[@]}"');
+  });
+
+  it("keeps no-attach-only launches nounset-safe on the macOS system Bash", () => {
+    const result = runLaunchArgBuilder("--no-attach-only");
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe("<-n>\n</tmp/OpenClaw.app>");
+  });
+
+  it("finds persistent launchd supervisors across explicit domains", () => {
+    const result = runManagedSupervisorClassifier([
+      {
+        domain: "gui/501",
+        label: "ai.openclaw.mac.custom",
+        program: "/Applications/OpenClaw.app/Contents/MacOS/OpenClaw",
+        properties: "keepalive | runatload",
+      },
+      {
+        domain: "user/501",
+        label: "ai.openclaw.mac.target",
+        program: "/worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw",
+        properties: "keepalive",
+      },
+      {
+        domain: "gui/501",
+        label: "application.ai.openclaw.mac.123",
+        program: "/Applications/OpenClaw.app/Contents/MacOS/OpenClaw",
+      },
+      {
+        domain: "system",
+        label: "com.example.other",
+        program: "/Applications/Other.app/Contents/MacOS/Other",
+        properties: "keepalive",
+      },
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim().split("\n").toSorted()).toEqual([
+      "ai.openclaw.mac.custom",
+      "ai.openclaw.mac.target",
+    ]);
+    expect(result.stderr).toBe("");
+  });
+
+  it("checks managed launchd supervisors before starting the Swift package build", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const supervisorIndex = script.indexOf(
+      'managed_supervisors="$(managed_openclaw_supervisor_labels',
+    );
+    const packageIndex = script.indexOf('run_step "package app"');
+
+    expect(supervisorIndex).toBeGreaterThan(-1);
+    expect(packageIndex).toBeGreaterThan(supervisorIndex);
+    expect(script).toContain("Unable to inspect loaded launchd jobs");
+    expect(script).toContain("stop those jobs before a target-only restart");
+  });
+
+  it("lets the packager own the single incremental Swift product build", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).not.toContain('run_step "clean build cache"');
+    expect(script).not.toContain('run_step "swift build"');
+    expect(script).toContain('run_step "package app"');
   });
 
   it("keeps the managed app alive until the signed replacement is ready", () => {
@@ -467,8 +652,11 @@ describe("scripts/restart-mac.sh", () => {
   it("forces LaunchServices to start the selected app bundle", () => {
     const script = readFileSync(restartScriptPath, "utf8");
 
-    expect(script).toContain('/usr/bin/open -n "${APP_BUNDLE}"');
-    expect(script).not.toContain('/usr/bin/open "${APP_BUNDLE}"');
+    expect(script).toContain('OPEN_ARGS=(-n "${APP_BUNDLE}")');
+    expect(script).toContain('/usr/bin/open "${OPEN_ARGS[@]}"');
+    expect(script.indexOf("\nchoose_app_bundle\n")).toBeLessThan(
+      script.indexOf('OPEN_ARGS=(-n "${APP_BUNDLE}")'),
+    );
   });
 
   it("normalizes custom app bundle paths before process matching", () => {

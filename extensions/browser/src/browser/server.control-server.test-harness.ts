@@ -107,6 +107,7 @@ const cdpMocks = vi.hoisted(() => ({
   createTargetViaCdp: vi.fn<() => Promise<{ targetId: string }>>(async () => {
     throw new Error("cdp disabled");
   }),
+  getMainFrameDocumentIdentityViaCdp: vi.fn(async () => "cdp:test-document"),
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
   })),
@@ -120,11 +121,13 @@ const cdpMocks = vi.hoisted(() => ({
 /** Returns mocked CDP functions used by Browser control-server tests. */
 export function getCdpMocks(): {
   createTargetViaCdp: MockFn;
+  getMainFrameDocumentIdentityViaCdp: MockFn;
   snapshotAria: MockFn;
   snapshotRoleViaCdp: MockFn;
 } {
   return cdpMocks as unknown as {
     createTargetViaCdp: MockFn;
+    getMainFrameDocumentIdentityViaCdp: MockFn;
     snapshotAria: MockFn;
     snapshotRoleViaCdp: MockFn;
   };
@@ -181,66 +184,76 @@ function buildActPayload(params: {
   };
 }
 
-const pwMocks = vi.hoisted(() => ({
-  armDialogViaPlaywright: vi.fn(async () => {}),
-  armFileUploadViaPlaywright: vi.fn(async () => {}),
-  batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
-  clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  closePlaywrightBrowserConnection: vi.fn(async () => {}),
-  cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
-  downloadViaPlaywright: vi.fn(async () => ({
-    url: "https://example.com/report.pdf",
-    suggestedFilename: "report.pdf",
-    path: "/tmp/report.pdf",
-  })),
-  dragViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  evaluateViaPlaywright: vi.fn(async (_opts?: unknown) => "ok"),
-  fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  getConsoleMessagesViaPlaywright: vi.fn(async () => []),
-  getNetworkRequestsViaPlaywright: vi.fn(async () => ({ requests: [] })),
-  getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
-    dialogs: { pending: [], recent: [] },
-  })),
-  getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
-  highlightViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
-  pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
-  pressKeyViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  responseBodyViaPlaywright: vi.fn(async () => ({
-    url: "https://example.com/api/data",
-    status: 200,
-    headers: { "content-type": "application/json" },
-    body: '{"ok":true}',
-  })),
-  resizeViewportViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  setInputFilesViaPlaywright: vi.fn(async () => {}),
-  snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
-  snapshotRoleViaPlaywright: vi.fn(async () => ({
-    snapshot: '- button "Role" [ref=e1]',
-    refs: { e1: { role: "button", name: "Role" } },
-    stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
-  })),
-  storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
-  storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
-  traceStartViaPlaywright: vi.fn(async () => {}),
-  traceStopViaPlaywright: vi.fn(async () => {}),
-  takeScreenshotViaPlaywright: vi.fn(async () => ({
-    buffer: Buffer.from("png"),
-  })),
-  typeViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  waitForDownloadViaPlaywright: vi.fn(async () => ({
-    url: "https://example.com/report.pdf",
-    suggestedFilename: "report.pdf",
-    path: "/tmp/report.pdf",
-  })),
-  waitForViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  executeActViaPlaywright: vi.fn(async (_opts?: ExecuteActMockOptions) => ({})),
-}));
+const pwMocks = vi.hoisted(() => {
+  const closePlaywrightBrowserConnection = vi.fn(async (_opts?: { cdpUrl?: string }) => {});
+  return {
+    armDialogViaPlaywright: vi.fn(async () => {}),
+    armFileUploadViaPlaywright: vi.fn(async () => {}),
+    uploadViaPlaywright: vi.fn(async () => {}),
+    batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
+    clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    closePlaywrightBrowserConnection,
+    retirePlaywrightBrowserConnection: vi.fn(() => false),
+    retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
+      retired: false,
+      close: async () => await closePlaywrightBrowserConnection(opts),
+    })),
+    cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
+    downloadViaPlaywright: vi.fn(async () => ({
+      url: "https://example.com/report.pdf",
+      suggestedFilename: "report.pdf",
+      path: "/tmp/report.pdf",
+    })),
+    dragViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    evaluateViaPlaywright: vi.fn(async (_opts?: unknown) => "ok"),
+    fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    getConsoleMessagesViaPlaywright: vi.fn(async () => []),
+    getNetworkRequestsViaPlaywright: vi.fn(async () => ({ requests: [] })),
+    getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
+      dialogs: { pending: [], recent: [] },
+    })),
+    getMainFrameDocumentIdentityViaPlaywright: vi.fn(async () => "pw:test-document"),
+    getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
+    highlightViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
+    pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
+    pressKeyViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    responseBodyViaPlaywright: vi.fn(async () => ({
+      url: "https://example.com/api/data",
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: '{"ok":true}',
+    })),
+    resizeViewportViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    setInputFilesViaPlaywright: vi.fn(async () => {}),
+    snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+    snapshotRoleViaPlaywright: vi.fn(async () => ({
+      snapshot: '- button "Role" [ref=e1]',
+      refs: { e1: { role: "button", name: "Role" } },
+      stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
+    })),
+    storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
+    storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
+    traceStartViaPlaywright: vi.fn(async () => {}),
+    traceStopViaPlaywright: vi.fn(async () => {}),
+    takeScreenshotViaPlaywright: vi.fn(async () => ({
+      buffer: Buffer.from("png"),
+    })),
+    typeViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    waitForDownloadViaPlaywright: vi.fn(async () => ({
+      url: "https://example.com/report.pdf",
+      suggestedFilename: "report.pdf",
+      path: "/tmp/report.pdf",
+    })),
+    waitForViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    executeActViaPlaywright: vi.fn(async (_opts?: ExecuteActMockOptions) => ({})),
+  };
+});
 
 const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   click: {
@@ -501,6 +514,7 @@ vi.mock("../config/config.js", async () => {
 const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 
 vi.mock("./chrome.js", () => ({
+  isChromeCdpOwnedByPid: vi.fn(async () => true),
   isChromeCdpReady: vi.fn(async () => state.reachable),
   isChromeReachable: vi.fn(async () => state.reachable),
   launchOpenClawChrome: vi.fn(async (_resolved: unknown, profile: { cdpPort: number }) => {
@@ -523,6 +537,7 @@ vi.mock("./chrome.js", () => ({
 
 vi.mock("./cdp.js", () => ({
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
+  getMainFrameDocumentIdentityViaCdp: cdpMocks.getMainFrameDocumentIdentityViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
   snapshotAria: cdpMocks.snapshotAria,
   snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
@@ -534,7 +549,7 @@ vi.mock("./cdp.js", () => ({
   }),
 }));
 
-vi.mock("./pw-ai.js", () => pwMocks);
+vi.mock("./pw-ai.js", () => ({ pwAi: pwMocks }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMocks);
 

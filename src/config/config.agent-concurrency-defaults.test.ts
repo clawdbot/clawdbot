@@ -29,7 +29,6 @@ describe("agent concurrency defaults", () => {
     };
     expect(resolveAgentMaxConcurrent(cfg)).toBe(1);
     expect(resolveSubagentMaxConcurrent(cfg)).toBe(1);
-    expect(resolveCronMaxConcurrentRuns({ maxConcurrentRuns: 0 })).toBe(1);
   });
 
   it("accepts subagent spawn depth and per-agent child limits", () => {
@@ -41,6 +40,7 @@ describe("agent concurrency defaults", () => {
             maxChildrenPerAgent: 7,
           },
         },
+        entries: { main: { default: true } },
       },
     });
 

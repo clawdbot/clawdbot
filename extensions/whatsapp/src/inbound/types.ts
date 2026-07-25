@@ -1,6 +1,10 @@
 // Whatsapp type declarations define plugin contracts.
 import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
-import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelInboundMediaInput,
+  MediaPlaceholderTextFact,
+  NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 import type { DeprecatedWebInboundAdmissionTopLevelFields } from "./admission-types.js";
@@ -22,6 +26,7 @@ export type ActiveWebSendOptions = {
     fromMe: boolean;
     participant?: string;
     messageText?: string;
+    media?: MediaPlaceholderTextFact;
   };
   gifPlayback?: boolean;
   accountId?: string;
@@ -59,7 +64,7 @@ export type WhatsAppStructuredContactContext = {
   }>;
 };
 
-export type WhatsAppInboundEvent = {
+type WhatsAppInboundEvent = {
   id?: string;
   timestamp?: number;
   isBatched?: boolean;
@@ -69,6 +74,7 @@ export type WhatsAppInboundQuote = {
   context?: WhatsAppReplyContext;
   id?: string;
   body?: string;
+  media?: MediaPlaceholderTextFact;
   sender?: {
     displayName?: string;
     jid?: string;
@@ -85,7 +91,7 @@ export type WhatsAppInboundGroupContext = {
   };
 };
 
-export type WhatsAppInboundPayload = {
+type WhatsAppInboundPayload = {
   body: string;
   commandBody?: string;
   media?: {
@@ -93,6 +99,7 @@ export type WhatsAppInboundPayload = {
     type?: string;
     fileName?: string;
     url?: string;
+    kind?: ChannelInboundMediaInput["kind"];
   };
   location?: NormalizedLocation;
   untrustedStructuredContext?: Array<{
@@ -103,7 +110,7 @@ export type WhatsAppInboundPayload = {
   }>;
 };
 
-export type WhatsAppInboundPlatform = {
+type WhatsAppInboundPlatform = {
   chatJid: string;
   recipientJid: string;
   sender?: WhatsAppIdentity;

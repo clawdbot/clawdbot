@@ -5,15 +5,8 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  installOpenClawPluginSdkNativeResolver,
-  resetOpenClawPluginSdkNativeResolverForTest,
-} from "./plugin-sdk-native-resolver.js";
-
-afterEach(() => {
-  resetOpenClawPluginSdkNativeResolverForTest();
-});
+import { beforeAll, describe, expect, it } from "vitest";
+import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 
 type NativeEsmLazyImportProbe = {
   status: number | null;
@@ -36,7 +29,6 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
     },
     exports: {
       "./cli-entry": "./dist/cli-entry.js",
-      "./plugin-sdk": "./dist/plugin-sdk/root-alias.cjs",
       "./plugin-sdk/agent-runtime": "./dist/plugin-sdk/agent-runtime.js",
       "./plugin-sdk/channel-message": "./dist/plugin-sdk/channel-message.js",
       "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",
@@ -47,7 +39,6 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
   const distRoot = path.join(root, "dist");
   const pluginSdkDir = path.join(distRoot, "plugin-sdk");
   fs.mkdirSync(pluginSdkDir, { recursive: true });
-  fs.writeFileSync(path.join(pluginSdkDir, "root-alias.cjs"), "module.exports = {};\n", "utf8");
   fs.writeFileSync(
     path.join(pluginSdkDir, "agent-runtime.js"),
     "export const agentRuntimeSource = import.meta.url;\n",
@@ -290,7 +281,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         'import fs from "node:fs";',
         'import path from "node:path";',
         'import { pathToFileURL } from "node:url";',
-        `import { installOpenClawPluginSdkNativeResolver, resetOpenClawPluginSdkNativeResolverForTest } from ${JSON.stringify(resolverModuleUrl)};`,
+        `import { installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverModuleUrl)};`,
         `const root = ${JSON.stringify(root)};`,
         "const writeJson = (targetPath, value) => {",
         "  fs.mkdirSync(path.dirname(targetPath), { recursive: true });",
@@ -301,13 +292,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         '  type: "module",',
         '  bin: { openclaw: "./openclaw.mjs" },',
         "  exports: {",
-        '    "./plugin-sdk": "./dist/plugin-sdk/root-alias.cjs",',
         '    "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",',
         "  },",
         "});",
         'fs.writeFileSync(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\\n", "utf8");',
         'fs.mkdirSync(path.join(root, "dist", "plugin-sdk"), { recursive: true });',
-        'fs.writeFileSync(path.join(root, "dist", "plugin-sdk", "root-alias.cjs"), "module.exports = {};\\n", "utf8");',
         'fs.writeFileSync(path.join(root, "dist", "plugin-sdk", "channel-outbound.js"), "export const defineChannelMessageAdapter = () => \\"adapter\\";\\n", "utf8");',
         'const loaderModulePath = path.join(root, "dist", "plugins", "loader.js");',
         "fs.mkdirSync(path.dirname(loaderModulePath), { recursive: true });",
@@ -334,7 +323,6 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "});",
         "const module = await import(pathToFileURL(entryPath).href);",
         "const lazy = await module.loadLazy();",
-        "resetOpenClawPluginSdkNativeResolverForTest();",
         "console.log(`${module.eager}:${lazy.lazy}`);",
         "",
       ].join("\n"),
@@ -389,12 +377,15 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "normalization-core",
       "boolean-coercion.ts",
     );
+    const resultSource = writeInternalCorePackageSource(root, "normalization-core", "result.ts");
+    const agentIdSource = writeInternalCorePackageSource(root, "normalization-core", "agent-id.ts");
     const mediaCoreSource = writeInternalCorePackageSource(root, "media-core", "mime.ts");
     const markdownCoreSource = writeInternalCorePackageSource(
       root,
       "markdown-core",
       "code-spans.ts",
     );
+    const aiTransportsSource = writeInternalCorePackageSource(root, "ai", "transports.ts");
     const aiRuntimeSource = writeInternalCorePackageSource(
       root,
       "ai",
@@ -424,8 +415,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
 
     expect(installedAliases).toContain("@openclaw/normalization-core/string-coerce");
     expect(installedAliases).toContain("@openclaw/normalization-core/boolean-coercion");
+    expect(installedAliases).toContain("@openclaw/normalization-core/result");
+    expect(installedAliases).toContain("@openclaw/normalization-core/agent-id");
     expect(installedAliases).toContain("@openclaw/media-core/mime");
     expect(installedAliases).toContain("@openclaw/markdown-core/code-spans");
+    expect(installedAliases).toContain("@openclaw/ai/transports");
     expect(installedAliases).toContain("@openclaw/ai/internal/retry-after");
     expect(installedAliases).toContain("@openclaw/ai/internal/runtime");
     expect(installedAliases).toContain("@openclaw/acp-core/runtime/types");
@@ -440,12 +434,21 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         requireFromCoreSource.resolve("@openclaw/normalization-core/boolean-coercion"),
       ),
     ).toBe(fs.realpathSync(booleanCoercionSource));
+    expect(
+      fs.realpathSync(requireFromCoreSource.resolve("@openclaw/normalization-core/result")),
+    ).toBe(fs.realpathSync(resultSource));
+    expect(
+      fs.realpathSync(requireFromCoreSource.resolve("@openclaw/normalization-core/agent-id")),
+    ).toBe(fs.realpathSync(agentIdSource));
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/media-core/mime"))).toBe(
       fs.realpathSync(mediaCoreSource),
     );
     expect(
       fs.realpathSync(requireFromCoreSource.resolve("@openclaw/markdown-core/code-spans")),
     ).toBe(fs.realpathSync(markdownCoreSource));
+    expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/transports"))).toBe(
+      fs.realpathSync(aiTransportsSource),
+    );
     expect(
       fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/retry-after")),
     ).toBe(fs.realpathSync(aiRetryAfterSource));
@@ -462,8 +465,10 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(() =>
       requireFromPlugin.resolve("@openclaw/normalization-core/boolean-coercion"),
     ).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/normalization-core/result")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/media-core/mime")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/markdown-core/code-spans")).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/ai/transports")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/retry-after")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/runtime")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/acp-core/runtime/types")).toThrow();

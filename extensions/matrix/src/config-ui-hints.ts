@@ -1,23 +1,17 @@
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 // Matrix helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const matrixChannelConfigUiHints = {
-  mentionPatterns: {
-    label: "Matrix Mention Pattern Policy",
-    help: "Scopes configured groupChat mentionPatterns to selected Matrix room IDs. Native Matrix mention evidence still triggers even when regex patterns are denied.",
-  },
-  "mentionPatterns.mode": {
-    label: "Matrix Mention Pattern Mode",
-    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
-  },
-  "mentionPatterns.allowIn": {
-    label: "Matrix Mention Pattern Allowlist",
-    help: "Matrix room IDs where configured regex mention patterns are enabled when mode is deny.",
-  },
-  "mentionPatterns.denyIn": {
-    label: "Matrix Mention Pattern Denylist",
-    help: "Matrix room IDs where configured regex mention patterns are disabled. Native mention evidence still triggers.",
-  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Matrix",
+    mentionPatterns: {
+      targetDescription: "Matrix room IDs",
+      policyNote:
+        "Native Matrix mention evidence still triggers even when regex patterns are denied.",
+      denyNote: "Native mention evidence still triggers.",
+    },
+  }),
   allowBots: {
     label: "Matrix Allow Bot Messages",
     help: 'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to require a visible room mention.',
@@ -46,28 +40,5 @@ export const matrixChannelConfigUiHints = {
     label: "Matrix Display Name Matching",
     help: "Compatibility opt-in for resolving Matrix display names and joined room names in allowlists. Prefer full @user:server IDs and room IDs or aliases because names are mutable.",
   },
-  "streaming.progress.label": {
-    label: "Matrix Progress Label",
-    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
-  },
-  "streaming.progress.labels": {
-    label: "Matrix Progress Label Pool",
-    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
-  },
-  "streaming.progress.maxLines": {
-    label: "Matrix Progress Max Lines",
-    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
-  },
-  "streaming.progress.maxLineChars": {
-    label: "Matrix Progress Max Line Chars",
-    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
-  },
-  "streaming.progress.toolProgress": {
-    label: "Matrix Progress Tool Lines",
-    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
-  },
-  "streaming.progress.commandText": {
-    label: "Matrix Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
-  },
+  ...createChannelConfigUiHints({ channelLabel: "Matrix", progress: {} }),
 } satisfies Record<string, ChannelConfigUiHint>;

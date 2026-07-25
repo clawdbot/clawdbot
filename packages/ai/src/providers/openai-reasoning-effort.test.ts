@@ -1,6 +1,7 @@
 // Verifies model-specific OpenAI reasoning-effort normalization and disablement.
 import { describe, expect, it } from "vitest";
 import {
+  isOpenAIGpt56Model,
   resolveOpenAIReasoningEffortForModel,
   resolveOpenAISupportedReasoningEfforts,
   supportsOpenAIReasoningEffort,
@@ -8,6 +9,12 @@ import {
 } from "./openai-reasoning-effort.js";
 
 describe("OpenAI reasoning effort support", () => {
+  it("recognizes GPT-5.6 model ids and deployment names", () => {
+    expect(isOpenAIGpt56Model({ id: "gpt-5.6-luna" })).toBe(true);
+    expect(isOpenAIGpt56Model({ id: "prod-luna", name: "GPT-5.6 (Azure)" })).toBe(true);
+    expect(isOpenAIGpt56Model({ id: "gpt-5.5" })).toBe(false);
+  });
+
   it("preserves disabled and max effort for the GPT-5.6 series", () => {
     const sol = { provider: "openai", id: "gpt-5.6-sol" };
     const terra = { provider: "openai", id: "gpt-5.6-terra" };

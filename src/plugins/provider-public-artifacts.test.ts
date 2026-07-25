@@ -5,13 +5,33 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface,
+} from "./provider-public-artifacts.js";
+
+function writeExternalPolicyFixture(): string {
+  const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-external-"));
+  fs.writeFileSync(
+    path.join(pluginRoot, "provider-policy-api.js"),
+    [
+      "export function resolveThinkingProfile({ modelId }) {",
+      '  return modelId === "full"',
+      '    ? { levels: [{ id: "off" }, { id: "high" }, { id: "max" }], defaultLevel: "off" }',
+      '    : { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel: "off" };',
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return pluginRoot;
+}
 
 describe("provider public artifacts", () => {
   const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
-  afterEach(() => {
+  function restoreBundledPluginEnv() {
     if (originalBundledPluginsDir === undefined) {
       delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     } else {
@@ -22,6 +42,10 @@ describe("provider public artifacts", () => {
     } else {
       process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
     }
+  }
+
+  afterEach(() => {
+    restoreBundledPluginEnv();
     vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
@@ -48,6 +72,26 @@ describe("provider public artifacts", () => {
         ?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })
         ?.levels.map((level) => level.id),
     ).toContain("xhigh");
+    expect(surface?.resolveModelRoutes?.({ provider: "openai", modelId: "gpt-5.5" })).toEqual({
+      kind: "routes",
+      defaultRuntimeId: "codex",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+        {
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+      ],
+    });
   });
 
   it("loads MiniMax thinking policy before runtime registration", () => {
@@ -63,7 +107,7 @@ describe("provider public artifacts", () => {
     ).toBe("adaptive");
   });
 
-  it("loads Moonshot Kimi K2.7 thinking policy before runtime registration", () => {
+  it("loads Moonshot always-thinking policies before runtime registration", () => {
     const surface = resolveBundledProviderPolicySurface("moonshot");
 
     expect(
@@ -76,6 +120,120 @@ describe("provider public artifacts", () => {
       defaultLevel: "low",
       preserveWhenCatalogReasoningFalse: true,
     });
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "moonshot",
+        modelId: "kimi-k3",
+      }),
+    ).toEqual({
+      levels: [{ id: "max", label: "max" }],
+      defaultLevel: "max",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("loads Kimi Code K3 thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("kimi");
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "kimi",
+        modelId: "k3",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "max", label: "max" },
+      ],
+      defaultLevel: "max",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("loads OpenCode Go DeepSeek V4 thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("opencode-go");
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "opencode-go",
+        modelId: "deepseek-v4-pro",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "max" },
+      ],
+      defaultLevel: "high",
+    });
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "opencode-go", modelId: "glm-5" }),
+    ).toBeUndefined();
+  });
+
+  it("loads trusted official external provider policy before runtime registration", () => {
+    const bundledPluginsDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-empty-bundled-plugins-"),
+    );
+    const pluginRoot = writeExternalPolicyFixture();
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+      const fixturePlugin = {
+        id: "fixture-provider",
+        origin: "external",
+        trustedOfficialInstall: true,
+        rootDir: pluginRoot,
+        providers: ["fixture-provider"],
+        cliBackends: [],
+      } as const;
+      const surface = resolveProviderPolicySurface("fixture-provider", {
+        manifestRegistry: { plugins: [fixturePlugin as never] },
+      });
+
+      expect(
+        surface
+          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "full" })
+          ?.levels.map((level) => level.id),
+      ).toEqual(["off", "high", "max"]);
+      expect(
+        surface
+          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "legacy" })
+          ?.levels.map((level) => level.label),
+      ).toEqual([undefined, "on"]);
+    } finally {
+      restoreBundledPluginEnv();
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+      fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not load public policy code from untrusted external plugins", () => {
+    const pluginRoot = writeExternalPolicyFixture();
+    try {
+      expect(
+        resolveProviderPolicySurface("fixture-provider", {
+          manifestRegistry: {
+            plugins: [
+              {
+                id: "fixture-provider",
+                origin: "external",
+                rootDir: pluginRoot,
+                providers: ["fixture-provider"],
+                cliBackends: [],
+              } as never,
+            ],
+          },
+        }),
+      ).toBeNull();
+    } finally {
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+    }
   });
 
   it("resolves multi-provider policy artifacts by manifest-owned provider id", async () => {
@@ -414,6 +572,41 @@ describe("provider public artifacts", () => {
     expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "openai",
       artifactBasename: "provider-policy-api.js",
+    });
+  });
+
+  it("recognizes resolveModelRoutes as a standalone provider policy surface", async () => {
+    const resolveModelRoutes = vi.fn(() => ({
+      kind: "routes" as const,
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://fixture.example.test/v1",
+          authRequirement: "api-key" as const,
+          requestTransportOverrides: "none" as const,
+        },
+      ] as const,
+    }));
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({ resolveModelRoutes }));
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=model-routes-only");
+
+    const surface = resolvePolicySurface("openai");
+    expect(surface?.resolveModelRoutes?.({ provider: "openai" })).toEqual({
+      kind: "routes",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://fixture.example.test/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+        },
+      ],
     });
   });
 });

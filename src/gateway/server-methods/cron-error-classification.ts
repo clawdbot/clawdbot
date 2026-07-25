@@ -22,6 +22,7 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("cron webhook delivery requires") ||
     message.includes("delivery.channel") ||
     message.includes("delivery.failureDestination.channel") ||
+    message.includes("failureAlert.channel") ||
     message.includes("cron completion destination webhook requires") ||
     message.includes("cron failure destination webhook requires") ||
     message.includes("cron channel delivery config is only supported") ||

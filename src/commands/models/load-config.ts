@@ -10,7 +10,7 @@ import {
 } from "./load-config.runtime.js";
 
 /** Source and resolved config pair returned by model command config loading. */
-export type LoadedModelsConfig = {
+type LoadedModelsConfig = {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
   diagnostics: string[];

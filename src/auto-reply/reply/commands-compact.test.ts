@@ -43,6 +43,7 @@ function buildCompactParams(
       Surface: "whatsapp",
       CommandSource: "text",
       CommandBody: commandBodyNormalized,
+      commandText: commandBodyNormalized,
     },
     command: {
       commandBodyNormalized,
@@ -155,6 +156,7 @@ describe("handleCompactCommand", () => {
           Surface: "whatsapp",
           CommandSource: "text",
           CommandBody: "/compact: focus on decisions",
+          commandText: "/compact: focus on decisions",
           From: "+15550001",
           To: "+15550002",
           SenderName: "Alice",
@@ -197,6 +199,7 @@ describe("handleCompactCommand", () => {
     expect(call.senderE164).toBe("+15551234567");
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
     expect(call.authProfileId).toBe("github-copilot:work");
+    expect(call.authProfileIdSource).toBe("user");
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
   });

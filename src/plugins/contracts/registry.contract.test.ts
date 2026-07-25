@@ -4,11 +4,7 @@ import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
-import {
-  pluginRegistrationContractRegistry,
-  providerContractLoadError,
-  providerContractPluginIds,
-} from "./registry.js";
+import { pluginRegistrationContractRegistry, providerContractLoadError } from "./registry.js";
 
 const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
 const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET = new Set<string>(
@@ -133,13 +129,6 @@ describe("plugin contract registry", () => {
     expectUniqueIds(pluginRegistrationContractRegistry.flatMap((entry) => entry.speechProviderIds));
   });
 
-  it("covers every bundled provider plugin discovered from manifests", () => {
-    expectRegistryPluginIds({
-      actualPluginIds: providerContractPluginIds,
-      predicate: (plugin) => plugin.origin === "bundled" && plugin.providers.length > 0,
-    });
-  });
-
   it("covers every bundled worker provider plugin discovered from manifests", () => {
     expectRegistryPluginIds({
       actualPluginIds: pluginRegistrationContractRegistry
@@ -190,6 +179,7 @@ describe("plugin contract registry", () => {
       {
         provider: "github-copilot",
         method: "device",
+        appGuidedAuth: "device-code",
         appGuidedSecret: true,
         choiceId: "github-copilot",
         choiceLabel: "GitHub Copilot",
@@ -206,6 +196,7 @@ describe("plugin contract registry", () => {
       {
         provider: "github-copilot",
         method: "device-enterprise",
+        appGuidedAuth: "device-code",
         choiceId: "github-copilot-enterprise",
         choiceLabel: "GitHub Copilot (Enterprise / data residency)",
         choiceHint: "Device login against your GitHub Enterprise (*.ghe.com) tenant",

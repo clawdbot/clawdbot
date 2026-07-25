@@ -26,7 +26,7 @@ import { isDiscordRateLimitBody } from "./schemas.js";
 export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
 type RuntimeProfile = "serverless" | "persistent";
-export type RequestPriority = RestRequestPriority;
+type RequestPriority = RestRequestPriority;
 type RequestSchedulerOptions = {
   lanes?: Partial<
     Record<RequestPriority, { maxQueueSize?: number; staleAfterMs?: number; weight?: number }>
@@ -62,7 +62,7 @@ export type RequestData = {
   headers?: Record<string, string>;
 };
 
-export type QueuedRequest = {
+type QueuedRequest = {
   method: string;
   path: string;
   data?: RequestData;

@@ -50,8 +50,8 @@ function resolveNoVncObserverTokenExpiresAt(params: { ttlMs?: number; nowMs: num
   );
 }
 
-export function isNoVncEnabled(params: { enableNoVnc: boolean; headless: boolean }) {
-  return params.enableNoVnc && !params.headless;
+export function isNoVncEnabled(params: { noVncEnabled: boolean; headless: boolean }) {
+  return params.noVncEnabled && !params.headless;
 }
 
 export function generateNoVncPassword() {
@@ -115,8 +115,4 @@ export function consumeNoVncObserverToken(
 export function buildNoVncObserverTokenUrl(baseUrl: string, token: string) {
   const query = new URLSearchParams({ token });
   return `${baseUrl}/sandbox/novnc?${query.toString()}`;
-}
-
-export function resetNoVncObserverTokensForTests() {
-  NO_VNC_OBSERVER_TOKENS.clear();
 }

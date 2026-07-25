@@ -1,7 +1,6 @@
 // Gateway session reset/delete service.
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -10,17 +9,19 @@ import {
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
-import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
+import {
+  clearBootstrapSnapshot,
+  clearBootstrapSnapshotOnSessionBoundary,
+} from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
-import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveSessionPlacementResetBlock } from "../agents/session-placement-admission.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -31,17 +32,22 @@ import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-clea
 import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionWorkStartError,
-  snapshotSessionOrigin,
   type SessionEntry,
+  deleteSessionEntryLifecycle,
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
-import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
-  canonicalizeAbsoluteSessionFilePath,
-  rewriteSessionFileForNewSessionId,
-} from "../config/sessions/session-file-rotation.js";
+  buildSessionCreationStamp,
+  type SessionCreatedActor,
+  type SessionCreatedVia,
+} from "../config/sessions/session-entry-provenance.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesTarget,
+} from "../config/sessions/sqlite-marker.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -52,6 +58,7 @@ import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
+  isIncognitoSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -69,14 +76,19 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
 import {
+  handleSessionStateSessionDeleted,
+  handleSessionStateSessionReset,
+  recordSessionCreated,
+} from "../sessions/session-state-events.js";
+import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
+import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import {
   archiveSessionTranscriptsDetailed,
-  extractGeneratedTranscriptSessionId,
   resolveStableSessionEndTranscript,
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
@@ -87,42 +99,9 @@ import {
   resolveSessionStoreKey,
 } from "./session-utils.js";
 
-const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+const mcpRunEndWatchers = new Map<string, Promise<void>>();
 
-function resolveResetSessionFile(params: {
-  nextSessionId: string;
-  currentEntry?: SessionEntry;
-  storePath: string;
-  agentId: string;
-}): string {
-  const currentEntry = params.currentEntry;
-  // Rotate generated transcript names by the file's *embedded* id, not the logical
-  // session id: a post-upgrade sessionFile can embed a stale id, so keying off
-  // currentEntry.sessionId would orphan the reset session on the old file. Explicit
-  // custom placements have no embedded id and stay preserved.
-  const rotationPreviousSessionId =
-    extractGeneratedTranscriptSessionId(currentEntry?.sessionFile) ?? currentEntry?.sessionId;
-  const rewrittenSessionFile = rotationPreviousSessionId
-    ? rewriteSessionFileForNewSessionId({
-        sessionFile: currentEntry?.sessionFile,
-        previousSessionId: rotationPreviousSessionId,
-        nextSessionId: params.nextSessionId,
-      })
-    : undefined;
-  const normalizedRewrittenSessionFile =
-    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
-      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
-      : rewrittenSessionFile;
-  const preservedSessionFile = normalizedRewrittenSessionFile ?? currentEntry?.sessionFile;
-  return resolveSessionFilePath(
-    params.nextSessionId,
-    preservedSessionFile ? { sessionFile: preservedSessionFile } : undefined,
-    resolveSessionFilePathOptions({
-      storePath: params.storePath,
-      agentId: params.agentId,
-    }),
-  );
-}
+const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
 
 export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionId: string | undefined;
@@ -130,9 +109,10 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  incognito?: boolean;
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
-  if (!params.sessionId) {
+  if (!params.sessionId || params.incognito === true) {
     return [];
   }
   return archiveSessionTranscriptsDetailed({
@@ -248,7 +228,7 @@ export function emitGatewaySessionStartPluginHook(params: {
 
 const SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS = 2_000;
 
-export type DrainActiveSessionsForShutdownResult = {
+type DrainActiveSessionsForShutdownResult = {
   emittedSessionIds: string[];
   timedOut: boolean;
 };
@@ -374,6 +354,13 @@ async function ensureSessionRuntimeCleanup(params: {
   sessionId?: string;
   assertCurrent?: () => void;
 }) {
+  // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
+  // commands such as status must not load the embedded-agent barrel.
+  const [embeddedAgent, mcpTools] = await Promise.all([
+    import("../agents/embedded-agent.js"),
+    import("../agents/agent-bundle-mcp-tools.js"),
+  ]);
+  params.assertCurrent?.();
   const closeTrackedBrowserTabs = async () => {
     params.assertCurrent?.();
     const closeKeys = new Set<string>([
@@ -406,22 +393,67 @@ async function ensureSessionRuntimeCleanup(params: {
     await closeTrackedBrowserTabs();
     return undefined;
   }
+  const sessionId = params.sessionId;
   params.assertCurrent?.();
-  abortEmbeddedAgentRun(params.sessionId);
-  const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
-  params.assertCurrent?.();
-  clearBootstrapSnapshot(params.target.canonicalKey);
-  if (ended) {
-    params.assertCurrent?.();
-    await retireSessionMcpRuntime({
-      sessionId: params.sessionId,
+  const retireMcpRuntime = async (retainAcrossReuse: boolean) => {
+    await mcpTools.retireSessionMcpRuntime({
+      sessionId,
       reason: "gateway-session-cleanup",
-      onError: (error, sessionId) => {
+      preserveActiveLeases: true,
+      retainAcrossReuse,
+      onError: (error, retiredSessionId) => {
         logVerbose(
-          `sessions cleanup: failed to dispose bundle MCP runtime for ${sessionId}: ${String(error)}`,
+          `sessions cleanup: failed to dispose bundle MCP runtime for ${retiredSessionId}: ${String(error)}`,
         );
       },
     });
+  };
+  const ensureMcpRetirementWatcher = () => {
+    if (mcpRunEndWatchers.has(sessionId)) {
+      return;
+    }
+    const watcherRef: { current?: Promise<void> } = {};
+    const watcher = (async () => {
+      while (await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null)) {
+        // A replacement can register after the wait promise settles but before
+        // this continuation runs. Keep the required retirement armed for it.
+        if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
+          continue;
+        }
+        if (mcpRunEndWatchers.get(sessionId) === watcherRef.current) {
+          mcpRunEndWatchers.delete(sessionId);
+        }
+        await retireMcpRuntime(false);
+        return;
+      }
+    })();
+    watcherRef.current = watcher;
+    mcpRunEndWatchers.set(sessionId, watcher);
+    void watcher
+      .catch((error: unknown) => {
+        logVerbose(`sessions cleanup: failed to disarm deferred MCP retirement: ${String(error)}`);
+      })
+      .finally(() => {
+        if (mcpRunEndWatchers.get(sessionId) === watcher) {
+          mcpRunEndWatchers.delete(sessionId);
+        }
+      });
+  };
+  // Register against the run being stopped before abort or any await allows a
+  // later embedded or reply-backed run to replace it in the active registry.
+  ensureMcpRetirementWatcher();
+  embeddedAgent.abortEmbeddedAgentRun(sessionId);
+  // Mark cleanup before waiting so the timeout path cannot strand MCP children.
+  // Active tool/app leases keep in-flight work alive until their final release.
+  await retireMcpRuntime(true);
+  const ended = await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+  params.assertCurrent?.();
+  // A stopping run can create or reuse its runtime while we wait. Retire again
+  // after a clean stop; otherwise keep the required marker armed for late work.
+  await retireMcpRuntime(!ended);
+  params.assertCurrent?.();
+  clearBootstrapSnapshot(params.target.canonicalKey);
+  if (ended) {
     params.assertCurrent?.();
     await closeTrackedBrowserTabs();
     return undefined;
@@ -801,6 +833,7 @@ export async function cleanupSessionBeforeMutation(params: {
 export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
+  messages?: unknown[];
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   entry?: SessionEntry;
@@ -816,28 +849,15 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   const sessionFile = params.entry?.sessionFile;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-  let messages: unknown[] = [];
-  try {
-    if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = await readSessionMessagesAsync(
-        {
-          agentId,
-          sessionEntry: params.entry,
-          sessionId,
-          sessionKey,
-          storePath: params.storePath,
-        },
-        {
-          mode: "full",
-          reason: "before_reset hook payload",
-        },
-      );
-    }
-  } catch (err) {
-    logVerbose(
-      `before_reset: failed to read session messages for ${sessionId ?? "(none)"}; firing hook with empty messages (${String(err)})`,
-    );
-  }
+  const messages =
+    params.messages ??
+    (await readGatewayBeforeResetPluginHookMessages({
+      agentId,
+      entry: params.entry,
+      sessionId,
+      sessionKey,
+      storePath: params.storePath,
+    }));
 
   void hookRunner
     .runBeforeReset(
@@ -858,6 +878,38 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     });
 }
 
+async function readGatewayBeforeResetPluginHookMessages(params: {
+  agentId: string;
+  entry?: SessionEntry;
+  sessionId?: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<unknown[]> {
+  if (typeof params.sessionId !== "string" || params.sessionId.trim().length === 0) {
+    return [];
+  }
+  try {
+    return await readSessionMessagesAsync(
+      {
+        agentId: params.agentId,
+        sessionEntry: params.entry,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      {
+        mode: "full",
+        reason: "before_reset hook payload",
+      },
+    );
+  } catch (err) {
+    logVerbose(
+      `before_reset: failed to read session messages for ${params.sessionId}; firing hook with empty messages (${String(err)})`,
+    );
+    return [];
+  }
+}
+
 export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
@@ -866,12 +918,19 @@ export async function performGatewaySessionReset(params: {
   worktree?: { id: string; branch: string; repoRoot: string };
   /** Bind session exec to host=node with this node id; caller scope-checks. */
   execNode?: string;
+  /** Working directory interpreted only by execNode. */
+  execCwd?: string;
+  /** Clear a prior node binding when a new Gateway-host session replaces it. */
+  clearExecBinding?: boolean;
   // A plain New Chat must return to the agent workspace instead of inheriting the previous
   // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
   clearSpawnedCwd?: boolean;
   reason: "new" | "reset";
   commandSource: string;
+  /** Trusted provenance for a reset that materializes a previously missing row. */
+  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   assertCurrent?: () => void;
+  assertAuthorizedInstance?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
   | {
@@ -881,6 +940,13 @@ export async function performGatewaySessionReset(params: {
       resolved: { modelProvider: string; model: string };
       agentId: string;
       storePath: string;
+    }
+  | {
+      ok: true;
+      key: string;
+      agentId: string;
+      storePath: string;
+      incognitoDeleted: true;
     }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
@@ -943,6 +1009,18 @@ export async function performGatewaySessionReset(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
     };
   }
+  const initialPlacementBlock = initialResetEntry?.sessionId
+    ? resolveSessionPlacementResetBlock(initialResetEntry.sessionId)
+    : undefined;
+  if (initialPlacementBlock) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Session ${params.key} cannot reset while ${initialPlacementBlock}.`,
+      ),
+    };
+  }
   const resetLifecycleIdentities = [
     resetTarget.target.canonicalKey,
     params.key,
@@ -974,6 +1052,7 @@ export async function performGatewaySessionReset(params: {
     // lets aborted runs finish admission cleanup without deadlocking reset.
     prepare: async () => {
       params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       admittedWorkReleased = await interruptSessionWorkAdmissions({
         scope: resetTarget.storePath,
         identities: resetLifecycleIdentities,
@@ -995,6 +1074,18 @@ export async function performGatewaySessionReset(params: {
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
       );
+      const placementBlock = entry?.sessionId
+        ? resolveSessionPlacementResetBlock(entry.sessionId)
+        : undefined;
+      if (placementBlock) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Session ${params.key} cannot reset while ${placementBlock}.`,
+          ),
+        };
+      }
       const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
       if (archivedSessionError) {
         return {
@@ -1009,6 +1100,7 @@ export async function performGatewaySessionReset(params: {
         };
       }
       const hadExistingEntry = Boolean(entry);
+      const resetLifecycleRevision = entry?.lifecycleRevision;
       const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const resetPluginRegistry = getActivePluginRegistry();
@@ -1034,8 +1126,10 @@ export async function performGatewaySessionReset(params: {
         },
       );
       params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       // Cleanup below is destructive. Once it starts, finish rotating the same
       // session even if gateway ownership changes; otherwise runtime state can be
       // reset while the persisted session still points at the old conversation.
@@ -1088,20 +1182,145 @@ export async function performGatewaySessionReset(params: {
           reason: "reset",
         });
       }
+      const beforeResetMessages = getGlobalHookRunner()?.hasHooks("before_reset")
+        ? await readGatewayBeforeResetPluginHookMessages({
+            agentId: normalizeAgentId(
+              target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
+            ),
+            entry,
+            sessionId: entry?.sessionId,
+            sessionKey: target.canonicalKey ?? params.key,
+            storePath,
+          })
+        : undefined;
 
-      const lifecycle = await resetSessionEntryLifecycle({
+      const incognito = entry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
+      if (incognito) {
+        if (!entry) {
+          return {
+            ok: false,
+            error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
+          };
+        }
+        await emitGatewayBeforeResetPluginHook({
+          cfg,
+          key: params.key,
+          messages: beforeResetMessages,
+          target,
+          storePath,
+          entry,
+          reason: params.reason,
+        });
+        const deleted = await deleteSessionEntryLifecycle({
+          agentId: target.agentId,
+          archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
+          expectedEntry: entry,
+          expectedSessionId: entry.sessionId,
+          expectedUpdatedAt: entry.updatedAt,
+          storePath,
+          target: {
+            canonicalKey: target.canonicalKey,
+            storeKeys: target.storeKeys,
+          },
+        });
+        if (!deleted.deleted) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `Session ${params.key} changed before reset. Retry.`,
+            ),
+          };
+        }
+        handleSessionStateSessionDeleted(target.canonicalKey, agentId);
+        notifyGatewaySessionReset(target.canonicalKey);
+        emitGatewaySessionEndPluginHook({
+          cfg,
+          sessionKey: target.canonicalKey,
+          sessionId: entry.sessionId,
+          storePath,
+          sessionFile: entry.sessionFile,
+          agentId: target.agentId,
+          reason: params.reason,
+          archivedTranscripts: [],
+        });
+        await emitSessionUnboundLifecycleEvent({
+          targetSessionKey: target.canonicalKey,
+          reason: "session-reset",
+        });
+        return {
+          ok: true,
+          key: target.canonicalKey,
+          agentId: target.agentId,
+          storePath,
+          incognitoDeleted: true,
+        };
+      }
+
+      let createdNewEntry = false;
+      params.assertAuthorizedInstance?.();
+      const boundaryEntry = loadSessionEntry(
+        params.key,
+        requestedAgentId ? { agentId: requestedAgentId } : undefined,
+      ).entry;
+      if (boundaryEntry?.sessionId !== entry?.sessionId) {
+        params.assertCurrent?.();
+        throw new Error(`Session ${params.key} changed before reset boundary append.`);
+      }
+      const resetSessionFile = boundaryEntry?.sessionId
+        ? ((sqliteSessionFileMarkerMatchesTarget(boundaryEntry.sessionFile, {
+            agentId,
+            sessionId: boundaryEntry.sessionId,
+            storePath,
+          })
+            ? boundaryEntry.sessionFile
+            : undefined) ??
+          formatSqliteSessionFileMarker({
+            agentId,
+            sessionId: boundaryEntry.sessionId,
+            storePath,
+          }))
+        : undefined;
+      let resetBoundaryAppended = false;
+      let resetSkipped = false;
+      const lifecyclePromise = resetSessionEntryLifecycle({
+        archivePreviousTranscript: false,
         agentId: target.agentId,
+        resetBoundaryReason: boundaryEntry ? params.reason : undefined,
         storePath,
         target: {
           canonicalKey: target.canonicalKey,
-          storeKeys: target.storeKeys,
+          storeKeys: [
+            ...new Set(
+              [...target.storeKeys, canonicalKey, legacyKey, params.key].filter(
+                (key): key is string => Boolean(key),
+              ),
+            ),
+          ],
         },
         buildNextEntry: ({ currentEntry, primaryKey }) => {
-          if (!isResetLifecycleCurrent() && currentEntry?.sessionId !== entry?.sessionId) {
-            // A newer owner already replaced or removed the session while cleanup
-            // targeted the old id. Preserve that newer state instead of resetting it.
+          params.assertAuthorizedInstance?.();
+          createdNewEntry = currentEntry === undefined;
+          if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
+            if (currentEntry) {
+              resetSkipped = true;
+              return currentEntry;
+            }
             params.assertCurrent?.();
+            throw new Error(`Session ${params.key} changed before reset boundary commit.`);
           }
+          if (
+            currentEntry &&
+            !isResetLifecycleCurrent() &&
+            currentEntry.lifecycleRevision !== resetLifecycleRevision
+          ) {
+            // A newer owner already replaced or removed the session while cleanup
+            // targeted the old lifecycle. Preserve that newer state instead of resetting it.
+            resetSkipped = true;
+            return currentEntry;
+          }
+          resetBoundaryAppended = currentEntry !== undefined;
           const parsed = parseAgentSessionKey(primaryKey);
           const sessionAgentId = normalizeAgentId(
             parsed?.agentId ?? target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
@@ -1110,17 +1329,29 @@ export async function performGatewaySessionReset(params: {
             entry: currentEntry,
           });
           const now = Date.now();
-          const nextSessionId = randomUUID();
-          const sessionFile = resolveResetSessionFile({
-            nextSessionId,
-            currentEntry,
-            storePath,
-            agentId: sessionAgentId,
-          });
+          const nextSessionId = currentEntry?.sessionId ?? randomUUID();
+          const sessionFile =
+            (currentEntry ? resetSessionFile : undefined) ??
+            formatSqliteSessionFileMarker({
+              agentId: sessionAgentId,
+              sessionId: nextSessionId,
+              storePath,
+            });
+          const creationStamp = currentEntry
+            ? {
+                createdVia: currentEntry.createdVia,
+                createdActor: currentEntry.createdActor,
+                createdAt: currentEntry.createdAt,
+              }
+            : params.creation
+              ? buildSessionCreationStamp(params.creation)
+              : {};
           const nextEntry: SessionEntry = {
             sessionId: nextSessionId,
             sessionFile,
+            lifecycleRevision: randomUUID(),
             updatedAt: now,
+            sessionStartedAt: now,
             systemSent: false,
             abortedLastRun: false,
             thinkingLevel: currentEntry?.thinkingLevel,
@@ -1130,20 +1361,33 @@ export async function performGatewaySessionReset(params: {
             reasoningLevel: currentEntry?.reasoningLevel,
             elevatedLevel: currentEntry?.elevatedLevel,
             ttsAuto: currentEntry?.ttsAuto,
-            execHost: params.execNode ? "node" : currentEntry?.execHost,
+            execHost: params.execNode
+              ? "node"
+              : params.clearExecBinding
+                ? undefined
+                : currentEntry?.execHost,
             execSecurity: currentEntry?.execSecurity,
             execAsk: currentEntry?.execAsk,
-            execNode: params.execNode ?? currentEntry?.execNode,
+            execNode: params.execNode
+              ? params.execNode
+              : params.clearExecBinding
+                ? undefined
+                : currentEntry?.execNode,
+            execCwd: params.execNode
+              ? params.execCwd
+              : params.clearExecBinding
+                ? undefined
+                : currentEntry?.execCwd,
             responseUsage: currentEntry?.responseUsage,
             pinnedAt: currentEntry?.pinnedAt,
+            icon: currentEntry?.icon,
             // Resets should keep the user's explicit selection, but clear any
             // temporary fallback model that was pinned during the previous run.
             ...resetPreservedSelection,
             groupActivation: currentEntry?.groupActivation,
             groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
             chatType: currentEntry?.chatType,
-            compactionCount: currentEntry?.compactionCount,
-            compactionCheckpoints: currentEntry?.compactionCheckpoints,
+            compactionCount: 0,
             sendPolicy: currentEntry?.sendPolicy,
             queueMode: currentEntry?.queueMode,
             queueDebounceMs: currentEntry?.queueDebounceMs,
@@ -1158,26 +1402,24 @@ export async function performGatewaySessionReset(params: {
               ? undefined
               : (params.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
-            forkedFromParent: currentEntry?.forkedFromParent,
+            ...creationStamp,
+            forkSource: currentEntry?.forkSource,
+            forkedFromParent: sessionEntryForkedFromParent(currentEntry) ? true : undefined,
             spawnDepth: currentEntry?.spawnDepth,
             subagentRole: currentEntry?.subagentRole,
             subagentControlScope: currentEntry?.subagentControlScope,
             label: currentEntry?.label,
             displayName: currentEntry?.displayName,
-            channel: currentEntry?.channel,
+            delivery: currentEntry?.delivery,
             groupId: currentEntry?.groupId,
             subject: currentEntry?.subject,
             groupChannel: currentEntry?.groupChannel,
             space: currentEntry?.space,
-            origin: snapshotSessionOrigin(currentEntry),
-            deliveryContext: currentEntry?.deliveryContext,
             cliSessionBindings: currentEntry?.cliSessionBindings,
             cliSessionIds: currentEntry?.cliSessionIds,
             claudeCliSessionId: currentEntry?.claudeCliSessionId,
-            lastChannel: currentEntry?.lastChannel,
-            lastTo: currentEntry?.lastTo,
-            lastAccountId: currentEntry?.lastAccountId,
-            lastThreadId: currentEntry?.lastThreadId,
+            usageFamilyKey: currentEntry?.usageFamilyKey,
+            usageFamilySessionIds: currentEntry?.usageFamilySessionIds,
             // Do not carry the cached skills catalog across /new. Long-lived channel
             // sessions (Signal DMs/groups in particular) otherwise keep advertising a
             // stale <available_skills> block even after reset/restart, because the
@@ -1193,7 +1435,7 @@ export async function performGatewaySessionReset(params: {
           // regression fix intentionally protects CLI continuity for
           // orchestration-driven resets. Non-subagent sessions that happen to set
           // `parentSessionKey` (e.g. dashboard children) are not exempt.
-          if (!isSubagentSessionKey(primaryKey)) {
+          if (resetBoundaryAppended && !isSubagentSessionKey(primaryKey)) {
             clearAllCliSessions(nextEntry);
           } else {
             nextEntry.cliSessionBindings = rebindCliSessionReseedReceiptsForReset(
@@ -1204,6 +1446,20 @@ export async function performGatewaySessionReset(params: {
           return nextEntry;
         },
         afterEntryMutation: async (mutation) => {
+          if (resetSkipped) {
+            return;
+          }
+          clearBootstrapSnapshotOnSessionBoundary({
+            boundaryAppended: resetBoundaryAppended,
+            sessionKey: target.canonicalKey ?? params.key,
+          });
+          if (createdNewEntry) {
+            recordSessionCreated({
+              sessionKey: target.canonicalKey ?? params.key,
+              agentId,
+              entry: mutation.nextEntry,
+            });
+          }
           let committedAcpResetState: { sessionKey: string; meta: SessionAcpMeta } | undefined;
           if (deferredAcpResetState) {
             const identity = deferredAcpResetState.meta.identity;
@@ -1215,12 +1471,13 @@ export async function performGatewaySessionReset(params: {
                 sessionKey: deferredAcpResetState.sessionKey,
                 meta: buildPendingAcpMeta(deferredAcpResetState.meta, Date.now()),
               };
-              // The JSON session rotation and SQLite metadata cannot share a transaction.
+              // Session row rotation and ACP metadata cannot share a transaction.
               // Bind captured ACP state before acknowledging the committed reset so the
               // new session never observes an unreadable old-session row.
               writeAcpSessionMetaForMigration({
                 sessionKey: committedAcpResetState.sessionKey,
                 sessionId: mutation.nextEntry.sessionId,
+                lifecycleRevision: mutation.nextEntry.lifecycleRevision,
                 meta: committedAcpResetState.meta,
               });
             }
@@ -1245,6 +1502,7 @@ export async function performGatewaySessionReset(params: {
           await emitGatewayBeforeResetPluginHook({
             cfg,
             key: params.key,
+            messages: beforeResetMessages,
             target,
             storePath,
             entry: mutation.previousEntry,
@@ -1252,6 +1510,13 @@ export async function performGatewaySessionReset(params: {
           });
         },
       });
+      const lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>> =
+        await lifecyclePromise;
+      if (!resetSkipped) {
+        const resetSessionKey = target.canonicalKey ?? params.key;
+        handleSessionStateSessionReset(resetSessionKey);
+        notifyGatewaySessionReset(resetSessionKey);
+      }
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
       const resolved = {
@@ -1269,27 +1534,29 @@ export async function performGatewaySessionReset(params: {
       const oldSessionFile = lifecycle.previousSessionFile;
 
       const archivedTranscripts = lifecycle.archivedTranscripts;
-      emitGatewaySessionEndPluginHook({
-        cfg,
-        sessionKey: target.canonicalKey ?? params.key,
-        sessionId: oldSessionId,
-        storePath,
-        sessionFile: oldSessionFile,
-        agentId: target.agentId,
-        reason: params.reason,
-        archivedTranscripts,
-        nextSessionId: next.sessionId,
-      });
-      emitGatewaySessionStartPluginHook({
-        cfg,
-        sessionKey: target.canonicalKey ?? params.key,
-        sessionId: next.sessionId,
-        resumedFrom: oldSessionId,
-        storePath,
-        sessionFile: next.sessionFile,
-        agentId: target.agentId,
-      });
-      if (hadExistingEntry) {
+      if (!resetSkipped) {
+        emitGatewaySessionEndPluginHook({
+          cfg,
+          sessionKey: target.canonicalKey ?? params.key,
+          sessionId: oldSessionId,
+          storePath,
+          sessionFile: oldSessionFile,
+          agentId: target.agentId,
+          reason: params.reason,
+          archivedTranscripts,
+          nextSessionId: next.sessionId,
+        });
+        emitGatewaySessionStartPluginHook({
+          cfg,
+          sessionKey: target.canonicalKey ?? params.key,
+          sessionId: next.sessionId,
+          resumedFrom: oldSessionId,
+          storePath,
+          sessionFile: next.sessionFile,
+          agentId: target.agentId,
+        });
+      }
+      if (hadExistingEntry && !resetSkipped) {
         await emitSessionUnboundLifecycleEvent({
           targetSessionKey: target.canonicalKey ?? params.key,
           reason: "session-reset",
@@ -1306,3 +1573,4 @@ export async function performGatewaySessionReset(params: {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

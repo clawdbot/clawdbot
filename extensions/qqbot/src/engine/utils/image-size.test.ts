@@ -17,7 +17,11 @@ vi.mock("./log.js", () => ({
   debugLog: (...args: unknown[]) => adapterMocks.debugLog(...args),
 }));
 
-import { getImageSizeFromUrl, parseImageSize } from "./image-size.js";
+import { getImageSize } from "./image-size.js";
+
+function parseImageSize(buffer: Buffer) {
+  return getImageSize(`data:image/png;base64,${buffer.toString("base64")}`);
+}
 
 /** Build a minimal valid PNG header with the given dimensions. */
 function buildPngHeader(width: number, height: number): Buffer {
@@ -41,7 +45,7 @@ function buildPngHeader(width: number, height: number): Buffer {
   return buf;
 }
 
-describe("getImageSizeFromUrl", () => {
+describe("getImageSize URL handling", () => {
   beforeEach(() => {
     adapterMocks.fetchMedia.mockReset();
     adapterMocks.debugLog.mockReset();
@@ -54,7 +58,7 @@ describe("getImageSizeFromUrl", () => {
         contentType: "image/png",
       });
 
-      await getImageSizeFromUrl("https://cdn.example.com/photo.png");
+      await getImageSize("https://cdn.example.com/photo.png");
 
       expect(adapterMocks.fetchMedia).toHaveBeenCalledOnce();
       const opts = adapterMocks.fetchMedia.mock.calls[0]?.[0];
@@ -70,12 +74,12 @@ describe("getImageSizeFromUrl", () => {
       });
     });
 
-    it("threads caller abort signal through requestInit", async () => {
+    it("passes an abort signal through requestInit", async () => {
       adapterMocks.fetchMedia.mockResolvedValueOnce({
         buffer: buildPngHeader(100, 100),
       });
 
-      await getImageSizeFromUrl("https://cdn.example.com/img.png", 3000);
+      await getImageSize("https://cdn.example.com/img.png");
 
       const opts = adapterMocks.fetchMedia.mock.calls[0]?.[0];
       expect(opts.requestInit.signal).toBeInstanceOf(AbortSignal);
@@ -86,7 +90,7 @@ describe("getImageSizeFromUrl", () => {
     it("returns null when adapter.fetchMedia throws for loopback", async () => {
       adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("SSRF blocked: loopback address"));
 
-      const result = await getImageSizeFromUrl("https://127.0.0.1/img.png");
+      const result = await getImageSize("https://127.0.0.1/img.png");
 
       expect(result).toBeNull();
     });
@@ -94,7 +98,7 @@ describe("getImageSizeFromUrl", () => {
     it("returns null when adapter.fetchMedia throws for IPv6 loopback", async () => {
       adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("SSRF blocked: loopback address"));
 
-      const result = await getImageSizeFromUrl("https://[::1]/img.png");
+      const result = await getImageSize("https://[::1]/img.png");
 
       expect(result).toBeNull();
     });
@@ -102,7 +106,7 @@ describe("getImageSizeFromUrl", () => {
     it("returns null when adapter.fetchMedia throws for link-local/metadata", async () => {
       adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("SSRF blocked: link-local address"));
 
-      const result = await getImageSizeFromUrl("https://169.254.169.254/latest/meta-data/");
+      const result = await getImageSize("https://169.254.169.254/latest/meta-data/");
 
       expect(result).toBeNull();
     });
@@ -110,7 +114,7 @@ describe("getImageSizeFromUrl", () => {
     it("returns null when adapter.fetchMedia throws for RFC1918 addresses", async () => {
       adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("SSRF blocked: private address"));
 
-      const result = await getImageSizeFromUrl("https://10.0.0.1/img.png");
+      const result = await getImageSize("https://10.0.0.1/img.png");
 
       expect(result).toBeNull();
     });
@@ -118,7 +122,7 @@ describe("getImageSizeFromUrl", () => {
     it("returns null on http error from adapter.fetchMedia", async () => {
       adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("HTTP 403 Forbidden"));
 
-      const result = await getImageSizeFromUrl("https://cdn.example.com/forbidden.png");
+      const result = await getImageSize("https://cdn.example.com/forbidden.png");
 
       expect(result).toBeNull();
     });
@@ -131,7 +135,7 @@ describe("getImageSizeFromUrl", () => {
         contentType: "image/png",
       });
 
-      const size = await getImageSizeFromUrl("https://cdn.example.com/banner.png");
+      const size = await getImageSize("https://cdn.example.com/banner.png");
 
       expect(size).toEqual({ width: 1920, height: 1080 });
     });
@@ -142,7 +146,7 @@ describe("getImageSizeFromUrl", () => {
         contentType: "text/html",
       });
 
-      const size = await getImageSizeFromUrl("https://cdn.example.com/notimage.html");
+      const size = await getImageSize("https://cdn.example.com/notimage.html");
 
       expect(size).toBeNull();
     });
@@ -155,14 +159,14 @@ describe("getImageSizeFromUrl", () => {
       const base = "https://cdn.example.com/";
       const urlPrefix = `${base}${"x".repeat(59 - base.length)}`;
 
-      await getImageSizeFromUrl(`${urlPrefix}😀.png`);
+      await getImageSize(`${urlPrefix}😀.png`);
 
       expect(adapterMocks.debugLog).toHaveBeenCalledWith(
         `[image-size] Got size from URL: 800x600 - ${urlPrefix}...`,
       );
 
       adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("probe failed"));
-      await getImageSizeFromUrl(`${urlPrefix}😀.png`);
+      await getImageSize(`${urlPrefix}😀.png`);
       expect(adapterMocks.debugLog).toHaveBeenLastCalledWith(
         `[image-size] Error fetching ${urlPrefix}...: probe failed`,
       );
@@ -171,16 +175,16 @@ describe("getImageSizeFromUrl", () => {
 });
 
 describe("parseImageSize", () => {
-  it("parses PNG dimensions", () => {
-    const size = parseImageSize(buildPngHeader(640, 480));
+  it("parses PNG dimensions", async () => {
+    const size = await parseImageSize(buildPngHeader(640, 480));
     expect(size).toEqual({ width: 640, height: 480 });
   });
 
-  it("returns null for unrecognized data", () => {
-    expect(parseImageSize(Buffer.from("hello"))).toBeNull();
+  it("returns null for unrecognized data", async () => {
+    await expect(parseImageSize(Buffer.from("hello"))).resolves.toBeNull();
   });
 
-  it("returns null for empty buffer", () => {
-    expect(parseImageSize(Buffer.alloc(0))).toBeNull();
+  it("returns null for empty buffer", async () => {
+    await expect(parseImageSize(Buffer.alloc(0))).resolves.toBeNull();
   });
 });

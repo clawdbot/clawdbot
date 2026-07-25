@@ -169,6 +169,21 @@ describe("scripts/run-vitest", () => {
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 
+  it("isolates mixed explicit directory targets across Vitest projects", () => {
+    expect(resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host"])).toEqual([
+      "extensions/linux-canvas",
+      "src/node-host",
+      "--isolate",
+    ]);
+    expect(resolveImplicitVitestArgs(["src/node-host"])).toEqual(["src/node-host"]);
+    expect(
+      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--no-isolate"]),
+    ).toEqual(["extensions/linux-canvas", "src/node-host", "--no-isolate"]);
+    expect(
+      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--", "--no-isolate"]),
+    ).toEqual(["extensions/linux-canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
+  });
+
   it("routes explicit tooling tests through the tooling config", () => {
     expect(resolveImplicitVitestArgs(["run", "test/scripts/run-vitest.test.ts"])).toEqual([
       "run",
@@ -187,8 +202,11 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
-  it("keeps tooling-excluded explicit tests on existing routing", () => {
-    const argv = ["run", "test/scripts/openclaw-e2e-instance.test.ts"];
+  it.each([
+    "test/plugins/bundled-provider-auth-literal-parity.test.ts",
+    "test/scripts/openclaw-e2e-instance.test.ts",
+  ])("keeps tooling-excluded explicit test %s on existing routing", (testFile) => {
+    const argv = ["run", testFile];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 
@@ -261,7 +279,7 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
-  it("delegates bare explicit directories and globs to the project router", () => {
+  it("delegates bare explicit directories, globs, and extensionless prefixes", () => {
     expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
     expect(
       resolveTestProjectsDelegationArgs(["run", "test/scripts", "--reporter=verbose"]),
@@ -272,6 +290,8 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["src/agents/**/*.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["src/**/*.test.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
+    const prefix = "extensions/telegram/src/format";
+    expect(resolveTestProjectsDelegationArgs([prefix])).toEqual([prefix]);
   });
 
   it("delegates mixed filters when an explicit file target is present", () => {
@@ -474,6 +494,30 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("disables an inherited Node compile cache for every Vitest child", () => {
+    expect(
+      resolveRunVitestSpawnEnv(
+        {
+          NODE_COMPILE_CACHE: "/tmp/node-compile",
+          NODE_COMPILE_CACHE_PORTABLE: "1",
+          PATH: "/usr/bin",
+        },
+        ["run"],
+      ),
+    ).toEqual({
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveRunVitestSpawnEnv({ NODE_COMPILE_CACHE: "/tmp/node-compile", PATH: "/usr/bin" }, [
+        "run",
+        "--coverage=false",
+      ]),
+    ).toMatchObject({ NODE_DISABLE_COMPILE_CACHE: "1" });
+  });
+
   it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {
     const timeout = String(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
     const extraLongTimeout = String(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
@@ -495,6 +539,7 @@ describe("scripts/run-vitest", () => {
       "--config=test/vitest/vitest.contracts-plugin.config.ts",
       "--config=test/vitest/vitest.infra.config.ts",
       "--config=test/vitest/vitest.gateway-core.config.ts",
+      "--config=test/vitest/vitest.gateway-server.config.ts",
     ]) {
       expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", configArg])).toEqual({
         PATH: "/usr/bin",
@@ -549,6 +594,13 @@ describe("scripts/run-vitest", () => {
         "run",
         "--config",
         "/repo/test/vitest/vitest.gateway-core.config.ts",
+      ]),
+    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.gateway-server.config.ts",
       ]),
     ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
   });
@@ -990,7 +1042,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await delay(5);
   }
 }
 
@@ -999,7 +1051,7 @@ async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) 
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for child close");
     }),
   ]);

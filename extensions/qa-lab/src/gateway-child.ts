@@ -1,7 +1,13 @@
 // Qa Lab plugin module implements gateway child behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, existsSync, type WriteStream } from "node:fs";
+import {
+  createWriteStream,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  type WriteStream,
+} from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -14,10 +20,12 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
+  normalizeOptionalString,
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createQaBundledPluginsDir,
   resolveQaBundledPluginSourceDir,
@@ -63,6 +71,7 @@ import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import type { RuntimeId } from "./runtime-parity.js";
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
@@ -70,6 +79,12 @@ const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
+// The Gateway owns a 25s shutdown watchdog. Let it flush provider state before
+// the QA parent escalates to a process-tree kill.
+const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
+// Loaded Docker runners can take several seconds to reap a force-killed process group.
+const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
+const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
@@ -325,6 +340,25 @@ function appendQaGatewayTempRoot(details: string, tempRoot: string) {
     : `${details}\nQA gateway temp root preserved at ${tempRoot}`;
 }
 
+function throwQaGatewayStartupError(params: {
+  error: unknown;
+  message: string;
+  cleanupErrors: unknown[];
+}): never {
+  const primaryError =
+    params.error instanceof QaSuiteInfraError
+      ? new QaSuiteInfraError(params.error.code, params.message, { cause: params.error })
+      : new Error(params.message, { cause: params.error });
+  if (params.cleanupErrors.length === 0) {
+    throw primaryError;
+  }
+  throw new AggregateError(
+    [primaryError, ...params.cleanupErrors],
+    "qa gateway startup and cleanup failed",
+    { cause: primaryError },
+  );
+}
+
 export function resolveQaGatewayChildProviderMode(providerMode?: QaProviderMode): QaProviderMode {
   return providerMode ?? DEFAULT_QA_PROVIDER_MODE;
 }
@@ -398,6 +432,31 @@ export function buildQaRuntimeEnv(params: {
   return scrubQaGatewayChildSecretEnv(normalizedEnv);
 }
 
+function buildQaForcedRuntimeEnvPatch(params: {
+  forcedRuntime?: RuntimeId;
+  providerMode: QaProviderMode;
+  providerBaseUrl?: string;
+}): NodeJS.ProcessEnv | undefined {
+  if (!params.forcedRuntime) {
+    return undefined;
+  }
+  const patch: NodeJS.ProcessEnv = {
+    OPENCLAW_BUILD_PRIVATE_QA: "1",
+    OPENCLAW_QA_FORCE_RUNTIME: params.forcedRuntime,
+  };
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return patch;
+  }
+  const providerBaseUrl = params.providerBaseUrl?.trim().replace(/\/+$/u, "");
+  if (!providerBaseUrl) {
+    throw new Error("forced Codex mock QA requires the managed mock provider URL");
+  }
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} --listen stdio://`;
+  patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  return patch;
+}
+
 function isRetryableGatewayCallError(details: string): boolean {
   return (
     details.includes("handshake timeout") ||
@@ -463,7 +522,10 @@ function monitorQaGatewayChildFailure(child: ChildProcess, output: { push(chunk:
 const QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS = 8_192;
 
 function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, logs: string) {
-  const logTail = redactQaGatewayDebugText(logs).slice(-QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS);
+  const logTail = sliceUtf16Safe(
+    redactQaGatewayDebugText(logs),
+    -QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS,
+  );
   return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
 }
 
@@ -560,7 +622,9 @@ export const testing = {
   formatQaGatewayProcessBoundaryStartupFailure,
   createQaBundledPluginsDir,
   signalQaGatewayChildProcessTree,
+  resolveQaGatewayChildStopTimeouts,
   stopQaGatewayChildProcessTree,
+  classifyLinuxProcessGroupStats,
 };
 
 function hasChildExited(child: ChildProcess) {
@@ -569,6 +633,60 @@ function hasChildExited(child: ChildProcess) {
 
 function isProcessAlreadyExitedError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ESRCH";
+}
+
+function parseLinuxProcessStat(raw: string) {
+  const commandEnd = raw.lastIndexOf(")");
+  if (commandEnd < 0) {
+    return null;
+  }
+  const fields = raw
+    .slice(commandEnd + 1)
+    .trim()
+    .split(/\s+/u);
+  const state = fields[0];
+  const processGroupId = Number.parseInt(fields[2] ?? "", 10);
+  if (!state || !Number.isSafeInteger(processGroupId) || processGroupId <= 0) {
+    return null;
+  }
+  return { processGroupId, state };
+}
+
+function classifyLinuxProcessGroupStats(processGroupId: number, stats: readonly string[]) {
+  const members = stats
+    .map((raw) => parseLinuxProcessStat(raw))
+    .filter(
+      (entry): entry is NonNullable<ReturnType<typeof parseLinuxProcessStat>> =>
+        entry?.processGroupId === processGroupId,
+    );
+  if (members.length === 0) {
+    return null;
+  }
+  return members.some((entry) => entry.state !== "Z" && entry.state !== "X");
+}
+
+function inspectLinuxProcessGroupLiveness(processGroupId: number) {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  let entries;
+  try {
+    entries = readdirSync("/proc", { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const stats: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) {
+      continue;
+    }
+    try {
+      stats.push(readFileSync(path.join("/proc", entry.name, "stat"), "utf8"));
+    } catch {
+      // Processes can exit while /proc is being scanned.
+    }
+  }
+  return classifyLinuxProcessGroupStats(processGroupId, stats);
 }
 
 function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
@@ -580,7 +698,12 @@ function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
   }
   try {
     process.kill(-child.pid, 0);
-    return true;
+    if (!hasChildExited(child)) {
+      return true;
+    }
+    // Container PID 1 can leave killed descendants as zombies. They cannot
+    // retain ports or execute work, so do not make release QA wait forever.
+    return inspectLinuxProcessGroupLiveness(child.pid) ?? true;
   } catch (error) {
     if (!isProcessAlreadyExitedError(error) && !hasChildExited(child)) {
       return true;
@@ -604,6 +727,7 @@ function signalQaGatewayWindowsProcessTree(
   const result = runTaskkill(taskkillPath, args, {
     stdio: "ignore",
     windowsHide: true,
+    timeout: 5_000,
   });
   if (!result.error && result.status === 0) {
     return true;
@@ -612,6 +736,7 @@ function signalQaGatewayWindowsProcessTree(
     const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
       stdio: "ignore",
       windowsHide: true,
+      timeout: 5_000,
     });
     return !forceResult.error && forceResult.status === 0;
   }
@@ -655,6 +780,16 @@ async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number)
   return !isQaGatewayChildProcessTreeAlive(child);
 }
 
+function resolveQaGatewayChildStopTimeouts(opts?: {
+  gracefulTimeoutMs?: number;
+  forceTimeoutMs?: number;
+}) {
+  return {
+    gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+    forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
+  };
+}
+
 async function stopQaGatewayChildProcessTree(
   child: ChildProcess,
   opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
@@ -662,12 +797,13 @@ async function stopQaGatewayChildProcessTree(
   if (!isQaGatewayChildProcessTreeAlive(child)) {
     return;
   }
+  const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
-  if (await waitForQaGatewayChildExit(child, opts?.gracefulTimeoutMs ?? 5_000)) {
+  if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
-  const stopped = await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+  const stopped = await waitForQaGatewayChildExit(child, timeouts.forceTimeoutMs);
   if (!stopped) {
     throw new Error("qa gateway process tree remained alive after forced shutdown");
   }
@@ -709,15 +845,14 @@ function isQaModelProviderConfig(value: unknown): value is ModelProviderConfig {
 }
 
 function normalizeQaLiveProviderConfig(value: unknown): ModelProviderConfig | null {
-  if (isQaModelProviderConfig(value)) {
-    return value;
-  }
-  if (!isRecord(value) || !Object.hasOwn(value, "apiKey")) {
+  if (!isQaModelProviderConfig(value) && (!isRecord(value) || !Object.hasOwn(value, "apiKey"))) {
     return null;
   }
+  const { baseUrl: rawBaseUrl, ...providerConfig } = value;
+  const baseUrl = normalizeOptionalString(rawBaseUrl);
   return {
-    ...value,
-    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
+    ...providerConfig,
+    ...(baseUrl ? { baseUrl } : {}),
     models: Array.isArray(value.models) ? value.models : [],
   } as ModelProviderConfig;
 }
@@ -868,6 +1003,7 @@ export async function startQaGatewayChild(params: {
   alternateModel?: string;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
+  forcedRuntime?: RuntimeId;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
@@ -956,6 +1092,7 @@ export async function startQaGatewayChild(params: {
       liveProviderConfigs,
       fastMode: params.fastMode,
       thinkingDefault: params.thinkingDefault,
+      forcedRuntime: params.forcedRuntime,
       controlUiEnabled: params.controlUiEnabled,
     });
   const buildStagedGatewayConfig = async (gatewayPort: number) => {
@@ -1082,7 +1219,6 @@ export async function startQaGatewayChild(params: {
               identity,
               opts: {
                 gracefulTimeoutMs: 1_500,
-                forceTimeoutMs: 1_500,
               },
             });
           } catch (cleanupError) {
@@ -1102,7 +1238,6 @@ export async function startQaGatewayChild(params: {
           try {
             await stopQaGatewayChildProcessTree(spawnedChild, {
               gracefulTimeoutMs: 1_500,
-              forceTimeoutMs: 1_500,
             });
           } catch (cleanupError) {
             cleanupErrors.push(cleanupError);
@@ -1168,7 +1303,14 @@ export async function startQaGatewayChild(params: {
           stagedBundledPluginsRoot,
           compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
           providerMode,
-          runtimeEnvPatch: params.runtimeEnvPatch,
+          runtimeEnvPatch: {
+            ...params.runtimeEnvPatch,
+            ...buildQaForcedRuntimeEnvPatch({
+              forcedRuntime: params.forcedRuntime,
+              providerMode,
+              providerBaseUrl: params.providerBaseUrl,
+            }),
+          },
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
         });
@@ -1512,59 +1654,109 @@ export async function startQaGatewayChild(params: {
       },
       async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
         await activeRpcClient.stop().catch(() => {});
-        await stopQaGatewayChildWithBoundary({
-          child: activeChild,
-          controller: processBoundaryController,
-          identity: activeIdentity,
-        });
-        await closeWriteStream(stdoutLog);
-        await closeWriteStream(stderrLog);
+        const cleanupErrors: unknown[] = [];
+        let processStopped = true;
+        let debugArtifactsPreserved = true;
+        try {
+          await stopQaGatewayChildWithBoundary({
+            child: activeChild,
+            controller: processBoundaryController,
+            identity: activeIdentity,
+          });
+        } catch (error) {
+          processStopped = false;
+          cleanupErrors.push(error);
+        }
+        for (const stream of [stdoutLog, stderrLog]) {
+          try {
+            await closeWriteStream(stream);
+          } catch (error) {
+            cleanupErrors.push(error);
+          }
+        }
         if (opts?.preserveToDir && !(opts?.keepTemp ?? keepTemp)) {
-          await preserveQaGatewayDebugArtifacts({
-            preserveToDir: opts.preserveToDir,
-            stdoutLogPath,
-            stderrLogPath,
-            tempRoot,
-            repoRoot: params.repoRoot,
-          });
+          try {
+            await preserveQaGatewayDebugArtifacts({
+              preserveToDir: opts.preserveToDir,
+              stdoutLogPath,
+              stderrLogPath,
+              tempRoot,
+              repoRoot: params.repoRoot,
+            });
+          } catch (error) {
+            debugArtifactsPreserved = false;
+            cleanupErrors.push(
+              new Error(appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot), {
+                cause: error,
+              }),
+            );
+          }
         }
-        if (!(opts?.keepTemp ?? keepTemp)) {
-          await cleanupQaGatewayTempRoots({
-            tempRoot,
-            stagedBundledPluginsRoot,
-          });
+        if (processStopped && debugArtifactsPreserved && !(opts?.keepTemp ?? keepTemp)) {
+          try {
+            await cleanupQaGatewayTempRoots({
+              tempRoot,
+              stagedBundledPluginsRoot,
+            });
+          } catch (error) {
+            cleanupErrors.push(error);
+          }
         }
-        throwActiveChildFailure();
+        try {
+          throwActiveChildFailure();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+        if (cleanupErrors.length === 1) {
+          throw cleanupErrors[0];
+        }
+        if (cleanupErrors.length > 1) {
+          throw new AggregateError(cleanupErrors, "qa gateway child cleanup failed");
+        }
       },
     };
   } catch (error) {
+    const cleanupErrors: unknown[] = [];
     await rpcClient?.stop().catch(() => {});
+    let processStopped = child === null;
     if (child) {
-      await stopQaGatewayChildWithBoundary({
-        child,
-        controller: processBoundaryController,
-        identity: childIdentity,
-        opts: {
-          gracefulTimeoutMs: 1_500,
-          forceTimeoutMs: 1_500,
-        },
-      });
+      try {
+        await stopQaGatewayChildWithBoundary({
+          child,
+          controller: processBoundaryController,
+          identity: childIdentity,
+          opts: {
+            gracefulTimeoutMs: 1_500,
+            forceTimeoutMs: 1_500,
+          },
+        });
+        processStopped = true;
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
     }
-    await closeWriteStream(stdoutLog);
-    await closeWriteStream(stderrLog);
-    if (!keepTemp) {
-      await cleanupQaGatewayTempRoots({
-        tempRoot,
-        stagedBundledPluginsRoot,
-      });
+    for (const stream of [stdoutLog, stderrLog]) {
+      try {
+        await closeWriteStream(stream);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
     }
-    const message = keepTemp
-      ? appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot)
-      : formatErrorMessage(error);
-    if (error instanceof QaSuiteInfraError) {
-      throw new QaSuiteInfraError(error.code, message, { cause: error });
+    if (processStopped && !keepTemp) {
+      try {
+        await cleanupQaGatewayTempRoots({
+          tempRoot,
+          stagedBundledPluginsRoot,
+        });
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
     }
-    throw new Error(message, { cause: error });
+    const message =
+      keepTemp || !processStopped
+        ? appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot)
+        : formatErrorMessage(error);
+    return throwQaGatewayStartupError({ error, message, cleanupErrors });
   }
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

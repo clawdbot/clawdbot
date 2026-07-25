@@ -2,7 +2,11 @@
  * Control UI gateway routing tests.
  */
 import { describe, expect, it } from "vitest";
-import { classifyControlUiRequest, isControlUiPluginManagerRequest } from "./control-ui-routing.js";
+import {
+  classifyControlUiRequest,
+  isControlUiApprovalDocumentPath,
+  isControlUiPluginManagerRequest,
+} from "./control-ui-routing.js";
 
 describe("isControlUiPluginManagerRequest", () => {
   it.each([
@@ -18,6 +22,25 @@ describe("isControlUiPluginManagerRequest", () => {
     { basePath: "", pathname: "/plugins", method: "GET", expected: false },
   ])("classifies $method $pathname", ({ basePath, pathname, method, expected }) => {
     expect(isControlUiPluginManagerRequest({ basePath, pathname, method })).toBe(expected);
+  });
+});
+
+describe("isControlUiApprovalDocumentPath", () => {
+  it.each([
+    { basePath: "", pathname: "/approve" },
+    { basePath: "", pathname: "/approve/" },
+    { basePath: "", pathname: "/approve/plugin%3Arequest.json" },
+    { basePath: "/openclaw", pathname: "/openclaw/approve/exec%3Aa%2Fb" },
+  ])("reserves $pathname", ({ basePath, pathname }) => {
+    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(true);
+  });
+
+  it.each([
+    { basePath: "", pathname: "/approvals/id" },
+    { basePath: "", pathname: "/approve/id/extra" },
+    { basePath: "/openclaw", pathname: "/approve/id" },
+  ])("does not reserve $pathname", ({ basePath, pathname }) => {
+    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(false);
   });
 });
 
@@ -71,6 +94,48 @@ describe("classifyControlUiRequest", () => {
         pathname: "/api/sessions",
         method: "GET",
         expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps the OpenAI-compatible API root outside the SPA catch-all",
+        pathname: "/v1",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps the OpenAI-compatible API root slash outside the SPA catch-all",
+        pathname: "/v1/",
+        method: "HEAD",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps OpenAI-compatible model discovery outside the SPA catch-all",
+        pathname: "/v1/models",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps OpenAI-compatible model details outside the SPA catch-all",
+        pathname: "/v1/models/openclaw",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps OpenAI-compatible responses outside the SPA catch-all",
+        pathname: "/v1/responses",
+        method: "HEAD",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "preserves the SPA root that only resembles the OpenAI-compatible API",
+        pathname: "/v12",
+        method: "GET",
+        expected: { kind: "serve" as const },
+      },
+      {
+        name: "preserves SPA routes that only resemble the OpenAI-compatible API",
+        pathname: "/v12/models",
+        method: "GET",
+        expected: { kind: "serve" as const },
       },
       {
         name: "returns not-found for legacy ui routes",

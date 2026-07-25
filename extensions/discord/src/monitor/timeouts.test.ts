@@ -1,6 +1,7 @@
 // Discord tests cover timeouts plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mergeAbortSignals } from "../../api.js";
 import {
   isAbortError as runtimeApiIsAbortError,
   normalizeDiscordInboundWorkerTimeoutMs as runtimeApiNormalizeDiscordInboundWorkerTimeoutMs,
@@ -24,13 +25,29 @@ afterEach(() => {
 });
 
 describe("discord monitor timeouts", () => {
-  it("keeps deprecated timeout helpers on the runtime api compatibility surface", () => {
+  it("keeps deprecated timeout helpers on shipped compatibility surfaces", () => {
     expect(runtimeApiIsAbortError).toBe(isAbortError);
     expect(runtimeApiNormalizeDiscordInboundWorkerTimeoutMs).toBe(
       normalizeDiscordInboundWorkerTimeoutMs,
     );
     expect(runtimeApiNormalizeDiscordListenerTimeoutMs).toBe(normalizeDiscordListenerTimeoutMs);
     expect(runtimeApiRunDiscordTaskWithTimeout).toBe(runDiscordTaskWithTimeout);
+  });
+
+  it("keeps the shipped public abort-signal compatibility semantics", () => {
+    const first = new AbortController();
+    const second = new AbortController();
+    const reason = new Error("first stopped");
+
+    expect(mergeAbortSignals([])).toBeUndefined();
+    expect(mergeAbortSignals([undefined, first.signal])).toBe(first.signal);
+
+    const signal = mergeAbortSignals([first.signal, second.signal]);
+
+    first.abort(reason);
+    second.abort(new Error("second stopped"));
+
+    expect(signal?.reason).toBe(reason);
   });
 
   it("preserves legacy timeout normalization semantics", () => {

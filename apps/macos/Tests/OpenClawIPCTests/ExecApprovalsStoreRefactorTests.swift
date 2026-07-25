@@ -6,45 +6,6 @@ import Testing
 
 @Suite(.serialized)
 struct ExecApprovalsStoreRefactorTests {
-    private actor ShellRunProbe {
-        private var commands: [[String]] = []
-
-        func run(_ command: [String]) -> ShellExecutor.ShellResult {
-            self.commands.append(command)
-            return ShellExecutor.ShellResult(
-                stdout: "ok",
-                stderr: "",
-                exitCode: 0,
-                timedOut: false,
-                success: true,
-                errorMessage: nil)
-        }
-
-        func capturedCommands() -> [[String]] {
-            self.commands
-        }
-    }
-
-    private static func forwardedApprovalPlan(
-        command: [String],
-        rawCommand: String? = nil,
-        agentId: String? = "main",
-        policySnapshot: ExecApprovalPolicySnapshot? = nil,
-        mutableFileOperand: OpenClawSystemRunApprovalFileOperand? = nil) -> OpenClawSystemRunApprovalPlan
-    {
-        let snapshot = policySnapshot ?? ExecApprovalPolicySnapshot(
-            resolved: ExecApprovalsStore.resolve(agentId: agentId))
-        return OpenClawSystemRunApprovalPlan(
-            argv: command,
-            cwd: nil,
-            commandText: ExecCommandFormatter.displayString(for: command),
-            commandPreview: rawCommand,
-            agentId: agentId,
-            sessionKey: nil,
-            policySnapshot: snapshot.portable,
-            mutableFileOperand: mutableFileOperand)
-    }
-
     private var realTemporaryDirectory: URL {
         let path = FileManager().temporaryDirectory.path
         if path.hasPrefix("/var/") {
@@ -101,6 +62,7 @@ struct ExecApprovalsStoreRefactorTests {
 
         try await self.withLockedEnv([
             "OPENCLAW_HOME": home.path,
+            "OPENCLAW_PROFILE": nil,
             "OPENCLAW_STATE_DIR": stateDir.path,
         ]) {
             try await body(stateDir)
@@ -108,6 +70,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     private func withTempHomeAndStateDir(
+        profile: String? = nil,
         _ body: @escaping @Sendable (URL, URL) async throws -> Void) async throws
     {
         let root = self.realTemporaryDirectory
@@ -118,6 +81,7 @@ struct ExecApprovalsStoreRefactorTests {
 
         try await self.withLockedEnv([
             "OPENCLAW_HOME": home.path,
+            "OPENCLAW_PROFILE": profile,
             "OPENCLAW_STATE_DIR": stateDir.path,
         ]) {
             try await body(home, stateDir)
@@ -290,7 +254,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `blocked legacy migration cannot create or mutate current policy`() async throws {
+    func `malformed default policy does not block custom state mutations`() async throws {
         try await self.withTempHomeAndStateDir { home, _ in
             let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
             try FileManager().createDirectory(at: legacyDir, withIntermediateDirectories: true)
@@ -299,26 +263,25 @@ struct ExecApprovalsStoreRefactorTests {
             try malformed.write(to: legacyURL)
 
             let readOnly = ExecApprovalsStore.resolveReadOnly(agentId: "main")
-            #expect(readOnly.agent.security == .deny)
-            #expect(readOnly.agent.ask == .always)
+            #expect(readOnly.agent.security == .full)
+            #expect(readOnly.agent.ask == .off)
 
             let ensured = ExecApprovalsStore.ensureFile()
-            #expect(ensured.defaults?.security == .deny)
-            #expect(ensured.defaults?.ask == .off)
-            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
+            #expect(ensured.socket?.token?.isEmpty == false)
+            #expect(FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
 
-            let mutation = ExecApprovalsStore.updateDefaults { $0.security = .full }
-            guard case .failure(.unavailable) = mutation else {
-                Issue.record("expected blocked migration mutation failure")
+            let mutation = ExecApprovalsStore.updateDefaults { $0.security = .allowlist }
+            guard case .success = mutation else {
+                Issue.record("expected custom state mutation to succeed")
                 return
             }
-            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
             #expect(try Data(contentsOf: legacyURL) == malformed)
+            #expect(!FileManager().fileExists(atPath: "\(legacyURL.path).migrated"))
         }
     }
 
     @Test
-    func `symlinked legacy policy cannot seed the current store`() async throws {
+    func `symlinked default policy cannot seed the custom store`() async throws {
         try await self.withTempHomeAndStateDir { home, _ in
             let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
             try FileManager().createDirectory(at: legacyDir, withIntermediateDirectories: true)
@@ -330,10 +293,10 @@ struct ExecApprovalsStoreRefactorTests {
 
             let ensured = ExecApprovalsStore.ensureFile()
 
-            #expect(ensured.defaults?.security == .deny)
-            #expect(ensured.defaults?.ask == .off)
-            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
+            #expect(ensured.socket?.token?.isEmpty == false)
+            #expect(FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
             #expect(try Data(contentsOf: linkedTarget) == permissive)
+            #expect(try FileManager().destinationOfSymbolicLink(atPath: legacyURL.path) == linkedTarget.path)
         }
     }
 
@@ -550,890 +513,6 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `native approvals get reports held sidecar lock as unavailable`() async throws {
-        try await self.withTempStateDir { stateDir in
-            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
-            try Data("held".utf8).write(to: lockURL)
-
-            let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
-                id: "approvals-get-held-lock",
-                command: OpenClawSystemCommand.execApprovalsGet.rawValue))
-
-            #expect(!response.ok)
-            #expect(response.error?.code == .unavailable)
-            #expect(response.error?.message == "UNAVAILABLE: exec approvals store unavailable; retry")
-            #expect(FileManager().fileExists(atPath: lockURL.path))
-        }
-    }
-
-    @Test
-    func `native approvals get reports malformed store as unavailable`() async throws {
-        try await self.withTempStateDir { _ in
-            let url = ExecApprovalsStore.fileURL()
-            let malformed = Data("{".utf8)
-            try malformed.write(to: url, options: [.atomic])
-
-            let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
-                id: "approvals-get-malformed",
-                command: OpenClawSystemCommand.execApprovalsGet.rawValue))
-
-            #expect(!response.ok)
-            #expect(response.error?.code == .unavailable)
-            #expect(response.error?.message == "UNAVAILABLE: exec approvals store unavailable; retry")
-            #expect(try Data(contentsOf: url) == malformed)
-        }
-    }
-
-    @Test
-    func `allow always atomic commit failure denies without persisting or executing`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .off
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(
-                commitExecution: { _ in .failure(.unavailable) })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
-                approvalDecision: "allow-always")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "persist-failure",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-        }
-    }
-
-    @Test
-    func `allowlist usage failure denies before shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .off
-                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/printf")]
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(
-                commitExecution: { _ in .failure(.unavailable) })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(command: ["/usr/bin/printf", "ok"], agentId: "main")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "usage-failure",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime revalidates unprompted full policy before shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.security = .deny
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "full-policy-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime rejects ask tightening before shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.ask = .onMiss
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "ask-policy-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime rejects explicit once when security tightens to allowlist`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.security = .allowlist
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
-                approvalDecision: "allow-once")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "explicit-once-security-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime rejects explicit once after allowlist revocation`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/echo")]
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.allowlist = []
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
-                approvalDecision: "allow-once")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "explicit-once-allowlist-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime rejects auto review when security tightens to allowlist`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.security = .allowlist
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-security-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime rejects auto review when ask tightens from off to on miss`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.ask = .onMiss
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-ask-tightening",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime treats a successful commit as the authorization linearization point`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                let result = ExecApprovalsStore.commitExecution(commit)
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.security = .deny
-                }
-                return result
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let command = ["/usr/bin/printf", "ok"]
-            let params = OpenClawSystemRunParams(command: command, agentId: "main")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "authorization-linearization",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [command])
-            #expect(ExecApprovalsStore.resolve(agentId: "main").agent.security == .deny)
-        }
-    }
-
-    @Test
-    func `native runtime requires the prepared snapshot for forwarded delayed authority`() async throws {
-        try await self.withTempStateDir { _ in
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let command = ["/usr/bin/printf", "ok"]
-            let planWithoutSnapshot = OpenClawSystemRunApprovalPlan(
-                argv: command,
-                cwd: nil,
-                commandText: ExecCommandFormatter.displayString(for: command),
-                agentId: "main",
-                sessionKey: nil)
-            let cases = [
-                OpenClawSystemRunParams(
-                    command: command,
-                    agentId: "main",
-                    systemRunPlan: planWithoutSnapshot,
-                    approvalDecision: "allow-once"),
-                OpenClawSystemRunParams(
-                    command: command,
-                    agentId: "main",
-                    systemRunPlan: planWithoutSnapshot,
-                    approvalSource: "auto-review"),
-                OpenClawSystemRunParams(
-                    command: command,
-                    agentId: "main",
-                    systemRunPlan: planWithoutSnapshot,
-                    approved: true),
-            ]
-
-            for (index, params) in cases.enumerated() {
-                let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-                let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                    id: "missing-delayed-snapshot-\(index)",
-                    command: OpenClawSystemCommand.run.rawValue,
-                    paramsJSON: json))
-
-                #expect(!response.ok)
-                #expect(response.error?.code == .invalidRequest)
-                #expect(response.error?.message.contains("prepared policy snapshot") == true)
-            }
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `native runtime rejects forwarded delayed authority for a mismatched plan`() async throws {
-        try await self.withTempStateDir { _ in
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let command = ["/usr/bin/printf", "ok"]
-            let params = OpenClawSystemRunParams(
-                command: command,
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "different"]),
-                approvalDecision: "allow-once")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "mismatched-forwarded-plan",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.code == .invalidRequest)
-            #expect(response.error?.message.contains("matching systemRunPlan") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `forwarded node session approval cannot restore a rule revoked before Mac evaluation`() async throws {
-        try await self.withTempStateDir { _ in
-            let stale = ExecAllowlistEntry(
-                pattern: "/usr/bin/echo",
-                source: "allow-always")
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-                entry.allowlist = [stale]
-            }.get()
-            let forwardedSnapshot = ExecApprovalPolicySnapshot(
-                resolved: ExecApprovalsStore.resolve(agentId: "main"))
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.allowlist = []
-            }.get()
-
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let command = ["/usr/bin/printf", "ok"]
-            let params = OpenClawSystemRunParams(
-                command: command,
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(
-                    command: command,
-                    policySnapshot: forwardedSnapshot),
-                approvalDecision: "allow-always")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "revoked-node-session-approval",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-        }
-    }
-
-    @Test
-    func `forwarded node session approval rejects a changed mutable script operand`() async throws {
-        try await self.withTempStateDir { stateDir in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .off
-            }.get()
-            let scriptURL = stateDir.appendingPathComponent("script.py")
-            let approvedData = Data("print('approved')\n".utf8)
-            try approvedData.write(to: scriptURL)
-            let approvedHash = SHA256.hash(data: approvedData)
-                .map { String(format: "%02x", $0) }
-                .joined()
-            let command = ["/usr/bin/python3", scriptURL.path]
-            let operand = OpenClawSystemRunApprovalFileOperand(
-                argvIndex: 1,
-                path: scriptURL.resolvingSymlinksInPath().path,
-                sha256: approvedHash)
-            try Data("print('changed')\n".utf8).write(to: scriptURL)
-
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: command,
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(
-                    command: command,
-                    mutableFileOperand: operand),
-                approvalDecision: "allow-once")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "changed-script-operand",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("script operand changed") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-
-            try approvedData.write(to: scriptURL)
-            let restoredResponse = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "restored-script-operand",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-            #expect(restoredResponse.ok)
-            #expect(await probe.capturedCommands() == [command])
-        }
-    }
-
-    @Test
-    func `native runtime cannot persist allow always after concurrent policy revocation`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.security = .deny
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
-                approvalDecision: "allow-always")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allow-always-policy-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(await probe.capturedCommands().isEmpty)
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-        }
-    }
-
-    @Test
-    func `revoked gateway timeout fallback denies before native shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-                entry.askFallback = .deny
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "revoked-timeout-fallback",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message == "SYSTEM_RUN_DISABLED: security=deny")
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `marker only full timeout fallback executes without a second prompt`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-                entry.askFallback = .full
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let command = ["/usr/bin/printf", "ok"]
-            let params = OpenClawSystemRunParams(
-                command: command,
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: command),
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "full-timeout-fallback",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [command])
-        }
-    }
-
-    @Test
-    func `timeout fallback rejects explicit approval fields`() async throws {
-        try await self.withTempStateDir { _ in
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                approvalDecision: "allow-once",
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "mixed-timeout-fallback",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("cannot be combined") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `auto review marker executes one shot allowlist miss`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let command = ["/usr/bin/printf", "ok"]
-            let params = OpenClawSystemRunParams(
-                command: command,
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: command),
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-once",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [command])
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-        }
-    }
-
-    @Test
-    func `auto review marker cannot bypass ask always`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-ask-always",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("ask=always") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `auto review revalidates concurrent ask always before shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let mutations = ExecApprovalStoreMutations(commitExecution: { commit in
-                _ = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.ask = .always
-                }
-                return ExecApprovalsStore.commitExecution(commit)
-            })
-            let runtime = MacNodeRuntime(
-                execApprovalStoreMutations: mutations,
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-ask-race",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `auto review marker preserves reviewed strict inline execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let payload = "/usr/bin/printf reviewed"
-            let command = ["/bin/sh", "-c", payload]
-            let params = OpenClawSystemRunParams(
-                command: command,
-                rawCommand: payload,
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: command, rawCommand: payload),
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "auto-review-inline",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [command])
-        }
-    }
-
-    @Test
-    func `auto review marker rejects legacy approval fields`() async throws {
-        try await self.withTempStateDir { _ in
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/usr/bin/printf", "ok"],
-                agentId: "main",
-                approved: true,
-                approvalSource: "auto-review")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "mixed-auto-review",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("cannot be combined") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `allowlist timeout fallback executes the canonical bound command`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-                entry.askFallback = .allowlist
-                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/printf")]
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["printf", "ok"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["printf", "ok"]),
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allowlist-timeout-fallback",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [["/usr/bin/printf", "ok"]])
-        }
-    }
-
-    @Test
-    func `allowlist timeout fallback miss denies without shell execution`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-                entry.ask = .always
-                entry.askFallback = .allowlist
-                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/printf")]
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let params = OpenClawSystemRunParams(
-                command: ["/bin/echo", "miss"],
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: ["/bin/echo", "miss"]),
-                approvalSource: "ask-fallback")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allowlist-timeout-fallback-miss",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(!response.ok)
-            #expect(response.error?.message.contains("allowlist miss") == true)
-            #expect(await probe.capturedCommands().isEmpty)
-        }
-    }
-
-    @Test
-    func `explicit allow once executes original unbound shell command`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/printf")]
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let payload = "/usr/bin/printf one && /usr/bin/printf two"
-            let original = ["/bin/sh", "-c", payload]
-            let params = OpenClawSystemRunParams(
-                command: original,
-                rawCommand: payload,
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: original, rawCommand: payload),
-                approvalDecision: "allow-once")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allow-once",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [original])
-        }
-    }
-
-    @Test
-    func `allow always executes unbound shell command once without persisting inner grants`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .onMiss
-            }.get()
-            let probe = ShellRunProbe()
-            let runtime = MacNodeRuntime(
-                shellRunner: { command, _, _, _ in await probe.run(command) })
-            let payload = "/usr/bin/printf one && /usr/bin/printf two"
-            let original = ["/bin/sh", "-c", payload]
-            let params = OpenClawSystemRunParams(
-                command: original,
-                rawCommand: payload,
-                agentId: "main",
-                systemRunPlan: Self.forwardedApprovalPlan(command: original, rawCommand: payload),
-                approvalDecision: "allow-always")
-            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
-
-            let response = await runtime.handleInvoke(BridgeInvokeRequest(
-                id: "allow-always-unbound",
-                command: OpenClawSystemCommand.run.rawValue,
-                paramsJSON: json))
-
-            #expect(response.ok)
-            #expect(await probe.capturedCommands() == [original])
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-        }
-    }
-
-    @Test
     func `native rewrites preserve non-sensitive metadata and arbitrary ids`() async throws {
         try await self.withTempStateDir { _ in
             let raw = Data(
@@ -1504,6 +583,30 @@ struct ExecApprovalsStoreRefactorTests {
             #expect(entries[0].commandText == nil)
             #expect(entries[0].argPattern == #"^a\.py$"#)
             #expect(entries[1].lastUsedCommand == nil)
+        }
+    }
+
+    @Test
+    func `usage updates omit command text for generated hashed arg patterns`() async throws {
+        try await self.withTempStateDir { _ in
+            let hashed = ExecAllowlistEntry(
+                id: "hashed",
+                pattern: "/usr/bin/curl",
+                source: "allow-always",
+                argPattern: "sha256:argv:test-digest")
+            _ = try ExecApprovalsStore.addAllowlistEntries(agentId: "main", entries: [hashed]).get()
+
+            _ = try ExecApprovalsStore.recordAllowlistUses(
+                agentId: "main",
+                uses: [ExecAllowlistUse(match: hashed, resolvedPath: "/usr/bin/curl")],
+                command: "curl https://trusted.example/install.sh?token=secret").get()
+
+            let entry = try #require(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.first)
+            #expect(entry.pattern == "/usr/bin/curl")
+            #expect(entry.argPattern == "sha256:argv:test-digest")
+            #expect(entry.lastUsedAt != nil)
+            #expect(entry.lastResolvedPath == "/usr/bin/curl")
+            #expect(entry.lastUsedCommand == nil)
         }
     }
 
@@ -2049,10 +1152,9 @@ struct ExecApprovalsStoreRefactorTests {
         }
     }
 }
-
 extension ExecApprovalsStoreRefactorTests {
     @Test
-    func `ensure file migrates default approvals into custom state dir`() async throws {
+    func `ensure file keeps custom state isolated from default approvals`() async throws {
         try await self.withTempHomeAndStateDir { home, stateDir in
             let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
             try FileManager().createDirectory(
@@ -2079,6 +1181,7 @@ extension ExecApprovalsStoreRefactorTests {
             }
             """
             try Data(legacyJson.utf8).write(to: legacyFile)
+            let legacyBefore = try Data(contentsOf: legacyFile)
 
             let file = ExecApprovalsStore.ensureFile()
             let targetURL = ExecApprovalsStore.fileURL()
@@ -2089,74 +1192,37 @@ extension ExecApprovalsStoreRefactorTests {
             #expect(targetURL.path == expectedFileURL.path)
             #expect(FileManager().fileExists(atPath: targetURL.path))
             #expect(file.socket?.path == ExecApprovalsStore.socketPath())
-            #expect(file.socket?.token == "legacy-token")
-            #expect(file.defaults?.security == .deny)
-            #expect(file.defaults?.ask == .always)
-            #expect(file.agents?["main"]?.allowlist?.map(\.pattern) == ["git status"])
-            #expect(!FileManager().fileExists(atPath: legacyFile.path))
-            #expect(FileManager().fileExists(atPath: "\(legacyFile.path).migrated"))
+            #expect(file.socket?.token != "legacy-token")
+            #expect(file.agents?["main"]?.allowlist == nil)
+            #expect(try Data(contentsOf: legacyFile) == legacyBefore)
+            #expect(!FileManager().fileExists(atPath: "\(legacyFile.path).migrated"))
         }
     }
 
     @Test
-    func `legacy writer revocation wins before migration publishes and archives`() async throws {
-        try await self.withTempHomeAndStateDir { home, _ in
-            let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
-            try FileManager().createDirectory(
-                at: legacyDir,
-                withIntermediateDirectories: true)
-            let legacyFile = legacyDir.appendingPathComponent("exec-approvals.json")
-            let legacyLock = legacyDir.appendingPathComponent("exec-approvals.json.lock")
-            let initial = Data(
-                #"{"version":1,"agents":{"main":{"allowlist":[{"id":"revoked-entry","pattern":"/usr/bin/echo"}]}}}"#
-                    .utf8)
-            let revoked = Data(
-                #"{"version":1,"agents":{"main":{"allowlist":[]}}}"#.utf8)
-            try initial.write(to: legacyFile)
-            try Data("legacy writer owns lock".utf8).write(to: legacyLock)
-
-            // An older writer revokes under its sidecar lock. Migration must
-            // wait, then read and archive only the post-revocation policy.
-            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(100)) {
-                try? revoked.write(to: legacyFile, options: [.atomic])
-                try? FileManager().removeItem(at: legacyLock)
+    func `ensure file keeps named profile isolated from default approvals`() async throws {
+        try await self.withTempHomeAndStateDir(profile: "work") { home, stateDir in
+            let defaultDir = home.appendingPathComponent(".openclaw", isDirectory: true)
+            try FileManager().createDirectory(at: defaultDir, withIntermediateDirectories: true)
+            let defaultFile = defaultDir.appendingPathComponent("exec-approvals.json")
+            let defaultJson = """
+            {
+              "version": 1,
+              "socket": { "token": "default-profile-token" },
+              "defaults": { "security": "full", "ask": "off" },
+              "agents": {}
             }
+            """
+            try Data(defaultJson.utf8).write(to: defaultFile)
+            let defaultBefore = try Data(contentsOf: defaultFile)
 
-            let migrated = ExecApprovalsStore.ensureFile()
+            let file = ExecApprovalsStore.ensureFile()
 
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
-            #expect(migrated.agents?["main"]?.allowlist?.isEmpty != false)
-            #expect(!FileManager().fileExists(atPath: legacyFile.path))
-            let archived = URL(fileURLWithPath: "\(legacyFile.path).migrated")
-            #expect(FileManager().fileExists(atPath: archived.path))
-            let archivedFile = try JSONDecoder().decode(
-                ExecApprovalsFile.self,
-                from: Data(contentsOf: archived))
-            #expect(archivedFile.agents?["main"]?.allowlist?.isEmpty == true)
-        }
-    }
-
-    @Test
-    func `legacy migration fails closed while legacy writer lock is held`() async throws {
-        try await self.withTempHomeAndStateDir { home, _ in
-            let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
-            try FileManager().createDirectory(
-                at: legacyDir,
-                withIntermediateDirectories: true)
-            let legacyFile = legacyDir.appendingPathComponent("exec-approvals.json")
-            let legacyLock = legacyDir.appendingPathComponent("exec-approvals.json.lock")
-            let permissive = Data(
-                #"{"version":1,"defaults":{"security":"full","ask":"off"}}"#.utf8)
-            try permissive.write(to: legacyFile)
-            try Data("legacy writer owns lock".utf8).write(to: legacyLock)
-
-            let ensured = ExecApprovalsStore.ensureFile()
-
-            #expect(ensured.defaults?.security == .deny)
-            #expect(ensured.defaults?.ask == .off)
-            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
-            #expect(try Data(contentsOf: legacyFile) == permissive)
-            #expect(FileManager().fileExists(atPath: legacyLock.path))
+            #expect(file.socket?.token != "default-profile-token")
+            #expect(FileManager().fileExists(
+                atPath: stateDir.appendingPathComponent("exec-approvals.json").path))
+            #expect(try Data(contentsOf: defaultFile) == defaultBefore)
+            #expect(!FileManager().fileExists(atPath: "\(defaultFile.path).migrated"))
         }
     }
 

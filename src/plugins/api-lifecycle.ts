@@ -9,10 +9,10 @@ type FunctionPropertyNames<T> = Extract<
 >;
 
 /** Names of plugin API methods exposed on the OpenClaw plugin API. */
-export type PluginApiMethodName = FunctionPropertyNames<OpenClawPluginApi>;
+type PluginApiMethodName = FunctionPropertyNames<OpenClawPluginApi>;
 
 /** Lifecycle policy for whether a plugin API method can be called after registration. */
-export type PluginApiLifecyclePolicy = {
+type PluginApiLifecyclePolicy = {
   phase: "registration" | "runtime";
   lateCallable: boolean;
 };

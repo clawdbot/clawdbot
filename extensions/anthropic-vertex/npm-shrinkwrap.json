@@ -8,13 +8,15 @@
       "name": "@openclaw/anthropic-vertex-provider",
       "version": "2026.7.2",
       "dependencies": {
-        "@anthropic-ai/vertex-sdk": "0.19.0"
+        "@anthropic-ai/vertex-sdk": "0.19.0",
+        "google-auth-library": "10.9.0",
+        "undici": "8.6.0"
       }
     },
     "node_modules/@anthropic-ai/sdk": {
-      "version": "0.109.1",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.109.1.tgz",
-      "integrity": "sha512-q9OnEKLr5H9nxSuXdgDgJhxfYMiE+AaUEBze2Gk91UcaaLnsN+Lx5fbCYywiqurU/APLdwv23x03Wm6WN3EBsg==",
+      "version": "0.112.3",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.112.3.tgz",
+      "integrity": "sha512-wjcozJlitVIuBEw9cj/xBuRznwkhcLmXmNzlFoeHbh4AvrDG3HGZrdvEOTTmobcbhjGkfOpKbmDTCQ4s9LQvCg==",
       "license": "MIT",
       "dependencies": {
         "json-schema-to-ts": "^3.1.1",
@@ -184,9 +186,9 @@
       }
     },
     "node_modules/gaxios": {
-      "version": "7.1.5",
-      "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-7.1.5.tgz",
-      "integrity": "sha512-5FZy72Rh8LhtjmvDrKkI+lVhrsQrVKVsItxMoDm5mNQE+xR0WVIIs+jzPSJgBvKVsLi24fZhXJIsNI0bihDzFg==",
+      "version": "7.2.0",
+      "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-7.2.0.tgz",
+      "integrity": "sha512-CUVb4wcYe+771XevyH6HtGmXFAGGKkIC3kswAP8Z1JCe0j80JMaTPZH930DWFrvo0atjh18Arc0pEyUCWa5bfg==",
       "license": "Apache-2.0",
       "dependencies": {
         "extend": "^3.0.2",
@@ -229,9 +231,9 @@
       }
     },
     "node_modules/google-logging-utils": {
-      "version": "1.1.3",
-      "resolved": "https://registry.npmjs.org/google-logging-utils/-/google-logging-utils-1.1.3.tgz",
-      "integrity": "sha512-eAmLkjDjAFCVXg7A1unxHsLf961m6y17QFqXqAXGj/gVkKFrEICfStRfwUlGNfeCEjNRa32JEWOUTlYXPyyKvA==",
+      "version": "1.1.4",
+      "resolved": "https://registry.npmjs.org/google-logging-utils/-/google-logging-utils-1.1.4.tgz",
+      "integrity": "sha512-LXxE6ND+JHhDPYtPFt3oeWrjxFPrnRZCZ4At6lpbi1ZDSAN7bmGET9s53vvARbxT93p+xpeDUbc/nCR4C+7vcw==",
       "license": "Apache-2.0",
       "engines": {
         "node": ">=14"
@@ -362,6 +364,15 @@
       "resolved": "https://registry.npmjs.org/ts-algebra/-/ts-algebra-2.0.0.tgz",
       "integrity": "sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==",
       "license": "MIT"
+    },
+    "node_modules/undici": {
+      "version": "8.6.0",
+      "resolved": "https://registry.npmjs.org/undici/-/undici-8.6.0.tgz",
+      "integrity": "sha512-l2FlC6I510GawyEd1qgcE/okihKrzy+BRTEBlu6T0fdbM9m5yxtIH5Oa3ysRsH0zC4EhmWUEaSDsy2QngBeRlw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=22.19.0"
+      }
     },
     "node_modules/web-streams-polyfill": {
       "version": "3.3.3",

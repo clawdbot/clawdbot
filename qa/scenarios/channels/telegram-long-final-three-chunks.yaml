@@ -1,0 +1,57 @@
+title: Telegram long final keeps three final chunks
+
+scenario:
+  id: telegram-long-final-three-chunks
+  surface: channels
+  category: channels.conversation-routing-and-delivery
+  coverage:
+    primary:
+      - telegram.conversation-routing-and-delivery
+  regressionRefs:
+    - openclaw/openclaw#39905
+  objective: Verify a three-chunk Telegram final removes previews and keeps only final chunks.
+  successCriteria:
+    - The joined final contains both scripted three-chunk boundary markers.
+    - Exactly three final Telegram messages remain after streaming settles.
+  codeRefs:
+    - extensions/telegram/src/send.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles: { "telegram:adapter": 16, "telegram:all": 15 }
+    kind: flow
+    channel: telegram
+    summary: Run the scripted three-chunk final and verify final chunk accounting.
+    config:
+      requiredProviderMode: mock-openai
+
+flow:
+  steps:
+    - name: keeps exactly three final chunks
+      actions:
+        - resetTransport: true
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-stream-room, kind: channel }
+            senderId: qa-stream-operator
+            senderName: QA Stream Operator
+            text: "@openclaw Telegram long final three chunk QA check. Use the scripted three chunk final response."
+        - waitForOutbound:
+            conversation: { id: telegram-stream-room, kind: channel }
+            sinceIndex: { ref: outboundStartIndex }
+            textIncludes: TELEGRAM-LONG-FINAL-3CHUNK-BEGIN
+            timeoutMs: 60000
+        - call: sleep
+          args: [4000]
+        - set: finalMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex)"
+        - set: joinedFinal
+          value:
+            expr: "finalMessages.map((message) => message.text).join('')"
+        - assert:
+            expr: "finalMessages.length === 3 && joinedFinal.includes('TELEGRAM-LONG-FINAL-3CHUNK-BEGIN') && joinedFinal.includes('TELEGRAM-LONG-FINAL-3CHUNK-END')"
+            message:
+              expr: "`expected three complete final chunks; saw ${finalMessages.length}: ${joinedFinal}`"
+      detailsExpr: "`${finalMessages.length} final chunks`"

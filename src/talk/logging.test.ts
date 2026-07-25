@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -120,7 +121,7 @@ describe("talk logging", () => {
     unsubscribe();
 
     expect(logs).toHaveLength(1);
-    expect(stableLogRecordPayload(logs[0])).toStrictEqual({
+    expect(stableLogRecordPayload(expectDefined(logs[0], "logs[0] test invariant"))).toStrictEqual({
       type: "log.record",
       level: "INFO",
       message: "talk event output.text.done",

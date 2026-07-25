@@ -69,16 +69,41 @@ type MessagePresentationBlock =
     };
 
 type MessagePresentationAction =
-  { type: "command"; command: string } | { type: "callback"; value: string };
+  | { type: "command"; command: string }
+  | { type: "callback"; value: string }
+  | {
+      type: "approval";
+      approvalId: string;
+      approvalKind: "exec" | "plugin";
+      decision: "allow-once" | "allow-always" | "deny";
+    }
+  | {
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | { type: "url"; url: string }
+  | {
+      type: "web-app";
+      url: string;
+      widgetId?: string;
+    }
+  | {
+      type: "web-app";
+      url?: string;
+      widgetId: string;
+    };
 
 type MessagePresentationButton = {
   label: string;
   action?: MessagePresentationAction;
   /** Legacy callback value. Prefer action for new controls. */
   value?: string;
+  /** @deprecated Use an action with type "url". */
   url?: string;
+  /** @deprecated Use an action with type "web-app". */
   webApp?: { url: string };
-  /** @deprecated Use webApp. Accepted for legacy JSON payloads only. */
+  /** @deprecated Use an action with type "web-app". */
   web_app?: { url: string };
   priority?: number;
   disabled?: boolean;
@@ -88,7 +113,7 @@ type MessagePresentationButton = {
 
 type MessagePresentationOption = {
   label: string;
-  action?: MessagePresentationAction;
+  action?: Extract<MessagePresentationAction, { type: "command" | "callback" }>;
   /** Legacy callback value. Prefer action for new controls. */
   value?: string;
 };
@@ -111,13 +136,32 @@ Button semantics:
 - `action.type: "callback"` carries opaque plugin data through the channel's
   interaction path. Channel plugins must not reinterpret callback data as slash
   commands.
+- `action.type: "approval"` identifies one durable operator approval, its
+  explicit `exec` or `plugin` kind, and the requested decision. Channel plugins
+  encode that action into a transport-private callback and resolve it through
+  the approval service; they must not parse `/approve` command text or infer
+  kind from the ID.
+- `action.type: "question"` identifies one choice for a live, runtime-authored
+  `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
+  agents and plugins must not synthesize question IDs. Telegram, Discord, and
+  Slack map it to transport-private native callbacks and resolve the choice
+  through the Gateway. When the question becomes answered, expired, or
+  cancelled, those channels edit the delivered message, remove its actions,
+  and append the terminal status. WhatsApp, Signal, and iMessage render up to
+  four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
+  shapes degrade to label text, and the user can answer with a plain-text
+  reply.
+- `action.type: "url"` opens a normal link.
+- `action.type: "web-app"` launches a channel-native web app. Set `url` for a
+  URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch
+  mechanics are owned by the channel; at least one is required. When both are
+  present, a channel can prefer its native hosted-widget launch and use the URL
+  where that mechanism is unavailable.
 - `value` is the legacy opaque callback value. New controls should use `action`
   so channel plugins can map commands and callbacks without guessing from text.
-- `url` is a link button. It can exist without `value`.
-- `webApp` describes a channel-native web app button. Telegram renders this
-  as `web_app` and only supports it in private chats. `web_app` is still
-  accepted in loose JSON payloads for compatibility, but TypeScript producers
-  should use `webApp`.
+- `url`, `webApp`, and `web_app` remain accepted as deprecated boundary inputs.
+  Normalizers preserve these fields so renderers can distinguish shipped legacy
+  semantics from explicit typed actions. New producers should use `action`.
 - `label` is required and is also used in text fallback.
 - `style` is advisory. Renderers should map unsupported styles to a safe
   default, not fail the send.
@@ -136,7 +180,7 @@ Button semantics:
 
 Select semantics:
 
-- `options[].action` has the same command/callback meaning as button `action`.
+- `options[].action` accepts only `command` or `callback`; approval and link actions are button-only.
 - `options[].value` is the legacy selected application value.
 - `placeholder` is advisory and may be ignored by channels without native
   select support.
@@ -193,8 +237,16 @@ Simple card:
     {
       "type": "buttons",
       "buttons": [
-        { "label": "Approve", "value": "deploy:approve", "style": "success" },
-        { "label": "Decline", "value": "deploy:decline", "style": "danger" }
+        {
+          "label": "Approve",
+          "action": { "type": "callback", "value": "deploy:approve" },
+          "style": "success"
+        },
+        {
+          "label": "Decline",
+          "action": { "type": "callback", "value": "deploy:decline" },
+          "style": "danger"
+        }
       ]
     }
   ]
@@ -209,7 +261,12 @@ URL-only link button:
     { "type": "text", "text": "Release notes are ready." },
     {
       "type": "buttons",
-      "buttons": [{ "label": "Open notes", "url": "https://example.com/release" }]
+      "buttons": [
+        {
+          "label": "Open notes",
+          "action": { "type": "url", "url": "https://example.com/release" }
+        }
+      ]
     }
   ]
 }
@@ -222,7 +279,12 @@ Telegram Mini App button:
   "blocks": [
     {
       "type": "buttons",
-      "buttons": [{ "label": "Launch", "web_app": { "url": "https://example.com/app" } }]
+      "buttons": [
+        {
+          "label": "Launch",
+          "action": { "type": "web-app", "url": "https://example.com/app" }
+        }
+      ]
     }
   ]
 }
@@ -460,12 +522,17 @@ When a channel cannot render interactive controls, button and select values
 fall back to plain text. The fallback behavior preserves usability while
 keeping opaque callback data private:
 
-- **`command`-typed actions** render as `label: \`command\`` so users can
+- **`command`-typed actions** render as `` label: `command` `` so users can
   copy the command and run it manually in the channel input.
 - **`callback`-typed actions** and legacy **`value`** fields render as
   label-only. The opaque callback value is not exposed in fallback text.
-- **`url` / `webApp`** buttons render the URL text alongside the button
-  label, since the URL is user-facing.
+- **`approval`-typed actions** render label-only. Approval IDs and decisions are
+  transport data and are not exposed through generic scalar helpers or fallback
+  text.
+- **`url` actions**, URL-backed **`web-app` actions**, and deprecated **`url` /
+  `webApp` / `web_app`** inputs render the URL text alongside the button label,
+  since the URL is user-facing. Hosted-widget-only actions render label-only on
+  channels without a native widget launch.
 - **Select options** render as label-only. The underlying option value is not
   exposed in fallback text.
 
@@ -543,7 +610,9 @@ import {
   renderMessagePresentationFallbackText,
   renderMessagePresentationTableFallbackText,
   resolveMessagePresentationActionValue,
+  resolveMessagePresentationButtonAction,
   resolveMessagePresentationControlValue,
+  resolveMessagePresentationOptionAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 ```
 
@@ -558,10 +627,14 @@ Non-deprecated helpers worth knowing:
   `--presentation` flag) into `MessagePresentation`.
 - `isMessagePresentationInteractiveBlock(block)` narrows a block to the
   `buttons` | `select` union.
+- `resolveMessagePresentationButtonAction(button)` and
+  `resolveMessagePresentationOptionAction(option)` return the canonical typed
+  action while accepting deprecated boundary fields. An explicit `action`
+  always wins.
 - `resolveMessagePresentationActionValue(action)` /
-  `resolveMessagePresentationControlValue(control)` read the effective
-  command/callback value off an `action`, falling back to the legacy `value`
-  field for `resolveMessagePresentationControlValue`.
+  `resolveMessagePresentationControlValue(control)` read command/callback
+  scalar values only. A non-scalar canonical action never falls through to a
+  legacy shadow `value`, so approval IDs and link targets stay typed.
 - `renderMessagePresentationChartFallbackText(block)` /
   `renderMessagePresentationTableFallbackText(block)` render one structured
   data block as deterministic text for channel-specific fallback paths.
@@ -569,9 +642,8 @@ Non-deprecated helpers worth knowing:
 The legacy `InteractiveReply*` types and conversion helpers are marked
 `@deprecated` in the SDK:
 
-- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`,
-  `InteractiveReplyOption`, `InteractiveReplySelectBlock`, and
-  `InteractiveReplyTextBlock`
+- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`, and
+  `InteractiveReplyOption`
 - `normalizeInteractiveReply(...)`
 - `hasInteractiveReplyBlocks(...)`
 - `interactiveReplyToPresentation(...)`
@@ -587,12 +659,17 @@ them; send `presentation` and let core/channel adaptation handle rendering.
 
 Approval helpers also have presentation-first replacements:
 
-- use `buildApprovalPresentationFromActionDescriptors(...)` instead of
-  `buildApprovalInteractiveReplyFromActionDescriptors(...)`
 - use `buildApprovalPresentation(...)` instead of
   `buildApprovalInteractiveReply(...)`
 - use `buildExecApprovalPresentation(...)` instead of
   `buildExecApprovalInteractiveReply(...)`
+
+Those shipped builders remain command-backed for plugin compatibility. Gateway
+and bundled channel code that owns a durable approval kind should use
+`buildTypedApprovalPresentation(...)`,
+`buildTypedExecApprovalPendingReplyPayload(...)`, or
+`buildTypedPluginApprovalPendingReplyPayload(...)` so transports receive an
+explicit `approval` action instead of inferring semantics from `/approve` text.
 
 `renderMessagePresentationFallbackText(...)` returns an empty string for
 presentation blocks that have no text fallback, such as a divider-only

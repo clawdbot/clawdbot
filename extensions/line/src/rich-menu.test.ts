@@ -4,15 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
 import {
   createRichMenu,
   createDefaultMenuConfig,
   createGridLayout,
-  datetimePickerAction,
-  messageAction,
-  postbackAction,
   uploadRichMenuImage,
-  uriAction,
 } from "./rich-menu.js";
 
 const {
@@ -200,12 +197,14 @@ describe("createGridLayout", () => {
 
     const areas = createGridLayout(843, actions);
 
-    expect((areas[0].action as { text: string }).text).toBe("/help");
-    expect((areas[1].action as { text: string }).text).toBe("/status");
-    expect((areas[2].action as { text: string }).text).toBe("/settings");
-    expect((areas[3].action as { text: string }).text).toBe("/about");
-    expect((areas[4].action as { text: string }).text).toBe("/feedback");
-    expect((areas[5].action as { text: string }).text).toBe("/contact");
+    expect(areas.map((area) => (area.action as { text: string }).text)).toEqual([
+      "/help",
+      "/status",
+      "/settings",
+      "/about",
+      "/feedback",
+      "/contact",
+    ]);
   });
 });
 

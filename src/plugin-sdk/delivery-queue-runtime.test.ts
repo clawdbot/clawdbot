@@ -1,13 +1,14 @@
 /**
  * Tests delivery queue runtime ordering and retry behavior.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  runWithGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   coreDrainPendingDeliveries: vi.fn(async () => {}),
@@ -90,7 +91,7 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
     });
     const deliver = vi.fn(async () => []);
 
-    await runWithGatewayRootWorkAdmission(async () => {
+    await runWithGatewayRootWorkAdmissionForTest(async () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       const pending = drainPendingDeliveries({
         drainKey: "demo:test",
@@ -141,8 +142,10 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
     });
 
     expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledTimes(1);
-    const [[{ deliver: lazyDeliver }]] = mocks.coreDrainPendingDeliveries.mock
-      .calls as unknown as Array<[{ deliver?: unknown }]>;
+    const [{ deliver: lazyDeliver }] = expectDefined(
+      (mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0],
+      "(mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0] test invariant",
+    );
     expect(lazyDeliver).toBe(mocks.deliverOutboundPayloads);
   });
 
@@ -159,8 +162,10 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
     });
 
     expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledTimes(1);
-    const [[{ deliver: explicitDeliver }]] = mocks.coreDrainPendingDeliveries.mock
-      .calls as unknown as Array<[{ deliver?: unknown }]>;
+    const [{ deliver: explicitDeliver }] = expectDefined(
+      (mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0],
+      "(mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0] test invariant",
+    );
     expect(explicitDeliver).toBe(deliver);
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });

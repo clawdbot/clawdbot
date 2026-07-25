@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { resolveAndroidVersion, syncAndroidVersioning } from "../../../scripts/lib/android-version.ts";
 
 type ReleaseArtifact = {
-  flavorName: "play" | "third-party";
+  flavorName: "play" | "wear" | "third-party";
   kind: "aab" | "apk";
   gradleTask: string;
   sourcePath: string;
@@ -165,8 +165,8 @@ function parseArgs(argv: string[]): CliOptions {
     switch (arg) {
       case "--artifact": {
         const value = argv[index + 1];
-        if (value !== "all" && value !== "play" && value !== "third-party") {
-          throw new Error("--artifact must be one of: all, play, third-party");
+        if (value !== "all" && value !== "play" && value !== "wear" && value !== "third-party") {
+          throw new Error("--artifact must be one of: all, play, wear, third-party");
         }
         artifact = value;
         index += 1;
@@ -189,9 +189,9 @@ function parseArgs(argv: string[]): CliOptions {
       case "--help": {
         console.log(
           [
-            "Usage: bun apps/android/scripts/build-release-artifacts.ts [--artifact all|play|third-party] [--dry-run] [--verify-apk PATH]",
+            "Usage: bun apps/android/scripts/build-release-artifacts.ts [--artifact all|play|wear|third-party] [--dry-run] [--verify-apk PATH]",
             "",
-            "Builds the signed Play AAB and third-party APK from apps/android/version.json.",
+            "Builds the signed phone, Wear, and third-party Android artifacts.",
           ].join("\n"),
         );
         process.exit(0);
@@ -222,6 +222,12 @@ function pinnedApkCertificateSha256(): string {
 
 function releaseArtifacts(versionName: string): ReleaseArtifact[] {
   return [
+    {
+      flavorName: "wear",
+      kind: "aab",
+      gradleTask: ":wear:bundleRelease",
+      sourcePath: join(androidDir, "wear", "build", "outputs", "bundle", "release", "wear-release.aab"),
+    },
     {
       flavorName: "play",
       kind: "aab",
@@ -265,8 +271,24 @@ function writeSha256File(path: string): string {
   return hash;
 }
 
-function verifyAabSignature(path: string): void {
+function verifyAabSignature(path: string, expectedCertificateSha256: string): void {
   execFileSync("jarsigner", ["-verify", path], { stdio: "ignore" });
+  const output = execFileSync("keytool", ["-printcert", "-jarfile", path], {
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C", LANG: "C" },
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const fingerprints = Array.from(output.matchAll(/^\s*SHA256:\s*([a-fA-F0-9:]+)\s*$/gmu)).map(
+    (match) => match[1]?.replaceAll(":", "").toLowerCase(),
+  );
+  if (fingerprints.length !== 1 || !/^[a-f0-9]{64}$/u.test(fingerprints[0] ?? "")) {
+    throw new Error(`Expected exactly one SHA-256 signing certificate for ${path}`);
+  }
+  if (fingerprints[0] !== expectedCertificateSha256) {
+    throw new Error(
+      `AAB signing certificate mismatch for ${path}: expected ${expectedCertificateSha256}, got ${fingerprints[0]}`,
+    );
+  }
 }
 
 function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
@@ -320,10 +342,16 @@ function verifyApkSignature(path: string, expectedCertificateSha256: string): vo
     throw new Error(`apksigner verification failed for ${path}`);
   }
 
-  const fingerprints = Array.from(
-    output.matchAll(/^Signer #[0-9]+ certificate SHA-256 digest: ([a-fA-F0-9:]+)$/gmu),
-    (match) => match[1].replaceAll(":", "").toLowerCase(),
-  );
+  const fingerprints: string[] = [];
+  for (const match of output.matchAll(
+    /^Signer #[0-9]+ certificate SHA-256 digest: ([a-fA-F0-9:]+)$/gmu,
+  )) {
+    const fingerprint = match[1];
+    if (!fingerprint) {
+      throw new Error(`Malformed SHA-256 signing certificate output for ${path}`);
+    }
+    fingerprints.push(fingerprint.replaceAll(":", "").toLowerCase());
+  }
   if (fingerprints.length !== 1 || !/^[a-f0-9]{64}$/u.test(fingerprints[0] ?? "")) {
     throw new Error(`Expected exactly one SHA-256 signing certificate for ${path}`);
   }
@@ -348,7 +376,7 @@ function verifyArtifactSignature(
   expectedCertificateSha256: string,
 ): void {
   if (artifact.kind === "aab") {
-    verifyAabSignature(outputPath);
+    verifyAabSignature(outputPath, expectedCertificateSha256);
   } else {
     verifyApkSignature(outputPath, expectedCertificateSha256);
   }

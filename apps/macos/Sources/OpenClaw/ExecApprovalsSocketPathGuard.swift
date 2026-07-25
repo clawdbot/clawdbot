@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 
+// periphery:ignore:parameters uid,uuid - Darwin consumes both positions through the imported C ABI.
 @_silgen_name("mbr_uid_to_uuid")
 private func openClawMbrUIDToUUID(
     _ uid: uid_t,

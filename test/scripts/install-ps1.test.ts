@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createScriptTestHarness } from "./test-helpers";
+import { createScriptTestHarness } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.ps1";
 const ENTRYPOINT_RE =
@@ -110,15 +110,116 @@ describe("install.ps1 failure handling", () => {
           scriptWithoutEntryPoint,
           "",
           "$cases = @{",
-          "  '22.18.9' = $false",
-          "  '22.19.0' = $true",
-          "  '23.7.0' = $false",
-          "  '23.10.9' = $false",
-          "  '23.11.0' = $true",
-          "  '24.0.0' = $true",
+          "  '22.22.2' = $false",
+          "  '22.22.3' = $true",
+          "  '23.11.0' = $false",
+          "  '24.14.1' = $false",
+          "  '24.15.0' = $true",
+          "  '25.8.1' = $false",
+          "  '25.9.0' = $true",
+          "  '26.0.0' = $true",
           "}",
           "foreach ($entry in $cases.GetEnumerator()) {",
           "  $actual = Test-NodeVersionSupported -Version $entry.Key",
+          '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "canonical-temp-root",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "$originalTemp = $env:TEMP",
+          "$originalTmp = $env:TMP",
+          '$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-install-temp-test-" + [guid]::NewGuid().ToString("N"))',
+          '$longTemp = Join-Path $sandbox "Long Temp"',
+          "try {",
+          "  New-Item -ItemType Directory -Force -Path $longTemp | Out-Null",
+          "  $env:TEMP = $longTemp",
+          "  $env:TMP = $longTemp",
+          "  $resolved = Resolve-InstallerTempDirectory",
+          "  $expected = (Get-Item -LiteralPath $longTemp -ErrorAction Stop).FullName",
+          '  if ($resolved -ne $expected) { throw "default=$resolved expected=$expected" }',
+          "  $env:TEMP = '\\\\?\\' + $longTemp",
+          "  $env:TMP = $env:TEMP",
+          '  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -ne $longTemp) { throw "prefix not stripped: $candidate" }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }',
+          '  if ($resolved -ne $expected) { throw "extended=$resolved expected=$expected" }',
+          "  # Windows PowerShell 5.1 proof: FSO Folder.Path echoes 8.3; Get-Item.FullName expands it.",
+          "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
+          "  $env:TMP = $longTemp",
+          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { return $longTemp }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }",
+          '  if ($resolved -ne $longTemp) { throw "short=$resolved" }',
+          "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Missing'",
+          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { throw 'unresolvable short alias' }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }",
+          '  if ($resolved -ne $longTemp) { throw "fallback=$resolved" }',
+          "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
+          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) return $candidate }",
+          '  if ($resolved -ne $longTemp) { throw "unchanged-short=$resolved" }',
+          "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
+          "  Initialize-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { return $longTemp }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }",
+          '  if ($script:InstallerTempDirectory -ne $longTemp) { throw "canonical=$script:InstallerTempDirectory" }',
+          '  if ($env:TEMP -ne $longTemp) { throw "TEMP=$env:TEMP" }',
+          '  if ($env:TMP -ne $longTemp) { throw "TMP=$env:TMP" }',
+          "} finally {",
+          "  $env:TEMP = $originalTemp",
+          "  $env:TMP = $originalTmp",
+          "  if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "portable-git-layout",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-portable-git-test-" + [guid]::NewGuid().ToString("N"))',
+          '$portableRoot = Join-Path $sandbox "portable-git"',
+          "try {",
+          "  New-Item -ItemType Directory -Force -Path $sandbox | Out-Null",
+          "  $script:InstallerTempDirectory = $sandbox",
+          "  function Get-PortableGitRoot { return $portableRoot }",
+          "  function Resolve-PortableGitDownload { return @{ Tag = 'test'; Name = 'MinGit.zip'; Url = 'https://example.test/MinGit.zip' } }",
+          "  function Ensure-PortableGitOnUserPath { }",
+          "  function Use-PortableGitIfPresent { return (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe')) }",
+          "  function Invoke-WebRequest { param($Uri, $OutFile) New-Item -ItemType File -Force -Path $OutFile | Out-Null }",
+          "  function Expand-Archive {",
+          "    param($Path, $DestinationPath, [switch]$Force)",
+          "    New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'cmd') | Out-Null",
+          "    New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'etc') | Out-Null",
+          "    New-Item -ItemType File -Force -Path (Join-Path $DestinationPath 'cmd/git.exe') | Out-Null",
+          "    New-Item -ItemType File -Force -Path (Join-Path $DestinationPath 'etc/gitconfig') | Out-Null",
+          "  }",
+          "  Install-PortableGit",
+          "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe'))) { throw 'missing cmd/git.exe' }",
+          "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'etc/gitconfig'))) { throw 'missing etc/gitconfig' }",
+          "  if (@(Get-ChildItem -LiteralPath $sandbox -Filter 'openclaw-portable-git-*').Count -ne 0) { throw 'temporary Git files remain' }",
+          "} finally {",
+          "  if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "sqlite-versions",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "$cases = @{",
+          "  '3.44.5' = $false",
+          "  '3.44.6' = $true",
+          "  '3.46.1' = $false",
+          "  '3.50.6' = $false",
+          "  '3.50.7' = $true",
+          "  '3.51.2' = $false",
+          "  '3.51.3' = $true",
+          "  '3.53.1' = $true",
+          "  'unavailable' = $false",
+          "}",
+          "foreach ($entry in $cases.GetEnumerator()) {",
+          "  $actual = Test-NodeSqliteSupported -Version $entry.Key",
           '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
           "}",
           "",
@@ -132,6 +233,8 @@ describe("install.ps1 failure handling", () => {
           "$env:PROCESSOR_ARCHITEW6432 = $null",
           "$env:PROCESSOR_ARCHITECTURE = 'ARM64'",
           "function Invoke-RestMethod {",
+          "  param([string]$Uri, [object]$Headers, [int]$TimeoutSec)",
+          '  if ($TimeoutSec -ne 30) { throw "TimeoutSec=$TimeoutSec" }',
           "  [pscustomobject]@{",
           "    tag_name = 'v2.54.0.windows.1'",
           "    assets = @(",
@@ -162,7 +265,8 @@ describe("install.ps1 failure handling", () => {
           '  throw "Unexpected CIM class $ClassName"',
           "}",
           "function Invoke-RestMethod {",
-          "  param([string]$Uri, [object]$Headers)",
+          "  param([string]$Uri, [object]$Headers, [int]$OperationTimeoutSeconds)",
+          '  if ($OperationTimeoutSeconds -ne 30) { throw "OperationTimeoutSeconds=$OperationTimeoutSeconds" }',
           "  if ($Uri -eq 'https://nodejs.org/dist/index.json') {",
           "    return @(",
           "      [pscustomobject]@{ version = 'v24.17.0'; files = @('win-arm64-zip', 'win-x64-zip') }",
@@ -198,6 +302,119 @@ describe("install.ps1 failure handling", () => {
           'if ($result -ne "--max-old-space-size=12288") { throw "quoted token result=$result" }',
           '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--max-old-space-size=`"12288`"" -MinOldSpaceMb 8192',
           'if ($result -ne "--max-old-space-size=12288") { throw "quoted value result=$result" }',
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "winget-node-delayed-path",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'winget') { return $true }",
+          "  return $null",
+          "}",
+          "function Join-Path {",
+          "  param([string]$Path, [string]$ChildPath)",
+          "  return \"$($Path.TrimEnd('\\'))\\$ChildPath\"",
+          "}",
+          "function Test-Path {",
+          "  param([string]$Path)",
+          "  return ($Path -eq 'C:\\Program Files\\nodejs\\node.exe')",
+          "}",
+          "filter Out-Host { }",
+          "$env:ProgramW6432 = 'C:\\Program Files'",
+          "$env:ProgramFiles = 'C:\\Program Files (x86)'",
+          "$env:Path = 'C:\\Windows\\System32'",
+          "function winget {",
+          "  $global:LASTEXITCODE = 0",
+          "  Write-Output 'winget output'",
+          "}",
+          "function Check-Node {",
+          "  return (($env:Path -split ';') -contains 'C:\\Program Files\\nodejs')",
+          "}",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if (($env:Path -split ';')[0] -ne 'C:\\Program Files\\nodejs') { throw \"Path=$env:Path\" }",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "chocolatey-node-upgrade",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'choco') { return $true }",
+          "  return $null",
+          "}",
+          "filter Out-Host { }",
+          "function choco {",
+          "  $script:chocoArgs = $args -join ' '",
+          "  $global:LASTEXITCODE = 0",
+          "  Write-Output 'Chocolatey output'",
+          "}",
+          "function Check-Node { return $true }",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if ($script:chocoArgs -ne 'upgrade nodejs-lts -y --install-if-not-installed') {",
+          '  throw "Args=$script:chocoArgs"',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "scoop-node-update",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'scoop') { return $true }",
+          "  return $null",
+          "}",
+          "filter Out-Host { }",
+          "$env:Path = 'C:\\session-bin'",
+          "$script:scoopCalls = @()",
+          "function scoop {",
+          "  $script:scoopCalls += ($args -join ' ')",
+          "  $global:LASTEXITCODE = 0",
+          "  Write-Output 'Scoop output'",
+          "}",
+          "function Check-Node { return $true }",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if (($script:scoopCalls -join '|') -ne 'update|install nodejs-lts|update nodejs-lts') {",
+          "  throw \"Calls=$($script:scoopCalls -join '|')\"",
+          "}",
+          "if (($env:Path -split ';') -notcontains 'C:\\session-bin') { throw \"Path=$env:Path\" }",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "package-manager-node-validation-failure",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-Command {",
+          "  [CmdletBinding()]",
+          "  param([string]$Name)",
+          "  if ($Name -eq 'choco') { return $true }",
+          "  return $null",
+          "}",
+          "filter Out-Host { }",
+          "function choco {",
+          "  $global:LASTEXITCODE = 0",
+          "  Write-Output 'Chocolatey output'",
+          "}",
+          "function Check-Node { return $false }",
+          "$result = @(Install-Node)",
+          'if ($result.Count -ne 1 -or $result[0] -ne $false) { throw "Install-Node returned $result" }',
           "",
         ].join("\n"),
       },
@@ -347,22 +564,67 @@ describe("install.ps1 failure handling", () => {
 
   it("checks the full supported Node version range", () => {
     const versionBody = extractFunctionBody(source, "Test-NodeVersionSupported");
+    const sqliteBody = extractFunctionBody(source, "Test-NodeSqliteSupported");
     const checkNodeBody = extractFunctionBody(source, "Check-Node");
     expect(versionBody).toContain("$major -eq 22");
-    expect(versionBody).toContain("$minor -ge 19");
-    expect(versionBody).toContain("$major -eq 23");
-    expect(versionBody).toContain("$minor -ge 11");
-    expect(versionBody).toContain("$major -gt 23");
+    expect(versionBody).toContain("$patch -ge 3");
+    expect(versionBody).toContain("$major -eq 24");
+    expect(versionBody).toContain("$minor -ge 15");
+    expect(versionBody).toContain("$major -eq 25");
+    expect(versionBody).toContain("$minor -ge 9");
+    expect(versionBody).toContain("$major -gt 25");
+    expect(sqliteBody).toContain("$minor -eq 51 -and $patch -ge 3");
     expect(checkNodeBody).toContain("Test-NodeVersionSupported -Version $nodeVersion");
+    expect(checkNodeBody).toContain("Get-Command node -CommandType Application");
+    expect(checkNodeBody).toContain("SELECT sqlite_version() AS version");
+    expect(checkNodeBody).toContain("$sqliteProbe | & $nodePath -");
+    expect(checkNodeBody).not.toContain("& $nodePath -e");
+    expect(checkNodeBody).toContain("Test-NodeSqliteSupported -Version $sqliteVersion");
+    expect(checkNodeBody).toContain(
+      "SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required",
+    );
+    expect(source).toContain("Please install Node.js 24.15+ manually:");
   });
 
   runIfPowerShell("accepts only supported Node versions", () => {
     expectBatchedPowerShellCase("node-versions");
+    expectBatchedPowerShellCase("sqlite-versions");
+  });
+
+  runIfPowerShell("normalizes and exports one installer temp root", () => {
+    expectBatchedPowerShellCase("canonical-temp-root");
+  });
+
+  runIfPowerShell("installs portable Git from multiple archive roots without collisions", () => {
+    expectBatchedPowerShellCase("portable-git-layout");
+  });
+
+  runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {
+    expectBatchedPowerShellCase("winget-node-delayed-path");
+    expectBatchedPowerShellCase("chocolatey-node-upgrade");
+    expectBatchedPowerShellCase("scoop-node-update");
+    expectBatchedPowerShellCase("package-manager-node-validation-failure");
+  });
+
+  it("discovers a winget Node install before the machine PATH refreshes", () => {
+    const installNodeBody = extractFunctionBody(source, "Install-Node");
+    const addInstalledNodeBody = extractFunctionBody(source, "Add-InstalledNodeToProcessPath");
+    expect(installNodeBody).toContain("Add-InstalledNodeToProcessPath | Out-Null");
+    expect(addInstalledNodeBody).toContain("$env:ProgramW6432");
+    expect(addInstalledNodeBody).toContain("$env:ProgramFiles");
+    expect(addInstalledNodeBody).toContain('Join-Path $nodeDir "node.exe"');
+    expect(addInstalledNodeBody).toContain("Add-ToProcessPath $nodeDir");
   });
 
   it("runs npm install through the resolved command with quiet CI defaults", () => {
     const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
     expect(npmInstallBody).toContain("$npmOutput = Invoke-NpmCommand -Arguments");
+    expect(npmInstallBody).toContain("$npmDebugLogRoots = @(Get-NpmDebugLogRootCandidates)");
+    expect(npmInstallBody).toContain('$npmInstallArguments = @("install", "-g")');
+    expect(npmInstallBody).toContain('Write-Host "[!] npm install failed; retrying once"');
+    expect(
+      npmInstallBody.match(/Invoke-NpmCommand -Arguments \$npmInstallArguments/g),
+    ).toHaveLength(2);
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_LOGLEVEL = "error"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_UPDATE_NOTIFIER = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_FUND = "false"');
@@ -372,18 +634,14 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_BEFORE");
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE");
     expect(npmInstallBody).toContain('$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"');
-    expect(npmInstallBody).toContain(
-      [
-        "$npmOutput = Invoke-NpmCommand -Arguments",
-        '(@("install", "-g") + $freshnessArgs + @("$installSpec"))',
-      ].join(" "),
-    );
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_LOGLEVEL = $prevLogLevel");
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_BEFORE = $prevBefore");
     expect(npmInstallBody).toContain(
       "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
     );
-    expect(npmInstallBody).toContain("Write-NpmInstallFailureDetails -Output $npmOutput");
+    expect(npmInstallBody).toContain(
+      "Write-NpmInstallFailureDetails -Output $npmOutput -CacheRoots $npmDebugLogRoots",
+    );
     expect(source).toContain("function Get-LatestNpmDebugLogPath {");
     expect(source).toContain("Get-Content -LiteralPath $latestLog -Tail 120");
   });
@@ -421,6 +679,30 @@ describe("install.ps1 failure handling", () => {
     expect(mainBody).toContain(
       'Invoke-NpmCommand -Arguments @("list", "-g", "--depth", "0", "--json")',
     );
+  });
+
+  it("selects one canonical temp root for installer and child process paths", () => {
+    const resolveBody = extractFunctionBody(source, "Resolve-InstallerTempDirectory");
+    const initializeBody = extractFunctionBody(source, "Initialize-InstallerTempDirectory");
+    const portableNodeBody = extractFunctionBody(source, "Install-PortableNode");
+    const portableGitBody = extractFunctionBody(source, "Install-PortableGit");
+    const commandSafeBody = extractFunctionBody(source, "Get-WindowsCommandSafeDirectory");
+
+    expect(resolveBody).toContain("Get-Item -LiteralPath $pathToResolve -ErrorAction Stop");
+    expect(resolveBody).toContain(".FullName");
+    expect(resolveBody).toContain("FSO Folder.Path echoes 8.3 aliases");
+    expect(resolveBody).not.toContain("Scripting.FileSystemObject");
+    expect(resolveBody).toContain("$resolvedCandidate.Substring(8)");
+    expect(resolveBody).toContain("$resolvedCandidate.Substring(4)");
+    expect(resolveBody).toContain("Test-Path -LiteralPath $resolvedCandidate -PathType Container");
+    expect(initializeBody).toContain("$script:InstallerTempDirectory = $tempDirectory");
+    expect(initializeBody).toContain("$env:TEMP = $tempDirectory");
+    expect(initializeBody).toContain("$env:TMP = $tempDirectory");
+    expect(portableNodeBody).toContain("Join-Path $script:InstallerTempDirectory");
+    expect(portableGitBody).toContain("Join-Path $script:InstallerTempDirectory");
+    expect(commandSafeBody).toContain("return $script:InstallerTempDirectory");
+    expect(source.match(/^Initialize-InstallerTempDirectory$/gm)).toHaveLength(1);
+    expect(source).not.toContain("Get-InstallerTempDirectory");
   });
 
   it("rejects OpenClaw GitHub source targets for npm installs", () => {
@@ -483,6 +765,7 @@ describe("install.ps1 failure handling", () => {
     const depsRootBody = extractFunctionBody(source, "Get-OpenClawDepsRoot");
     const resolveNodeBody = extractFunctionBody(source, "Resolve-PortableNodeDownload");
     const expandNodeBody = extractFunctionBody(source, "Expand-PortableNodeArchive");
+    const timeoutParametersBody = extractFunctionBody(source, "Get-WebRequestTimeoutParameters");
 
     expect(installNodeBody).toContain("Install-PortableNode");
     expect(installNodeBody).toContain("Portable Node.js bootstrap failed");
@@ -500,6 +783,10 @@ describe("install.ps1 failure handling", () => {
       '[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")',
     );
     expect(portableNodeBody).toContain("Invoke-WebRequest -UseBasicParsing");
+    expect(portableNodeBody).toContain(
+      'Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600',
+    );
+    expect(portableNodeBody).toContain("@downloadTimeouts");
     expect(portableNodeBody).toContain("Expand-PortableNodeArchive");
     expect(portableNodeBody).not.toContain("Expand-Archive");
     expect(portableNodeBody).not.toContain("New-Item -ItemType Directory -Force -Path $tmpExtract");
@@ -510,8 +797,15 @@ describe("install.ps1 failure handling", () => {
     );
     expect(expandNodeBody).toContain("System.IO.Compression.ZipFile");
     expect(resolveNodeBody).toContain("https://nodejs.org/dist/index.json");
+    expect(resolveNodeBody).toContain(
+      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30',
+    );
+    expect(resolveNodeBody).toContain("@requestTimeouts");
     expect(resolveNodeBody).toContain("win-$architecture-zip");
     expect(resolveNodeBody).toContain("node-$($release.version)-win-$architecture.zip");
+    expect(timeoutParametersBody).toContain('ContainsKey("OperationTimeoutSeconds")');
+    expect(timeoutParametersBody).toContain("OperationTimeoutSeconds = 30");
+    expect(timeoutParametersBody).toContain("TimeoutSec = $LegacyTimeoutSec");
   });
 
   it("persists user-local portable Git for future git-backed updates", () => {
@@ -539,8 +833,26 @@ describe("install.ps1 failure handling", () => {
     expect(portableArchitectureBody).toContain("PROCESSOR_ARCHITEW6432");
     expect(portableArchitectureBody).toContain("PROCESSOR_ARCHITECTURE");
     expect(portableGitDownloadBody).toContain("Get-WindowsPortableArchitecture");
+    expect(portableGitDownloadBody).toContain(
+      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30',
+    );
+    expect(portableGitDownloadBody).toContain("@requestTimeouts");
+    expect(portableGitBody).toContain(
+      'Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600',
+    );
+    expect(portableGitBody).toContain("@downloadTimeouts");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-arm64\\.zip$'");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-64-bit\\.zip$'");
+    expect(portableGitBody).toContain(
+      '$tempName = "openclaw-portable-git-" + [guid]::NewGuid().ToString("N")',
+    );
+    expect(portableGitBody).toContain(
+      'Join-Path $script:InstallerTempDirectory ($tempName + ".zip")',
+    );
+    expect(portableGitBody).toContain("Join-Path $script:InstallerTempDirectory $tempName");
+    expect(portableGitBody).toContain(
+      "New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null",
+    );
   });
 
   runIfPowerShell("selects native ARM64 MinGit when the release publishes it", () => {
@@ -623,6 +935,8 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain(
       "$env:NODE_OPTIONS = Resolve-NodeOptionsWithMinOldSpace -NodeOptions $prevNodeOptions -MinOldSpaceMb 8192",
     );
+    expect(gitInstallBody).toMatch(/& \$pnpmCommand ui:build\s+if \(\$LASTEXITCODE -ne 0\)/);
+    expect(gitInstallBody).not.toContain("if (-not (& $pnpmCommand ui:build))");
     expect(nodeOptionsBody).toContain("--max-old-space-size=$MinOldSpaceMb");
     expect(nodeOptionsBody).toContain("[Math]::Max");
     expect(gitInstallBody).toContain("& $pnpmCommand build");

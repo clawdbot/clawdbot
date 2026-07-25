@@ -11,29 +11,59 @@ import {
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   listSessionEntries,
+  parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
+  readTranscriptContentRevisionSync,
   resolveSessionAgentId,
   resolveSessionFilePath,
   resolveStorePath,
   type SessionEntry,
 } from "./openclaw-runtime-session.js";
 
-type SessionTranscriptCorpusArtifactKind =
-  | "active-session"
-  | "archive-artifact"
-  | "orphan-file-artifact";
+type SessionTranscriptCorpusArtifactKind = "active-session" | "archive-artifact";
 
 export type SessionTranscriptCorpusEntry = {
   agentId: string;
   sessionFile: string;
   sessionId: string;
+  /** Canonical source revision used by derived transcript consumers. */
+  contentRevision?: string;
   artifactKind: SessionTranscriptCorpusArtifactKind;
   sessionKey?: string;
+  /** Present when an active transcript is addressed by SQLite identity, not a JSONL path. */
+  transcriptSource?: "sqlite";
+  /** Session entry activity timestamp used when the source has no filesystem stat. */
+  updatedAtMs?: number;
   /** True when this transcript belongs to an internal dreaming narrative run. */
   generatedByDreamingNarrative?: boolean;
   /** True when this transcript belongs to an isolated cron run session. */
   generatedByCronRun?: boolean;
 };
+
+function fileContentRevision(filePath: string): string | undefined {
+  try {
+    const stat = fsSync.statSync(filePath, { bigint: true });
+    if (!stat.isFile()) {
+      return undefined;
+    }
+    return `file:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function sqliteContentRevision(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey?: string;
+  storePath: string;
+}): string | undefined {
+  try {
+    return readTranscriptContentRevisionSync(params);
+  } catch {
+    return undefined;
+  }
+}
 
 type SessionEntrySummary = {
   sessionKey: string;
@@ -76,27 +106,58 @@ function extractAgentIdFromSessionPath(absPath: string): string | null {
   return parts[sessionsIndex - 1] || null;
 }
 
-function resolveSessionStoreTranscriptCorpusPath(
+type ResolvedSessionStoreCorpusSource = {
+  sessionFile: string;
+  sessionId: string;
+  transcriptSource: "sqlite" | "file";
+};
+
+function resolveSessionStoreTranscriptCorpusSource(
   agentId: string,
   sessionsDir: string,
+  storePath: string,
   entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
-): string | null {
+): ResolvedSessionStoreCorpusSource | null {
   const sessionFile =
     typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0
       ? entry.sessionFile.trim()
       : undefined;
-  const sessionId =
+  const sqliteMarker = sessionFile ? parseSqliteSessionFileMarker(sessionFile) : undefined;
+  const explicitSessionId =
     typeof entry?.sessionId === "string" && entry.sessionId.trim().length > 0
       ? entry.sessionId.trim()
-      : sessionFile
-        ? parseUsageCountedSessionIdFromFileName(path.basename(sessionFile))
-        : null;
+      : null;
+  const sessionId =
+    explicitSessionId ??
+    sqliteMarker?.sessionId ??
+    (sessionFile ? parseUsageCountedSessionIdFromFileName(path.basename(sessionFile)) : null);
   if (!sessionId) {
     return null;
   }
+  if (sqliteMarker) {
+    if (!sessionFile) {
+      return null;
+    }
+    if (
+      sqliteMarker.sessionId !== sessionId ||
+      normalizeAgentId(sqliteMarker.agentId) !== normalizeAgentId(agentId) ||
+      normalizeComparablePath(sqliteMarker.storePath) !== normalizeComparablePath(storePath)
+    ) {
+      return null;
+    }
+    return {
+      sessionFile,
+      sessionId,
+      transcriptSource: "sqlite",
+    };
+  }
   try {
     if (!sessionFile) {
-      return resolveSessionFilePath(sessionId, undefined, { agentId, sessionsDir });
+      return {
+        sessionFile: resolveSessionFilePath(sessionId, undefined, { agentId, sessionsDir }),
+        sessionId,
+        transcriptSource: "file",
+      };
     }
     const resolved = resolveSessionFilePath(
       sessionId,
@@ -114,7 +175,7 @@ function resolveSessionStoreTranscriptCorpusPath(
         return null;
       }
       return normalizeRealComparablePath(resolved) === normalizeRealComparablePath(candidate)
-        ? candidate
+        ? { sessionFile: candidate, sessionId, transcriptSource: "file" }
         : null;
     }
     const pathAgentId = extractAgentIdFromSessionPath(sessionFile);
@@ -122,7 +183,7 @@ function resolveSessionStoreTranscriptCorpusPath(
       return null;
     }
     return normalizeRealComparablePath(resolved) === normalizeRealComparablePath(sessionFile)
-      ? sessionFile
+      ? { sessionFile, sessionId, transcriptSource: "file" }
       : null;
   } catch {
     return null;
@@ -204,29 +265,26 @@ function collectCronGeneratedSessionKeys(
   return cronGeneratedKeys;
 }
 
-function isRegularSessionTranscriptFile(absPath: string): boolean {
-  try {
-    return fsSync.lstatSync(absPath).isFile();
-  } catch {
-    return false;
-  }
-}
-
 function toSessionStoreCorpusEntry(
   agentId: string,
   sessionsDir: string,
+  storePath: string,
   summary: SessionEntrySummary,
   cronGeneratedSessionKeys: ReadonlySet<string>,
 ): SessionTranscriptCorpusEntry | null {
-  const sessionFile = resolveSessionStoreTranscriptCorpusPath(agentId, sessionsDir, summary.entry);
-  if (!sessionFile || !isUsageCountedSessionTranscriptFileName(path.basename(sessionFile))) {
+  const source = resolveSessionStoreTranscriptCorpusSource(
+    agentId,
+    sessionsDir,
+    storePath,
+    summary.entry,
+  );
+  if (!source) {
     return null;
   }
-  const sessionId =
-    typeof summary.entry.sessionId === "string" && summary.entry.sessionId.trim()
-      ? summary.entry.sessionId.trim()
-      : parseUsageCountedSessionIdFromFileName(path.basename(sessionFile));
-  if (!sessionId) {
+  if (
+    source.transcriptSource === "file" &&
+    !isUsageCountedSessionTranscriptFileName(path.basename(source.sessionFile))
+  ) {
     return null;
   }
   const sessionKey = summary.sessionKey.trim();
@@ -235,11 +293,25 @@ function toSessionStoreCorpusEntry(
     summary.entry,
     cronGeneratedSessionKeys,
   );
+  const contentRevision =
+    source.transcriptSource === "sqlite"
+      ? sqliteContentRevision({
+          agentId,
+          sessionId: source.sessionId,
+          ...(sessionKey ? { sessionKey } : {}),
+          storePath,
+        })
+      : fileContentRevision(source.sessionFile);
   return {
     agentId,
     artifactKind: "active-session",
-    sessionFile,
-    sessionId,
+    sessionFile: source.sessionFile,
+    sessionId: source.sessionId,
+    ...(contentRevision ? { contentRevision } : {}),
+    ...(source.transcriptSource === "sqlite" ? { transcriptSource: "sqlite" as const } : {}),
+    ...(source.transcriptSource === "sqlite" && Number.isFinite(summary.entry.updatedAt)
+      ? { updatedAtMs: summary.entry.updatedAt }
+      : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
@@ -253,6 +325,7 @@ function listSessionTranscriptArtifactFiles(sessionsDir: string): string[] {
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .filter((name) => isUsageCountedSessionTranscriptFileName(name))
+      .filter((name) => isSessionArchiveArtifactName(name))
       .map((name) => path.join(sessionsDir, name));
   } catch {
     return [];
@@ -262,6 +335,7 @@ function listSessionTranscriptArtifactFiles(sessionsDir: string): string[] {
 function classifyTranscriptArtifact(
   artifactPath: string,
   activeEntriesByPath: ReadonlyMap<string, SessionTranscriptCorpusEntry>,
+  activeEntriesBySessionId: ReadonlyMap<string, SessionTranscriptCorpusEntry>,
 ): {
   generatedByDreamingNarrative: boolean;
   generatedByCronRun: boolean;
@@ -277,9 +351,9 @@ function classifyTranscriptArtifact(
   const primarySessionId = parseUsageCountedSessionIdFromFileName(path.basename(artifactPath));
   const primaryEntry =
     primarySessionId && isSessionArchiveArtifactName(path.basename(artifactPath))
-      ? activeEntriesByPath.get(
+      ? (activeEntriesByPath.get(
           normalizeRealComparablePath(path.join(sessionsDir, `${primarySessionId}.jsonl`)),
-        )
+        ) ?? activeEntriesBySessionId.get(primarySessionId))
       : undefined;
   return {
     generatedByDreamingNarrative: primaryEntry?.generatedByDreamingNarrative === true,
@@ -291,20 +365,27 @@ function toArtifactCorpusEntry(
   agentId: string,
   artifactPath: string,
   activeEntriesByPath: ReadonlyMap<string, SessionTranscriptCorpusEntry>,
+  activeEntriesBySessionId: ReadonlyMap<string, SessionTranscriptCorpusEntry>,
 ): SessionTranscriptCorpusEntry | null {
   const sessionId = parseUsageCountedSessionIdFromFileName(path.basename(artifactPath));
   if (!sessionId) {
     return null;
   }
-  const artifactKind = isSessionArchiveArtifactName(path.basename(artifactPath))
-    ? "archive-artifact"
-    : "orphan-file-artifact";
-  const classification = classifyTranscriptArtifact(artifactPath, activeEntriesByPath);
+  if (!isSessionArchiveArtifactName(path.basename(artifactPath))) {
+    return null;
+  }
+  const classification = classifyTranscriptArtifact(
+    artifactPath,
+    activeEntriesByPath,
+    activeEntriesBySessionId,
+  );
+  const contentRevision = fileContentRevision(artifactPath);
   return {
     agentId,
-    artifactKind,
+    artifactKind: "archive-artifact",
     sessionFile: artifactPath,
     sessionId,
+    ...(contentRevision ? { contentRevision } : {}),
     ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
   };
@@ -330,6 +411,7 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
     !configuredStore.includes("{agentId}") &&
     !isAgentOwnedFixedStore;
   const activeEntriesByPath = new Map<string, SessionTranscriptCorpusEntry>();
+  const activeEntriesBySessionId = new Map<string, SessionTranscriptCorpusEntry>();
   const activeEntryOwnersByPath = new Map<string, string>();
   const artifactDirsByPath = new Map<string, string>();
   rememberArtifactDir(artifactDirsByPath, sessionsDir);
@@ -355,22 +437,29 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
     const entry = toSessionStoreCorpusEntry(
       ownerAgentId,
       sessionsDir,
+      storePath,
       summary,
       cronGeneratedSessionKeys,
     );
     if (!entry) {
       continue;
     }
-    const normalizedEntryPath = normalizeRealComparablePath(entry.sessionFile);
-    activeEntryOwnersByPath.set(normalizedEntryPath, ownerAgentId);
-    rememberArtifactDir(artifactDirsByPath, path.dirname(entry.sessionFile));
+    const normalizedEntryPath =
+      entry.transcriptSource === "sqlite" ? null : normalizeRealComparablePath(entry.sessionFile);
+    if (normalizedEntryPath) {
+      activeEntryOwnersByPath.set(normalizedEntryPath, ownerAgentId);
+      rememberArtifactDir(artifactDirsByPath, path.dirname(entry.sessionFile));
+    }
     if (ownerAgentId === normalizedAgentId) {
-      activeEntriesByPath.set(normalizedEntryPath, entry);
+      activeEntriesBySessionId.set(entry.sessionId, entry);
+      if (normalizedEntryPath) {
+        activeEntriesByPath.set(normalizedEntryPath, entry);
+      }
     }
   }
   const includeUnownedArtifacts = !isSharedFixedStore;
-  const corpusEntries = [...activeEntriesByPath.values()].filter((entry) =>
-    isRegularSessionTranscriptFile(entry.sessionFile),
+  const corpusEntries = [...activeEntriesBySessionId.values()].filter(
+    (entry) => entry.transcriptSource === "sqlite",
   );
   const scannedArtifactPaths = new Set<string>();
   for (const artifactDir of artifactDirsByPath.values()) {
@@ -402,7 +491,12 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
       if (!primaryOwner && !includeUnownedArtifacts) {
         continue;
       }
-      const entry = toArtifactCorpusEntry(normalizedAgentId, artifactPath, activeEntriesByPath);
+      const entry = toArtifactCorpusEntry(
+        normalizedAgentId,
+        artifactPath,
+        activeEntriesByPath,
+        activeEntriesBySessionId,
+      );
       if (entry) {
         corpusEntries.push(entry);
       }

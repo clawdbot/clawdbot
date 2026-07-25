@@ -13,9 +13,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 });
 
 import {
-  classifyDiscordGatewayEvent,
   DiscordGatewayLifecycleError,
   createDiscordGatewaySupervisor,
+  type DiscordGatewayEvent,
 } from "./gateway-supervisor.js";
 
 function firstErrorArg(runtime: { error: ReturnType<typeof vi.fn> }): unknown {
@@ -28,24 +28,44 @@ function firstErrorArg(runtime: { error: ReturnType<typeof vi.fn> }): unknown {
 }
 
 describe("classifyDiscordGatewayEvent", () => {
+  function captureGatewayEvent(params: {
+    error: Error;
+    isDisallowedIntentsError?: (err: unknown) => boolean;
+  }): DiscordGatewayEvent {
+    const emitter = new EventEmitter();
+    const supervisor = createDiscordGatewaySupervisor({
+      gateway: { emitter },
+      isDisallowedIntentsError: params.isDisallowedIntentsError ?? (() => false),
+      runtime: { error: vi.fn() } as never,
+    });
+    emitter.emit("error", params.error);
+    let captured: DiscordGatewayEvent | undefined;
+    supervisor.drainPending((event) => {
+      captured = event;
+      return "continue";
+    });
+    supervisor.dispose();
+    if (!captured) {
+      throw new Error("expected a gateway event");
+    }
+    return captured;
+  }
+
   it("maps current gateway errors onto domain events", () => {
     const transientTypeError = new TypeError();
     transientTypeError.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
-    const reconnectEvent = classifyDiscordGatewayEvent({
-      err: new Error("Max reconnect attempts (0) reached after close code 1006"),
-      isDisallowedIntentsError: () => false,
+    const reconnectEvent = captureGatewayEvent({
+      error: new Error("Max reconnect attempts (0) reached after close code 1006"),
     });
-    const fatalEvent = classifyDiscordGatewayEvent({
-      err: new Error("Fatal gateway close code: 4000"),
-      isDisallowedIntentsError: () => false,
+    const fatalEvent = captureGatewayEvent({
+      error: new Error("Fatal gateway close code: 4000"),
     });
-    const disallowedEvent = classifyDiscordGatewayEvent({
-      err: new Error("Fatal gateway close code: 4014"),
+    const disallowedEvent = captureGatewayEvent({
+      error: new Error("Fatal gateway close code: 4014"),
       isDisallowedIntentsError: (err) => String(err).includes("4014"),
     });
-    const transientEvent = classifyDiscordGatewayEvent({
-      err: transientTypeError,
-      isDisallowedIntentsError: () => false,
+    const transientEvent = captureGatewayEvent({
+      error: transientTypeError,
     });
 
     expect(reconnectEvent.type).toBe("reconnect-exhausted");
@@ -60,9 +80,8 @@ describe("classifyDiscordGatewayEvent", () => {
   it("wraps fatal lifecycle stops with discord-specific context", () => {
     const transientTypeError = new TypeError();
     transientTypeError.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
-    const event = classifyDiscordGatewayEvent({
-      err: transientTypeError,
-      isDisallowedIntentsError: () => false,
+    const event = captureGatewayEvent({
+      error: transientTypeError,
     });
 
     const wrapped = new DiscordGatewayLifecycleError(event);

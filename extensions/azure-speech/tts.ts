@@ -25,6 +25,9 @@ export const DEFAULT_AZURE_SPEECH_VOICE_NOTE_FORMAT = "ogg-24khz-16bit-mono-opus
 /** Default telephony output format. */
 export const DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT = "raw-8khz-8bit-mono-mulaw";
 const DEFAULT_AZURE_SPEECH_MAX_BYTES = 16 * 1024 * 1024;
+// Voice discovery should fail boundedly instead of waiting forever when the
+// Azure Speech voices endpoint accepts the connection but never responds.
+const DEFAULT_AZURE_SPEECH_VOICE_LIST_TIMEOUT_MS = 30_000;
 
 type AzureSpeechVoiceEntry = {
   ShortName?: string;
@@ -76,11 +79,7 @@ function escapeXmlAttr(value: string): string {
 }
 
 /** Build escaped SSML for one Azure Speech synthesis request. */
-export function buildAzureSpeechSsml(params: {
-  text: string;
-  voice: string;
-  lang?: string;
-}): string {
+function buildAzureSpeechSsml(params: { text: string; voice: string; lang?: string }): string {
   const lang = trimToUndefined(params.lang) ?? DEFAULT_AZURE_SPEECH_LANG;
   return (
     `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
@@ -156,7 +155,7 @@ export async function listAzureSpeechVoices(params: {
         "Ocp-Apim-Subscription-Key": params.apiKey,
       },
     },
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.timeoutMs ?? DEFAULT_AZURE_SPEECH_VOICE_LIST_TIMEOUT_MS,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(url),
     auditContext: "azure-speech.voices",
   });

@@ -5,40 +5,47 @@ maintainer decisions and review-binding invariants, not incidental
 implementation details. Also read `extensions/AGENTS.md` for the plugin
 boundary rules.
 
-Verified against Telegram Bot API 10.1, July 1 2026.
+Verified against Telegram Bot API 10.2, July 14 2026.
 
 ## Reliability Invariants
 
-- Durable-before-ack on both transports. Polling: the ingress worker advances
-  its offset only after the parent's committed spool enqueue. Webhook: respond
-  200 only after the spool write; a spool-write failure returning non-200 is
-  the redelivery contract, not an error to fix.
-- Completed spool rows tombstone via `complete()`, never `delete`. Telegram can
-  refetch an update after dispatch, and callback side effects would rerun on a
-  plain delete.
-- One retry policy. `spooled-update-retry-policy.ts` is the sole owner of spool
-  backoff and dead-letter decisions; the polling and webhook drains both
-  consume it. The dead-letter age gate is a product decision: over-limit
-  updates keep retrying at the capped delay and only tombstone once older than
-  the minimum age. Do not dead-letter on raw attempt counts, and do not
-  "unstick" a lane by removing the gate.
-- Never swallow inbound processing errors. A transient store error on a
-  spooled replay must record a `failed-retryable` processing result; a
-  swallowed throw acks the update as completed and deletes the message.
-- Spool completes at turn adoption, not settle. Once the recovery-relevant
-  session/run state is durably persisted (`restartRecoveryDeliveryContext` +
-  run id), the spooled row tombstones via `complete()` and the per-chat lane
-  frees. Run health after that is owned by run lifecycle / main-session
-  restart recovery — not by the ingress spool. Pre-adoption timeout
-  (`ISOLATED_INGRESS_ADOPTION_STALL_MS`, default 5 minutes, overridable via
-  `OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS`) is the only ingress
-  guillotine; it dead-letters with `handler-timeout` when claim→adoption
-  stalls. Healthy long turns must not be killed by the spool watchdog.
-- Reply fence abort authority is pre-adoption only. At turn adoption the fence
-  releases its abort controller; core owns all further interruption (queue
-  interrupt mode, reply-run registry aborts). Normal messages never supersede
-  in any chat type; only authorized abort text and authorized explicit
-  commands do.
+### Core drain contracts (do not re-implement in Telegram)
+
+Owned by `src/channels/message/ingress-drain.ts` (+ claim-owner, retry-policy).
+Proof: `src/channels/message/ingress-drain.test.ts`,
+`ingress-claim-owner.test.ts`, `ingress-retry-policy.test.ts`.
+
+- Completed rows tombstone via `complete()`, never `delete`.
+- Complete at turn adoption, not settle. Deferred holds the claim; watchdog
+  stays armed through deferral; dead-letter reason `handler-timeout`.
+- One retry policy: attempt floor **and** age gate (defaults 8 / 24h).
+- Claim refresh heartbeat while dispatching/deferred (`claimLeaseMs / 3`).
+- Never silently complete on transient failure — release/fail via disposition.
+- Pre-adoption supersede tombstones; post-adoption interruption is core-owned
+  (reply-run registry / queue interrupt).
+
+### Telegram-owned (transport + channel policy)
+
+- Durable-before-ack on both transports. Polling: ingress worker advances its
+  offset only after the parent's committed spool enqueue
+  (`writeTelegramSpooledUpdate`). Webhook: respond 200 only after the spool
+  write; non-200 on write failure is the redelivery contract.
+- `update_id`↔event-id encoding and per-chat/topic lane derivation stay in
+  `telegram-ingress-spool.ts` / sequential-key.
+- Polling and webhook both: enqueue then pump
+  `createTelegramTransportIngressDrain(...).drainOnce()` — no private claim
+  loops.
+- Stall timeout: `OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS` →
+  `adoptionStallTimeoutMs` (default 5 min) via
+  `resolveTelegramAdoptionStallTimeoutMs`.
+- Non-retryable classifier: `telegram-ingress-non-retryable.ts`
+  (missing harness, dispatch-dedupe rollback).
+- Supersede predicate: `telegram-ingress-supersede.ts` — only abort text /
+  authorized-looking explicit commands (and ambient room_event pending) may
+  supersede pre-adoption work. Normal messages never supersede.
+- room_event ambient work shares the sequential lane so a later user turn can
+  supersede it pre-adoption; adopted user turns are never touched (core drain
+  supersede is pre-adoption only).
 - No per-message full-store writes. Hot-path SQLite writes are per-entry.
   Rewriting a cache on every send or read stalls the event loop, and that
   stall masquerades as a polling stall (the sent-message-cache regression).

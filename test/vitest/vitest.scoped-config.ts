@@ -1,7 +1,11 @@
 // Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
 import { defineConfig } from "vitest/config";
-import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import {
+  intersectIncludePatterns,
+  loadPatternListFromEnv,
+  narrowIncludePatternsForCli,
+} from "./vitest.pattern-file.ts";
 import {
   nonIsolatedRunnerPath,
   repoRoot,
@@ -203,6 +207,7 @@ export function createScopedVitestConfig(
     isolate?: boolean;
     name?: string;
     fileParallelism?: boolean;
+    intersectIncludeFile?: boolean;
     pool?: "forks" | "threads";
     passWithNoTests?: boolean;
     excludeUnitFastTests?: boolean;
@@ -212,10 +217,14 @@ export function createScopedVitestConfig(
 ) {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
+  const baseSequence = (baseTest as { sequence?: { groupOrder?: number } }).sequence;
   const scopedDir = options?.dir;
   const resolvedScopedDir = scopedDir ? path.join(repoRoot, scopedDir) : undefined;
   const env = options?.env;
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const externalIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const includeFromEnv = options?.intersectIncludeFile
+    ? intersectIncludePatterns(include, externalIncludePatterns)
+    : externalIncludePatterns;
   const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
     scopedDir,
   });
@@ -229,6 +238,9 @@ export function createScopedVitestConfig(
     [...(baseTest.exclude ?? []), ...unitFastExcludePatterns, ...(options?.exclude ?? [])],
     scopedDir,
   );
+  const scopedEnvInclude = includeFromEnv
+    ? relativizeScopedPatterns(includeFromEnv, scopedDir)
+    : includeFromEnv;
   const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
   const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
   const setupFiles = [
@@ -263,15 +275,18 @@ export function createScopedVitestConfig(
         ? {}
         : {
             sequence: {
-              ...baseTest.sequence,
+              ...baseSequence,
               groupOrder: scopedGroupOrder,
             },
           }),
       ...(options?.passWithNoTests !== undefined
         ? { passWithNoTests: options.passWithNoTests }
-        : shouldPassWithNoTestsForCliIncludes(scopedCliInclude, exclude)
+        : externalIncludePatterns !== null &&
+            shouldPassWithNoTestsForCliIncludes(scopedEnvInclude, exclude)
           ? { passWithNoTests: true }
-          : {}),
+          : shouldPassWithNoTestsForCliIncludes(scopedCliInclude, exclude)
+            ? { passWithNoTests: true }
+            : {}),
     },
   });
 }

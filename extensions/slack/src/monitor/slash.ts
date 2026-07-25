@@ -1,6 +1,11 @@
 // Slack plugin module implements slash behavior.
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
-import { loadModelCatalog, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import type { Block, KnownBlock } from "@slack/web-api";
+import {
+  loadPreparedModelCatalog,
+  resolveAgentDir,
+  resolveDefaultModelForAgent,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatCommandArgMenuTitle,
@@ -36,7 +41,6 @@ import {
   compileSlackInteractiveReplies,
   isSlackInteractiveRepliesEnabled,
 } from "../interactive-replies.js";
-import { SLACK_RESPONSE_URL_MAX_USES } from "../limits.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackCommandIngress, resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
@@ -51,9 +55,11 @@ import {
 } from "./external-arg-menu-store.js";
 import { escapeSlackMrkdwn } from "./mrkdwn.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
+import {
+  createSlackResponseUrlBudget,
+  isSlackResponseAlreadyReportedError,
+} from "./response-url-budget.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
-
-type SlackBlock = { type: string; [key: string]: unknown };
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
 const SLACK_COMMAND_ARG_ACTION_LISTENER = /^openclaw_cmdarg/;
@@ -365,11 +371,16 @@ function buildSlackCommandArgMenuBlocks(params: {
   ];
 }
 
+type SlackCommandRegistration =
+  | { mode: "single"; name: string }
+  | { mode: "native" }
+  | { mode: "disabled" };
+
 export async function registerSlackMonitorSlashCommands(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   trackEvent?: () => void;
-}): Promise<void> {
+}): Promise<SlackCommandRegistration> {
   const { ctx, account, trackEvent } = params;
   const startupCfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -386,13 +397,29 @@ export async function registerSlackMonitorSlashCommands(params: {
     command: SlackCommandMiddlewareArgs["command"];
     ack: SlackCommandMiddlewareArgs["ack"];
     respond: SlackCommandMiddlewareArgs["respond"];
+    responseTransport?: "response-url" | "web-api";
     body?: unknown;
     prompt: string;
     commandArgs?: CommandArgs;
     commandDefinition?: ChatCommandDefinition;
   }) => {
-    const { command, ack, respond, body, prompt, commandArgs, commandDefinition } = p;
-    const responseUrlBudget: { used: number; closed?: boolean } = { used: 0 };
+    const {
+      command,
+      ack,
+      respond: respondWithoutBudget,
+      body,
+      prompt,
+      commandArgs,
+      commandDefinition,
+    } = p;
+    const responseBudget =
+      p.responseTransport === "web-api"
+        ? {
+            respond: respondWithoutBudget,
+            remaining: () => undefined,
+          }
+        : createSlackResponseUrlBudget(respondWithoutBudget);
+    const respond = responseBudget.respond;
     const cfg = getRuntimeConfigSnapshot() ?? ctx.cfg;
     try {
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
@@ -596,7 +623,16 @@ export async function registerSlackMonitorSlashCommands(params: {
         // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition.key === "think" && menuNeedsModelContext
-            ? await loadModelCatalog({ config: cfg, readOnly: true })
+            ? await loadPreparedModelCatalog({
+                config: cfg,
+                ...(menuRoute
+                  ? {
+                      agentId: menuRoute.agentId,
+                      agentDir: resolveAgentDir(cfg, menuRoute.agentId),
+                    }
+                  : {}),
+                readOnly: true,
+              })
             : undefined;
         const menu = resolveCommandArgMenu({
           command: commandDefinition,
@@ -664,7 +700,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         sessionPrefix: slashCommand.sessionPrefix,
         userId: command.user_id,
         targetSessionKey: route.sessionKey,
-        lowercaseSessionKey: true,
+        sessionKeyCase: "lowercase",
       });
       const slashReplyTarget =
         !slashCommand.ephemeral && isRoomish
@@ -745,7 +781,6 @@ export async function registerSlackMonitorSlashCommands(params: {
         await deliverSlackSlashReplies({
           replies,
           respond,
-          responseUrlBudget,
           ephemeral: slashCommand.ephemeral,
           textLimit: ctx.textLimit,
           messageSentHookTarget,
@@ -759,15 +794,26 @@ export async function registerSlackMonitorSlashCommands(params: {
             channel: "slack",
             accountId: route.accountId,
           }),
+          responseBudget,
         });
       };
+      const pendingSlashReplies: ReplyPayload[] = [];
+      const shouldDeliverBlockImmediately = commandDefinition?.key === "login";
 
       const { counts } = await dispatchReplyWithDispatcher({
         ctx: ctxPayload,
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
-          deliver: async (payload) => deliverSlashPayloads([payload]),
+          // /login must expose its device code before the auth flow can finish. Other block
+          // streams stay batched so the response_url planner can honor Slack's five-call cap.
+          deliver: async (payload, info) => {
+            if (info.kind === "block" && shouldDeliverBlockImmediately) {
+              await deliverSlashPayloads([payload]);
+              return;
+            }
+            pendingSlashReplies.push(payload);
+          },
           onError: (err, info) => {
             runtime.error?.(
               danger(`slack slash ${info.kind} reply failed: ${formatSlackError(err)}`),
@@ -779,13 +825,14 @@ export async function registerSlackMonitorSlashCommands(params: {
           onModelSelected,
         },
       });
-      if (counts.final + counts.tool + counts.block === 0) {
+      if (pendingSlashReplies.length > 0) {
+        await deliverSlashPayloads(pendingSlashReplies);
+      } else if (counts.final + counts.tool + counts.block === 0) {
         await deliverSlashPayloads([]);
       }
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${formatErrorMessage(err)}`));
-      if (!responseUrlBudget.closed && responseUrlBudget.used < SLACK_RESPONSE_URL_MAX_USES) {
-        responseUrlBudget.used += 1;
+      if (!isSlackResponseAlreadyReportedError(err) && responseBudget.remaining() !== 0) {
         await respond({
           text: "Sorry, something went wrong handling that command.",
           response_type: "ephemeral",
@@ -830,7 +877,20 @@ export async function registerSlackMonitorSlashCommands(params: {
     }
   }
 
-  if (nativeCommands.length > 0) {
+  if (slashCommand.enabled) {
+    ctx.app.command(
+      buildSlackSlashCommandMatcher(slashCommand.name),
+      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
+        await handleSlashCommand({
+          command,
+          ack,
+          respond,
+          body,
+          prompt: command.text?.trim() ?? "",
+        });
+      },
+    );
+  } else if (nativeCommands.length > 0) {
     if (!slashCommandsRuntime) {
       throw new Error("Missing commands runtime for native Slack commands.");
     }
@@ -865,25 +925,19 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
       );
     }
-  } else if (slashCommand.enabled) {
-    ctx.app.command(
-      buildSlackSlashCommandMatcher(slashCommand.name),
-      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
-        await handleSlashCommand({
-          command,
-          ack,
-          respond,
-          body,
-          prompt: command.text?.trim() ?? "",
-        });
-      },
-    );
   } else {
     logVerbose("slack: slash commands disabled");
   }
 
+  const registration: SlackCommandRegistration =
+    nativeCommands.length > 0
+      ? { mode: "native" }
+      : slashCommand.enabled
+        ? { mode: "single", name: slashCommand.name }
+        : { mode: "disabled" };
+
   if (nativeCommands.length === 0 || !supportsInteractiveArgMenus) {
-    return;
+    return registration;
   }
 
   const registerArgOptions = () => {
@@ -968,26 +1022,41 @@ export async function registerSlackMonitorSlashCommands(params: {
         action: NonNullable<(typeof ctx.app & { action?: unknown })["action"]>;
       }
     ).action(actionId, async (args: SlackActionMiddlewareArgs) => {
-      const { ack, body, respond } = args;
+      const { ack, body } = args;
+      const respond = (
+        args as unknown as {
+          respond?: SlackCommandMiddlewareArgs["respond"];
+        }
+      ).respond;
       const action = args.action as { value?: string; selected_option?: { value?: string } };
       await ack();
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
         runtime.log?.("slack: drop slash arg action payload (mismatched app/team)");
         return;
       }
-      const respondFn =
+      const respondFn: SlackCommandMiddlewareArgs["respond"] =
         respond ??
-        (async (payload: { text: string; blocks?: SlackBlock[]; response_type?: string }) => {
+        (async (message) => {
           if (!body.channel?.id || !body.user?.id) {
-            return;
+            return new Response(null, { status: 204 });
           }
+          const payload =
+            typeof message === "string"
+              ? { text: message }
+              : (message as {
+                  text?: string;
+                  blocks?: (Block | KnownBlock)[];
+                  mrkdwn?: boolean;
+                });
           await ctx.app.client.chat.postEphemeral({
             token: ctx.botToken,
             channel: body.channel.id,
             user: body.user.id,
-            text: payload.text,
-            blocks: payload.blocks,
+            text: payload.text ?? "",
+            ...(payload.blocks ? { blocks: payload.blocks } : {}),
+            ...(typeof payload.mrkdwn === "boolean" ? { mrkdwn: payload.mrkdwn } : {}),
           });
+          return new Response(null, { status: 200 });
         });
       const actionValue = action?.value ?? action?.selected_option?.value;
       const parsed = parseSlackCommandArgValue(actionValue);
@@ -1033,6 +1102,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         command: commandPayload,
         ack: async () => {},
         respond: respondFn,
+        // Bolt's action responder uses response_url; only the postEphemeral fallback
+        // goes through the uncapped Web API path.
+        responseTransport: respond ? "response-url" : "web-api",
         body,
         prompt,
         commandArgs,
@@ -1041,4 +1113,6 @@ export async function registerSlackMonitorSlashCommands(params: {
     });
   };
   registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
+  return registration;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

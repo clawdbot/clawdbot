@@ -12,11 +12,10 @@ import {
   makePersistedCall,
   writeLegacyCallsJsonl,
 } from "../manager.test-harness.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
+import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import {
   findCallMatchesInStore,
-  flushPendingCallRecordWritesForTest,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
@@ -34,6 +33,9 @@ function installStateRuntime(): void {
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call store tests");
       }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call store tests");
+      }) as never,
     },
   });
 }
@@ -46,7 +48,6 @@ describe("voice-call call record store", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
   });
 
@@ -73,7 +74,6 @@ describe("voice-call call record store", () => {
     );
 
     persistCallRecord(storePath, call);
-    await flushPendingCallRecordWritesForTest();
 
     expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
     const restored = loadActiveCallsFromStore(storePath);
@@ -95,6 +95,9 @@ describe("voice-call call record store", () => {
         }) as never,
         openChannelIngressQueue: (() => {
           throw new Error("openChannelIngressQueue is not used by voice-call store tests");
+        }) as never,
+        openChannelIngressDrain: (() => {
+          throw new Error("openChannelIngressDrain is not used by voice-call store tests");
         }) as never,
       },
     });
@@ -122,7 +125,6 @@ describe("voice-call call record store", () => {
     );
 
     persistCallRecord(storePath, call);
-    await flushPendingCallRecordWritesForTest();
 
     const restored = loadActiveCallsFromStore(storePath);
     const restoredCall = restored.activeCalls.get("call-large");
@@ -182,8 +184,6 @@ describe("voice-call call record store", () => {
         ),
       );
     }
-    await flushPendingCallRecordWritesForTest();
-
     expect(await getCallHistoryFromStore(storePath, 100)).toHaveLength(100);
     const internalMatches = await findCallMatchesInStore(storePath, "call-target");
     expect(internalMatches.byCallId).toMatchObject({

@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   deleteSessionGroup,
@@ -24,14 +27,16 @@ describe("session groups catalog", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function seedSessionStore(entries: Record<string, unknown>): Promise<string> {
+  async function seedSessionStore(entries: Record<string, SessionEntry>): Promise<string> {
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify(entries));
+    for (const [sessionKey, entry] of Object.entries(entries)) {
+      await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
+    }
     return storePath;
   }
 
@@ -70,13 +75,19 @@ describe("session groups catalog", () => {
     expect(result.updatedSessions).toBe(1);
     expect(result.groups.map((group) => group.name)).toEqual(["New", "Other"]);
 
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
-      string,
-      { category?: string; updatedAt: number }
-    >;
-    expect(store["agent:main:dashboard:a"].category).toBe("New");
-    expect(store["agent:main:dashboard:a"].updatedAt).toBe(updatedAtA);
-    expect(store["agent:main:dashboard:b"].category).toBe("Other");
+    const sessionA = loadSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey: "agent:main:dashboard:a",
+    });
+    const sessionB = loadSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey: "agent:main:dashboard:b",
+    });
+    expect(sessionA?.category).toBe("New");
+    expect(sessionA?.updatedAt).toBe(updatedAtA);
+    expect(sessionB?.category).toBe("Other");
   });
 
   it("deletes a group and clears member categories", async () => {
@@ -89,11 +100,13 @@ describe("session groups catalog", () => {
     expect(result.updatedSessions).toBe(1);
     expect(result.groups).toEqual([]);
 
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
-      string,
-      { category?: string }
-    >;
-    expect(store["agent:main:dashboard:a"].category).toBeUndefined();
+    expect(
+      loadSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey: "agent:main:dashboard:a",
+      })?.category,
+    ).toBeUndefined();
   });
 
   it("merges a rename into an existing target group", async () => {

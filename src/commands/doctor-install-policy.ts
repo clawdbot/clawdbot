@@ -22,7 +22,7 @@ function formatTargets(validation: InstallPolicyStaticValidation): string {
 }
 
 /** Builds doctor note lines for static install policy validation and optional deep probing. */
-export async function collectInstallPolicyHealthLines(
+async function collectInstallPolicyHealthLines(
   cfg: OpenClawConfig,
   options: InstallPolicyHealthOptions = {},
 ): Promise<string[]> {

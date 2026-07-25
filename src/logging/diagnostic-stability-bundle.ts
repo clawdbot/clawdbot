@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import v8 from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type {
@@ -1027,10 +1028,10 @@ function collectActiveResources(): DiagnosticActiveResourceSummary | undefined {
 function sanitizeSessionEvidencePath(relativePath: string): string {
   const parts = relativePath.split("/");
   if (parts.length === 4 && parts[0] === "agents" && parts[2] === "sessions") {
-    return `agents/<agent>/sessions/${sanitizeSessionEvidenceFileName(parts[3])}`;
+    return `agents/<agent>/sessions/${sanitizeSessionEvidenceFileName(expectDefined(parts[3], "parts entry at 3"))}`;
   }
   if (parts.length === 2 && parts[0] === "sessions") {
-    return `sessions/${sanitizeSessionEvidenceFileName(parts[1])}`;
+    return `sessions/${sanitizeSessionEvidenceFileName(expectDefined(parts[1], "parts entry at 1"))}`;
   }
   return redactSensitiveText(relativePath, { mode: "tools" });
 }
@@ -1420,3 +1421,4 @@ export function uninstallDiagnosticStabilityFatalHook(): void {
 export function resetDiagnosticStabilityBundleForTest(): void {
   uninstallDiagnosticStabilityFatalHook();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

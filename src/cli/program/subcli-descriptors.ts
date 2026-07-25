@@ -46,7 +46,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "approvals",
-    description: "Manage exec approvals (gateway or node host)",
+    description: "Manage approval policy and pending requests",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -72,13 +72,29 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     parentDefaultHelp: true,
   },
   {
+    name: "users",
+    description: "Manage durable user profiles and email aliases",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "node",
     description: "Run and manage the headless node host service",
     hasSubcommands: true,
   },
   {
+    name: "worker",
+    description: "Run the restricted cloud worker runtime",
+    hasSubcommands: false,
+  },
+  {
     name: "sandbox",
     description: "Manage sandbox containers (Docker-based agent isolation)",
+    hasSubcommands: true,
+  },
+  {
+    name: "fleet",
+    description: "Provision and manage isolated tenant cells (experimental)",
     hasSubcommands: true,
   },
   {

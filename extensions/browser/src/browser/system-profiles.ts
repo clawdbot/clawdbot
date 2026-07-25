@@ -2,14 +2,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
 import { getPwAiModule } from "./pw-ai-module.js";
-import type { BrowserRouteContext } from "./server-context.js";
+import { type BrowserRouteContext, runProfileContextOperation } from "./server-context.js";
+import { isProfileRestartRequiredError } from "./server-context.lifecycle.js";
 import {
   readChromeCookiesDatabase,
   type KeychainSecretReader,
@@ -64,12 +66,12 @@ function resolveSystemBrowser(value?: string): SystemBrowser {
   throw new Error(`unsupported system browser "${value}"; use chrome, brave, edge, or chromium`);
 }
 
-export function resolveSystemBrowserRoot(browser: SystemBrowser, homeDir = os.homedir()): string {
+function resolveSystemBrowserRoot(browser: SystemBrowser, homeDir = os.homedir()): string {
   return path.join(homeDir, "Library", "Application Support", ...SYSTEM_BROWSER_DIRS[browser]);
 }
 
 /** Prefer Chrome's current Network/Cookies location, then its legacy location. */
-export function resolveSystemCookiesFile(root: string, profileId: string): string | undefined {
+function resolveSystemCookiesFile(root: string, profileId: string): string | undefined {
   const candidates = [
     path.join(root, profileId, "Network", "Cookies"),
     path.join(root, profileId, "Cookies"),
@@ -132,7 +134,7 @@ export function listSystemProfiles(
 }
 
 /** Create a transactionally coherent snapshot while Chrome may be writing its WAL. */
-export function snapshotCookieDatabase(source: string): {
+function snapshotCookieDatabase(source: string): {
   databasePath: string;
   cleanup: () => void;
 } {
@@ -140,7 +142,7 @@ export function snapshotCookieDatabase(source: string): {
   fs.mkdirSync(tmpRoot, { recursive: true });
   const tempDir = fs.mkdtempSync(path.join(tmpRoot, "openclaw-system-cookies-"));
   const databasePath = path.join(tempDir, "Cookies");
-  const sourceDatabase = new DatabaseSync(source, { readOnly: true });
+  const sourceDatabase = openNodeSqliteDatabase(source, { readOnly: true });
   try {
     sourceDatabase.exec("PRAGMA busy_timeout = 5000");
     sourceDatabase.prepare("VACUUM INTO ?").run(databasePath);
@@ -159,7 +161,12 @@ export function snapshotCookieDatabase(source: string): {
 /** Import decrypted system-profile cookies into one managed OpenClaw profile. */
 export async function importSystemProfileCookies(
   params: ImportSystemProfileParams,
-  runtime: { ctx: BrowserRouteContext; createProfile: CreateProfile },
+  runtime: {
+    ctx: BrowserRouteContext;
+    createProfile: CreateProfile;
+    signal?: AbortSignal;
+    finalize?: (result: ImportSystemProfileResult) => Promise<void>;
+  },
   deps: SystemProfileDeps = {},
 ): Promise<ImportSystemProfileResult> {
   if ((deps.platform ?? process.platform) !== "darwin") {
@@ -197,64 +204,100 @@ export async function importSystemProfileCookies(
       `profile "${into}" is not a locally managed OpenClaw profile; import into a fresh profile name`,
     );
   }
-  await profileCtx.ensureBrowserAvailable({ headless: true });
-  const userDataDir = resolveOpenClawUserDataDir(into);
-  const runningUserDataDir = runtime.ctx.state().profiles.get(into)?.running?.userDataDir;
-  if (!runningUserDataDir || path.resolve(runningUserDataDir) !== path.resolve(userDataDir)) {
-    throw new Error(
-      `managed profile "${into}" is not owned by this OpenClaw browser runtime; stop it and import into a fresh profile name`,
-    );
-  }
-  if (!usesOpenClawMockKeychain(userDataDir)) {
-    throw new Error(
-      `managed profile "${into}" does not use the OpenClaw mock keychain; import into a fresh profile name`,
-    );
-  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await runProfileContextOperation(
+        profileCtx,
+        runtime.signal,
+        async (signal, profileRuntime) => {
+          await profileCtx.ensureBrowserAvailable({ headless: true, signal });
+          const userDataDir = resolveOpenClawUserDataDir(into);
+          const runningUserDataDir = profileRuntime.running?.userDataDir;
+          if (
+            !runningUserDataDir ||
+            path.resolve(runningUserDataDir) !== path.resolve(userDataDir)
+          ) {
+            throw new Error(
+              `managed profile "${into}" is not owned by this OpenClaw browser runtime; stop it and import into a fresh profile name`,
+            );
+          }
+          if (!usesOpenClawMockKeychain(userDataDir)) {
+            throw new Error(
+              `managed profile "${into}" does not use the OpenClaw mock keychain; import into a fresh profile name`,
+            );
+          }
 
-  const copied = snapshotCookieDatabase(cookiesFile);
-  try {
-    const decrypted = await readChromeCookiesDatabase({
-      browser,
-      databasePath: copied.databasePath,
-      domains: params.domains,
-      readSecret: deps.readSecret,
-    });
-    const pw = await getPwAiModule({ mode: "strict" });
-    if (!pw) {
-      throw new Error("Playwright is required to import system profile cookies");
-    }
-    let injected = 0;
-    if (decrypted.cookies.length > 0) {
-      const tab = await profileCtx.ensureTabAvailable(undefined, { allowPlaywrightFallback: true });
-      try {
-        const result = await pw.cookiesSetManyViaPlaywright({
-          cdpUrl: profileCtx.profile.cdpUrl,
-          targetId: tab.targetId,
-          cookies: decrypted.cookies,
-        });
-        injected = result.added;
-      } catch {
-        // Session/CDP errors may include rejected cookie payloads. Keep decrypted values private.
-        throw new Error(`failed to inject imported cookies into managed profile "${into}"`);
+          const copied = snapshotCookieDatabase(cookiesFile);
+          try {
+            const decrypted = await readChromeCookiesDatabase({
+              browser,
+              databasePath: copied.databasePath,
+              domains: params.domains,
+              readSecret: deps.readSecret,
+              signal,
+            });
+            signal.throwIfAborted();
+            const pw = await getPwAiModule({ mode: "strict" });
+            if (!pw) {
+              throw new Error("Playwright is required to import system profile cookies");
+            }
+            let injected = 0;
+            if (decrypted.cookies.length > 0) {
+              const tab = await profileCtx.ensureTabAvailable(undefined, {
+                allowPlaywrightFallback: true,
+                signal,
+              });
+              try {
+                const result = await pw.cookiesSetManyViaPlaywright({
+                  cdpUrl: profileCtx.profile.cdpUrl,
+                  targetId: tab.targetId,
+                  cookies: decrypted.cookies,
+                  signal,
+                });
+                signal.throwIfAborted();
+                injected = result.added;
+              } catch {
+                // Session/CDP errors may include rejected cookie payloads. Keep decrypted values private.
+                throw new Error(`failed to inject imported cookies into managed profile "${into}"`);
+              }
+            }
+            // Cookies rejected by Playwright are counted, not fatal: the import stays
+            // best-effort and imported reflects what actually landed in the profile.
+            const rejected = decrypted.cookies.length - injected;
+            const result: ImportSystemProfileResult = {
+              ok: true,
+              systemProfile,
+              into,
+              browser,
+              cookies: {
+                total: decrypted.counts.total,
+                imported: injected,
+                failed: decrypted.counts.failed + rejected,
+                skipped: decrypted.counts.skipped,
+              },
+              domains: decrypted.domains,
+            };
+            return result;
+          } finally {
+            copied.cleanup();
+          }
+        },
+        {
+          commit: async (result) => await runtime.finalize?.(result),
+        },
+      );
+    } catch (err) {
+      if (isProfileRestartRequiredError(err)) {
+        if (attempt === 0) {
+          await profileCtx.ensureBrowserAvailable({ headless: true, signal: runtime.signal });
+          continue;
+        }
+        throw new BrowserProfileUnavailableError(
+          `Managed profile "${into}" could not stabilize for cookie import.`,
+        );
       }
+      throw err;
     }
-    // Cookies rejected by Playwright are counted, not fatal: the import stays
-    // best-effort and imported reflects what actually landed in the profile.
-    const rejected = decrypted.cookies.length - injected;
-    return {
-      ok: true,
-      systemProfile,
-      into,
-      browser,
-      cookies: {
-        total: decrypted.counts.total,
-        imported: injected,
-        failed: decrypted.counts.failed + rejected,
-        skipped: decrypted.counts.skipped,
-      },
-      domains: decrypted.domains,
-    };
-  } finally {
-    copied.cleanup();
   }
+  throw new Error(`managed profile "${into}" could not stabilize for cookie import`);
 }

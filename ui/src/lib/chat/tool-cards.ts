@@ -1,11 +1,15 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI chat domain owns pure tool-card extraction rules.
-import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
+import {
+  extractCanvasFromDetails,
+  extractCanvasFromText,
+} from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
@@ -88,7 +92,7 @@ function hasToolErrorStatus(value: unknown): boolean {
   return typeof value === "string" && TOOL_ERROR_STATUSES.has(value.trim().toLowerCase());
 }
 
-export function isToolErrorOutput(outputText: string | undefined): boolean {
+function isToolErrorOutput(outputText: string | undefined): boolean {
   if (!outputText) {
     return false;
   }
@@ -258,6 +262,37 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
   return truncateUtf16Safe(normalized, 120);
 }
 
+const TOOL_ARGUMENT_PREVIEW_KEYS = [
+  "message",
+  "prompt",
+  "task",
+  "query",
+  "text",
+  "description",
+] as const;
+
+/** First meaningful user-authored line for compact generic tool rows. */
+export function resolveCollapsedToolArgumentPreview(args: unknown): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  const record = args as Record<string, unknown>;
+  for (const key of TOOL_ARGUMENT_PREVIEW_KEYS) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const firstLine = value.split(/\r\n?|\n/).find((line) => line.trim().length > 0);
+    const preview = formatCollapsedToolPreviewText(
+      firstLine ? redactToolPayloadText(firstLine) : undefined,
+    );
+    if (preview) {
+      return preview;
+    }
+  }
+  return undefined;
+}
+
 function findFirstUnmatchedCard(
   cards: ToolCard[],
   id: string,
@@ -281,7 +316,7 @@ function findFirstUnmatchedCard(
   return nameOnlyCandidate;
 }
 
-export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
+function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
@@ -319,9 +354,9 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const callId = resolveToolCallId(item, m);
       const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
-      const preview = extractToolPreview(text, name);
-      const isError = readToolErrorFlag(item) ?? messageIsError;
       const details = item.details ?? m.details;
+      const preview = extractCanvasFromDetails(details) ?? extractToolPreview(text, name);
+      const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
@@ -374,7 +409,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       ...(m.details !== undefined ? { details: m.details } : {}),
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
-      preview: extractToolPreview(text, name),
+      preview: extractCanvasFromDetails(m.details) ?? extractToolPreview(text, name),
     });
   }
 

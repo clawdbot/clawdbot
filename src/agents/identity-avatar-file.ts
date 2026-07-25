@@ -4,7 +4,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
   AVATAR_MAX_BYTES,
@@ -19,7 +19,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
-export type LocalAgentAvatarFailureReason =
+type LocalAgentAvatarFailureReason =
   | "missing"
   | "outside_workspace"
   | "too_large"

@@ -3,11 +3,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import ts from "typescript";
 import {
   pluginSdkDocMetadata,
-  resolvePluginSdkDocImportSpecifier,
   type PluginSdkDocCategory,
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
@@ -27,8 +25,6 @@ export type PluginSdkApiExportKind =
 
 /** Repo source location for a public SDK declaration or module. */
 export type PluginSdkApiSourceLink = {
-  /** One-based source line for docs and review links. */
-  line: number;
   /** Repo-relative source file path. */
   path: string;
 };
@@ -47,10 +43,10 @@ export type PluginSdkApiExport = {
 
 /** API baseline record for one public SDK module/subpath. */
 export type PluginSdkApiModule = {
-  /** Documentation category used to group SDK entrypoints. */
-  category: PluginSdkDocCategory;
-  /** Entry point metadata from the SDK docs registry. */
-  entrypoint: PluginSdkDocEntrypoint;
+  /** Documentation category used to group SDK entrypoints when documented. */
+  category: PluginSdkDocCategory | null;
+  /** Canonical public SDK entrypoint. */
+  entrypoint: string;
   /** Public exports discovered from the TypeScript program. */
   exports: PluginSdkApiExport[];
   /** Package specifier shown to plugin authors. */
@@ -79,15 +75,15 @@ export type PluginSdkApiBaselineRender = {
 
 /** Result returned when writing SDK API baseline artifacts. */
 export type PluginSdkApiBaselineWriteResult = {
-  /** True when any generated artifact content differs from disk. */
+  /** True when the generated contract manifest differs from disk. */
   changed: boolean;
-  /** True when changed artifacts were actually written. */
+  /** True when generated artifacts were actually written. */
   wrote: boolean;
   /** JSON baseline artifact path. */
   jsonPath: string;
   /** JSONL statefile artifact path. */
   statefilePath: string;
-  /** SHA-256 hash artifact path. */
+  /** Per-record SHA-256 contract manifest path. */
   hashPath: string;
 };
 
@@ -160,7 +156,7 @@ export function normalizePluginSdkApiDeclarationText(repoRoot: string, value: st
   );
 }
 
-function createCompilerContext(repoRoot: string) {
+function createCompilerContext(repoRoot: string, entrypoints: readonly string[]) {
   const configPath = ts.findConfigFile(
     repoRoot,
     (filePath) => ts.sys.fileExists(filePath),
@@ -172,31 +168,32 @@ function createCompilerContext(repoRoot: string) {
     throw new Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n"));
   }
   const parsedConfig = ts.parseJsonConfigFileContent(configFile.config, ts.sys, repoRoot);
-  const fileNames = parsedConfig.fileNames.toSorted((left, right) =>
-    compareText(
-      relativePath(repoRoot, path.resolve(left)),
-      relativePath(repoRoot, path.resolve(right)),
-    ),
-  );
+  const fileNames = entrypoints
+    .map((entrypoint) => path.join(repoRoot, "src", "plugin-sdk", `${entrypoint}.ts`))
+    .toSorted((left, right) =>
+      compareText(
+        relativePath(repoRoot, path.resolve(left)),
+        relativePath(repoRoot, path.resolve(right)),
+      ),
+    );
   const program = ts.createProgram(fileNames, parsedConfig.options);
   return {
     checker: program.getTypeChecker(),
-    printer: ts.createPrinter({ newLine: ts.NewLineKind.LineFeed }),
+    printer: ts.createPrinter({
+      newLine: ts.NewLineKind.LineFeed,
+      removeComments: true,
+    }),
     program,
   };
 }
 
-function buildSourceLink(
-  repoRoot: string,
-  program: ts.Program,
-  filePath: string,
-  start: number,
-): PluginSdkApiSourceLink {
-  const sourceFile = program.getSourceFile(filePath);
-  assert(sourceFile, `Unable to read source file for ${relativePath(repoRoot, filePath)}`);
-  const line = sourceFile.getLineAndCharacterOfPosition(start).line + 1;
+/** List canonical public SDK entrypoints included in the API baseline. */
+export function listPluginSdkApiBaselineEntrypoints(): string[] {
+  return [...publicPluginSdkEntrypoints];
+}
+
+function buildSourceLink(repoRoot: string, filePath: string): PluginSdkApiSourceLink {
   return {
-    line,
     path: relativePath(repoRoot, filePath),
   };
 }
@@ -278,30 +275,219 @@ function resolveSymbolAndDeclaration(
   return { declaration, resolvedSymbol };
 }
 
+const DECLARATION_TYPE_FORMAT_FLAGS =
+  ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.MultilineObjectLiterals;
+const DECLARATION_NODE_BUILDER_FLAGS = ts.NodeBuilderFlags.NoTruncation;
+
+function declarationModifiers(node: ts.Node): readonly ts.Modifier[] | undefined {
+  return ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined;
+}
+
+function inferDeclarationTypeNode(
+  checker: ts.TypeChecker,
+  declaration: ts.Declaration,
+  explicitType: ts.TypeNode | undefined,
+): ts.TypeNode | undefined {
+  return (
+    explicitType ??
+    checker.typeToTypeNode(
+      checker.getTypeAtLocation(declaration),
+      declaration,
+      DECLARATION_NODE_BUILDER_FLAGS,
+    )
+  );
+}
+
+function inferDeclarationReturnTypeNode(
+  checker: ts.TypeChecker,
+  declaration: ts.SignatureDeclaration,
+  explicitType: ts.TypeNode | undefined,
+): ts.TypeNode | undefined {
+  if (explicitType) {
+    return explicitType;
+  }
+  const signature = checker.getSignatureFromDeclaration(declaration);
+  return signature
+    ? checker.typeToTypeNode(
+        checker.getReturnTypeOfSignature(signature),
+        declaration,
+        DECLARATION_NODE_BUILDER_FLAGS,
+      )
+    : undefined;
+}
+
+function stripParameterInitializer(parameter: ts.ParameterDeclaration): ts.ParameterDeclaration {
+  return ts.factory.updateParameterDeclaration(
+    parameter,
+    declarationModifiers(parameter),
+    parameter.dotDotDotToken,
+    parameter.name,
+    parameter.questionToken,
+    parameter.type,
+    undefined,
+  );
+}
+
+function stripClassMemberImplementation(
+  checker: ts.TypeChecker,
+  member: ts.ClassElement,
+): ts.ClassElement | null {
+  if (ts.isClassStaticBlockDeclaration(member)) {
+    return null;
+  }
+  if (ts.isConstructorDeclaration(member)) {
+    return ts.factory.updateConstructorDeclaration(
+      member,
+      declarationModifiers(member),
+      member.parameters.map(stripParameterInitializer),
+      undefined,
+    );
+  }
+  if (ts.isMethodDeclaration(member)) {
+    return ts.factory.updateMethodDeclaration(
+      member,
+      declarationModifiers(member),
+      member.asteriskToken,
+      member.name,
+      member.questionToken,
+      member.typeParameters,
+      member.parameters.map(stripParameterInitializer),
+      inferDeclarationReturnTypeNode(checker, member, member.type),
+      undefined,
+    );
+  }
+  if (ts.isGetAccessorDeclaration(member)) {
+    return ts.factory.updateGetAccessorDeclaration(
+      member,
+      declarationModifiers(member),
+      member.name,
+      member.parameters.map(stripParameterInitializer),
+      inferDeclarationReturnTypeNode(checker, member, member.type),
+      undefined,
+    );
+  }
+  if (ts.isSetAccessorDeclaration(member)) {
+    return ts.factory.updateSetAccessorDeclaration(
+      member,
+      declarationModifiers(member),
+      member.name,
+      member.parameters.map(stripParameterInitializer),
+      undefined,
+    );
+  }
+  if (ts.isPropertyDeclaration(member)) {
+    return ts.factory.updatePropertyDeclaration(
+      member,
+      declarationModifiers(member),
+      member.name,
+      member.questionToken ?? member.exclamationToken,
+      inferDeclarationTypeNode(checker, member, member.type),
+      undefined,
+    );
+  }
+  return member;
+}
+
+function stripClassImplementation(
+  checker: ts.TypeChecker,
+  declaration: ts.ClassDeclaration,
+  exportName: string,
+): ts.ClassDeclaration {
+  const members = declaration.members.flatMap((member) => {
+    const stripped = stripClassMemberImplementation(checker, member);
+    return stripped ? [stripped] : [];
+  });
+  return ts.factory.updateClassDeclaration(
+    declaration,
+    declarationModifiers(declaration),
+    ts.factory.createIdentifier(exportName),
+    declaration.typeParameters,
+    declaration.heritageClauses,
+    members,
+  );
+}
+
+function renameStructuredDeclarationForExport(
+  checker: ts.TypeChecker,
+  declaration: ts.Declaration,
+  exportName: string,
+): ts.Declaration {
+  const name = ts.factory.createIdentifier(exportName);
+  if (ts.isClassDeclaration(declaration)) {
+    return stripClassImplementation(checker, declaration, exportName);
+  }
+  if (ts.isInterfaceDeclaration(declaration)) {
+    return ts.factory.updateInterfaceDeclaration(
+      declaration,
+      declarationModifiers(declaration),
+      name,
+      declaration.typeParameters,
+      declaration.heritageClauses,
+      declaration.members,
+    );
+  }
+  if (ts.isEnumDeclaration(declaration)) {
+    return ts.factory.updateEnumDeclaration(
+      declaration,
+      declarationModifiers(declaration),
+      name,
+      declaration.members,
+    );
+  }
+  if (ts.isModuleDeclaration(declaration) && ts.isIdentifier(declaration.name)) {
+    return ts.factory.updateModuleDeclaration(
+      declaration,
+      declarationModifiers(declaration),
+      name,
+      declaration.body,
+    );
+  }
+  return declaration;
+}
+
+function ensureExportedDeclarationText(value: string): string {
+  return /^export\b/u.test(value) ? value : `export ${value}`;
+}
+
+function printTypeParameters(printer: ts.Printer, declaration: ts.TypeAliasDeclaration): string {
+  if (!declaration.typeParameters?.length) {
+    return "";
+  }
+  const sourceFile = declaration.getSourceFile();
+  const parameters = declaration.typeParameters.map((typeParameter) =>
+    printer.printNode(ts.EmitHint.Unspecified, typeParameter, sourceFile).trim(),
+  );
+  return `<${parameters.join(", ")}>`;
+}
+
 function printNode(
   repoRoot: string,
   checker: ts.TypeChecker,
   printer: ts.Printer,
   declaration: ts.Declaration,
+  exportName: string,
 ): string | null {
   if (ts.isFunctionDeclaration(declaration)) {
     const signatures = checker.getTypeAtLocation(declaration).getCallSignatures();
     if (signatures.length === 0) {
-      return `export function ${declaration.name?.text ?? "anonymous"}();`;
+      return `export function ${exportName}();`;
     }
     return normalizePluginSdkApiDeclarationText(
       repoRoot,
       signatures
         .map(
           (signature) =>
-            `export function ${declaration.name?.text ?? "anonymous"}${checker.signatureToString(signature)};`,
+            `export function ${exportName}${checker.signatureToString(
+              signature,
+              declaration,
+              DECLARATION_TYPE_FORMAT_FLAGS,
+            )};`,
         )
         .join("\n"),
     );
   }
 
   if (ts.isVariableDeclaration(declaration)) {
-    const name = declaration.name.getText();
     const type = checker.getTypeAtLocation(declaration);
     const prefix =
       declaration.parent && (ts.getCombinedNodeFlags(declaration.parent) & ts.NodeFlags.Const) !== 0
@@ -309,52 +495,39 @@ function printNode(
         : "let";
     return normalizePluginSdkApiDeclarationText(
       repoRoot,
-      `export ${prefix} ${name}: ${checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation)};`,
+      `export ${prefix} ${exportName}: ${checker.typeToString(
+        type,
+        declaration,
+        DECLARATION_TYPE_FORMAT_FLAGS,
+      )};`,
     );
-  }
-
-  if (ts.isInterfaceDeclaration(declaration)) {
-    return `export interface ${declaration.name.text}`;
-  }
-
-  if (ts.isClassDeclaration(declaration)) {
-    return `export class ${declaration.name?.text ?? "AnonymousClass"}`;
-  }
-
-  if (ts.isEnumDeclaration(declaration)) {
-    return `export enum ${declaration.name.text}`;
-  }
-
-  if (ts.isModuleDeclaration(declaration)) {
-    return `export namespace ${declaration.name.getText()}`;
   }
 
   if (ts.isTypeAliasDeclaration(declaration)) {
     const type = checker.getTypeAtLocation(declaration);
-    const rendered = normalizePluginSdkApiDeclarationText(
+    const typeParameters = printTypeParameters(printer, declaration);
+    return normalizePluginSdkApiDeclarationText(
       repoRoot,
-      `export type ${declaration.name.text} = ${checker.typeToString(
+      `export type ${exportName}${typeParameters} = ${checker.typeToString(
         type,
         declaration,
-        ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.MultilineObjectLiterals,
+        DECLARATION_TYPE_FORMAT_FLAGS,
       )};`,
     );
-    if (rendered.length > 1200) {
-      return `export type ${declaration.name.text} = /* see source */`;
-    }
-    return rendered;
   }
 
+  const printableDeclaration = renameStructuredDeclarationForExport(
+    checker,
+    declaration,
+    exportName,
+  );
   const text = printer
-    .printNode(ts.EmitHint.Unspecified, declaration, declaration.getSourceFile())
+    .printNode(ts.EmitHint.Unspecified, printableDeclaration, declaration.getSourceFile())
     .trim();
   if (!text) {
     return null;
   }
-  const normalizedText = normalizePluginSdkApiDeclarationText(repoRoot, text);
-  return normalizedText.length > 1200
-    ? `${truncateUtf16Safe(normalizedText, 1175).trimEnd()}\n/* truncated; see source */`
-    : normalizedText;
+  return normalizePluginSdkApiDeclarationText(repoRoot, ensureExportedDeclarationText(text));
 }
 
 function compareText(left: string, right: string): number {
@@ -391,24 +564,19 @@ function compareDeclarations(
 function buildExportSurface(params: {
   checker: ts.TypeChecker;
   printer: ts.Printer;
-  program: ts.Program;
   repoRoot: string;
   symbol: ts.Symbol;
 }): PluginSdkApiExport {
-  const { checker, printer, program, repoRoot, symbol } = params;
+  const { checker, printer, repoRoot, symbol } = params;
   const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, repoRoot, symbol);
+  const exportName = symbol.getName();
   return {
-    declaration: declaration ? printNode(repoRoot, checker, printer, declaration) : null,
-    exportName: symbol.getName(),
-    kind: inferExportKind(resolvedSymbol, declaration),
-    source: declaration
-      ? buildSourceLink(
-          repoRoot,
-          program,
-          declaration.getSourceFile().fileName,
-          declaration.getStart(),
-        )
+    declaration: declaration
+      ? printNode(repoRoot, checker, printer, declaration, exportName)
       : null,
+    exportName,
+    kind: inferExportKind(resolvedSymbol, declaration),
+    source: declaration ? buildSourceLink(repoRoot, declaration.getSourceFile().fileName) : null,
   };
 }
 
@@ -437,11 +605,13 @@ function buildModuleSurface(params: {
   printer: ts.Printer;
   program: ts.Program;
   repoRoot: string;
-  entrypoint: PluginSdkDocEntrypoint;
+  entrypoint: string;
 }): PluginSdkApiModule {
   const { checker, printer, program, repoRoot, entrypoint } = params;
-  const metadata = pluginSdkDocMetadata[entrypoint];
-  const importSpecifier = resolvePluginSdkDocImportSpecifier(entrypoint);
+  const metadata = Object.hasOwn(pluginSdkDocMetadata, entrypoint)
+    ? pluginSdkDocMetadata[entrypoint as PluginSdkDocEntrypoint]
+    : undefined;
+  const importSpecifier = `openclaw/plugin-sdk/${entrypoint}`;
   const moduleSourcePath = path.join(repoRoot, "src", "plugin-sdk", `${entrypoint}.ts`);
   const sourceFile = program.getSourceFile(moduleSourcePath);
   assert(sourceFile, `Missing source file for ${importSpecifier}`);
@@ -456,7 +626,6 @@ function buildModuleSurface(params: {
       buildExportSurface({
         checker,
         printer,
-        program,
         repoRoot,
         symbol,
       }),
@@ -464,11 +633,11 @@ function buildModuleSurface(params: {
     .toSorted(sortExports);
 
   return {
-    category: metadata.category,
+    category: metadata?.category ?? null,
     entrypoint,
     exports,
     importSpecifier,
-    source: buildSourceLink(repoRoot, program, moduleSourcePath, 0),
+    source: buildSourceLink(repoRoot, moduleSourcePath),
   };
 }
 
@@ -482,7 +651,6 @@ function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
         entrypoint: moduleSurface.entrypoint,
         importSpecifier: moduleSurface.importSpecifier,
         recordType: "module",
-        sourceLine: moduleSurface.source.line,
         sourcePath: moduleSurface.source.path,
       }),
     );
@@ -496,7 +664,6 @@ function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
           importSpecifier: moduleSurface.importSpecifier,
           kind: exportSurface.kind,
           recordType: "export",
-          sourceLine: exportSurface.source?.line ?? null,
           sourcePath: exportSurface.source?.path ?? null,
         }),
       );
@@ -509,11 +676,13 @@ function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
 /** Render the current public SDK API baseline without writing generated artifacts. */
 export async function renderPluginSdkApiBaseline(params?: {
   repoRoot?: string;
+  entrypoints?: readonly string[];
 }): Promise<PluginSdkApiBaselineRender> {
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
+  const entrypoints = params?.entrypoints ?? listPluginSdkApiBaselineEntrypoints();
   validateMetadata();
-  const { checker, printer, program } = createCompilerContext(repoRoot);
-  const modules = (Object.keys(pluginSdkDocMetadata) as PluginSdkDocEntrypoint[])
+  const { checker, printer, program } = createCompilerContext(repoRoot, entrypoints);
+  const modules = entrypoints
     .map((entrypoint) =>
       buildModuleSurface({
         checker,
@@ -552,15 +721,16 @@ function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-/** Build the sha256 hash file content for plugin SDK API baseline artifacts. */
+/** Build a mergeable per-entrypoint sha256 manifest for the Plugin SDK API contract. */
 export function computePluginSdkApiBaselineHashFileContent(
   rendered: PluginSdkApiBaselineRender,
 ): string {
-  const lines = [
-    `${sha256(rendered.json)}  plugin-sdk-api-baseline.json`,
-    `${sha256(rendered.jsonl)}  plugin-sdk-api-baseline.jsonl`,
-  ];
-  return `${lines.join("\n")}\n`;
+  return `${rendered.baseline.modules
+    .map((moduleSurface) => {
+      const label = `module/${encodeURIComponent(moduleSurface.entrypoint)}`;
+      return `${sha256(JSON.stringify(moduleSurface))}  ${label}`;
+    })
+    .join("\n")}\n`;
 }
 
 function validateMetadata(): void {
@@ -575,8 +745,8 @@ function validateMetadata(): void {
   }
 }
 
-/** Write or check SDK API baseline artifacts used by docs and contract tests. */
-export async function writePluginSdkApiBaselineStatefile(params?: {
+/** Write or check SDK API contract artifacts used by CI and release checks. */
+export async function writePluginSdkApiBaselineArtifacts(params?: {
   repoRoot?: string;
   check?: boolean;
   jsonPath?: string;
@@ -588,7 +758,6 @@ export async function writePluginSdkApiBaselineStatefile(params?: {
   const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
   const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
   const rendered = await renderPluginSdkApiBaseline({ repoRoot });
-
   const nextHashContent = computePluginSdkApiBaselineHashFileContent(rendered);
   const currentHashContent = await loadCurrentFile(hashPath);
   const changed = currentHashContent !== nextHashContent;
@@ -603,11 +772,8 @@ export async function writePluginSdkApiBaselineStatefile(params?: {
     };
   }
 
-  // Write the hash file (tracked in git)
   await fs.mkdir(path.dirname(hashPath), { recursive: true });
   await fs.writeFile(hashPath, nextHashContent, "utf8");
-
-  // Write full JSON/JSONL artifacts locally (gitignored, useful for inspection)
   await fs.mkdir(path.dirname(jsonPath), { recursive: true });
   await fs.writeFile(jsonPath, rendered.json, "utf8");
   await fs.writeFile(statefilePath, rendered.jsonl, "utf8");

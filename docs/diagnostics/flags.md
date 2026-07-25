@@ -21,14 +21,17 @@ Diagnostics flags turn on extra logging for one subsystem without raising
 
 ## Known flags
 
-| Flag             | Enables                                                   |
-| ---------------- | --------------------------------------------------------- |
-| `telegram.http`  | Telegram Bot API HTTP error logging                       |
-| `brave.http`     | Brave Search request/response/cache logging               |
-| `profiler`       | Reply-stage profiler and Codex app-server profiler (both) |
-| `reply.profiler` | Reply-stage profiler only                                 |
-| `codex.profiler` | Codex app-server profiler only                            |
-| `timeline`       | Structured JSONL timeline artifact (see below)            |
+| Flag                  | Enables                                                   |
+| --------------------- | --------------------------------------------------------- |
+| `telegram.http`       | Telegram Bot API HTTP error logging                       |
+| `brave.http`          | Brave Search request/response/cache logging               |
+| `profiler`            | Reply-stage profiler and Codex app-server profiler (both) |
+| `reply.profiler`      | Reply-stage profiler only                                 |
+| `codex.profiler`      | Codex app-server profiler only                            |
+| `health`              | Gateway health probe/account/binding debug details        |
+| `ingress.timing`      | Session load, model selection, and model catalog timings  |
+| `plugin.load-profile` | Synchronous plugin module-load timings                    |
+| `timeline`            | Structured JSONL timeline artifact (see below)            |
 
 ## Enable via config
 
@@ -155,6 +158,9 @@ Flags emit logs into the standard diagnostics log file. By default:
 /tmp/openclaw/openclaw-YYYY-MM-DD.log
 ```
 
+Named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`; for
+example, `--dev` uses `openclaw-dev-YYYY-MM-DD.log`.
+
 If you set `logging.file`, use that path instead. Logs are JSONL (one JSON
 object per line). Redaction still applies based on `logging.redactSensitive`.
 See [Logging](/logging) for the full log-path resolution, rotation, and
@@ -162,28 +168,30 @@ redaction model.
 
 ## Extract logs
 
-Pick the latest log file:
+Read the active profile's latest log file:
 
 ```bash
-ls -t /tmp/openclaw/openclaw-*.log | head -n 1
+openclaw logs --plain
+# Named profile example:
+openclaw --profile work logs --plain
 ```
 
 Filter for Telegram HTTP diagnostics:
 
 ```bash
-rg "telegram http error" /tmp/openclaw/openclaw-*.log
+openclaw logs --plain --limit 5000 | rg "telegram http error"
 ```
 
 Filter for Brave Search HTTP diagnostics:
 
 ```bash
-rg "brave http" /tmp/openclaw/openclaw-*.log
+openclaw logs --plain --limit 5000 | rg "brave http"
 ```
 
 Or tail while reproducing:
 
 ```bash
-tail -f /tmp/openclaw/openclaw-$(date +%F).log | rg "telegram http error"
+openclaw logs --follow --plain | rg "telegram http error"
 ```
 
 For remote gateways, use `openclaw logs --follow` instead (see

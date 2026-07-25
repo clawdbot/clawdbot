@@ -1,5 +1,6 @@
 // Terminal Core tests cover ansi behavior.
 import { describe, expect, it } from "vitest";
+import { AnsiSequenceStripper } from "./ansi-sequences.js";
 import {
   sanitizeForLog,
   splitGraphemes,
@@ -25,6 +26,76 @@ describe("terminal ansi helpers", () => {
     expect(stripAnsi("\u009B31mred\u009B0m")).toBe("red");
     expect(stripAnsi("\u009D8;;https://openclaw.ai\u009Clink\u009D8;;\u009C")).toBe("link");
     expect(stripAnsi("\u001B]unterminated")).toBe("\u001B]unterminated");
+  });
+
+  it.each([
+    ["ESC OSC with BEL", ["A\u001B]0;title", "\u0007B"]],
+    ["ESC OSC with ESC ST", ["A\u001B]0;title", "\u001B\\B"]],
+    ["C1 OSC with C1 ST", ["A\u009D0;title", "\u009CB"]],
+    ["C1 OSC with ESC ST", ["A\u009D0;title", "\u001B\\B"]],
+    ["ESC CSI", ["A\u001B[31", "mB"]],
+    ["C1 CSI", ["A\u009B31", "mB"]],
+    ["ESC compatibility charset", ["A\u001B(", "BB"]],
+    ["ESC compatibility bracket prefix", ["A\u001B[", "[AB"]],
+    ["ESC compatibility mixed prefixes", ["A\u001B(", "[31mB"]],
+  ])("strips chunked %s sequences incrementally", (_label, chunks) => {
+    const stripper = new AnsiSequenceStripper();
+
+    const split = chunks.map((chunk) => stripper.write(chunk)).join("") + stripper.finish();
+    const joined = stripAnsiSequences(chunks.join(""));
+
+    expect(split).toBe("AB");
+    expect(split).toBe(joined);
+  });
+
+  it("keeps a trailing ESC pending until the next chunk can identify OSC", () => {
+    const chunks = ["A\u001B", "]0;title\u0007B"];
+    const stripper = new AnsiSequenceStripper();
+
+    const split = chunks.map((chunk) => stripper.write(chunk)).join("") + stripper.finish();
+    const joined = stripAnsiSequences(chunks.join(""));
+
+    expect(split).toBe("AB");
+    expect(split).toBe(joined);
+  });
+
+  it("drops unterminated chunked OSC payload without retaining it until finish", () => {
+    const stripper = new AnsiSequenceStripper();
+
+    const split =
+      stripper.write("line\n\t🙂\u001B]unter") + stripper.write("minated") + stripper.finish();
+
+    expect(split).toBe("line\n\t🙂");
+  });
+
+  it("does not retain large unterminated OSC payloads", () => {
+    const stripper = new AnsiSequenceStripper();
+    const payload = "x".repeat(1024 * 1024);
+
+    const split = stripper.write("safe\u001B]0;") + stripper.write(payload) + stripper.finish();
+
+    expect(split).toBe("safe");
+  });
+
+  it("accepts every standard CSI final byte after a chunk boundary", () => {
+    for (let final = 0x40; final <= 0x7e; final += 1) {
+      const stripper = new AnsiSequenceStripper();
+      const split = stripper.write("A\u001B[31") + stripper.write(`${String.fromCharCode(final)}B`);
+
+      expect(split).toBe("AB");
+    }
+  });
+
+  it.each([
+    ["BEL", "\u0007"],
+    ["C1 ST", "\u009C"],
+  ])("terminates OSC after stray ESC before %s", (_label, terminator) => {
+    const stripper = new AnsiSequenceStripper();
+    const input = `A\u001B]0;title\u001B${terminator}B`;
+    const split = stripper.write(input.slice(0, -1)) + stripper.write(input.slice(-1));
+
+    expect(stripAnsiSequences(input)).toBe("AB");
+    expect(split).toBe("AB");
   });
 
   it("strips the agent output escape grammar without changing text policy", () => {
@@ -118,6 +189,8 @@ describe("terminal ansi helpers", () => {
     expect(visibleWidth("📸 skill")).toBe(8);
     expect(visibleWidth("表")).toBe(2);
     expect(visibleWidth("\u001B[31m📸\u001B[0m")).toBe(2);
+    expect(visibleWidth("\u0007\u007F\u0085")).toBe(0);
+    expect(visibleWidth("a\u001B[31\u0001mb")).toBe(2);
   });
 
   it("keeps emoji zwj sequences as single graphemes", () => {
@@ -165,6 +238,18 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("[31mab[0m", 1)).toBe("[31ma[0m");
     expect(truncateToVisibleWidth("[31m表文[0m", 1)).toBe("[31m[0m");
     expect(visibleWidth(truncateToVisibleWidth("[31m表文[0m", 1))).toBe(0);
+  });
+
+  it("counts independently executed controls inside atomic CSI sequences", () => {
+    const sequence = "\x1b[31\tm";
+    const truncated = truncateToVisibleWidth(`a${sequence}B`, 2);
+    expect(truncated).toBe(`a${sequence}`);
+    expect(visibleWidth(truncated)).toBe(2);
+    expect(visibleWidth(truncateToVisibleWidth(`a${sequence}B`, 1))).toBe(1);
+
+    const reset = truncateToVisibleWidth("\x1b[31mA\x1b[0\tmB", 1);
+    expect(reset).toBe("\x1b[31mA\x1b[0m");
+    expect(visibleWidth(reset)).toBe(1);
   });
 
   it("reuses the ANSI scanner across truncation calls", () => {

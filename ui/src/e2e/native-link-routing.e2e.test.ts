@@ -18,22 +18,24 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/native-link-routing");
 
 let server: ControlUiE2eServer;
-const openBrowsers = new Set<Browser>();
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
+const openContexts = new Set<BrowserContext>();
 
 async function newBrowserContext(): Promise<BrowserContext> {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  openBrowsers.add(browser);
-  return browser.newContext({
+  const context = await browser.newContext({
     colorScheme: "light",
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 800, width: 1180 },
   });
+  openContexts.add(context);
+  return context;
 }
 
-async function closeBrowsers(): Promise<void> {
-  await Promise.all([...openBrowsers].map((browser) => browser.close().catch(() => {})));
-  openBrowsers.clear();
+async function closeContexts(): Promise<void> {
+  await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
+  openContexts.clear();
 }
 
 describeControlUiE2e("native link routing", () => {
@@ -42,15 +44,22 @@ describeControlUiE2e("native link routing", () => {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     fs.mkdirSync(artifactDir, { recursive: true });
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
-    await closeBrowsers();
+    await closeContexts();
+    await browser?.close();
     await server?.close();
   });
 
-  afterEach(closeBrowsers);
+  afterEach(closeContexts);
 
   it("shows native actions and posts inline or external targets", async () => {
     const context = await newBrowserContext();
@@ -161,17 +170,18 @@ describeControlUiE2e("native link routing", () => {
 
     await link.click({ button: "right" });
     const menu = page.getByRole("menu", { name: "Link actions" });
+    const menuHost = page.locator("openclaw-native-link-menu");
     await expect.poll(() => menu.isVisible()).toBe(true);
     await expect.poll(() => replyMenu.count()).toBe(0);
     await expect
-      .poll(() => menu.locator(".session-menu__text").allTextContents())
+      .poll(() => page.locator("openclaw-native-link-menu .session-menu__text").allTextContents())
       .toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
     await page.screenshot({
       path: path.join(artifactDir, "01-native-link-menu-page.jpg"),
       type: "jpeg",
       quality: 60,
     });
-    await menu.getByRole("menuitem", { name: "Open in Default Browser" }).click();
+    await menuHost.getByRole("menuitem", { name: "Open in Default Browser" }).click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -187,7 +197,7 @@ describeControlUiE2e("native link routing", () => {
       ]);
 
     await link.click({ button: "right" });
-    await menu.getByRole("menuitem", { name: "Copy Link" }).click();
+    await menuHost.getByRole("menuitem", { name: "Copy Link" }).click();
     await expect
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toBe("https://example.com/report");
@@ -218,13 +228,17 @@ describeControlUiE2e("native link routing", () => {
     await expect
       .poll(() =>
         page.locator("#native-link-routing-modal").evaluate((modal) => {
-          return modal.shadowRoot?.querySelector("dialog")?.open ?? false;
+          return (
+            modal.shadowRoot?.querySelector("wa-dialog")?.shadowRoot?.querySelector("dialog")
+              ?.open ?? false
+          );
         }),
       )
       .toBe(true);
     await modalLink.click({ button: "right" });
-    await expect.poll(() => menu.isVisible()).toBe(true);
-    await menu.getByRole("menuitem", { name: "Open in Sidebar" }).click();
+    const modalSidebarItem = menuHost.getByRole("menuitem", { name: "Open in Sidebar" });
+    await expect.poll(() => modalSidebarItem.isVisible()).toBe(true);
+    await modalSidebarItem.click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -242,7 +256,10 @@ describeControlUiE2e("native link routing", () => {
       document.querySelector("#native-link-routing-modal")?.remove();
     });
 
-    await page.getByRole("link", { name: "Usage" }).click({ button: "right" });
+    await page
+      .getByRole("paragraph")
+      .getByRole("link", { name: "Usage" })
+      .click({ button: "right" });
     expect(await page.locator("openclaw-native-link-menu").count()).toBe(0);
     const messageMenu = page.getByRole("menu", { name: "Message actions" });
     await expect.poll(() => messageMenu.isVisible()).toBe(true);

@@ -11,10 +11,29 @@ final class DashboardManager {
 
     private var controller: DashboardWindowController?
     private var endpointTask: Task<Void, Never>?
+    private var pendingOpenCommands: [DashboardNativeCommand] = []
+    private var openForCommandTask: Task<Void, Never>?
     private var updater: UpdaterProviding?
+    private var displayedRouteRevision: UInt64?
+    private let authTokenProvider: @Sendable (GatewayConnection.Config) async -> String?
+    private let routeProbe: @Sendable () async -> Void
     private static let failureURL = URL(string: "about:blank")!
 
-    private init() {}
+    private init(
+        authTokenProvider: @escaping @Sendable (GatewayConnection.Config) async -> String? = { config in
+            await GatewayConnection.shared.controlUiAutoAuthToken(config: config)
+        },
+        routeProbe: @escaping @Sendable () async -> Void = {
+            _ = try? await GatewayConnection.shared.request(
+                method: "health",
+                params: nil,
+                timeoutMs: 3000,
+                retryTransportFailures: false)
+        })
+    {
+        self.authTokenProvider = authTokenProvider
+        self.routeProbe = routeProbe
+    }
 
     func configure(updater: UpdaterProviding) {
         self.updater = updater
@@ -49,10 +68,20 @@ final class DashboardManager {
     }
 
     func handleEndpointState(_ state: GatewayEndpointState) async {
-        guard case let .ready(mode, url, token, password) = state else { return }
         guard let controller, controller.isWindowOpen else { return }
+        guard case let .ready(mode, url, token, password, routeRevision) = state else {
+            self.replaceWithRouteFailure(controller)
+            self.displayedRouteRevision = nil
+            return
+        }
         let config: GatewayConnection.Config = (url, token, password)
-        let authToken = await GatewayConnection.shared.controlUiAutoAuthToken(config: config)
+        let routeChanged = self.displayedRouteRevision.map { $0 != routeRevision }
+            ?? (routeRevision > 0)
+        var authToken = await self.authTokenProvider(config)
+        if authToken == nil, password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty == nil {
+            await self.routeProbe()
+            authToken = await self.authTokenProvider(config)
+        }
         guard let dashboardURL = try? GatewayEndpointStore.dashboardURL(
             for: config,
             mode: mode,
@@ -60,18 +89,65 @@ final class DashboardManager {
         else {
             return
         }
-        if dashboardURL == controller.currentURL {
-            controller.setUpdateBridgeEnabled(Self.updateBridgeEnabled(mode: mode))
-            return
-        }
         let auth = DashboardWindowAuth(
             gatewayUrl: Self.websocketURLString(for: dashboardURL),
             token: authToken,
             password: password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+        if routeChanged {
+            self.displayedRouteRevision = routeRevision
+            guard auth.hasCredential else {
+                self.replaceWithRouteFailure(controller)
+                return
+            }
+            self.replaceController(
+                controller,
+                url: dashboardURL,
+                auth: auth,
+                mode: mode)
+            return
+        }
+        if dashboardURL == controller.currentURL {
+            self.displayedRouteRevision = routeRevision
+            controller.setUpdateBridgeEnabled(Self.updateBridgeEnabled(mode: mode))
+            return
+        }
         guard auth.hasCredential, controller.isWindowOpen else { return }
         dashboardManagerLogger.info(
             "dashboard endpoint changed; reloading url=\(dashboardLogString(for: dashboardURL), privacy: .public)")
         controller.update(url: dashboardURL, auth: auth, updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
+        self.displayedRouteRevision = routeRevision
+    }
+
+    private func replaceController(
+        _ current: DashboardWindowController,
+        url: URL,
+        auth: DashboardWindowAuth,
+        mode: AppState.ConnectionMode)
+    {
+        current.releaseFrameAutosaveForReplacement()
+        current.closeDashboard()
+        let replacement = DashboardWindowController(
+            url: url,
+            auth: auth,
+            updater: self.updater,
+            updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
+        self.controller = replacement
+        replacement.show(url: url, auth: auth)
+    }
+
+    private func replaceWithRouteFailure(_ current: DashboardWindowController) {
+        current.releaseFrameAutosaveForReplacement()
+        current.closeDashboard()
+        let replacement = DashboardWindowController(
+            url: Self.failureURL,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            updater: self.updater,
+            updateBridgeEnabled: false)
+        self.controller = replacement
+        replacement.showFailure(
+            title: "Dashboard reconnecting",
+            message: "The selected Gateway changed.",
+            detail: "Waiting for a fresh authenticated connection.")
     }
 
     @discardableResult
@@ -106,6 +182,24 @@ final class DashboardManager {
         self.observeEndpointChanges()
         Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
         return true
+    }
+
+    /// Preload failures stay invisible: navigation errors land in the
+    /// controller's `showLoadFailure`, which never orders the window front, and
+    /// preload skips `observeEndpointChanges()` so no observer path can call
+    /// `showFailure`. The failure page is only seen on a later explicit show.
+    func preloadIfConfigured() {
+        guard self.controller == nil,
+              AppStateStore.shared.onboardingSeen,
+              let (mode, url, auth) = self.immediateWindowConfiguration()
+        else { return }
+        let controller = DashboardWindowController(
+            url: url,
+            auth: auth,
+            updater: self.updater,
+            updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
+        self.controller = controller
+        controller.loadInBackground(url: url, auth: auth)
     }
 
     func show() async throws {
@@ -163,6 +257,10 @@ final class DashboardManager {
         self.controller?.closeDashboard()
     }
 
+    func handleOnboardingCompletion() {
+        self.controller?.handleOnboardingCompletion()
+    }
+
     func navigateBack() {
         guard self.controller?.window?.isKeyWindow == true else { return }
         self.controller?.navigateBack()
@@ -171,6 +269,37 @@ final class DashboardManager {
     func navigateForward() {
         guard self.controller?.window?.isKeyWindow == true else { return }
         self.controller?.navigateForward()
+    }
+
+    func dispatchNativeCommand(_ command: DashboardNativeCommand) {
+        NSApp.activate(ignoringOtherApps: true)
+        if let controller, controller.isWindowOpen, controller.canDeliverNativeCommands {
+            controller.show()
+            controller.dispatchNativeCommand(command)
+            return
+        }
+        // One coalesced open drains the queue in press order; a Task per key
+        // press would race window creation and reorder ⌘N/⌘K delivery.
+        self.pendingOpenCommands.append(command)
+        guard self.openForCommandTask == nil else { return }
+        self.openForCommandTask = Task { @MainActor in
+            defer { self.openForCommandTask = nil }
+            if !self.showConfiguredWindowIfPossible() {
+                do {
+                    try await self.show()
+                } catch {
+                    // Commands are moment-bound; drop them with the failed open.
+                    self.pendingOpenCommands = []
+                    self.showFailure(error)
+                    return
+                }
+            }
+            let commands = self.pendingOpenCommands
+            self.pendingOpenCommands = []
+            for command in commands {
+                self.controller?.dispatchNativeCommand(command)
+            }
+        }
     }
 
     private static func websocketURLString(for dashboardURL: URL) -> String {
@@ -218,18 +347,44 @@ final class DashboardManager {
 
         return nil
     }
+
+    private func immediateWindowConfiguration()
+        -> (AppState.ConnectionMode, URL, DashboardWindowAuth)?
+    {
+        let mode = AppStateStore.shared.connectionMode
+        guard let config = self.immediateDashboardConfig(mode: mode),
+              let url = try? GatewayEndpointStore.dashboardURL(
+                  for: config,
+                  mode: mode,
+                  authToken: config.token)
+        else { return nil }
+        let auth = DashboardWindowAuth(
+            gatewayUrl: Self.websocketURLString(for: url),
+            token: config.token,
+            password: (config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty))
+        return auth.hasCredential ? (mode, url, auth) : nil
+    }
 }
 
 #if DEBUG
 extension DashboardManager {
     /// Test instances skip `observeEndpointChanges()` so the shared endpoint
     /// store cannot race test-driven `handleEndpointState` calls.
-    static func _testMake() -> DashboardManager {
-        DashboardManager()
+    static func _testMake(
+        authTokenProvider: @escaping @Sendable (GatewayConnection.Config) async -> String? = { $0.token },
+        routeProbe: @escaping @Sendable () async -> Void = {}) -> DashboardManager
+    {
+        DashboardManager(
+            authTokenProvider: authTokenProvider,
+            routeProbe: routeProbe)
     }
 
     func _testSetController(_ controller: DashboardWindowController?) {
         self.controller = controller
+    }
+
+    func _testController() -> DashboardWindowController? {
+        self.controller
     }
 }
 #endif

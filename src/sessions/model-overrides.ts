@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../config/sessions.js";
 
 /** User or automatic model/provider override selection for a session entry. */
-export type ModelOverrideSelection = {
+type ModelOverrideSelection = {
   provider: string;
   model: string;
   isDefault?: boolean;
@@ -26,7 +26,7 @@ export function isModelSelectionLocked(entry: SessionEntry | undefined): boolean
 }
 
 /** Enforces the durable model-selection lock before any session model fields change. */
-export function assertModelSelectionUnlocked(entry: SessionEntry): void {
+function assertModelSelectionUnlocked(entry: SessionEntry): void {
   if (isModelSelectionLocked(entry)) {
     throw new ModelSelectionLockedError();
   }

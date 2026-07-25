@@ -8,8 +8,10 @@ import {
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   normalizeSecretInputString,
   normalizeResolvedSecretInputString,
@@ -21,6 +23,7 @@ import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } f
 const DEFAULT_RECONNECT_MS = 1_500;
 const MIN_RECONNECT_MS = 100;
 const MAX_RECONNECT_MS = 60_000;
+const DEFAULT_DISCUSSIONS_SECTION = "Sessions";
 
 const {
   listAccountIds: listClickClackAccountIds,
@@ -31,7 +34,9 @@ const {
     const channel = cfg.channels?.clickclack;
     return Boolean(
       channel?.baseUrl?.trim() &&
-      hasConfiguredAccountValue(channel.token) &&
+      (hasConfiguredAccountValue(channel.token) ||
+        Boolean(channel.tokenFile?.trim()) ||
+        Boolean(process.env.CLICKCLACK_BOT_TOKEN?.trim())) &&
       channel.workspace?.trim(),
     );
   },
@@ -39,25 +44,57 @@ const {
 
 export { DEFAULT_ACCOUNT_ID, listClickClackAccountIds, resolveDefaultClickClackAccountId };
 
-function resolveMergedClickClackAccountConfig(
+export function resolveClickClackAccountConfig(
   cfg: CoreConfig,
   accountId: string,
 ): ClickClackAccountConfig {
-  return resolveMergedAccountConfig<ClickClackAccountConfig>({
+  const channel = cfg.channels?.clickclack;
+  const merged = resolveMergedAccountConfig<ClickClackAccountConfig>({
     channelConfig: cfg.channels?.clickclack as ClickClackAccountConfig | undefined,
-    accounts: cfg.channels?.clickclack?.accounts,
+    accounts: channel?.accounts,
     accountId,
     omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["discussions"],
     normalizeAccountId,
   });
+  const account = resolveNormalizedAccountEntry(channel?.accounts, accountId, normalizeAccountId);
+  const accountTokenFile = account?.tokenFile?.trim();
+  if (accountTokenFile) {
+    return {
+      ...merged,
+      token: account?.token,
+      tokenFile: accountTokenFile,
+    };
+  }
+  if (hasConfiguredAccountValue(account?.token)) {
+    return {
+      ...merged,
+      token: account?.token,
+      tokenFile: undefined,
+    };
+  }
+  return merged;
 }
 
 function resolveClickClackToken(params: {
   cfg: CoreConfig;
   value: unknown;
+  tokenFile?: string;
   accountId: string;
   env?: NodeJS.ProcessEnv;
 }): string {
+  const tokenFile = params.tokenFile?.trim();
+  if (tokenFile) {
+    return (
+      tryReadSecretFileSync(
+        tokenFile,
+        params.accountId === DEFAULT_ACCOUNT_ID
+          ? "channels.clickclack.tokenFile"
+          : `channels.clickclack.accounts.${params.accountId}.tokenFile`,
+        { rejectSymlink: true },
+      ) ?? ""
+    );
+  }
   const resolved = resolveSecretInputString({
     value: params.value,
     path:
@@ -68,6 +105,9 @@ function resolveClickClackToken(params: {
     mode: "inspect",
   });
   if (resolved.status !== "available") {
+    if (resolved.status === "missing" && params.accountId === DEFAULT_ACCOUNT_ID) {
+      return normalizeSecretInputString((params.env ?? process.env).CLICKCLACK_BOT_TOKEN) ?? "";
+    }
     if (resolved.status === "configured_unavailable" && resolved.ref.source === "env") {
       const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
       if (providerConfig) {
@@ -111,17 +151,21 @@ export function resolveClickClackAccount(params: {
   env?: NodeJS.ProcessEnv;
 }): ResolvedClickClackAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const merged = resolveMergedClickClackAccountConfig(params.cfg, accountId);
+  const merged = resolveClickClackAccountConfig(params.cfg, accountId);
   const baseEnabled = params.cfg.channels?.clickclack?.enabled !== false;
   const enabled = baseEnabled && merged.enabled !== false;
   const baseUrl = merged.baseUrl?.trim().replace(/\/$/, "") ?? "";
   const token = resolveClickClackToken({
     cfg: params.cfg,
     value: merged.token,
+    tokenFile: merged.tokenFile,
     accountId,
     env: params.env,
   });
   const workspace = merged.workspace?.trim() ?? "";
+  const discussionsWorkspace = merged.discussions?.workspace?.trim() || workspace;
+  const controlUrlBase = merged.discussions?.controlUrlBase?.trim();
+  const apiEndpoint = merged.apiBaseUrl?.trim().replace(/\/$/, "") || baseUrl;
   return {
     accountId,
     enabled,
@@ -135,7 +179,6 @@ export function resolveClickClackAccount(params: {
     replyMode: merged.replyMode === "model" ? "model" : "agent",
     model: normalizeOptionalString(merged.model),
     systemPrompt: normalizeOptionalString(merged.systemPrompt),
-    timeoutSeconds: merged.timeoutSeconds,
     toolsAllow: merged.toolsAllow,
     defaultTo: merged.defaultTo?.trim() || "channel:general",
     allowFrom: merged.allowFrom ?? ["*"],
@@ -147,10 +190,20 @@ export function resolveClickClackAccount(params: {
     // the ClickClack side, so this stays a per-account opt-in (default off),
     // matching the streaming-progress commentary opt-in precedent.
     agentActivity: merged.agentActivity === true,
+    // Command-menu sync is best effort and current bot:write tokens include
+    // commands:write, so resolved accounts default on unless explicitly disabled.
+    commandMenu: merged.commandMenu !== false,
+    discussions: {
+      enabled: merged.discussions?.enabled === true,
+      workspace: discussionsWorkspace,
+      ...(controlUrlBase ? { controlUrlBase } : {}),
+      section: merged.discussions?.section?.trim() || DEFAULT_DISCUSSIONS_SECTION,
+    },
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],
     },
+    apiEndpoint,
   };
 }
 

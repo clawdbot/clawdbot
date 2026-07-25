@@ -49,21 +49,6 @@ export function configureMemoryCoreDreamingState(openKeyedStore: MemoryCoreOpenK
   configuredOpenKeyedStore = openKeyedStore;
 }
 
-export async function configureMemoryCoreDreamingStateForTests(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
-  const { createPluginStateKeyedStoreForTests } =
-    await import("openclaw/plugin-sdk/plugin-state-test-runtime");
-  const testEnv = { ...env };
-  configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>(MEMORY_CORE_PLUGIN_ID, { ...options, env: testEnv }),
-  );
-}
-
-export function resetMemoryCoreDreamingStateForTests(): void {
-  configuredOpenKeyedStore = undefined;
-}
-
 export function openMemoryCoreStateStore<T>(
   options: OpenKeyedStoreOptions,
 ): PluginStateKeyedStore<T> {

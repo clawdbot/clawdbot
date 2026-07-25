@@ -28,7 +28,7 @@ export type ProviderAuthContractPluginLoader = () => Promise<{
   default: Parameters<typeof registerProviders>[0];
 }>;
 
-export type OpenAICodexProviderAuthContractOptions = {
+type OpenAICodexProviderAuthContractOptions = {
   expectedCodexDefaultModel: string;
   loginOpenAICodexOAuthMock: ReturnType<typeof vi.fn<LoginOpenAICodexOAuth>>;
 };
@@ -341,7 +341,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
               },
             },
           ],
-          defaultModel: "github-copilot/claude-opus-4.7",
+          defaultModel: "github-copilot/claude-opus-5",
         });
       } finally {
         if (previousIsTTYDescriptor) {
@@ -424,7 +424,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
             },
           },
         ],
-        defaultModel: "github-copilot/claude-opus-4.7",
+        defaultModel: "github-copilot/claude-opus-5",
       });
       // Credential is sourced from the device flow response, not from the existing
       // on-disk auth store. ensureAuthProfileStore is still called by the

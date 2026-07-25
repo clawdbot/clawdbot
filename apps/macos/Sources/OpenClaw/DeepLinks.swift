@@ -149,10 +149,6 @@ final class DeepLinkHandler {
         self.expectedKey()
     }
 
-    static func currentCanvasKey() -> String {
-        self.canvasUnattendedKey
-    }
-
     private static func expectedKey() -> String {
         let defaults = UserDefaults.standard
         if let key = defaults.string(forKey: deepLinkKeyKey), !key.isEmpty {

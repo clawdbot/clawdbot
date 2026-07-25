@@ -3,7 +3,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { configMayNeedPluginAutoEnable } from "../config/plugin-auto-enable.shared.js";
@@ -59,7 +58,7 @@ function readFacadeBoundaryConfigSafely(): {
       return { rawConfig: EMPTY_FACADE_BOUNDARY_CONFIG };
     }
     const raw = fs.readFileSync(configPath, "utf8");
-    const parsed = JSON5.parse(raw);
+    const parsed = parseJsonWithJson5Fallback(raw);
     const rawConfig =
       parsed && typeof parsed === "object"
         ? (parsed as OpenClawConfig)

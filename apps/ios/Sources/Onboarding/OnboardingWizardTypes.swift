@@ -3,6 +3,7 @@ import SwiftUI
 
 enum OnboardingStep: Int, CaseIterable {
     case intro
+    case permissions
     case welcome
     case mode
     case connect
@@ -23,6 +24,7 @@ enum OnboardingStep: Int, CaseIterable {
     var title: LocalizedStringKey {
         switch self {
         case .intro: "Welcome"
+        case .permissions: "Permissions"
         case .welcome: "Connect Gateway"
         case .mode: "Gateway Setup"
         case .connect: "Gateway Details"
@@ -32,15 +34,45 @@ enum OnboardingStep: Int, CaseIterable {
     }
 
     var canGoBack: Bool {
-        self != .intro && self != .welcome && self != .success
+        switch self {
+        case .intro, .permissions, .welcome, .success:
+            false
+        case .mode, .connect, .auth:
+            true
+        }
     }
 }
 
-enum OnboardingConnectPhase {
+enum OnboardingConnectPhase: Equatable {
     case connecting(detail: String)
     case failed(GatewayConnectionProblem)
     case failedStatus(message: String, allowsRetry: Bool)
     case ready
+
+    static func resolve(
+        problem: GatewayConnectionProblem?,
+        connectingDetail: String?,
+        localFailure: String?,
+        retryableFailure: String?) -> Self
+    {
+        // A retry may already be running; keep its previous error readable until success clears it.
+        if let localFailure { return .failedStatus(message: localFailure, allowsRetry: false) }
+        if let problem { return .failed(problem) }
+        if let connectingDetail { return .connecting(detail: connectingDetail) }
+        if let retryableFailure { return .failedStatus(message: retryableFailure, allowsRetry: true) }
+        return .ready
+    }
+}
+
+/// Typed connection attempt replaces string sentinels ("manual", "retry", ...) so
+/// gateway attempts compare by byte-exact stable-ID key, never trimmed strings.
+enum OnboardingGatewayConnectionAttempt: Equatable {
+    case gateway(GatewayStableIdentifier.Key)
+    case manual
+    case retry
+    case retryAutomatically
+    case setupCode
+    case trustCertificate
 }
 
 struct GatewaySetupLinkStaging {

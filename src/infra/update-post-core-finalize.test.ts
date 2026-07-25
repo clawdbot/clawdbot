@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   foldPostCoreFinalizeIntoResult,
-  type PostCoreFinalizeSpawner,
   runPostCoreFinalizeAfterGatewayUpdate,
 } from "./update-post-core-finalize.js";
 import type { UpdateRunResult } from "./update-runner.js";
@@ -22,6 +22,9 @@ function gitOkResult(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult 
 
 const ENTRYPOINT = "/srv/openclaw/dist/index.mjs";
 const resolveEntrypointOk = async () => ENTRYPOINT;
+type PostCoreFinalizeSpawner = NonNullable<
+  Parameters<typeof runPostCoreFinalizeAfterGatewayUpdate>[0]["spawnFinalize"]
+>;
 
 describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
   it("skips non-git update modes", async () => {
@@ -78,7 +81,10 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     });
     expect(outcome).toEqual({ status: "ok", entrypoint: ENTRYPOINT });
     expect(spawnFinalize).toHaveBeenCalledTimes(1);
-    const call = spawnFinalize.mock.calls[0][0];
+    const call = expectDefined(
+      spawnFinalize.mock.calls[0],
+      "spawnFinalize.mock.calls[0] test invariant",
+    )[0];
     // Reconcile runs through the designed finalizer; never restarts (RPC owns
     // restart). No `--channel` — the channel is passed as effective-only via env
     // so the finalizer does not persist it.
@@ -116,7 +122,10 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
         OPENCLAW_GATEWAY_SERVICE_PID: "4242",
       },
     });
-    const { env } = spawnFinalize.mock.calls[0][0];
+    const { env } = expectDefined(
+      spawnFinalize.mock.calls[0],
+      "spawnFinalize.mock.calls[0] test invariant",
+    )[0];
     expect(env.PATH).toBe("/usr/bin");
     expect(env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_KIND).toBeUndefined();
@@ -132,7 +141,10 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
       serviceRepairPolicy: "external",
     });
 
-    expect(spawnFinalize.mock.calls[0][0].env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
+    expect(
+      expectDefined(spawnFinalize.mock.calls[0], "spawnFinalize.mock.calls[0] test invariant")[0]
+        .env.OPENCLAW_SERVICE_REPAIR_POLICY,
+    ).toBe("external");
   });
 
   it("carries effective git/dev channel via env without --channel for a no-config update", async () => {
@@ -142,7 +154,10 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
       resolveEntrypoint: resolveEntrypointOk,
       spawnFinalize,
     });
-    const call = spawnFinalize.mock.calls[0][0];
+    const call = expectDefined(
+      spawnFinalize.mock.calls[0],
+      "spawnFinalize.mock.calls[0] test invariant",
+    )[0];
     // No configured channel → effective channel defaults to the git/dev channel
     // the core update ran on, carried via env (convergence-only, not persisted),
     // never as `--channel` (which `update finalize` would persist to openclaw.json).

@@ -29,10 +29,6 @@ enum OpenClawConfigFile {
         OpenClawPaths.stateDirURL
     }
 
-    static func defaultWorkspaceURL() -> URL {
-        OpenClawPaths.workspaceURL
-    }
-
     static func loadDict() -> [String: Any] {
         self.withFileLock {
             let url = self.url()
@@ -62,7 +58,9 @@ enum OpenClawConfigFile {
     {
         self.withFileLock {
             // Nix mode disables config writes in production, but tests rely on saving temp configs.
-            if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return false }
+            if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests {
+                return false
+            }
             let url = self.url()
             let previousData = try? Data(contentsOf: url)
             let previousRoot = previousData.flatMap { self.parseConfigData($0) }
@@ -185,11 +183,6 @@ enum OpenClawConfigFile {
         }
     }
 
-    static func loadGatewayDict() -> [String: Any] {
-        let root = self.loadDict()
-        return root["gateway"] as? [String: Any] ?? [:]
-    }
-
     static func updateGatewayDict(_ mutate: (inout [String: Any]) -> Void) {
         var root = self.loadDict()
         var gateway = root["gateway"] as? [String: Any] ?? [:]
@@ -261,10 +254,14 @@ extension OpenClawConfigFile {
         }
 
         let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
-        if deny.contains(pluginId) { return false }
+        if deny.contains(pluginId) {
+            return false
+        }
 
         let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
-        if !allow.isEmpty, !allow.contains(pluginId) { return false }
+        if !allow.isEmpty, !allow.contains(pluginId) {
+            return false
+        }
         return true
     }
 
@@ -287,7 +284,44 @@ extension OpenClawConfigFile {
         }
 
         let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
-        if deny.contains(pluginId) { return false }
+        if deny.contains(pluginId) {
+            return false
+        }
+
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        return allow.isEmpty || allow.contains(pluginId)
+    }
+
+    /// Mirrors Gateway startup policy for a bundled plugin that is enabled by default.
+    /// An absent entry stays enabled; global policy, deny, allow, or an entry opt-out can block it.
+    static func defaultEnabledBundledPluginAllowed(
+        _ pluginId: String,
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
+        guard let pluginId = normalizedPluginConfigId(pluginId) else { return false }
+        let plugins = root["plugins"] as? [String: Any] ?? [:]
+        if let enabled = plugins["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
+        let entries = plugins["entries"] as? [String: Any] ?? [:]
+        let matches = entries.filter { key, _ in
+            self.normalizedPluginConfigId(key) == pluginId
+        }
+        // The Gateway normalizes entry ids before merging them. Swift dictionaries do not
+        // preserve that source ordering, so aliases and malformed matching entries fail closed.
+        guard matches.count <= 1 else { return false }
+        if let rawEntry = matches.first?.value {
+            guard let entry = rawEntry as? [String: Any] else { return false }
+            if let enabled = entry["enabled"], literalBoolean(enabled) != true {
+                return false
+            }
+        }
+
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if deny.contains(pluginId) {
+            return false
+        }
 
         let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         return allow.isEmpty || allow.contains(pluginId)
@@ -323,32 +357,12 @@ extension OpenClawConfigFile {
         self.logger.debug("browser control updated enabled=\(enabled)")
     }
 
-    static func agentWorkspace() -> String? {
-        AgentWorkspaceConfig.workspace(from: self.loadDict())
-    }
-
-    static func setAgentWorkspace(_ workspace: String?) {
-        var root = self.loadDict()
-        AgentWorkspaceConfig.setWorkspace(in: &root, workspace: workspace)
-        self.saveDict(root)
-        let hasWorkspace = !(workspace?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        self.logger.debug("agents.defaults.workspace updated set=\(hasWorkspace)")
-    }
-
-    static func gatewayPassword() -> String? {
-        let root = self.loadDict()
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any]
-        else {
-            return nil
-        }
-        return remote["password"] as? String
-    }
-
     static func gatewayPort() -> Int? {
         let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }
-        if let port = gateway["port"] as? Int, port > 0 { return port }
+        if let port = gateway["port"] as? Int, port > 0 {
+            return port
+        }
         if let number = gateway["port"] as? NSNumber, number.intValue > 0 {
             return number.intValue
         }
@@ -615,14 +629,22 @@ extension OpenClawConfigFile {
     }
 
     private static func fileAttributeInt(_ value: Any?) -> Int? {
-        if let number = value as? NSNumber { return number.intValue }
-        if let number = value as? Int { return number }
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let number = value as? Int {
+            return number
+        }
         return nil
     }
 
     private static func fileSystemNumber(_ value: Any?) -> String? {
-        if let number = value as? NSNumber { return number.stringValue }
-        if let number = value as? Int { return String(number) }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        if let number = value as? Int {
+            return String(number)
+        }
         return nil
     }
 

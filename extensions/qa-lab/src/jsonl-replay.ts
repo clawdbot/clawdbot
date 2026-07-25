@@ -16,14 +16,14 @@ export type JsonlReplayInput = {
   providerMode: "mock-openai" | "live-frontier";
 };
 
-export type JsonlReplayTurn = {
+type JsonlReplayTurn = {
   turn: number;
   lineNumber: number;
   userText: string;
   transcriptPrefix: string;
 };
 
-export type JsonlReplayCellRunner = (params: {
+type JsonlReplayCellRunner = (params: {
   runtime: RuntimeId;
   transcriptPath: string;
   turn: JsonlReplayTurn;
@@ -31,7 +31,7 @@ export type JsonlReplayCellRunner = (params: {
   providerMode: JsonlReplayInput["providerMode"];
 }) => Promise<RuntimeParityScenarioExecution>;
 
-export type JsonlReplayResult = {
+type JsonlReplayResult = {
   transcripts: Array<{
     transcriptPath: string;
     userTurnCount: number;
@@ -41,11 +41,11 @@ export type JsonlReplayResult = {
   }>;
 };
 
-export type JsonlReplayOptions = {
+type JsonlReplayOptions = {
   runCell?: JsonlReplayCellRunner;
 };
 
-export type JsonlReplayMarkdownReport = {
+type JsonlReplayMarkdownReport = {
   generatedAt: string;
   providerMode: JsonlReplayInput["providerMode"];
   runtimePair: JsonlReplayInput["runtimePair"];
@@ -105,7 +105,7 @@ function extractTextContent(content: unknown): string {
   return parts.join("\n").trim();
 }
 
-export function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {
+function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {
   const turns: JsonlReplayTurn[] = [];
   const acceptedLines: string[] = [];
   for (const [lineIndex, rawLine] of transcriptBytes.split(/\r?\n/u).entries()) {

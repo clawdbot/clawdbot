@@ -1,5 +1,6 @@
 // Barnacle Auto Response tests cover barnacle auto response script behavior.
 import { readFileSync } from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   candidateLabels,
@@ -236,19 +237,23 @@ function expectedAddLabels(issue_number: number, labels: string[]) {
   };
 }
 
+function managedLabelDescription(label: string): string {
+  return expectDefined(managedLabelSpecs[label], `managed label ${label}`).description;
+}
+
 describe("barnacle-auto-response", () => {
   it("keeps Barnacle-owned labels documented and ClawHub spelled correctly", () => {
-    expect(managedLabelSpecs["r: skill"].description).toContain("ClawHub");
-    expect(managedLabelSpecs["r: skill"].description).not.toContain("Clawdhub");
-    expect(managedLabelSpecs.dirty.description).toContain("dirty/unrelated");
-    expect(managedLabelSpecs["r: support"].description).toContain("support requests");
-    expect(managedLabelSpecs["r: false-positive"].description).toContain("false positive");
-    expect(managedLabelSpecs["r: third-party-extension"].description).toContain("ClawHub");
-    expect(managedLabelSpecs["r: bluebubbles"].description).toContain("deprecated");
-    expect(managedLabelSpecs["r: too-many-prs"].description).toContain("twenty active PRs");
+    expect(managedLabelDescription("r: skill")).toContain("ClawHub");
+    expect(managedLabelDescription("r: skill")).not.toContain("Clawdhub");
+    expect(managedLabelDescription("dirty")).toContain("dirty/unrelated");
+    expect(managedLabelDescription("r: support")).toContain("support requests");
+    expect(managedLabelDescription("r: false-positive")).toContain("false positive");
+    expect(managedLabelDescription("r: third-party-extension")).toContain("ClawHub");
+    expect(managedLabelDescription("r: bluebubbles")).toContain("deprecated");
+    expect(managedLabelDescription("r: too-many-prs")).toContain("twenty active PRs");
     for (const label of Object.values(candidateLabels)) {
       expect(managedLabelSpecs).toHaveProperty(label);
-      expect(managedLabelSpecs[label].description).toMatch(/^Candidate:/);
+      expect(managedLabelDescription(label)).toMatch(/^Candidate:/);
     }
   });
 

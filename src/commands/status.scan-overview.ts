@@ -238,10 +238,11 @@ export async function collectStatusScanOverview(params: {
     includeRegistryUpdate: params.includeRegistryUpdate,
     includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
     gatewayProbeTimeoutMs,
-    getTailnetHostname: async (runner) =>
-      await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
+    getTailnetHostname: async (runner) => {
+      return await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
-      ),
+      );
+    },
     getUpdateCheckResult: async (updateParams) =>
       await loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
         getUpdateCheckResult(updateParams),

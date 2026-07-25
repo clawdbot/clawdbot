@@ -7,6 +7,7 @@ import {
 } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
   loadGatewayStartupPluginPlan,
@@ -61,7 +62,7 @@ function collectBundledChannelOwnerPluginIds(params: {
     ? {
         ...params.env,
         OPENCLAW_BUNDLED_PLUGINS_DIR: params.bundledPluginsDir,
-        ...(params.env.VITEST || process.env.VITEST
+        ...(isVitestRuntimeEnv(params.env) || isVitestRuntimeEnv()
           ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
           : {}),
       }

@@ -1,5 +1,6 @@
 // Formats port probe results for diagnostics and CLI output.
 import net from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
@@ -49,7 +50,10 @@ function parseListenerAddress(address: string): { host: string; port: number } |
   const normalized = trimmed.replace(/^tcp6?\s+/i, "").replace(/\s*\(listen\)\s*$/i, "");
   const bracketMatch = normalized.match(/^\[([^\]]+)\]:(\d+)$/);
   if (bracketMatch) {
-    const port = Number.parseInt(bracketMatch[2], 10);
+    const port = Number.parseInt(
+      expectDefined(bracketMatch[2], "bracket match capture group 2"),
+      10,
+    );
     return Number.isFinite(port)
       ? { host: normalizeLowercaseStringOrEmpty(bracketMatch[1]), port }
       : null;
@@ -123,7 +127,7 @@ function parseGatewayListeners(
 }
 
 /** Returns true for one Gateway listener bound to an expected loopback or wildcard address. */
-export function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
+function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
   if (listeners.length !== 1) {
     return false;
   }
@@ -227,7 +231,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
 }
 
 /** Formats one listener row for CLI diagnostics. */
-export function formatPortListener(listener: PortListener): string {
+function formatPortListener(listener: PortListener): string {
   const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
   const user = listener.user ? ` ${listener.user}` : "";
   const command = listener.commandLine || listener.command || "unknown";

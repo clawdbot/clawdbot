@@ -1,12 +1,17 @@
 // Runner entry guard tests cover malformed decision data formatting without
 // depending on provider execution.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import {
-  buildModelDecision,
-  formatDecisionSummary,
-  formatMissingProviderHint,
-} from "./runner.entries.js";
+  runtimeMediaModelSecretOwnerId,
+  runtimeMediaRequestSecretOwnerId,
+} from "../secrets/runtime-media-secret-owner.js";
+import { buildModelDecision, formatDecisionSummary, runProviderEntry } from "./runner.entries.js";
 import type { MediaUnderstandingDecision } from "./types.js";
+
+afterEach(() => {
+  setActiveDegradedSecretOwners([]);
+});
 
 describe("media-understanding formatDecisionSummary guards", () => {
   it("formats skipped summary when decision.attachments is undefined", () => {
@@ -86,60 +91,115 @@ describe("media-understanding CLI backend decisions", () => {
   );
 });
 
-describe("media-understanding formatMissingProviderHint", () => {
-  it("returns the catalog hint for a provider with mediaUnderstandingProviders contract (groq)", () => {
-    const hint = formatMissingProviderHint("groq");
-    expect(hint).toContain("openclaw plugins install @openclaw/groq-provider");
-    expect(hint).toContain("openclaw plugins registry --refresh");
-    expect(hint).toContain("stop and start the gateway service");
-    expect(hint).toContain("openclaw doctor --fix");
-    expect(hint).toContain("official external plugin");
+async function getMissingProviderError(provider: string): Promise<string> {
+  type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
+  const error = await runProviderEntry({
+    capability: "audio",
+    entry: { provider },
+    cfg: {},
+    ctx: {} as RunProviderEntryParams["ctx"],
+    attachmentIndex: 0,
+    cache: {} as RunProviderEntryParams["cache"],
+    providerRegistry: new Map(),
+  }).then(
+    () => undefined,
+    (reason: unknown) => reason,
+  );
+  if (!(error instanceof Error)) {
+    throw new Error("expected missing media provider error");
+  }
+  return error.message;
+}
+
+describe("media-understanding missing provider errors", () => {
+  it("includes the catalog repair hint for a media provider contract", async () => {
+    const message = await getMissingProviderError("groq");
+    expect(message).toMatch(/^Media provider not available: groq .*openclaw plugins install/);
+    expect(message).toContain("@openclaw/groq-provider");
+    expect(message).toContain("openclaw plugins registry --refresh");
+    expect(message).toContain("stop and start the gateway service");
+    expect(message).toContain("openclaw doctor --fix");
   });
 
-  it("returns empty string for a provider with only generic providers[] entry but no mediaUnderstandingProviders contract (amazon-bedrock)", () => {
-    const hint = formatMissingProviderHint("amazon-bedrock");
-    expect(hint).toBe("");
+  it.each(["amazon-bedrock", "mystery-provider", "feishu"])(
+    "keeps the legacy error for provider without a media contract: %s",
+    async (provider) => {
+      await expect(getMissingProviderError(provider)).resolves.toBe(
+        `Media provider not available: ${provider}`,
+      );
+    },
+  );
+});
+
+describe("media-understanding SecretRef owner isolation", () => {
+  it("rejects only the configured media model whose owner is unavailable", async () => {
+    const entry = { provider: "openai", capabilities: ["audio" as const] };
+    const cfg = { tools: { media: { models: [entry], audio: {} } } };
+    const ownerId = runtimeMediaModelSecretOwnerId({
+      source: "shared",
+      index: 0,
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId,
+        state: "unavailable",
+        paths: ["tools.media.models.0.request.auth.token"],
+        refKeys: ["env:default:MISSING_MEDIA_VALUE"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
+    await expect(
+      runProviderEntry({
+        capability: "audio",
+        entry,
+        cfg,
+        config: cfg.tools.media.audio,
+        secretOwnerId: ownerId,
+        ctx: {} as RunProviderEntryParams["ctx"],
+        attachmentIndex: 0,
+        cache: {} as RunProviderEntryParams["cache"],
+        providerRegistry: new Map(),
+      }),
+    ).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId,
+    });
   });
 
-  it("returns empty string for a non-cataloged id (no convention fallback)", () => {
-    const hint = formatMissingProviderHint("mystery-provider");
-    expect(hint).toBe("");
-  });
+  it("keeps a model active when it overrides the unavailable request field", async () => {
+    const entry = {
+      provider: "unknown-provider",
+      capabilities: ["audio" as const],
+      request: { auth: { mode: "authorization-bearer" as const, token: "test-token" } },
+    };
+    const cfg = { tools: { media: { models: [entry], audio: {} } } };
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: runtimeMediaRequestSecretOwnerId("audio"),
+        state: "unavailable",
+        paths: ["tools.media.audio.request.auth.token"],
+        refKeys: ["env:default:MISSING_MEDIA_DEFAULT_VALUE"],
+        reason: "secret reference was not found",
+      },
+    ]);
 
-  it("returns empty string for an empty/whitespace id", () => {
-    expect(formatMissingProviderHint("")).toBe("");
-    expect(formatMissingProviderHint("   ")).toBe("");
-  });
-
-  it("returns empty string for an id that does not look like a plugin id", () => {
-    expect(formatMissingProviderHint("bad/id")).toBe("");
-    expect(formatMissingProviderHint("a")).toBe("");
-    expect(formatMissingProviderHint("some/long/path")).toBe("");
-  });
-
-  it("preserves the legacy prefix when hint is appended (catalog-known id)", () => {
-    const hint = formatMissingProviderHint("groq");
-    const composed = `Media provider not available: groq${hint}`;
-    expect(composed).toMatch(/^Media provider not available: groq .*openclaw plugins install/);
-    expect(composed).toMatch(/official external plugin/);
-    expect(composed).toMatch(/stop and start the gateway service/);
-  });
-
-  it("preserves the legacy message verbatim when the id is not cataloged", () => {
-    const hint = formatMissingProviderHint("mystery-provider");
-    expect(`Media provider not available: mystery-provider${hint}`).toBe(
-      "Media provider not available: mystery-provider",
-    );
-  });
-
-  it("returns empty string for a channel-only id (feishu)", () => {
-    expect(formatMissingProviderHint("feishu")).toBe("");
-  });
-
-  it("returns empty string for a catalog provider without mediaUnderstandingProviders contract (amazon-bedrock legacy prefix)", () => {
-    const hint = formatMissingProviderHint("amazon-bedrock");
-    expect(`Media provider not available: amazon-bedrock${hint}`).toBe(
-      "Media provider not available: amazon-bedrock",
-    );
+    type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
+    await expect(
+      runProviderEntry({
+        capability: "audio",
+        entry,
+        cfg,
+        config: cfg.tools.media.audio,
+        ctx: {} as RunProviderEntryParams["ctx"],
+        attachmentIndex: 0,
+        cache: {} as RunProviderEntryParams["cache"],
+        providerRegistry: new Map(),
+      }),
+    ).rejects.toThrow("Media provider not available: unknown-provider");
   });
 });

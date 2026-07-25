@@ -3,17 +3,20 @@
  * screenshots, batch actions, and SSRF-aware post-interaction navigation checks.
  */
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { Frame, Page } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
+import type { FileChooser, Frame, Page } from "playwright-core";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
   ACT_MAX_CLICK_DELAY_MS,
   ACT_MAX_WAIT_TIME_MS,
+  BROWSER_ACTION_NAVIGATION_GRACE_MS,
   resolveActInteractionTimeoutMs,
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
+import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
@@ -62,7 +65,6 @@ type TargetOpts = {
   targetId?: string;
 };
 
-const INTERACTION_NAVIGATION_GRACE_MS = 250;
 const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
 
 function interactionNavigationPolicy(
@@ -115,7 +117,7 @@ function reconcileRemoteDialogAfterActionSettled(page: Page, signal?: AbortSigna
 
 function throwIfInteractionAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
-    throw toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
+    throw toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
   }
 }
 
@@ -236,7 +238,7 @@ async function assertObservedDelayedNavigations(
     });
   }
   if (subframeError) {
-    throw toLintErrorObject(subframeError, "Non-Error thrown");
+    throw toErrorObject(subframeError, "Non-Error thrown");
   }
 }
 
@@ -276,7 +278,7 @@ function observeDelayedInteractionNavigation(
         mainFrameNavigated: didCrossDocumentUrlChange(page, previousUrl),
         subframes,
       });
-    }, INTERACTION_NAVIGATION_GRACE_MS);
+    }, BROWSER_ACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
       // Call off directly on page (not via a cached reference) to preserve
@@ -322,7 +324,7 @@ function scheduleDelayedInteractionNavigationGuard(
     const settle = (err?: unknown) => {
       cleanup();
       if (err) {
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -363,7 +365,7 @@ function scheduleDelayedInteractionNavigationGuard(
           subframes,
         },
       }).then(() => settle(), settle);
-    }, INTERACTION_NAVIGATION_GRACE_MS);
+    }, BROWSER_ACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
       page.off!("framenavigated", onFrameNavigated);
@@ -476,11 +478,11 @@ async function assertInteractionNavigationCompletedSafely<T>(
   }
 
   if (subframeError) {
-    throw toLintErrorObject(subframeError, "Non-Error thrown");
+    throw toErrorObject(subframeError, "Non-Error thrown");
   }
 
   if (actionError) {
-    throw toLintErrorObject(actionError, "Non-Error thrown");
+    throw toErrorObject(actionError, "Non-Error thrown");
   }
   return result as T;
 }
@@ -571,7 +573,7 @@ async function awaitNavigationGuardedInteraction<T>(
           // The canonical post-check can settle on the first safe navigation.
           // Keep request interception for the full grace after the raw action.
           const elapsedMs = Math.max(0, Date.now() - actionSettledAtMs);
-          const remainingMs = Math.max(0, INTERACTION_NAVIGATION_GRACE_MS - elapsedMs);
+          const remainingMs = Math.max(0, BROWSER_ACTION_NAVIGATION_GRACE_MS - elapsedMs);
           if (remainingMs > 0) {
             await new Promise<void>((resolve) => {
               setTimeout(resolve, remainingMs);
@@ -613,7 +615,7 @@ async function awaitNavigationGuardedInteraction<T>(
       // alive until the raw action settles; otherwise an aborted caller could
       // select a page before a later preservation failure is quarantined.
       await guardedAction;
-      throw toLintErrorObject(observedPolicyError, "Non-Error thrown");
+      throw toErrorObject(observedPolicyError, "Non-Error thrown");
     }
     throw err;
   }
@@ -641,13 +643,13 @@ function createAbortPromiseWithListener(
     ? (() => {
         onAbort?.(signal.reason);
         return Promise.reject(
-          toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+          toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
         );
       })()
     : new Promise((_, reject) => {
         abortListener = () => {
           onAbort?.(signal.reason);
-          reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
+          reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
         };
         signal.addEventListener("abort", abortListener, { once: true });
       });
@@ -690,48 +692,34 @@ export async function clickViaPlaywright(
     delayMs?: number;
     timeoutMs?: number;
     signal?: AbortSignal;
+    resolvedPage?: Page;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
-  const page = await getRestoredPageForTarget(opts);
+  const page = opts.resolvedPage ?? (await getRestoredPageForTarget(opts));
+  if (opts.resolvedPage) {
+    ensurePageState(page);
+    restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  }
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const signal = opts.signal;
-  let abortListener: (() => void) | undefined;
-  let abortReject: ((reason: unknown) => void) | undefined;
-  let abortPromise: Promise<never> | undefined;
-  if (signal) {
-    abortPromise = new Promise((_, reject) => {
-      abortReject = reject;
-    });
-    void abortPromise.catch(() => {});
-    const disconnect = () => {
-      if (isBrowserObservedDialogBlockedError(signal.reason)) {
-        return;
-      }
-      void forceDisconnectPlaywrightForTarget({
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        ssrfPolicy: opts.ssrfPolicy,
-        reason: "click aborted",
-      }).catch(() => {});
-    };
-    if (signal.aborted) {
-      disconnect();
-      throw signal.reason ?? new Error("aborted");
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, (reason) => {
+    if (isBrowserObservedDialogBlockedError(reason)) {
+      return;
     }
-    abortListener = () => {
-      disconnect();
-      abortReject?.(signal.reason ?? new Error("aborted"));
-    };
-    signal.addEventListener("abort", abortListener, { once: true });
-    if (signal.aborted) {
-      abortListener();
-      throw signal.reason ?? new Error("aborted");
-    }
+    void forceDisconnectPlaywrightForTarget({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
+      reason: "click aborted",
+    }).catch(() => {});
+  });
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("aborted");
   }
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
   try {
@@ -746,9 +734,10 @@ export async function clickViaPlaywright(
           if (delayMs > 0) {
             await locator.hover({ timeout });
             throwIfInteractionAborted(signal);
-            await new Promise((resolve) => {
-              setTimeout(resolve, delayMs);
-            });
+            // Abortable hold: a bare setTimeout would keep the orphaned action
+            // chain (and its navigation-guard teardown) alive for the full
+            // delayMs after the caller already lost the abort race.
+            await sleepWithAbort(delayMs, signal);
             throwIfInteractionAborted(signal);
           }
           if (opts.doubleClick) {
@@ -777,14 +766,12 @@ export async function clickViaPlaywright(
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
-    if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
+    cleanup();
   }
 }
 
 /** Clicks absolute page coordinates with optional double-click and navigation guard. */
-export async function clickCoordsViaPlaywright(
+async function clickCoordsViaPlaywright(
   opts: {
     cdpUrl: string;
     targetId?: string;
@@ -1301,41 +1288,90 @@ export async function scrollIntoViewViaPlaywright(
   }
 }
 
+type BrowserWaitPredicateState = {
+  document: unknown;
+  pending?: boolean;
+  predicate?: () => unknown;
+  settled?: { kind: "value"; value: unknown } | { error: unknown; kind: "error" };
+};
+
+function createBrowserWaitPredicate(source: string): (state: BrowserWaitPredicateState) => boolean {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- compile only; Playwright runs it in-page
+  return new Function(
+    "state",
+    `
+      if (state.document !== this.document) throw "Wait predicate document changed";
+      state.predicate ??= (${source});
+      var settled = state.settled;
+      if (settled) {
+        delete state.settled;
+        if (settled.kind === "error") throw settled.error;
+        if (!!settled.value) return true;
+      }
+      if (state.pending) return false;
+      var predicate = state.predicate;
+      var value = predicate();
+      if (!value || typeof value.then !== "function") return !!value;
+      state.pending = true;
+      value.then(
+        function(resolved) {
+          state.settled = { kind: "value", value: resolved };
+          delete state.pending;
+        },
+        function(error) {
+          state.settled = { error: error, kind: "error" };
+          delete state.pending;
+        }
+      );
+      return false;
+    `,
+  ) as (state: BrowserWaitPredicateState) => boolean;
+}
+
 /** Waits for load state, timeout, URL, text, ref, or selector conditions. */
-export async function waitForViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  timeMs?: number;
-  text?: string;
-  textGone?: string;
-  selector?: string;
-  url?: string;
-  loadState?: "load" | "domcontentloaded" | "networkidle";
-  fn?: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<void> {
+export async function waitForViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    timeMs?: number;
+    text?: string;
+    textGone?: string;
+    selector?: string;
+    url?: string;
+    loadState?: "load" | "domcontentloaded" | "networkidle";
+    fn?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
+  const fn = normalizeOptionalString(opts.fn) ?? "";
+  const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
+  const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
     await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
   };
-
-  try {
-    // Playwright exposes no per-wait cancellation; retiring the shared
-    // connection would disrupt sibling tabs. Keep waits outside this guard.
+  const waitForSettledStep = async <T>(stepPromise: Promise<T>) => {
+    await stepPromise;
+    reconcileRemoteDialog();
+    throwIfInteractionAborted(opts.signal);
+  };
+  const runWaitSequence = async (
+    waitFor: <T>(stepPromise: Promise<T>) => Promise<void>,
+  ): Promise<void> => {
     if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-      await waitForStep(
+      await waitFor(
         page.waitForTimeout(
           resolveBoundedDelayMs(opts.timeMs, "wait timeMs", ACT_MAX_WAIT_TIME_MS),
         ),
       );
     }
     if (opts.text) {
-      await waitForStep(
+      await waitFor(
         page.getByText(opts.text).first().waitFor({
           state: "visible",
           timeout,
@@ -1343,7 +1379,7 @@ export async function waitForViaPlaywright(opts: {
       );
     }
     if (opts.textGone) {
-      await waitForStep(
+      await waitFor(
         page.getByText(opts.textGone).first().waitFor({
           state: "hidden",
           timeout,
@@ -1353,24 +1389,61 @@ export async function waitForViaPlaywright(opts: {
     if (opts.selector) {
       const selector = normalizeOptionalString(opts.selector) ?? "";
       if (selector) {
-        await waitForStep(page.locator(selector).first().waitFor({ state: "visible", timeout }));
+        await waitFor(page.locator(selector).first().waitFor({ state: "visible", timeout }));
       }
     }
     if (opts.url) {
       const url = normalizeOptionalString(opts.url) ?? "";
       if (url) {
-        await waitForStep(page.waitForURL(url, { timeout }));
+        await waitFor(page.waitForURL(url, { timeout }));
       }
     }
     if (opts.loadState) {
-      await waitForStep(page.waitForLoadState(opts.loadState, { timeout }));
+      await waitFor(page.waitForLoadState(opts.loadState, { timeout }));
     }
-    if (opts.fn) {
-      const fn = normalizeOptionalString(opts.fn) ?? "";
-      if (fn) {
-        await waitForStep(page.waitForFunction(fn, { timeout }));
+    if (fn) {
+      // Passing the live document handle makes Playwright fail instead of
+      // recreating this predicate in a replacement execution context.
+      const documentHandle = await page.evaluateHandle(() => globalThis.document);
+      try {
+        throwIfInteractionAborted(opts.signal);
+        await waitFor(
+          page.waitForFunction(
+            predicate!,
+            {
+              document: documentHandle,
+            } satisfies BrowserWaitPredicateState,
+            { timeout },
+          ),
+        );
+      } finally {
+        await documentHandle.dispose();
       }
     }
+  };
+
+  try {
+    // Playwright exposes no per-wait cancellation; retiring the shared
+    // connection would disrupt sibling tabs. Only executable waits need the
+    // request guard, which must own the full sequence before their predicate.
+    // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
+    // this guard owns navigation during the action, not jobs trusted JS schedules later.
+    if (!fn) {
+      await runWaitSequence(waitForStep);
+      return;
+    }
+    await awaitNavigationGuardedInteraction(
+      {
+        action: async () => await runWaitSequence(waitForSettledStep),
+        cdpUrl: opts.cdpUrl,
+        page,
+        ...interactionNavigationPolicy(opts),
+        targetId: opts.targetId,
+      },
+      abortPromise,
+      opts.signal,
+      reconcileRemoteDialog,
+    );
   } finally {
     cleanup();
   }
@@ -1483,6 +1556,10 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   const inputs: RawAnnotationInput[] = [];
   let bboxFailures = 0;
   for (const ref of refKeys) {
+    const refInfo = opts.refs[ref];
+    if (refInfo === undefined) {
+      continue;
+    }
     const box = await refLocator(page, ref)
       .boundingBox()
       .catch(() => null);
@@ -1492,8 +1569,8 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
     }
     inputs.push({
       ref,
-      role: opts.refs[ref].role,
-      name: opts.refs[ref].name,
+      role: refInfo.role,
+      name: refInfo.name,
       doc: {
         x: box.x + scroll.x,
         y: box.y + scroll.y,
@@ -1584,13 +1661,36 @@ async function captureElementScreenshotForLabels(
 }
 
 /** Sets file inputs for a role ref or selector with strict existing-path checks. */
-export async function setInputFilesViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  inputRef?: string;
-  element?: string;
-  paths: string[];
-}): Promise<void> {
+export async function setFileChooserFilesViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    page: Page;
+    fileChooser: FileChooser;
+    paths: string[];
+    timeoutMs: number;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  await awaitNavigationGuardedInteraction({
+    action: async () => {
+      await opts.fileChooser.setFiles(opts.paths, { timeout: opts.timeoutMs });
+    },
+    cdpUrl: opts.cdpUrl,
+    page: opts.page,
+    ...interactionNavigationPolicy(opts),
+    targetId: opts.targetId,
+  });
+}
+
+export async function setInputFilesViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    inputRef?: string;
+    element?: string;
+    paths: string[];
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -1614,7 +1714,15 @@ export async function setInputFilesViaPlaywright(opts: {
   const resolvedPaths = resolvedResult.paths;
 
   try {
-    await locator.setInputFiles(resolvedPaths);
+    await awaitNavigationGuardedInteraction({
+      action: async () => {
+        await locator.setInputFiles(resolvedPaths);
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, inputRef || element);
   }
@@ -1769,6 +1877,7 @@ async function executeSingleAction(
         loadState: action.loadState,
         fn: action.fn,
         timeoutMs: action.timeoutMs,
+        ...navigationPolicy,
         signal,
       });
       break;
@@ -1813,8 +1922,9 @@ function actionUsesNavigationRequestGuard(action: BrowserActRequest): boolean {
   switch (action.kind) {
     case "close":
     case "resize":
-    case "wait":
       return false;
+    case "wait":
+      return Boolean(action.fn);
     case "batch":
       return action.actions.some(actionUsesNavigationRequestGuard);
     default:
@@ -1844,7 +1954,8 @@ export async function executeActViaPlaywright(
   } & BrowserNavigationPolicyOptions,
 ): Promise<{
   result?: unknown;
-  results?: Array<{ ok: boolean; error?: string }>;
+  results?: BrowserBatchActionResult[];
+  aborted?: BrowserBatchAbort;
   blockedByDialog?: boolean;
   browserState?: unknown;
   downloads?: BrowserDownloadResult[];
@@ -1869,13 +1980,13 @@ export async function executeActViaPlaywright(
     },
   });
   const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, navigationPolicy)
-    ? INTERACTION_NAVIGATION_GRACE_MS
+    ? BROWSER_ACTION_NAVIGATION_GRACE_MS
     : 0;
   const drainDownloads = async (firstEventGraceMs = downloadGraceMs) =>
     await downloadCapture.drain({
       firstEventGraceMs,
       maxWaitMs: ACT_DOWNLOAD_MAX_DRAIN_MS,
-      quietMs: INTERACTION_NAVIGATION_GRACE_MS,
+      quietMs: BROWSER_ACTION_NAVIGATION_GRACE_MS,
     });
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
@@ -1886,6 +1997,7 @@ export async function executeActViaPlaywright(
       const batch = await batchViaPlaywright({
         cdpUrl: opts.cdpUrl,
         targetId: opts.targetId,
+        page,
         ...navigationPolicy,
         actions: opts.action.actions,
         stopOnError: opts.action.stopOnError,
@@ -1895,6 +2007,7 @@ export async function executeActViaPlaywright(
       const newDownloads = await drainDownloads();
       return {
         results: batch.results,
+        ...(batch.aborted ? { aborted: batch.aborted } : {}),
         ...(newDownloads ? { downloads: newDownloads } : {}),
       };
     }
@@ -1917,7 +2030,7 @@ export async function executeActViaPlaywright(
     try {
       const failureGraceMs =
         dialogAbort.signal.aborted && actionUsesNavigationRequestGuard(opts.action)
-          ? INTERACTION_NAVIGATION_GRACE_MS
+          ? BROWSER_ACTION_NAVIGATION_GRACE_MS
           : downloadGraceMs;
       await drainDownloads(failureGraceMs);
     } catch (downloadErr) {
@@ -1950,13 +2063,14 @@ export async function batchViaPlaywright(
   opts: {
     cdpUrl: string;
     targetId?: string;
+    page?: Page;
     actions: BrowserActRequest[];
     stopOnError?: boolean;
     evaluateEnabled?: boolean;
     depth?: number;
     signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
-): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
+): Promise<{ results: BrowserBatchActionResult[]; aborted?: BrowserBatchAbort }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
   const depth = opts.depth ?? 0;
   if (depth > ACT_MAX_BATCH_DEPTH) {
@@ -1965,49 +2079,101 @@ export async function batchViaPlaywright(
   if (opts.actions.length > ACT_MAX_BATCH_ACTIONS) {
     throw new Error(`Batch exceeds maximum of ${ACT_MAX_BATCH_ACTIONS} actions`);
   }
-  const results: Array<{ ok: boolean; error?: string }> = [];
-  for (const action of opts.actions) {
-    if (opts.signal?.aborted) {
-      throw opts.signal.reason ?? new Error("aborted");
+  const page = opts.page ?? (await getPageForTargetId(opts));
+  const results: BrowserBatchActionResult[] = [];
+  const finishAborted = (
+    reason: BrowserBatchAbort["reason"],
+    afterAction: number,
+    url: string,
+    skipped: number,
+  ) =>
+    skipped === 0
+      ? { results }
+      : { results, aborted: { reason, afterAction, url, skipped } satisfies BrowserBatchAbort };
+  let mainFrameNavigations = 0;
+  let navigationsAtLastDispatch = 0;
+  const currentMainFrameUrl = () => page.mainFrame?.().url() ?? page.url();
+  const onFrameNavigated = (frame: Frame) => {
+    if (frame === page.mainFrame?.()) {
+      mainFrameNavigations += 1;
     }
-    try {
-      await executeSingleAction(
-        action,
-        opts.cdpUrl,
-        opts.targetId,
-        opts.evaluateEnabled,
-        navigationPolicy,
-        depth,
-        opts.signal,
-      );
-      results.push({ ok: true });
-    } catch (err) {
-      if (isBrowserObservedDialogBlockedError(err)) {
-        throw err;
+  };
+  const finishNavigation = (afterAction: number, skipped: number) => {
+    const url = currentMainFrameUrl();
+    const lastResult = results.at(-1);
+    if (lastResult) {
+      results[results.length - 1] = { ...lastResult, navigated: true, url };
+    }
+    return finishAborted("navigation", afterAction, url, skipped);
+  };
+
+  // Snapshot refs are document-scoped, so any committed main-frame navigation
+  // ends the batch. A commit after the next action dispatch is inherently unguardable;
+  // callers that expect navigation can use separate act calls as the escape hatch.
+  page.on?.("framenavigated", onFrameNavigated);
+  try {
+    for (const [index, action] of opts.actions.entries()) {
+      if (opts.signal?.aborted) {
+        throw opts.signal.reason ?? new Error("aborted");
       }
-      if (isPolicyDenyNavigationError(err)) {
-        throw err;
+      if (mainFrameNavigations > navigationsAtLastDispatch) {
+        return finishNavigation(index, opts.actions.length - index);
       }
-      const message = formatErrorMessage(err);
-      results.push({ ok: false, error: message });
-      if (opts.stopOnError !== false) {
-        break;
+      if (page.isClosed?.()) {
+        return finishAborted("closed", index, currentMainFrameUrl(), opts.actions.length - index);
+      }
+      navigationsAtLastDispatch = mainFrameNavigations;
+      try {
+        await executeSingleAction(
+          action,
+          opts.cdpUrl,
+          opts.targetId,
+          opts.evaluateEnabled,
+          navigationPolicy,
+          depth,
+          opts.signal,
+        );
+        results.push({ ok: true });
+        if (page.isClosed?.()) {
+          return finishAborted(
+            "closed",
+            index + 1,
+            currentMainFrameUrl(),
+            opts.actions.length - index - 1,
+          );
+        }
+        if (mainFrameNavigations > navigationsAtLastDispatch) {
+          return finishNavigation(index + 1, opts.actions.length - index - 1);
+        }
+      } catch (err) {
+        if (isBrowserObservedDialogBlockedError(err)) {
+          throw err;
+        }
+        if (isPolicyDenyNavigationError(err)) {
+          throw err;
+        }
+        const message = formatErrorMessage(err);
+        results.push({ ok: false, error: message });
+        if (page.isClosed?.()) {
+          return finishAborted(
+            "closed",
+            index + 1,
+            currentMainFrameUrl(),
+            opts.actions.length - index - 1,
+          );
+        }
+        if (mainFrameNavigations > navigationsAtLastDispatch) {
+          return finishNavigation(index + 1, opts.actions.length - index - 1);
+        }
+        if (opts.stopOnError !== false) {
+          break;
+        }
       }
     }
+    return { results };
+  } finally {
+    page.off?.("framenavigated", onFrameNavigated);
   }
-  return { results };
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

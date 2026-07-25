@@ -1,7 +1,7 @@
 // Defines reply directive parsing constants and text-matching helpers.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../../utils.js";
-import type { NoticeLevel, ReasoningLevel, TraceLevel } from "../thinking.js";
+import type { ReasoningLevel, TraceLevel } from "../thinking.js";
 import {
   type ElevatedLevel,
   normalizeFastMode,
@@ -46,17 +46,17 @@ const matchLevelDirective = (
   const start = match.index;
   const directiveEnd = match.index + match[0].length;
   let i = directiveEnd;
-  while (i < body.length && /\s/.test(body[i])) {
+  while (i < body.length && /\s/.test(body.charAt(i))) {
     i += 1;
   }
   if (body[i] === ":") {
     i += 1;
-    while (i < body.length && /\s/.test(body[i])) {
+    while (i < body.length && /\s/.test(body.charAt(i))) {
       i += 1;
     }
   }
   const argStart = i;
-  while (i < body.length && /[A-Za-z-]/.test(body[i])) {
+  while (i < body.length && /[A-Za-z-]/.test(body.charAt(i))) {
     i += 1;
   }
   const candidate = i > argStart ? body.slice(argStart, i) : undefined;
@@ -228,5 +228,5 @@ export function extractStatusDirective(body?: string): {
   return extractSimpleDirective(body, STATUS_DIRECTIVE_PATTERN);
 }
 
-export type { ElevatedLevel, NoticeLevel, ReasoningLevel, ThinkLevel, TraceLevel, VerboseLevel };
+export type { ElevatedLevel, ReasoningLevel, ThinkLevel, TraceLevel, VerboseLevel };
 export { extractExecDirective } from "./exec/directive.js";

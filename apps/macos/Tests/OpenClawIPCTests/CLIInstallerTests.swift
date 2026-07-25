@@ -67,6 +67,67 @@ struct CLIInstallerTests {
         ])
     }
 
+    @Test func `managed update uses the canonical updater without accepting downgrades`() {
+        let command = CLIInstaller.managedUpdateCommand(
+            executable: "/Users/Test User/.openclaw/bin/openclaw",
+            targetVersion: "2026.7.4")
+
+        #expect(command == [
+            "/Users/Test User/.openclaw/bin/openclaw",
+            "update",
+            "--tag",
+            "2026.7.4",
+            "--json",
+            "--timeout",
+            "900",
+        ])
+        #expect(!command.contains("--yes"))
+
+        let withoutRestart = CLIInstaller.managedUpdateCommand(
+            executable: "/Users/Test User/.openclaw/bin/openclaw",
+            targetVersion: "2026.7.4",
+            restartGateway: false)
+        #expect(withoutRestart == command + ["--no-restart"])
+
+        let repair = CLIInstaller.managedUpdateCommand(
+            executable: "/Users/Test User/.openclaw/bin/openclaw",
+            targetVersion: "2026.7.4",
+            restartGateway: false,
+            repair: true)
+        #expect(repair == [
+            "/Users/Test User/.openclaw/bin/openclaw",
+            "update",
+            "repair",
+            "--json",
+            "--timeout",
+            "900",
+            "--yes",
+            "--no-restart",
+        ])
+    }
+
+    @Test func `managed update parses structured updater diagnostics`() throws {
+        let summary = try #require(CLIInstaller.parseManagedUpdateSummary("""
+        {
+          "status": "error",
+          "mode": "npm",
+          "reason": "package-update-failed",
+          "before": { "version": "2026.7.3" },
+          "after": { "version": "2026.7.3" },
+          "steps": [
+            { "name": "package update", "exitCode": 1, "stderrTail": "registry unavailable" }
+          ],
+          "durationMs": 42
+        }
+        """))
+
+        #expect(summary.status == "error")
+        #expect(summary.reason == "package-update-failed")
+        #expect(summary.before?.version == "2026.7.3")
+        #expect(summary.steps?.first?.name == "package update")
+        #expect(summary.steps?.first?.stderrTail == "registry unavailable")
+    }
+
     @Test func `release builds install exact while unreleased builds choose a channel`() {
         #expect(CLIInstaller.automaticInstallTarget(
             appVersion: "2026.7.2",

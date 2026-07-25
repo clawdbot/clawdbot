@@ -69,7 +69,12 @@ export function projectOpenAITools(tools: readonly OpenAIToolDescriptor[]): Open
   for (let toolIndex = 0; toolIndex < inputToolCount; toolIndex += 1) {
     let tool: OpenAIToolDescriptor;
     try {
-      tool = tools[toolIndex];
+      const candidate = tools[toolIndex];
+      if (!candidate) {
+        diagnostics.push(unreadableToolDiagnostic(toolIndex));
+        continue;
+      }
+      tool = candidate;
     } catch {
       diagnostics.push(unreadableToolDiagnostic(toolIndex));
       continue;

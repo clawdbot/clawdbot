@@ -49,12 +49,14 @@ openclaw gateway restart
 
 ## Default model and catalog
 
-The default model is `kilocode/kilo/auto`, a provider-owned smart-routing model. OpenClaw does not
-publish a task-to-upstream-model mapping for it; routing behind `kilo/auto` is owned by Kilo Gateway.
+The default model is `kilocode/kilo-auto/balanced`, Kilo Gateway's balanced smart-routing tier.
+OpenClaw does not publish a task-to-upstream-model mapping for it; routing behind
+`kilo-auto/balanced` is owned by Kilo Gateway.
 
 At startup OpenClaw queries `GET https://api.kilo.ai/api/gateway/models` and merges discovered models
-ahead of a static fallback catalog. The static fallback contains only `kilocode/kilo/auto` (`Kilo Auto`,
-`input: ["text", "image"]`, `reasoning: true`, `contextWindow: 1000000`, `maxTokens: 128000`).
+ahead of a static fallback catalog. The static fallback contains only
+`kilocode/kilo-auto/balanced` (`Auto Balanced`, `input: ["text", "image"]`, `reasoning: true`,
+`contextWindow: 1000000`, `maxTokens: 65536`).
 
 Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
 `kilocode/anthropic/claude-sonnet-4`, `kilocode/openai/gpt-5.5`). Run `/models kilocode` or
@@ -67,7 +69,7 @@ Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
   env: { KILOCODE_API_KEY: "<your-kilocode-api-key>" }, // pragma: allowlist secret
   agents: {
     defaults: {
-      model: { primary: "kilocode/kilo/auto" },
+      model: { primary: "kilocode/kilo-auto/balanced" },
     },
   },
 }
@@ -92,14 +94,14 @@ Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
     models that support it.
 
     <Warning>
-    `kilocode/kilo/auto` and `x-ai/*` refs skip reasoning-effort injection. Use a concrete model
-    ref such as `kilocode/anthropic/claude-sonnet-4` if you need reasoning support.
+    `kilocode/kilo-auto/balanced` and `x-ai/*` refs skip reasoning-effort injection. Use a concrete
+    model ref such as `kilocode/anthropic/claude-sonnet-4` if you need reasoning support.
     </Warning>
 
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - If model discovery fails at startup, OpenClaw falls back to the static catalog containing `kilocode/kilo/auto`.
+    - If model discovery fails at startup, OpenClaw falls back to the static catalog containing `kilocode/kilo-auto/balanced`.
     - Confirm your API key is valid and that your Kilo account has the desired models enabled.
     - When Gateway runs as a daemon, ensure `KILOCODE_API_KEY` is available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
 

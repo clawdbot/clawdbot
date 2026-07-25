@@ -15,6 +15,7 @@ import {
   normalizeClawRouterResolvedModel,
 } from "./provider-catalog.js";
 import { wrapClawRouterProviderStream } from "./stream.js";
+import { inspectPerplexityToolSchemas, normalizePerplexityToolSchemas } from "./tool-schemas.js";
 import { fetchClawRouterUsage } from "./usage.js";
 
 const PROVIDER_ID = "clawrouter";
@@ -31,6 +32,10 @@ const googleReplay = buildProviderReplayFamilyHooks({ family: "google-gemini" })
 const openAiTools = buildProviderToolCompatFamilyHooks("openai");
 const deepSeekTools = buildProviderToolCompatFamilyHooks("deepseek");
 const geminiTools = buildProviderToolCompatFamilyHooks("gemini");
+const perplexityTools = {
+  normalizeToolSchemas: normalizePerplexityToolSchemas,
+  inspectToolSchemas: inspectPerplexityToolSchemas,
+};
 
 function buildApiKeyAuth(): ProviderAuthMethod {
   return createProviderApiKeyAuthMethod({
@@ -105,6 +110,9 @@ function resolveToolFamily(modelId: string) {
   if (normalized.startsWith("google/")) {
     return geminiTools;
   }
+  if (normalized.startsWith("perplexity/")) {
+    return perplexityTools;
+  }
   return openAiTools;
 }
 
@@ -157,9 +165,27 @@ export default definePluginEntry({
         },
       },
       resolveDynamicModel: (ctx) => dynamicModels.get(dynamicModelScope(ctx))?.get(ctx.modelId),
+      // Match by agentDir/workspaceDir/baseUrl; the context carries no auth
+      // profile id, so any profile scope for the same deployment counts.
+      preferRuntimeResolvedModel: (ctx) => {
+        const agentDir = ctx.agentDir ?? "";
+        const workspaceDir = ctx.workspaceDir ?? "";
+        const rootUrl = normalizeClawRouterRootUrl(configuredBaseUrl(ctx.config));
+        for (const [scope, models] of dynamicModels) {
+          const [scopeAgentDir, scopeWorkspaceDir, , scopeRootUrl] = JSON.parse(scope) as string[];
+          if (
+            scopeAgentDir === agentDir &&
+            scopeWorkspaceDir === workspaceDir &&
+            scopeRootUrl === rootUrl &&
+            models.has(ctx.modelId)
+          ) {
+            return true;
+          }
+        }
+        return false;
+      },
       prepareDynamicModel: async (ctx) => {
         const scope = dynamicModelScope(ctx);
-        dynamicModels.delete(scope);
         const { resolveApiKeyForProvider } =
           await import("openclaw/plugin-sdk/provider-auth-runtime");
         const apiKey = (
@@ -172,6 +198,9 @@ export default definePluginEntry({
           })
         )?.apiKey;
         if (!apiKey) {
+          // Rebuilds publish atomically so catalog errors keep the prior snapshot.
+          // Missing credentials are the sole fail-closed clearing path.
+          dynamicModels.delete(scope);
           return;
         }
         const providerConfig = await buildClawRouterProviderConfig({
@@ -219,7 +248,6 @@ export default definePluginEntry({
           token: ctx.token,
           baseUrl: configuredBaseUrl(ctx.config),
           timeoutMs: ctx.timeoutMs,
-          fetchFn: ctx.fetchFn,
         }),
     });
   },

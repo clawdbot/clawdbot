@@ -5,7 +5,7 @@ import { parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
 import { formatConfigPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
 import { asObjectRecord } from "./object.js";
 
-export type LegacyToolsBySenderKeyHit = {
+type LegacyToolsBySenderKeyHit = {
   /** Path parts pointing to the containing toolsBySender object. */
   toolsBySenderPath: Array<string | number>;
   /** Formatted config path for user-facing warnings. */

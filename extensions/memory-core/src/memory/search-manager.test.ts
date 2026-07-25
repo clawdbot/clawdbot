@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import type {
+  PluginStateLeaseContext,
+  PluginStateLeaseOptions,
+  PluginStateLeaseRunner,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
@@ -40,6 +45,9 @@ function nativePath(candidate: string): string {
   return path.resolve(candidate);
 }
 
+type ManagerSearchParams = Parameters<SearchManager["search"]>;
+type ManagerSearchResult = Awaited<ReturnType<SearchManager["search"]>>;
+
 function createManagerMock(params: {
   backend: "qmd" | "builtin";
   provider: string;
@@ -56,7 +64,12 @@ function createManagerMock(params: {
   withMemorySourceCounts?: boolean;
 }) {
   return {
-    search: vi.fn(async () => params.searchResults ?? []),
+    search: vi.fn(
+      async (
+        _query: ManagerSearchParams[0],
+        _opts?: ManagerSearchParams[1],
+      ): Promise<ManagerSearchResult> => params.searchResults ?? [],
+    ),
     readFile: vi.fn(async () => ({ text: "", path: "MEMORY.md" })),
     status: vi.fn(() =>
       createManagerStatus({
@@ -136,10 +149,32 @@ vi.mock("../../manager-runtime.js", () => ({
 
 import { QmdMemoryManager } from "./qmd-manager.js";
 import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  runMemorySearchWithDeadline,
+  type MemorySearchDeadlineControlOptions,
+} from "./search-deadline.js";
+import {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
-  getMemorySearchManager,
+  getMemorySearchManager as getMemorySearchManagerWithoutLease,
 } from "./search-manager.js";
+const withLease: PluginStateLeaseRunner = async <T>(
+  options: PluginStateLeaseOptions,
+  run: (lease: PluginStateLeaseContext) => Promise<T>,
+) =>
+  await run({
+    signal: options.signal ?? new AbortController().signal,
+    assertOwned: vi.fn(),
+  });
+const createLeaseHost = (): PluginStateLeaseRunner =>
+  async function leaseHost<T>(
+    options: PluginStateLeaseOptions,
+    run: (lease: PluginStateLeaseContext) => Promise<T>,
+  ): Promise<T> {
+    return await withLease(options, run);
+  };
+const getMemorySearchManager = (params: Parameters<typeof getMemorySearchManagerWithoutLease>[0]) =>
+  getMemorySearchManagerWithoutLease({ ...params, withLease: params.withLease ?? withLease });
 const createQmdManagerMock = vi.mocked(QmdMemoryManager["create"]);
 
 type QmdManagerInstance = Awaited<ReturnType<typeof QmdMemoryManager.create>>;
@@ -159,21 +194,24 @@ function createQmdCfg(
 
 function createBuiltinCfg(agentId: string): OpenClawConfig {
   return {
+    memory: {
+      search: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        store: {
+          path: "/tmp/index.sqlite",
+          vector: { enabled: false },
+        },
+        sync: { watch: false, onSessionStart: false, onSearch: false },
+        query: { minScore: 0, hybrid: { enabled: false } },
+        sources: ["memory"],
+        experimental: { sessionMemory: false },
+      },
+    },
+
     agents: {
       defaults: {
         workspace: "/tmp/workspace",
-        memorySearch: {
-          provider: "openai",
-          model: "text-embedding-3-small",
-          store: {
-            path: "/tmp/index.sqlite",
-            vector: { enabled: false },
-          },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
-          query: { minScore: 0, hybrid: { enabled: false } },
-          sources: ["memory"],
-          experimental: { sessionMemory: false },
-        },
       },
       list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }],
     },
@@ -308,6 +346,7 @@ describe("getMemorySearchManager caching", () => {
       const result = await freshModule.getMemorySearchManager({
         cfg: createQmdCfg("corrupt-cache-agent"),
         agentId: "corrupt-cache-agent",
+        withLease,
       });
       const managerStatus = requireManager(result).status();
       expect(managerStatus.backend).toBe("qmd");
@@ -330,6 +369,75 @@ describe("getMemorySearchManager caching", () => {
     expect(second.debug?.managerCacheState).toBe("cached-full-hit");
     expect(first.debug?.qmdIdentityHash).toMatch(/^[0-9a-f]{64}$/);
     expect(second.debug?.qmdIdentityHash).toBe(first.debug?.qmdIdentityHash);
+  });
+
+  it("does not reuse QMD fallback managers across local-service hosts", async () => {
+    const agentId = "local-service-hosts";
+    const cfg = createQmdCfg(agentId);
+    const firstAcquire = vi.fn(async () => undefined);
+    const secondAcquire = vi.fn(async () => undefined);
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    secondPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance);
+
+    const first = await getMemorySearchManager({
+      cfg,
+      agentId,
+      acquireLocalService: firstAcquire,
+    });
+    const second = await getMemorySearchManager({
+      cfg,
+      agentId,
+      acquireLocalService: secondAcquire,
+    });
+    const secondManager = requireManager(second);
+    await secondManager.search("hello");
+
+    expect(Object.is(first.manager, second.manager)).toBe(false);
+    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenCalledWith(
+      expect.objectContaining({ acquireLocalService: secondAcquire }),
+    );
+  });
+
+  it("does not reuse QMD managers across SQLite lease hosts", async () => {
+    const agentId = "lease-hosts";
+    const cfg = createQmdCfg(agentId);
+    const firstLease = createLeaseHost();
+    const secondLease = createLeaseHost();
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance);
+
+    const first = await getMemorySearchManager({ cfg, agentId, withLease: firstLease });
+    const second = await getMemorySearchManager({ cfg, agentId, withLease: secondLease });
+
+    expect(first.manager).not.toBe(second.manager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
+    expect(qmdCreateParams(1).withLease).toBe(secondLease);
+  });
+
+  it("fails QMD closed when the host omits SQLite lease coordination", async () => {
+    const cfg = createQmdCfg("missing-lease-host");
+
+    const result = await getMemorySearchManagerWithoutLease({
+      cfg,
+      agentId: "missing-lease-host",
+    });
+
+    expect(result.manager).toBe(fallbackManager);
+    expect(result.debug).toMatchObject({
+      backend: "qmd",
+      managerCacheState: "fallback-builtin",
+      failureCode: "qmd-unavailable",
+    });
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
   });
 
   it("keeps the cached QMD manager active when the caller cancels a search", async () => {
@@ -370,7 +478,11 @@ describe("getMemorySearchManager caching", () => {
     const fallbackResults = await firstManager.search("hello", { signal: controller.signal });
     expect(fallbackResults).toHaveLength(1);
     expect(fallbackResults[0]?.path).toBe("MEMORY.md");
-    expect(fallbackSearch).toHaveBeenCalledWith("hello", { signal: controller.signal });
+    expect(fallbackSearch).toHaveBeenCalledWith("hello", { signal: expect.any(AbortSignal) });
+    const fallbackSignal = fallbackSearch.mock.calls[0]?.[1]?.signal;
+    expect(fallbackSignal).toBeInstanceOf(AbortSignal);
+    expect(fallbackSignal).not.toBe(controller.signal);
+    expect(fallbackSignal?.aborted).toBe(false);
 
     const second = await getMemorySearchManager({ cfg, agentId: retryAgentId });
     requireManager(second);
@@ -628,7 +740,6 @@ describe("getMemorySearchManager caching", () => {
             workspace: "/tmp/workspace",
             contextLimits: {
               memoryGetMaxChars: 24_000,
-              memoryGetDefaultLines: 180,
             },
           },
         ],
@@ -1007,6 +1118,143 @@ describe("getMemorySearchManager caching", () => {
     expect(fallbackSearch).toHaveBeenCalledTimes(1);
   });
 
+  it("does not wait for failed qmd retirement before starting builtin fallback", async () => {
+    const retryAgentId = "retry-agent-slow-retirement";
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+    mockPrimary.close.mockImplementationOnce(async () => await new Promise(() => {}));
+    const onDebug = vi.fn();
+
+    try {
+      const results = await firstManager.search("hello", { onDebug });
+
+      expect(results).toHaveLength(1);
+      expect(onDebug).toHaveBeenCalledWith({ backend: "builtin" });
+      expect(mockPrimary.close).toHaveBeenCalledTimes(1);
+      expect(fallbackSearch).toHaveBeenCalledTimes(1);
+    } finally {
+      mockPrimary.close.mockImplementation(async () => {});
+    }
+  });
+
+  it("signals builtin fallback to calls queued behind the failed qmd primary", async () => {
+    const retryAgentId = "retry-agent-concurrent-fallback";
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+    const fallbackGate = createDeferred<typeof fallbackManager>();
+    mockMemoryIndexGet.mockImplementation(async () => await fallbackGate.promise);
+    const firstDebug = vi.fn();
+    const secondDebug = vi.fn();
+
+    const firstSearch = firstManager.search("first", { onDebug: firstDebug });
+    await vi.waitFor(() => expect(firstDebug).toHaveBeenCalledWith({ backend: "builtin" }));
+    const secondSearch = firstManager.search("second", { onDebug: secondDebug });
+    await vi.waitFor(() => expect(secondDebug).toHaveBeenCalledWith({ backend: "builtin" }));
+
+    fallbackGate.resolve(fallbackManager);
+    await expect(Promise.all([firstSearch, secondSearch])).resolves.toHaveLength(2);
+    expect(fallbackSearch).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives same-call qmd-to-builtin fallback a fresh default deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const retryAgentId = "retry-agent-fallback-timeout";
+      const { manager: firstManager } = await createFailedQmdSearchHarness({
+        agentId: retryAgentId,
+        errorMessage: "qmd query failed",
+      });
+      mockPrimary.search.mockReset();
+      mockPrimary.search.mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10_000);
+        });
+        throw new Error("qmd query failed");
+      });
+      let fallbackSignal: AbortSignal | undefined;
+      fallbackSearch.mockImplementationOnce(
+        async (_query: string, opts?: Parameters<SearchManager["search"]>[1]) => {
+          fallbackSignal = opts?.signal;
+          return await new Promise(() => {});
+        },
+      );
+      const onDebug = vi.fn();
+
+      let settled = false;
+      const resultPromise = runMemorySearchWithDeadline({
+        timeoutMs: 15_000,
+        run: async (signal, controlDeadline) => {
+          const searchOptions: NonNullable<ManagerSearchParams[1]> &
+            MemorySearchDeadlineControlOptions = {
+            signal,
+            onDebug,
+            [MEMORY_SEARCH_DEADLINE_CONTROL]: controlDeadline,
+          };
+          return await firstManager.search("hello", searchOptions);
+        },
+      }).then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(9_999);
+
+      expect(fallbackSearch).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(fallbackSearch).toHaveBeenCalledTimes(1);
+      expect(onDebug).toHaveBeenCalledWith({ backend: "builtin" });
+      await vi.advanceTimersByTimeAsync(14_999);
+
+      expect(settled).toBe(false);
+      expect(fallbackSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      const error = await resultPromise;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("memory_search timed out after 15s");
+      expect(fallbackSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates caller cancellation to a same-call builtin fallback", async () => {
+    const retryAgentId = "retry-agent-fallback-abort";
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+    let fallbackSignal: AbortSignal | undefined;
+    fallbackSearch.mockImplementationOnce(
+      async (_query: string, opts?: Parameters<SearchManager["search"]>[1]) => {
+        fallbackSignal = opts?.signal;
+        return await new Promise(() => {});
+      },
+    );
+    const controller = new AbortController();
+    const abortError = new Error("memory_search timed out after 45s");
+
+    const resultPromise = firstManager.search("hello", { signal: controller.signal });
+    await vi.waitFor(() => expect(fallbackSearch).toHaveBeenCalledTimes(1));
+    controller.abort(abortError);
+
+    await expect(resultPromise).rejects.toBe(abortError);
+    expect(fallbackSignal?.aborted).toBe(true);
+    expect(fallbackSignal?.reason).toBe(abortError);
+  });
+
   it("keeps original qmd error when fallback manager initialization fails", async () => {
     const retryAgentId = "retry-agent-no-fallback-auth";
     const { manager: firstManager } = await createFailedQmdSearchHarness({
@@ -1112,3 +1360,4 @@ describe("getMemorySearchManager caching", () => {
     expect(mockCloseAllMemoryIndexManagers).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

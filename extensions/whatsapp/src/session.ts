@@ -1,7 +1,13 @@
 // Whatsapp plugin module implements session behavior.
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:https";
-import type { GroupMetadata, WAMessageKey, proto } from "baileys";
+import type {
+  GroupMetadata,
+  SignalDataTypeMap,
+  SignalKeyStore,
+  WAMessageKey,
+  proto,
+} from "baileys";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import {
@@ -29,6 +35,7 @@ import {
 import { renderQrTerminal } from "./qr-terminal.js";
 import { getStatusCode } from "./session-errors.js";
 import {
+  createBaileysSignalRepository,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
@@ -43,19 +50,10 @@ export { formatError, getStatusCode } from "./session-errors.js";
 export {
   getWebAuthAgeMs,
   logoutWeb,
-  logWebSelfId,
-  pickWebChannel,
-  readWebAuthSnapshot,
-  readWebAuthState,
-  readWebAuthExistsBestEffort,
   readWebAuthExistsForDecision,
-  readWebAuthSnapshotBestEffort,
-  readWebSelfIdentityForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
-  type WhatsAppWebAuthState,
-  webAuthExists,
 } from "./auth-store.js";
 export {
   waitForCredsSaveQueue,
@@ -68,7 +66,7 @@ const LOGGED_OUT_STATUS = 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
-export const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
+const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
 
 async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
   await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
@@ -78,35 +76,44 @@ function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
+  options?: {
+    beforeCredentialPersistence?: () => Promise<void>;
+    onError?: (error: unknown) => void;
+  },
 ): void {
   enqueueCredsSave(
     authDir,
-    () => safeSaveCreds(authDir, saveCreds, logger),
+    () =>
+      safeSaveCreds({
+        authDir,
+        saveCreds,
+        logger,
+        beforeCredentialPersistence: options?.beforeCredentialPersistence,
+      }),
     (err) => {
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
+      options?.onError?.(err);
     },
   );
 }
 
-async function safeSaveCreds(
-  authDir: string,
-  saveCreds: () => Promise<void> | void,
-  logger: ReturnType<typeof getChildLogger>,
-): Promise<void> {
+async function safeSaveCreds(params: {
+  authDir: string;
+  saveCreds: () => Promise<void> | void;
+  logger: ReturnType<typeof getChildLogger>;
+  beforeCredentialPersistence?: () => Promise<void>;
+}): Promise<void> {
+  let backup: { content: string; filePath: string } | undefined;
   try {
     // Best-effort backup so we can recover after abrupt restarts.
     // Important: don't clobber a good backup with a corrupted/truncated creds.json.
-    const credsPath = resolveWebCredsPath(authDir);
-    const backupPath = resolveWebCredsBackupPath(authDir);
+    const credsPath = resolveWebCredsPath(params.authDir);
+    const backupPath = resolveWebCredsBackupPath(params.authDir);
     const raw = readCredsJsonRaw(credsPath);
     if (raw) {
       try {
         JSON.parse(raw);
-        await writeWebCredsRawAtomically({
-          filePath: backupPath,
-          content: raw,
-          tempPrefix: ".creds.backup",
-        });
+        backup = { content: raw, filePath: backupPath };
       } catch {
         // keep existing backup
       }
@@ -114,10 +121,48 @@ async function safeSaveCreds(
   } catch {
     // ignore backup failures
   }
+
+  if (backup) {
+    await params.beforeCredentialPersistence?.();
+    try {
+      await writeWebCredsRawAtomically({
+        filePath: backup.filePath,
+        content: backup.content,
+        tempPrefix: ".creds.backup",
+      });
+    } catch {
+      // keep existing backup
+    }
+  }
+
+  await params.beforeCredentialPersistence?.();
   try {
-    await Promise.resolve(saveCreds());
+    await Promise.resolve(params.saveCreds());
   } catch (err) {
-    logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
+    params.logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
+    if (params.beforeCredentialPersistence) {
+      throw err;
+    }
+  }
+}
+
+function abortSocketAfterCredentialPersistenceFailure(
+  sock: ReturnType<typeof makeWASocket>,
+  error: unknown,
+): void {
+  const failure =
+    error instanceof Error ? error : new Error("WhatsApp credential persistence rejected");
+  const closeWebSocket = () => {
+    try {
+      void sock.ws?.close?.();
+    } catch {
+      // ignore best-effort shutdown failures
+    }
+  };
+  try {
+    void sock.end(failure).catch(closeWebSocket);
+  } catch {
+    closeWebSocket();
   }
 }
 
@@ -160,10 +205,31 @@ export async function createWaSocket(
   opts: {
     authDir?: string;
     onQr?: (qr: string) => void;
+    beforeCredentialPersistence?: () => Promise<void>;
+    onCredentialPersistenceError?: (error: unknown) => void;
+    onCredentialPersistenceTask?: (task: Promise<unknown>) => void;
     getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
     cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
     waWebSocketUrl?: string | URL;
   } & WhatsAppSocketTimingOptions = {},
+): Promise<ReturnType<typeof makeWASocket>> {
+  return await createWaSocketInternal(printQr, verbose, opts, "normal");
+}
+
+async function createWaSocketInternal(
+  printQr: boolean,
+  verbose: boolean,
+  opts: {
+    authDir?: string;
+    onQr?: (qr: string) => void;
+    beforeCredentialPersistence?: () => Promise<void>;
+    onCredentialPersistenceError?: (error: unknown) => void;
+    onCredentialPersistenceTask?: (task: Promise<unknown>) => void;
+    getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
+    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
+    waWebSocketUrl?: string | URL;
+  } & WhatsAppSocketTimingOptions,
+  receiveMode: "normal" | "directory",
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -174,6 +240,7 @@ export async function createWaSocket(
   const logger = toPinoLikeLogger(baseLogger, verbose ? "info" : "silent");
   const authDir = resolveUserPath(opts.authDir ?? resolveDefaultWebAuthDir());
   await rejectUnsafeWebCredsPath(authDir);
+  await opts.beforeCredentialPersistence?.();
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   const queueResult = await waitForCredsSaveQueueWithTimeout(authDir);
@@ -181,7 +248,9 @@ export async function createWaSocket(
     sessionLogger.warn({ authDir }, CREDS_FLUSH_TIMEOUT_MESSAGE);
   } else {
     await rejectUnsafeWebCredsPath(authDir);
-    await restoreCredsFromBackupIfNeeded(authDir);
+    await restoreCredsFromBackupIfNeeded(authDir, {
+      beforeCredentialPersistence: opts.beforeCredentialPersistence,
+    });
   }
   await rejectUnsafeWebCredsPath(authDir);
   const { state } = await useMultiFileAuthState(authDir);
@@ -199,28 +268,122 @@ export async function createWaSocket(
     defaultQueryTimeoutMs:
       opts.defaultQueryTimeoutMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
   };
+  const socketRef: { current?: ReturnType<typeof makeWASocket> } = {};
+  let pendingSocketAbort: { error: unknown } | undefined;
+  const reportCredentialPersistenceError = (error: unknown) => {
+    if (socketRef.current) {
+      abortSocketAfterCredentialPersistenceFailure(socketRef.current, error);
+    } else {
+      pendingSocketAbort = { error };
+    }
+    opts.onCredentialPersistenceError?.(error);
+  };
+  const persistedSignalKeys: SignalKeyStore = opts.beforeCredentialPersistence
+    ? {
+        ...state.keys,
+        async set(data) {
+          await opts.beforeCredentialPersistence?.();
+          await state.keys.set(data);
+        },
+      }
+    : state.keys;
+  const cachedSignalKeys = makeCacheableSignalKeyStore(persistedSignalKeys, logger);
+  const signalKeys: SignalKeyStore = opts.beforeCredentialPersistence
+    ? {
+        ...cachedSignalKeys,
+        get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
+          const task = Promise.resolve(cachedSignalKeys.get(type, ids));
+          opts.onCredentialPersistenceTask?.(task);
+          return task;
+        },
+        set(data) {
+          const task = (async () => {
+            try {
+              await cachedSignalKeys.set(data);
+            } catch (error) {
+              reportCredentialPersistenceError(error);
+              throw error;
+            }
+          })();
+          opts.onCredentialPersistenceTask?.(task);
+          return task;
+        },
+      }
+    : cachedSignalKeys;
+  const makeSignalRepository = opts.onCredentialPersistenceTask
+    ? (...args: Parameters<typeof createBaileysSignalRepository>) => {
+        const repository = createBaileysSignalRepository(...args);
+        const storeLidPnMappings = repository.lidMapping.storeLIDPNMappings.bind(
+          repository.lidMapping,
+        );
+        repository.lidMapping.storeLIDPNMappings = (...storeArgs) => {
+          const task = storeLidPnMappings(...storeArgs);
+          opts.onCredentialPersistenceTask?.(task);
+          void task.then(undefined, reportCredentialPersistenceError);
+          return task;
+        };
+        const migrateSession = repository.migrateSession.bind(repository);
+        repository.migrateSession = (...migrateArgs) => {
+          const task = migrateSession(...migrateArgs);
+          opts.onCredentialPersistenceTask?.(task);
+          void task.then(undefined, reportCredentialPersistenceError);
+          return task;
+        };
+        return repository;
+      }
+    : undefined;
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger),
+      keys: signalKeys,
     },
     version,
     logger,
     printQRInTerminal: false,
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
+    fireInitQueries: receiveMode !== "directory",
     markOnlineOnConnect: false,
     ...socketTiming,
     agent,
     // Baileys types still model `fetchAgent` as a Node agent even though the
     // runtime path accepts an undici dispatcher for upload fetches.
     fetchAgent: fetchAgent as Agent | undefined,
+    ...(makeSignalRepository ? { makeSignalRepository } : {}),
     ...(waWebSocketUrl ? { waWebSocketUrl } : {}),
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
     ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
   });
+  if (receiveMode === "directory") {
+    // A standalone directory lookup must not consume, acknowledge, or react to user
+    // traffic. Keep only Baileys connection/query machinery for the group IQ request.
+    for (const event of [
+      "CB:message",
+      "CB:call",
+      "CB:receipt",
+      "CB:notification",
+      "CB:ack,class:message",
+      "CB:presence",
+      "CB:chatstate",
+      "CB:ib,,dirty",
+      "CB:ib,,offline_preview",
+      "CB:ib,,offline",
+      "CB:ib,,edge_routing",
+    ]) {
+      sock.ws.removeAllListeners(event);
+    }
+  }
+  socketRef.current = sock;
+  if (pendingSocketAbort) {
+    abortSocketAfterCredentialPersistenceFailure(sock, pendingSocketAbort.error);
+  }
 
-  sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
+  sock.ev.on("creds.update", () =>
+    enqueueSaveCreds(authDir, saveCreds, sessionLogger, {
+      beforeCredentialPersistence: opts.beforeCredentialPersistence,
+      onError: reportCredentialPersistenceError,
+    }),
+  );
   sock.ev.on("connection.update", (update: Partial<import("baileys").ConnectionState>) => {
     void (async () => {
       try {
@@ -261,6 +424,12 @@ export async function createWaSocket(
   }
 
   return sock;
+}
+
+export async function createWaDirectorySocket(
+  authDir: string,
+): Promise<ReturnType<typeof makeWASocket>> {
+  return await createWaSocketInternal(false, false, { authDir }, "directory");
 }
 
 async function resolveEnvProxyAgent(
@@ -379,9 +548,10 @@ export async function waitForWaConnection(
       }
       if (update.connection === "close") {
         cleanup();
+        const disconnectError = update.lastDisconnect?.error ?? update.lastDisconnect;
         reject(
           toLintErrorObject(
-            update.lastDisconnect ?? new Error("Connection closed"),
+            disconnectError ?? new Error("Connection closed"),
             "Non-Error rejection",
           ),
         );

@@ -3,6 +3,7 @@ import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderWorkboard } from "./view.ts";
 
 type WorkboardRenderProps = Parameters<typeof renderWorkboard>[0];
@@ -44,13 +45,122 @@ function dispatchKey(target: EventTarget, key: string, options: KeyboardEventIni
   return event;
 }
 
+function changeWorkboardSelect(select: Element | null | undefined, value: string) {
+  const control = select as (HTMLElement & { value: string }) | null | undefined;
+  expect(control).not.toBeNull();
+  if (!control) {
+    return;
+  }
+  Object.defineProperty(control, "value", { configurable: true, value, writable: true });
+  control.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function selectWorkboardAgent(select: Element | null | undefined, value: string) {
+  const control = select as
+    | (HTMLElement & { onSelect: (value: string) => void })
+    | null
+    | undefined;
+  expect(control).not.toBeNull();
+  control?.onSelect(value);
+}
+
 describe("renderWorkboard", () => {
-  it("hides the manual refresh button while auto-refresh is enabled", () => {
+  it("shows a card dashboard only for linked cards while the plugin is active", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Dashboard-aware card",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).toBeNull();
+
+    state.cards = [{ ...state.cards[0]!, sessionKey: "agent:main:dashboard-aware" }];
+    renderInto(container, props);
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).not.toBeNull();
+
+    renderInto(container, { ...props, pluginEnabled: false });
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).toBeNull();
+  });
+
+  it("releases the card dashboard provider when the details panel closes", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const sessionKey = "agent:main:dashboard-panel-close";
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Disposable dashboard card",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey,
+      },
+    ];
+    const removeListener = vi.fn();
+    const request = vi.fn(async () => ({
+      sessionKey,
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    }));
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: {
+        request,
+        addEventListener: vi.fn(() => removeListener),
+      } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", { sessionKey }));
+
+    state.detailCardId = null;
+    renderInto(container, props);
+    await nextFrame();
+
+    expect(removeListener).toHaveBeenCalledOnce();
+    container.remove();
+  });
+
+  it("keeps manual recovery refresh visible while data is loading", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
     state.loading = true;
-    state.autoRefreshIntervalMs = 5000;
     const container = document.createElement("div");
 
     render(
@@ -66,10 +176,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(buttonByText(container, "Refresh")).toBeNull();
-    expect(container.querySelector(".workboard-toolbar__actions")?.textContent).not.toContain(
-      "Refreshing",
-    );
+    expect(buttonByText(container, "Refreshing")?.disabled).toBe(true);
   });
 
   it("renders lifecycle refresh errors without replacing generic errors", () => {
@@ -103,7 +210,6 @@ describe("renderWorkboard", () => {
     const state = getWorkboardState(host);
     state.loaded = true;
     state.loading = true;
-    state.autoRefreshIntervalMs = 5000;
     const container = document.createElement("div");
     const props: WorkboardRenderProps = {
       host,
@@ -126,7 +232,6 @@ describe("renderWorkboard", () => {
     expect(buttonByText(container, "Dispatch ready work")?.disabled).toBe(true);
 
     state.loading = false;
-    state.autoRefreshIntervalMs = 0;
     render(renderWorkboard(props), container);
 
     expect(buttonByText(container, "Refresh")?.disabled).toBe(true);
@@ -189,7 +294,7 @@ describe("renderWorkboard", () => {
     expect(detailActions).not.toBeNull();
     expect(buttonByLabel(detailActions!, "Edit card")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Archive card")?.disabled).toBe(true);
-    expect(buttonByLabel(detailActions!, "Stop session")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Stop thread")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Delete card")?.disabled).toBe(true);
     expect(
       detailActions!.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
@@ -287,8 +392,8 @@ describe("renderWorkboard", () => {
       "workboard-dispatcher",
     );
     const runningCard = cards.find((card) => card.textContent?.includes("Running card"));
-    expect(runningCard?.querySelector('button[aria-label="Open session"]')).not.toBeNull();
-    expect(runningCard?.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Open thread"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
   });
 
   it("renders date and time in detail drawer timestamps", () => {
@@ -417,6 +522,49 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-health")?.textContent).toContain("running");
   });
 
+  it("distinguishes the dragged card from its available drop columns", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Drag feedback",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    state.draggedCardId = "card-1";
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      canWrite: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+
+    expect(container.querySelector(".workboard-card")?.classList).toContain(
+      "workboard-card--dragging",
+    );
+    expect(container.querySelectorAll(".workboard-column--drop")).toHaveLength(9);
+
+    state.draggedCardId = null;
+    renderInto(container, props);
+
+    expect(container.querySelector(".workboard-card--dragging")).toBeNull();
+    expect(container.querySelector(".workboard-column--drop")).toBeNull();
+  });
+
   it("hides cached card mutation controls until a lifecycle teardown reload succeeds", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -501,9 +649,9 @@ describe("renderWorkboard", () => {
       "Unsaved edit",
     );
 
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const cancelButton = container.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]');
+    expect(cancelButton?.disabled).toBe(false);
+    cancelButton?.click();
 
     expect(state.draftOpen).toBe(false);
   });
@@ -524,16 +672,22 @@ describe("renderWorkboard", () => {
         updatedAt: 1,
         metadata: {
           attempts: [{ id: "attempt-1", status: "failed", startedAt: 1 }],
-          claim: { ownerId: "agent-1", claimedAt: 1, lastHeartbeatAt: Date.now() },
+          claim: {
+            ownerId: "agent-1",
+            token: "[redacted]",
+            claimedAt: 1,
+            lastHeartbeatAt: Date.now(),
+          },
           diagnostics: [
             {
-              kind: "protocol_violation",
+              kind: "orphaned_session",
               severity: "warning",
               title: "Old diagnostic",
               detail: "Older detail.",
               firstSeenAt: 1,
               lastSeenAt: 1,
               count: 1,
+              actions: [],
             },
             {
               kind: "repeated_failures",
@@ -543,6 +697,7 @@ describe("renderWorkboard", () => {
               firstSeenAt: 1,
               lastSeenAt: 2,
               count: 1,
+              actions: [],
             },
           ],
           notifications: [{ id: "note-1", kind: "failed", createdAt: 1, message: "Needs proof." }],
@@ -589,13 +744,14 @@ describe("renderWorkboard", () => {
         metadata: {
           diagnostics: [
             {
-              kind: "protocol_violation",
+              kind: "orphaned_session",
               severity: "warning",
               title: `${"x".repeat(62)}🚀tail`,
               detail: "Boundary detail.",
               firstSeenAt: 1,
               lastSeenAt: 1,
               count: 1,
+              actions: [],
             },
           ],
         },
@@ -640,6 +796,7 @@ describe("renderWorkboard", () => {
         metadata: {
           claim: {
             ownerId: "agent-1",
+            token: "[redacted]",
             claimedAt: 1,
             lastHeartbeatAt: Date.now() - 42_000,
           },
@@ -659,7 +816,7 @@ describe("renderWorkboard", () => {
         onOpenSession: () => undefined,
       });
 
-      expect(container.textContent).toContain("heartbeat 42 s");
+      expect(container.textContent).toContain("heartbeat 42s");
     } finally {
       vi.useRealTimers();
     }
@@ -835,8 +992,8 @@ describe("renderWorkboard", () => {
     );
     const viewSelect = container.querySelector(".workboard-toolbar__filters .workboard-select");
     const runningOption = [
-      ...(viewSelect?.querySelectorAll<HTMLButtonElement>("button") ?? []),
-    ].find((button) => button.textContent?.includes("Running"));
+      ...(viewSelect?.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-option") ?? []),
+    ].find((option) => option.textContent?.includes("Running"));
     expect(runningOption?.disabled).toBe(true);
     expect(runningOption?.textContent).toContain("0 cards");
   });
@@ -880,7 +1037,7 @@ describe("renderWorkboard", () => {
     );
   });
 
-  it("uses the same custom dropdown control for Workboard toolbar filters", () => {
+  it("uses the same Web Awesome select control for Workboard toolbar filters", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -905,11 +1062,17 @@ describe("renderWorkboard", () => {
     );
 
     const toolbarFilters = container.querySelector(".workboard-toolbar__filters");
-    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(3);
+    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(2);
     expect(toolbarFilters?.querySelectorAll("select")).toHaveLength(0);
     expect(toolbarFilters?.textContent).toContain("All cards");
     expect(toolbarFilters?.textContent).toContain("All priorities");
-    expect(toolbarFilters?.textContent).toContain("All agents");
+    expect(
+      toolbarFilters
+        ?.querySelector<HTMLElement & { options: Array<{ label: string }> }>(
+          ".workboard-agent-select--toolbar",
+        )
+        ?.options.map((option) => option.label),
+    ).toContain("All agents");
     const priorityFilter = toolbarFilters?.querySelectorAll(".workboard-select--toolbar").item(1);
     expect(priorityFilter?.textContent).toContain("Low");
     expect(priorityFilter?.textContent).toContain("Normal");
@@ -917,7 +1080,63 @@ describe("renderWorkboard", () => {
     expect(priorityFilter?.textContent).toContain("Urgent");
   });
 
-  it("closes the previous Workboard dropdown when another one opens", () => {
+  it("filters cards to the global agent scope and hides the secondary agent filter", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.viewPreset = "all";
+    state.cards = [
+      {
+        id: "writer-card",
+        title: "Writer card",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        agentId: "writer",
+      },
+      {
+        id: "ops-card",
+        title: "Ops card",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        agentId: "ops",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [{ id: "main" }, { id: "writer" }, { id: "ops" }],
+        },
+        sessions: [],
+        scopeAgentId: "writer",
+        showAgentFilter: false,
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Writer card");
+    expect(container.textContent).not.toContain("Ops card");
+    expect(container.querySelectorAll(".workboard-select--toolbar")).toHaveLength(2);
+  });
+
+  it("uses labelled controls for Workboard filters", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -937,158 +1156,22 @@ describe("renderWorkboard", () => {
     );
 
     const selects = [
-      ...container.querySelectorAll<HTMLDetailsElement>(
-        ".workboard-toolbar__filters .workboard-select",
+      ...container.querySelectorAll<HTMLElement & { value: string }>(
+        ".workboard-toolbar__filters > wa-select",
       ),
     ];
-    expect(selects).toHaveLength(3);
-
-    selects[0].open = true;
-    selects[0].dispatchEvent(new Event("toggle"));
-    selects[1].open = true;
-    selects[1].dispatchEvent(new Event("toggle"));
-
-    expect(selects[0]?.open).toBe(false);
-    expect(selects[1]?.open).toBe(true);
-    expect(selects[2]?.open).toBe(false);
-  });
-
-  it("closes open Workboard dropdowns on outside pointer and Escape", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
-
-      const select = container
-        .querySelector(".workboard-toolbar__filters")
-        ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
-        .item(1);
-      const board = container.querySelector<HTMLElement>(".workboard-board");
-      expect(select).toBeTruthy();
-      expect(board).toBeTruthy();
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-      expect(select?.open).toBe(false);
-
-      select!.open = true;
-      const escape = dispatchKey(select!, "Escape");
-      expect(escape.defaultPrevented).toBe(true);
-      expect(select?.open).toBe(false);
-    } finally {
-      container.remove();
-    }
-  });
-
-  it("includes selected values in custom select accessible names", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    const container = document.createElement("div");
-
-    render(
-      renderWorkboard({
-        host,
-        client: null,
-        connected: true,
-        pluginEnabled: true,
-        agentsList: null,
-        sessions: [],
-        onOpenSession: () => undefined,
-      }),
-      container,
-    );
-
-    const selects = [
-      ...container.querySelectorAll<HTMLElement>(".workboard-toolbar__filters .workboard-select"),
-    ];
-    expect(selects).toHaveLength(3);
-    for (const select of selects) {
-      const trigger = select.querySelector<HTMLElement>(".workboard-select__trigger");
-      const menu = select.querySelector<HTMLElement>(".workboard-select__menu");
-      const selectedLabel = trigger?.querySelector(".workboard-select__value")?.textContent?.trim();
-      const fieldLabel = menu?.getAttribute("aria-label");
-      expect(trigger?.getAttribute("aria-label")).toBe(`${fieldLabel}: ${selectedLabel}`);
-    }
-  });
-
-  it("supports keyboard navigation and restores dropdown trigger focus", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
-
-      const select = container
-        .querySelector(".workboard-toolbar__filters")
-        ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
-        .item(1);
-      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
-      const options = [
-        ...(select?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
-      ];
-      expect(select).toBeTruthy();
-      expect(trigger).toBeTruthy();
-      expect(options.length).toBeGreaterThan(2);
-      options[1].disabled = true;
-
-      trigger!.focus();
-      dispatchKey(trigger!, "ArrowDown");
-      expect(select?.open).toBe(true);
-      expect(document.activeElement).toBe(options[0]);
-
-      dispatchKey(options[0], "ArrowDown");
-      expect(document.activeElement).toBe(options[2]);
-
-      dispatchKey(options[2], "End");
-      expect(document.activeElement).toBe(options.at(-1));
-
-      dispatchKey(options.at(-1)!, "h");
-      expect(document.activeElement?.textContent).toContain("High");
-      expect(dispatchKey(document.activeElement!, " ").defaultPrevented).toBe(false);
-
-      (document.activeElement as HTMLButtonElement).click();
-      expect(select?.open).toBe(false);
-      expect(document.activeElement).toBe(trigger);
-
-      dispatchKey(trigger!, " ");
-      expect(select?.open).toBe(true);
-      dispatchKey(document.activeElement!, "Escape");
-      expect(select?.open).toBe(false);
-      expect(document.activeElement).toBe(trigger);
-    } finally {
-      container.remove();
-    }
+    expect(selects).toHaveLength(2);
+    expect(selects.map((select) => select.getAttribute("label"))).toEqual([
+      "Workboard view",
+      "All priorities",
+    ]);
+    expect(selects.map((select) => select.getAttribute("value"))).toEqual(["all", "all"]);
+    const agentSelect = container.querySelector<
+      HTMLElement & { accessibleLabel: string; value: string }
+    >(".workboard-agent-select--toolbar");
+    expect(agentSelect?.accessibleLabel).toBe("Filter by agent");
+    expect(agentSelect?.value).toBe("all");
+    expect(container.querySelector(".workboard-select__trigger")).toBeNull();
   });
 
   it("can hide empty columns while keeping populated columns visible", () => {
@@ -1301,8 +1384,8 @@ describe("renderWorkboard", () => {
     expect(actions).not.toBeNull();
     expect(buttonByLabel(actions!, "Edit card")).not.toBeNull();
     expect(buttonByLabel(actions!, "Archive card")).not.toBeNull();
-    expect(buttonByLabel(actions!, "Stop session")).not.toBeNull();
-    expect(buttonByLabel(actions!, "Open session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Stop thread")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Open thread")).not.toBeNull();
     expect(buttonByLabel(actions!, "Delete card")).not.toBeNull();
 
     const moveSelect = actions!.querySelector<HTMLSelectElement>(".workboard-card__move-select");
@@ -1344,13 +1427,11 @@ describe("renderWorkboard", () => {
       launcher?.click();
       await nextFrame();
 
-      const modal = container.querySelector<HTMLElement>(".workboard-draft");
+      const modal = container.querySelector("openclaw-modal-dialog");
+      const { dialog } = await getRenderedModalDialog(container);
       const titleInput = container.querySelector<HTMLInputElement>(".workboard-draft__title");
-      const main = container.querySelector<HTMLElement>(".workboard-main");
-      expect(modal?.getAttribute("role")).toBe("dialog");
-      expect(modal?.getAttribute("aria-modal")).toBe("true");
-      expect(modal?.getAttribute("aria-labelledby")).toBe("workboard-card-modal-title");
-      expect(modal?.getAttribute("aria-describedby")).toBe("workboard-card-modal-description");
+      expect(modal?.getAttribute("label")).toBe("New card");
+      expect(dialog.open).toBe(true);
       expect(container.querySelector("#workboard-card-modal-title")?.textContent).toContain(
         "New card",
       );
@@ -1358,26 +1439,10 @@ describe("renderWorkboard", () => {
         "Queue work",
       );
       expect(document.activeElement).toBe(titleInput);
-      expect(main?.hasAttribute("inert")).toBe(true);
-      expect(main?.getAttribute("aria-hidden")).toBe("true");
 
-      const cancel = [...modal!.querySelectorAll<HTMLButtonElement>("button")].at(-1);
-      const close = modal!.querySelector<HTMLButtonElement>("button[aria-label='Cancel']");
-      expect(cancel).toBeInstanceOf(HTMLButtonElement);
-      expect(close).toBeInstanceOf(HTMLButtonElement);
-      cancel?.focus();
-      const tab = dispatchKey(cancel!, "Tab");
-      expect(tab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(close);
-
-      const shiftTab = dispatchKey(close!, "Tab", { shiftKey: true });
-      expect(shiftTab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(cancel);
-
-      dispatchKey(titleInput!, "Escape");
+      dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
       await nextFrame();
       expect(container.querySelector(".workboard-draft")).toBeNull();
-      expect(main?.hasAttribute("inert")).toBe(false);
       expect(document.activeElement).toBe(launcher);
     } finally {
       render(nothing, container);
@@ -1385,7 +1450,7 @@ describe("renderWorkboard", () => {
     }
   });
 
-  it("lets Escape close the card modal from a closed custom select", async () => {
+  it("lets Escape close the card modal from a closed Web Awesome select", async () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -1407,15 +1472,13 @@ describe("renderWorkboard", () => {
       container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .primary")?.click();
       await nextFrame();
 
-      const select = container.querySelector<HTMLDetailsElement>(
+      const select = container.querySelector<HTMLElement & { open: boolean }>(
         ".workboard-draft .workboard-select",
       );
-      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
       expect(select?.open).toBe(false);
-      expect(trigger).toBeTruthy();
 
-      trigger!.focus();
-      dispatchKey(trigger!, "Escape");
+      select?.focus();
+      dispatchKey(select!, "Escape");
       await nextFrame();
 
       expect(container.querySelector(".workboard-draft")).toBeNull();
@@ -1464,40 +1527,19 @@ describe("renderWorkboard", () => {
       launcher?.click();
       await nextFrame();
 
-      const drawer = container.querySelector<HTMLElement>(".workboard-detail-drawer");
-      const main = container.querySelector<HTMLElement>(".workboard-main");
-      expect(drawer?.getAttribute("role")).toBe("dialog");
-      expect(drawer?.getAttribute("aria-modal")).toBe("true");
-      expect(drawer?.getAttribute("aria-labelledby")).toBe("workboard-card-detail-title");
-      expect(drawer?.getAttribute("aria-describedby")).toBe("workboard-card-detail-description");
+      const modal = container.querySelector("openclaw-modal-dialog");
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(modal?.getAttribute("label")).toBe("Inspect drawer focus");
+      expect(dialog.open).toBe(true);
       expect(container.querySelector("#workboard-card-detail-title")?.textContent).toContain(
         "Card details: Inspect drawer focus",
       );
       expect(container.querySelector("#workboard-card-detail-description")?.textContent).toContain(
-        "Start or link a session",
+        "Start or link a thread",
       );
-      expect(document.activeElement).toBe(drawer);
-      expect(main?.hasAttribute("inert")).toBe(true);
-      expect(main?.getAttribute("aria-hidden")).toBe("true");
-
-      const close = drawer!.querySelector<HTMLButtonElement>("button[aria-label='Cancel']");
-      const tab = dispatchKey(drawer!, "Tab");
-      expect(tab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(close);
-
-      const lastFocusable = [
-        ...drawer!.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href]"),
-      ]
-        .toReversed()
-        .find((element) => !element.hasAttribute("disabled"));
-      const shiftTab = dispatchKey(close!, "Tab", { shiftKey: true });
-      expect(shiftTab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(lastFocusable);
-
-      dispatchKey(drawer!, "Escape");
+      dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
       await nextFrame();
       expect(container.querySelector(".workboard-detail-drawer")).toBeNull();
-      expect(main?.hasAttribute("inert")).toBe(false);
       expect(document.activeElement).toBe(launcher);
     } finally {
       render(nothing, container);
@@ -1584,10 +1626,6 @@ describe("renderWorkboard", () => {
       launcher?.focus();
       launcher?.click();
       await nextFrame();
-
-      expect(document.activeElement).toBe(
-        container.querySelector<HTMLElement>(".workboard-detail-drawer"),
-      );
 
       state.detailCardId = null;
       renderInto(container, props);
@@ -1965,7 +2003,7 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
 
     expect(container.textContent).toContain("Task running");
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
 
@@ -2012,7 +2050,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -2049,7 +2087,7 @@ describe("renderWorkboard", () => {
     );
 
     expect(container.querySelector(".workboard-live")).toBeNull();
-    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -2086,7 +2124,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -2123,7 +2161,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
@@ -2352,7 +2390,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Session missing");
+    expect(container.textContent).toContain("Thread missing");
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
@@ -2390,7 +2428,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("New card");
+    expect(container.querySelector("openclaw-modal-dialog")?.textContent).toContain("New card");
     expect(container.querySelector('[aria-label="Card templates"]')?.textContent).toContain(
       "Bugfix",
     );
@@ -2612,6 +2650,154 @@ describe("renderWorkboard", () => {
     );
   });
 
+  it("filters cards by persisted boards and keeps empty archived boards selectable", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const onBoardFilterChange = vi.fn();
+    state.loaded = true;
+    state.boards = [
+      { id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } },
+      {
+        id: "ops",
+        name: "Operations",
+        total: 1,
+        active: 1,
+        archived: 0,
+        byStatus: { todo: 1 },
+      },
+      {
+        id: "archive",
+        name: "Old work",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+        archivedAt: 7,
+      },
+    ];
+    state.cards = [
+      {
+        id: "card-default",
+        title: "Default work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "card-ops",
+        title: "Ops work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { automation: { boardId: "ops" } },
+      },
+    ];
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onBoardFilterChange,
+    };
+
+    renderInto(container, props);
+    const boardFilter = container.querySelector(".workboard-select--toolbar-board");
+    expect(boardFilter?.textContent).toContain("Default board");
+    expect(boardFilter?.textContent).toContain("Operations (ops)");
+    expect(boardFilter?.textContent).toContain("Old work (archive)");
+
+    changeWorkboardSelect(boardFilter, "ops");
+    renderInto(container, props);
+
+    expect(onBoardFilterChange).toHaveBeenCalledWith("ops");
+    expect(container.textContent).not.toContain("Default work");
+    expect(container.textContent).toContain("Ops work");
+  });
+
+  it("shows the board switcher at two boards with icon, color, and fallback glyphs", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.boards = [
+      { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
+      {
+        id: "ops",
+        name: "Operations",
+        icon: "⚙",
+        color: "#22c55e",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+      },
+    ];
+    const container = document.createElement("div");
+
+    renderInto(container, {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    });
+
+    const boardFilter = container.querySelector(".workboard-select--toolbar-board");
+    expect(boardFilter).not.toBeNull();
+    const defaultGlyph = boardFilter?.querySelector(
+      'wa-option[value="default"] .workboard-board-glyph',
+    );
+    const opsGlyph = boardFilter?.querySelector('wa-option[value="ops"] .workboard-board-glyph');
+    expect(defaultGlyph?.textContent?.trim()).toBe("D");
+    expect(opsGlyph?.textContent?.trim()).toBe("⚙");
+    expect(opsGlyph?.getAttribute("style")).toContain("#22c55e");
+  });
+
+  it("keeps a deleted routed board filtered instead of exposing every board", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.boardFilter = "deleted";
+    state.boards = [{ id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } }];
+    state.cards = [
+      {
+        id: "default-card",
+        title: "Default board work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    renderInto(container, {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    });
+
+    expect(container.textContent).not.toContain("Default board work");
+    expect(container.querySelector(".workboard-empty-state")).not.toBeNull();
+  });
+
   it("filters cards by linked agent", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -2674,15 +2860,18 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    const agentFilter = container.querySelector(".workboard-select--toolbar-agent");
-    expect(agentFilter?.textContent).toContain("Main (default)");
-    expect(agentFilter?.textContent).toContain("Unassigned (uses Main)");
-    expect(agentFilter?.textContent).toContain("workboard-dispatcher (not configured)");
+    const agentFilter = container.querySelector<
+      HTMLElement & { options: Array<{ label: string }>; value: string }
+    >(".workboard-agent-select--toolbar");
+    expect(agentFilter?.options.map((option) => option.label)).toEqual([
+      "All agents",
+      "Unassigned (uses Main)",
+      "Main (default)",
+      "Ops",
+      "workboard-dispatcher (not configured)",
+    ]);
 
-    const opsOption = [
-      ...(agentFilter?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
-    ].find((button) => button.textContent?.includes("Ops"));
-    opsOption?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    selectWorkboardAgent(agentFilter, "ops");
     render(
       renderWorkboard({
         host,
@@ -2706,16 +2895,15 @@ describe("renderWorkboard", () => {
 
     expect(container.textContent).not.toContain("Main work");
     expect(container.textContent).toContain("Ops work");
-    expect(container.querySelector(".workboard-select--toolbar-agent")?.textContent).toContain(
-      "Ops",
-    );
+    expect(
+      container.querySelector<HTMLElement & { value: string }>(".workboard-agent-select--toolbar")
+        ?.value,
+    ).toBe("ops");
 
-    const dispatcherOption = [
-      ...(container
-        .querySelector(".workboard-select--toolbar-agent")
-        ?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
-    ].find((button) => button.textContent?.includes("workboard-dispatcher"));
-    dispatcherOption?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    selectWorkboardAgent(
+      container.querySelector(".workboard-agent-select--toolbar"),
+      "workboard-dispatcher",
+    );
     render(
       renderWorkboard({
         host,
@@ -2739,9 +2927,10 @@ describe("renderWorkboard", () => {
 
     expect(container.textContent).not.toContain("Ops work");
     expect(container.textContent).toContain("Dispatcher work");
-    expect(container.querySelector(".workboard-select--toolbar-agent")?.textContent).toContain(
-      "workboard-dispatcher (not configured)",
-    );
+    expect(
+      container.querySelector<HTMLElement & { value: string }>(".workboard-agent-select--toolbar")
+        ?.value,
+    ).toBe("workboard-dispatcher");
   });
 
   it("limits assignment choices to configured agents and preserves an unknown current assignee", () => {
@@ -2789,13 +2978,10 @@ describe("renderWorkboard", () => {
     );
 
     const draft = container.querySelector<HTMLElement>(".workboard-draft");
-    const agentSelect = [...(draft?.querySelectorAll<HTMLElement>(".workboard-select") ?? [])].at(
-      2,
+    const agentSelect = draft?.querySelector<HTMLElement & { options: Array<{ label: string }> }>(
+      ".workboard-agent-select",
     );
-    const optionLabels = [
-      ...(agentSelect?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
-    ].map((option) => option.textContent?.trim());
-    expect(optionLabels).toEqual([
+    expect(agentSelect?.options.map((option) => option.label)).toEqual([
       "Unassigned (uses Main)",
       "Main (default)",
       "Ops",
@@ -2834,180 +3020,30 @@ describe("renderWorkboard", () => {
     expect(body?.contains(footer as Node)).toBe(false);
   });
 
-  it("positions card modal dropdown menus as overlays", () => {
+  it("delegates modal select positioning and dismissal to Web Awesome", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
     state.draftOpen = true;
     state.draftTitle = "New task";
     const container = document.createElement("div");
-    const innerWidth = vi.spyOn(window, "innerWidth", "get").mockReturnValue(1024);
 
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
 
-      const select = container.querySelector<HTMLDetailsElement>(
-        ".workboard-draft .workboard-select",
-      );
-      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
-      const menu = select?.querySelector<HTMLElement>(".workboard-select__menu");
-      expect(select).toBeTruthy();
-      expect(trigger).toBeTruthy();
-      expect(menu).toBeTruthy();
-
-      Object.defineProperty(trigger, "getBoundingClientRect", {
-        value: () => ({
-          top: 120,
-          right: 420,
-          bottom: 156,
-          left: 180,
-          width: 240,
-          height: 36,
-          x: 180,
-          y: 120,
-          toJSON: () => ({}),
-        }),
-      });
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-left")).toBe("180px");
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
-      expect(menu?.style.visibility).toBe("visible");
-
-      select!.open = false;
-      select!.dispatchEvent(new Event("toggle"));
-      expect(menu?.style.visibility).toBe("hidden");
-    } finally {
-      innerWidth.mockRestore();
-    }
-  });
-
-  it("positions short dropdown menus against their trigger when opening above", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    state.draftOpen = true;
-    state.draftTitle = "New task";
-    const container = document.createElement("div");
-    const innerHeight = vi.spyOn(window, "innerHeight", "get").mockReturnValue(768);
-
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
-
-      const select = container.querySelector<HTMLDetailsElement>(
-        ".workboard-draft .workboard-select",
-      );
-      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
-      const menu = select?.querySelector<HTMLElement>(".workboard-select__menu");
-      expect(select).toBeTruthy();
-      expect(trigger).toBeTruthy();
-      expect(menu).toBeTruthy();
-
-      Object.defineProperty(trigger, "getBoundingClientRect", {
-        value: () => ({
-          top: 700,
-          right: 420,
-          bottom: 736,
-          left: 180,
-          width: 240,
-          height: 36,
-          x: 180,
-          y: 700,
-          toJSON: () => ({}),
-        }),
-      });
-      Object.defineProperty(menu, "getBoundingClientRect", {
-        value: () => ({
-          top: 0,
-          right: 420,
-          bottom: 96,
-          left: 180,
-          width: 240,
-          height: 96,
-          x: 180,
-          y: 0,
-          toJSON: () => ({}),
-        }),
-      });
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("598px");
-      expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
-    } finally {
-      innerHeight.mockRestore();
-    }
-  });
-
-  it("closes fixed dropdown menus when their anchor container scrolls or resizes", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    state.draftOpen = true;
-    state.draftTitle = "New task";
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    try {
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
-
-      const body = container.querySelector<HTMLElement>(".workboard-draft__body");
-      const select = container.querySelector<HTMLDetailsElement>(
-        ".workboard-draft .workboard-select",
-      );
-      expect(body).toBeTruthy();
-      expect(select).toBeTruthy();
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-      body!.dispatchEvent(new Event("scroll"));
-      expect(select?.open).toBe(false);
-
-      select!.open = true;
-      select!.dispatchEvent(new Event("toggle"));
-      window.dispatchEvent(new Event("resize"));
-      expect(select?.open).toBe(false);
-    } finally {
-      container.remove();
-    }
+    const selects = container.querySelectorAll(".workboard-draft wa-select");
+    expect(selects.length).toBeGreaterThan(0);
+    expect(container.querySelector(".workboard-select__menu")).toBeNull();
   });
 
   it("preflights model-specific starts for ACP runtime agents", () => {
@@ -3149,10 +3185,10 @@ describe("renderWorkboard", () => {
       );
 
       expect(container.textContent).toContain("Stale");
-      expect(container.textContent).toContain("No recent session activity");
+      expect(container.textContent).toContain("No recent thread activity");
       expect(container.textContent).not.toContain("codex autonomous");
       expect(container.querySelector(".workboard-live")).toBeNull();
-      expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
@@ -3199,7 +3235,7 @@ describe("renderWorkboard", () => {
     );
 
     expect(container.querySelector(".workboard-live")?.textContent).toContain("live");
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
   });
 
   it("opens an edit modal and submits card updates", async () => {
@@ -3262,8 +3298,10 @@ describe("renderWorkboard", () => {
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(renderWorkboard(props), container);
 
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Edit card");
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Needs owner check");
+    expect(container.querySelector("openclaw-modal-dialog")?.textContent).toContain("Edit card");
+    expect(container.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      "Needs owner check",
+    );
     const commentInput = container.querySelector<HTMLTextAreaElement>(".workboard-comments__input");
     commentInput!.value = "Ship after CI";
     commentInput!.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -3290,10 +3328,7 @@ describe("renderWorkboard", () => {
         .querySelector(".workboard-draft")
         ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
     ].at(1);
-    priority
-      ?.querySelectorAll<HTMLButtonElement>(".workboard-select__option")
-      .item(2)
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    changeWorkboardSelect(priority, "high");
     container
       .querySelector<HTMLFormElement>(".workboard-draft")
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -3310,7 +3345,7 @@ describe("renderWorkboard", () => {
     expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 2 });
 
     render(renderWorkboard(props), container);
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
     container
       .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -3320,12 +3355,10 @@ describe("renderWorkboard", () => {
       "Renamed",
     );
     expect(
-      [
-        ...(container
-          .querySelector(".workboard-draft")
-          ?.querySelectorAll<HTMLElement>(".workboard-select__value") ?? []),
-      ].at(1)?.textContent,
-    ).toBe("High");
+      [...(container.querySelector(".workboard-draft")?.querySelectorAll("wa-select") ?? [])]
+        .at(1)
+        ?.getAttribute("value"),
+    ).toBe("high");
   });
 
   it("locks edit-modal actions while a comment request is in flight", () => {
@@ -3503,7 +3536,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.textContent).toContain("No linked session");
+    expect(container.textContent).toContain("No linked thread");
     expect(container.textContent).toContain("Existing session");
   });
 
@@ -3532,11 +3565,11 @@ describe("renderWorkboard", () => {
       ...(container
         .querySelector(".workboard-draft")
         ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
-    ].at(3);
-    expect(sessionSelect?.querySelector(".workboard-select__value")?.textContent).toBe(
-      "agent:main:archived-session",
-    );
-    expect(sessionSelect?.querySelector('[aria-selected="true"]')).toBeNull();
+    ].at(2);
+    expect(sessionSelect?.getAttribute("value")).toBe("agent:main:archived-session");
+    expect(
+      sessionSelect?.querySelector('wa-option[value="agent:main:archived-session"]'),
+    ).not.toBeNull();
   });
 
   it("does not offer synthetic heartbeat sessions when creating a card", () => {
@@ -3576,7 +3609,7 @@ describe("renderWorkboard", () => {
       ...(container
         .querySelector(".workboard-draft")
         ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
-    ].at(3);
+    ].at(2);
     const labels = [...(sessionOptions?.querySelectorAll(".workboard-select__option") ?? [])].map(
       (option) => option.textContent?.trim(),
     );
@@ -3652,3 +3685,4 @@ describe("renderWorkboard", () => {
     expect(onReloadConfig).toHaveBeenCalledOnce();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

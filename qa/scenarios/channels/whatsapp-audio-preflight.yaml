@@ -1,0 +1,19 @@
+title: WhatsApp inbound audio preflight transcript reaches the agent
+scenario:
+  id: whatsapp-audio-preflight
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.inbound-media-download
+  execution:
+    profiles: { "whatsapp:mock-default": 17 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-audio-preflight }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppAudioPreflightScenario
+  args: [{ expr: whatsappScenarioContext }]

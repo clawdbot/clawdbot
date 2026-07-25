@@ -31,6 +31,10 @@ describe("Ollama provider", () => {
   const countFetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>, suffix: string): number =>
     fetchCallUrls(fetchMock).reduce((count, url) => count + (url.endsWith(suffix) ? 1 : 0), 0);
 
+  const stubOllamaFetch = (fetchMock: ReturnType<typeof vi.fn>) => {
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+  };
+
   const countWarnCallsIncluding = (warnSpy: ReturnType<typeof vi.spyOn>, text: string): number => {
     let count = 0;
     for (const [message] of warnSpy.mock.calls) {
@@ -122,7 +126,7 @@ describe("Ollama provider", () => {
       }
       return notFoundJsonResponse();
     });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    stubOllamaFetch(fetchMock);
     return fetchMock;
   };
 
@@ -221,7 +225,7 @@ describe("Ollama provider", () => {
       }
       return notFoundJsonResponse();
     });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    stubOllamaFetch(fetchMock);
 
     const provider = await runOllamaCatalog({
       env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
@@ -247,7 +251,7 @@ describe("Ollama provider", () => {
         }
         return notFoundJsonResponse();
       });
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
         env: { OLLAMA_API_KEY: OLLAMA_LOCAL_AUTH_MARKER, VITEST: "", NODE_ENV: "development" },
@@ -271,7 +275,7 @@ describe("Ollama provider", () => {
       const fetchMock = vi
         .fn()
         .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434"));
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
         env: { VITEST: "", NODE_ENV: "development" },
@@ -292,7 +296,7 @@ describe("Ollama provider", () => {
       const fetchMock = vi
         .fn()
         .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434"));
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
 
       await runOllamaCatalog({
         config: {
@@ -326,7 +330,7 @@ describe("Ollama provider", () => {
       }
       return notFoundJsonResponse();
     });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    stubOllamaFetch(fetchMock);
 
     const provider = await runOllamaCatalog({
       env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
@@ -351,7 +355,7 @@ describe("Ollama provider", () => {
       }
       return jsonResponse({ model_info: { "llama.context_length": 65536 } });
     });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    stubOllamaFetch(fetchMock);
 
     const provider = await runOllamaCatalog({
       env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
@@ -380,7 +384,7 @@ describe("Ollama provider", () => {
   it("should skip discovery fetch when explicit models are configured", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
       const explicitModels: ModelDefinitionConfig[] = [
         {
           id: "gpt-oss:20b",
@@ -423,7 +427,7 @@ describe("Ollama provider", () => {
   it("should use synthetic local auth for configured remote providers without apiKey", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
         config: {
@@ -460,7 +464,7 @@ describe("Ollama provider", () => {
   it("should not use synthetic local auth for configured cloud providers without apiKey", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
         config: {
@@ -497,7 +501,7 @@ describe("Ollama provider", () => {
   it("uses resolved discovery api key when configured cloud apiKey is an env marker", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
         config: {
@@ -539,7 +543,7 @@ describe("Ollama provider", () => {
   it("uses resolved discovery api key for configured cloud providers without apiKey", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
         config: {
@@ -580,7 +584,7 @@ describe("Ollama provider", () => {
   it("keeps synthetic local auth when a local provider also has a discovery key", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
         config: {
@@ -628,7 +632,7 @@ describe("Ollama provider", () => {
         }
         return notFoundJsonResponse();
       });
-      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+      stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
         config: {

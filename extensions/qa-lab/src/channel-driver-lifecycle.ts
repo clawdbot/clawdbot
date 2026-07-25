@@ -77,7 +77,7 @@ export function createQaChannelDriverLifecycle(
         return;
       }
       const runtime = state.runtime;
-      await runtime.cleanup();
+      await runtime.cleanupWithoutGateway();
       state = { status: "stopped" };
     },
   };

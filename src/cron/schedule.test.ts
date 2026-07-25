@@ -2,13 +2,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   coerceFiniteScheduleNumber,
-  clearCronScheduleCacheForTest,
   computeNextRunAtMs,
   computePreviousRunAtMs,
+} from "./schedule.js";
+import {
+  clearCronScheduleCacheForTest,
   getCronScheduleCacheMaxForTest,
   getCronScheduleCacheSizeForTest,
   hasCronInCacheForTest,
-} from "./schedule.js";
+} from "./schedule.test-support.js";
 
 function requireTimestamp(value: number | undefined, label: string): number {
   if (value === undefined) {
@@ -262,5 +264,13 @@ describe("computeNextRunAtMs on-exit", () => {
     expect(
       computeNextRunAtMs({ kind: "on-exit", command: "make build", cwd: "/repo" }, 0),
     ).toBeUndefined();
+  });
+});
+
+describe("computeNextRunAtMs stream", () => {
+  it("never reports a time-due run for event stream schedules", () => {
+    expect(computeNextRunAtMs({ kind: "stream", command: ["node", "events.mjs"] }, 0)).toBe(
+      undefined,
+    );
   });
 });

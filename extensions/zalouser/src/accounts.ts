@@ -70,23 +70,6 @@ function resolveZalouserAccountBase(params: { cfg: OpenClawConfig; accountId?: s
   };
 }
 
-export async function resolveZalouserAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): Promise<ResolvedZalouserAccount> {
-  const { accountId, enabled, merged, profile } = resolveZalouserAccountBase(params);
-  const authenticated = await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile);
-
-  return {
-    accountId,
-    name: normalizeOptionalString(merged.name),
-    enabled,
-    profile,
-    authenticated,
-    config: merged,
-  };
-}
-
 export function resolveZalouserAccountSync(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -103,16 +86,6 @@ export function resolveZalouserAccountSync(params: {
   };
 }
 
-export async function listEnabledZalouserAccounts(
-  cfg: OpenClawConfig,
-): Promise<ResolvedZalouserAccount[]> {
-  const ids = listZalouserAccountIds(cfg);
-  const accounts = await Promise.all(
-    ids.map((accountId) => resolveZalouserAccount({ cfg, accountId })),
-  );
-  return accounts.filter((account) => account.enabled);
-}
-
 export async function getZcaUserInfo(
   profile: string,
 ): Promise<{ userId?: string; displayName?: string } | null> {
@@ -126,8 +99,11 @@ export async function getZcaUserInfo(
   };
 }
 
-export async function checkZcaAuthenticated(profile: string): Promise<boolean> {
-  return await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile);
+export async function checkZcaAuthenticated(
+  profile: string,
+  options?: { credentialPersistence?: "persist" | "read-only" },
+): Promise<boolean> {
+  return await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile, options);
 }
 
 export type { ResolvedZalouserAccount } from "./types.js";

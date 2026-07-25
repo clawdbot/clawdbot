@@ -4,7 +4,6 @@ export {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
-  type ResolvedAgentConfig,
 } from "../../agents/agent-scope-config.js";
 export { resolveCronStyleNow } from "../../agents/current-time.js";
 export { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -14,13 +13,12 @@ export { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 export { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 export { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 export { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
-export { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "../../agents/workspace.js";
+export { ensureAgentWorkspace } from "../../agents/workspace.js";
 export {
   isThinkingLevelSupported,
   normalizeThinkLevel,
   resolveSupportedThinkingLevel,
 } from "../../auto-reply/thinking.js";
-export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 export { setSessionRuntimeModel } from "../../config/sessions/types.js";
 export { logWarn } from "../../logger.js";
 export { normalizeAgentId } from "../../routing/session-key.js";

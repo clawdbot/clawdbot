@@ -21,12 +21,14 @@ function createSkill() {
     blockedByAllowlist: false,
     eligible: true,
     requirements: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],
       os: [],
     },
     missing: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],
@@ -99,6 +101,9 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     agentIdentityLoading: false,
     agentIdentityError: null,
     agentIdentityById: {},
+    identityDraft: { name: null, emoji: null, avatar: null },
+    identitySaving: false,
+    identityError: null,
     agentSkills: {
       report: null,
       loading: false,
@@ -119,8 +124,10 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
     modelCatalog: [],
+    pinnedAgentIds: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
+    onCreateAgent: () => undefined,
     onSelectPanel: () => undefined,
     onLoadFiles: () => undefined,
     onSelectFile: () => undefined,
@@ -142,11 +149,45 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onAgentSkillsClear: () => undefined,
     onAgentSkillsDisableAll: () => undefined,
     onSetDefault: () => undefined,
+    onIdentityFieldChange: () => undefined,
+    onIdentityAvatarSelect: () => undefined,
+    onIdentitySave: () => undefined,
+    onTogglePinnedAgent: () => undefined,
     ...overrides,
   };
 }
 
 describe("renderAgents", () => {
+  it("prefills the identity editor from the fetched agent identity", () => {
+    const container = document.createElement("div");
+    render(
+      renderAgents(
+        createProps({
+          agentIdentityById: {
+            beta: { agentId: "beta", name: "Fetched Beta", avatar: "" },
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
+    ).toBe("Fetched Beta");
+  });
+
+  it("renders Memory after Automations and scopes the panel to the selected agent", () => {
+    const container = document.createElement("div");
+    render(renderAgents(createProps({ activePanel: "memory" })), container);
+
+    const tabs = [...container.querySelectorAll(".agent-tab")].map((tab) => directText(tab));
+    expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
+    const panel = container.querySelector<HTMLElement & { agentId: string }>(
+      "openclaw-agent-memory-panel",
+    );
+    expect(panel?.agentId).toBe("beta");
+  });
+
   it("renders the custom agent select with the provided agents and selected label", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -155,14 +196,14 @@ describe("renderAgents", () => {
       render(renderAgents(createProps()), container);
       const select = container.querySelector("openclaw-agent-select") as
         | (HTMLElement & {
-            agents: Array<{ id: string }>;
+            options: Array<{ value: string }>;
             updateComplete: Promise<boolean>;
           })
         | null;
       expect(select).not.toBeNull();
       await select?.updateComplete;
 
-      expect(select?.agents).toHaveLength(2);
+      expect(select?.options.map((option) => option.value)).toEqual(["alpha", "beta"]);
       expect(select?.querySelector(".agent-select__label")?.textContent?.trim()).toBe("Beta");
     } finally {
       container.remove();
@@ -200,7 +241,7 @@ describe("renderAgents", () => {
     );
 
     const defaultSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(select?.value).toBe("openai/gpt-5.4");
       return select;
     });
@@ -222,7 +263,7 @@ describe("renderAgents", () => {
     );
 
     const inheritedSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(select?.value).toBe("");
       return select;
     });
@@ -264,7 +305,7 @@ describe("renderAgents", () => {
     );
 
     const betaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(
         Array.from(select?.options ?? []).some((option) => option.value === "openai/gpt-5.4"),
       ).toBe(true);
@@ -287,7 +328,7 @@ describe("renderAgents", () => {
     );
 
     const alphaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(
         Array.from(select?.options ?? []).some(
           (option) => option.value === "anthropic/claude-sonnet-4-6",
@@ -321,11 +362,10 @@ describe("renderAgents", () => {
 
     await Promise.resolve();
 
-    const thinkingKv = Array.from(container.querySelectorAll(".agent-kv")).find(
-      (entry) =>
-        entry.querySelector(".label")?.textContent?.trim() === t("agents.context.thinkingDefault"),
+    const thinkingKv = Array.from(container.querySelectorAll(".settings-kv dt")).find(
+      (entry) => entry.textContent?.trim() === t("agents.context.thinkingDefault"),
     );
-    expect(thinkingKv?.textContent).toContain("xhigh");
+    expect(thinkingKv?.nextElementSibling?.textContent).toContain("xhigh");
   });
 
   it("shows the skills count only for the selected agent's report", async () => {
@@ -380,7 +420,7 @@ describe("renderAgents", () => {
     expect(skillsTab.querySelector(".agent-tab-count")?.textContent).toBe("1");
   });
 
-  it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
+  it("localizes agent tabs and the channel refresh never state", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("zh-CN");
     const container = document.createElement("div");
@@ -406,9 +446,17 @@ describe("renderAgents", () => {
         (button) => button.textContent?.trim(),
       );
 
-      expect(tabLabels).toEqual(["概览", "文件", "工具", "技能", "频道", "Cron Jobs"]);
-      const cards = container.querySelectorAll("section.card");
-      expect(cards[1]?.querySelector(".muted")?.textContent?.trim()).toBe("上次刷新：从未");
+      expect(tabLabels).toEqual([
+        "概览",
+        "文件",
+        "工具",
+        "技能",
+        "频道",
+        t("agents.tabs.cronJobs"),
+        "记忆",
+      ]);
+      const sectionDescs = Array.from(container.querySelectorAll(".settings-section__desc"));
+      expect(sectionDescs.some((desc) => desc.textContent?.includes("上次刷新：从未"))).toBe(true);
     } finally {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();
@@ -417,6 +465,50 @@ describe("renderAgents", () => {
 });
 
 describe("renderAgentFiles", () => {
+  it("does not accept another file selection while a file request is loading", () => {
+    const container = document.createElement("div");
+    const onSelectFile = vi.fn();
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/tmp/workspace/AGENTS.md",
+              missing: false,
+            },
+            {
+              name: "SOUL.md",
+              path: "/tmp/workspace/SOUL.md",
+              missing: false,
+            },
+          ],
+        },
+        agentFilesLoading: true,
+        agentFilesError: null,
+        agentFileActive: "AGENTS.md",
+        agentFileContents: { "AGENTS.md": "# Instructions" },
+        agentFileDrafts: { "AGENTS.md": "# Instructions" },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    const soulTab = expectAgentTab(container, "SOUL");
+    expect(soulTab.disabled).toBe(true);
+    soulTab.click();
+    expect(onSelectFile).not.toHaveBeenCalled();
+  });
+
   it("renders the upgraded markdown preview structure with file metadata", () => {
     const container = document.createElement("div");
 
@@ -558,11 +650,11 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    const dialog = container.querySelector<HTMLDialogElement>(".md-preview-dialog");
+    const dialog = container.querySelector("openclaw-modal-dialog");
     const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel");
     const expandButton = container.querySelector<HTMLButtonElement>(".md-preview-expand-btn");
 
-    expect(dialog).toBeInstanceOf(HTMLDialogElement);
+    expect(dialog).not.toBeNull();
     expect(panel).toBeInstanceOf(HTMLElement);
     expect(expandButton).toBeInstanceOf(HTMLButtonElement);
     const previewPanel = panel!;
@@ -580,7 +672,7 @@ describe("renderAgentFiles", () => {
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
 
-    dialog!.dispatchEvent(new Event("close"));
+    container.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')?.click();
 
     expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel"]);
     expect([...previewExpandButton.classList]).toEqual([

@@ -369,9 +369,12 @@ function sanitizeReplayToolCallInputs(
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
 
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object" || message.role !== "assistant") {
+  for (const [index, message] of messages.entries()) {
+    if (!message) {
+      changed = true;
+      continue;
+    }
+    if (typeof message !== "object" || message.role !== "assistant") {
       out.push(message);
       continue;
     }
@@ -507,9 +510,12 @@ function sanitizeAnthropicReplayToolResults(
   const disallowEmbeddedUserToolResultsForSignedThinkingReplay =
     options?.disallowEmbeddedUserToolResultsForSignedThinkingReplay === true;
 
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object" || message.role !== "user") {
+  for (const [index, message] of messages.entries()) {
+    if (!message) {
+      changed = true;
+      continue;
+    }
+    if (typeof message !== "object" || message.role !== "user") {
       out.push(message);
       continue;
     }
@@ -1099,16 +1105,15 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   preserveReplaySafeThinkingToolCallIds?: boolean;
   repairToolUseResultPairing?: boolean;
 }): AgentMessage[] {
-  const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
+  const paired = params.repairToolUseResultPairing
+    ? sanitizeToolUseResultPairing(params.messages)
+    : params.messages;
+  return sanitizeToolCallIdsForCloudCodeAssist(paired, params.mode, {
     preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
     duplicateToolCallIdStyle: params.duplicateToolCallIdStyle,
     preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
     allowedToolNames: params.allowedToolNames,
   });
-  if (!params.repairToolUseResultPairing) {
-    return sanitized;
-  }
-  return sanitizeToolUseResultPairing(sanitized);
 }
 
 /** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
@@ -1203,3 +1208,4 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     return baseFn(model, nextContext as typeof context, options);
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

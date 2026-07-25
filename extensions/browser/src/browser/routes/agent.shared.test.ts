@@ -195,7 +195,7 @@ describe("browser route shared helpers", () => {
 
       expect(ensureTabAvailable).toHaveBeenCalledWith(undefined, {
         allowPlaywrightFallback: true,
-        signal: undefined,
+        signal: expect.any(AbortSignal),
         timeoutMs: 60_000,
       });
     });

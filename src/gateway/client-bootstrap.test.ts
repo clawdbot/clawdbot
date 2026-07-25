@@ -19,9 +19,7 @@ vi.mock("./connection-auth.js", () => ({
   resolveGatewayConnectionAuth: (...args: unknown[]) =>
     mockState.resolveGatewayConnectionAuth(...args),
 }));
-
-const { resolveGatewayClientBootstrap, resolveGatewayUrlOverrideSource } =
-  await import("./client-bootstrap.js");
+const { resolveGatewayClientBootstrap } = await import("./client-bootstrap.js");
 
 function expectLastAuthResolutionParams(expected: {
   urlOverride?: string;
@@ -36,14 +34,6 @@ function expectLastAuthResolutionParams(expected: {
   expect(authParams.urlOverride).toBe(expected.urlOverride);
   expect(authParams.urlOverrideSource).toBe(expected.urlOverrideSource);
 }
-
-describe("resolveGatewayUrlOverrideSource", () => {
-  it("maps override url sources only", () => {
-    expect(resolveGatewayUrlOverrideSource("cli --url")).toBe("cli");
-    expect(resolveGatewayUrlOverrideSource("env OPENCLAW_GATEWAY_URL")).toBe("env");
-    expect(resolveGatewayUrlOverrideSource("config gateway.remote.url")).toBeUndefined();
-  });
-});
 
 describe("resolveGatewayClientBootstrap", () => {
   beforeEach(() => {
@@ -97,19 +87,5 @@ describe("resolveGatewayClientBootstrap", () => {
       urlOverride: undefined,
       urlOverrideSource: undefined,
     });
-  });
-
-  it("carries configured preauth handshake timeout for GatewayClient callers", async () => {
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-    });
-
-    const result = await resolveGatewayClientBootstrap({
-      config: { gateway: { handshakeTimeoutMs: 30_000 } } as never,
-      env: process.env,
-    });
-
-    expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
   });
 });

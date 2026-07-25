@@ -68,6 +68,84 @@ class AndroidScreenshotFixtureTest {
   }
 
   @Test
+  fun providesDeterministicChatHistory() {
+    val messages =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("chat.history", null))
+        .jsonObject["messages"]
+        ?.jsonArray
+        .orEmpty()
+
+    assertEquals(
+      listOf(
+        listOf("user", "What is blocking the Android release?", "1783555020000"),
+        listOf(
+          "assistant",
+          "Two review threads are still open on the release branch, and the localization sync needs one more pass. " +
+            "Once those land, the changelog draft is ready for review and the tag can go out.",
+          "1783555080000",
+        ),
+        listOf("user", "Summarize the open review feedback for me.", "1783555140000"),
+        listOf(
+          "assistant",
+          "The main thread asks for a regression test around session restore, and the second one wants the new " +
+            "config key documented before merge. Both are small; I can draft patches for each if you want.",
+          "1783555200000",
+        ),
+        listOf("user", "Draft a short status update for the team.", "1783555260000"),
+        listOf(
+          "assistant",
+          "The Android release is close. Two review follow-ups and one localization pass remain; once those land, " +
+            "the changelog can be reviewed and the tag can go out.",
+          "1783555320000",
+        ),
+      ),
+      messages.map { message ->
+        val fields = message.jsonObject
+        listOf(
+          fields["role"]?.jsonPrimitive?.content,
+          fields["content"]?.jsonPrimitive?.content,
+          fields["timestamp"]?.jsonPrimitive?.content,
+        )
+      },
+    )
+  }
+
+  @Test
+  fun providesDeterministicSystemAgentConversation() {
+    val greeting =
+      json
+        .parseToJsonElement(
+          AndroidScreenshotFixture.request(
+            "openclaw.chat",
+            """{"sessionId":"android-settings-openclaw-test"}""",
+          ),
+        ).jsonObject
+    val response =
+      json
+        .parseToJsonElement(
+          AndroidScreenshotFixture.request(
+            "openclaw.chat",
+            """{"sessionId":"android-settings-openclaw-test","message":"Check status"}""",
+          ),
+        ).jsonObject
+
+    assertEquals("android-screenshot-openclaw", greeting["sessionId"]?.jsonPrimitive?.content)
+    assertEquals(
+      "What should we look at first?",
+      greeting["question"]
+        ?.jsonObject
+        ?.get("question")
+        ?.jsonPrimitive
+        ?.content,
+    )
+    assertEquals(
+      "I’ll keep this conversation separate from ordinary agent chat.",
+      response["reply"]?.jsonPrimitive?.content,
+    )
+  }
+
+  @Test
   fun rejectsUnexpectedGatewayCalls() {
     val error =
       assertThrows(IllegalStateException::class.java) {

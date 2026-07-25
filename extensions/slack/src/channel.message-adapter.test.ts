@@ -1,5 +1,6 @@
 // Slack tests cover channel.message adapter plugin behavior.
 import {
+  createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
@@ -205,6 +206,14 @@ describe("slack channel message adapter", () => {
   });
 
   it("renders portable presentations through the facade as card receipts (#95440)", async () => {
+    sendSlack.mockResolvedValueOnce({
+      messageId: "msg-1",
+      channelId: "C123",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "slack", messageId: "msg-1", channelId: "C123" }],
+        kind: "card",
+      }),
+    });
     const outbound = slackPlugin.outbound;
     const renderPresentation = outbound?.renderPresentation;
     if (!renderPresentation) {

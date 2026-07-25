@@ -1,10 +1,11 @@
-import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   type HeartbeatReplySpy,
+  readSessionStoreForTest,
   seedMainSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -57,14 +58,11 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     sessionKey: string,
     patch: Record<string, unknown>,
   ): Promise<void> {
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, StoredEntry>;
-    store[sessionKey] = { ...store[sessionKey], ...patch };
-    await fs.writeFile(storePath, JSON.stringify(store));
+    await patchSessionEntry({ storePath, sessionKey }, () => patch, { preserveActivity: true });
   }
 
   async function readEntry(storePath: string, sessionKey: string): Promise<StoredEntry> {
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, StoredEntry>;
-    return store[sessionKey];
+    return readSessionStoreForTest<Record<string, unknown>>(storePath)[sessionKey];
   }
 
   function expectPendingFinalDeliveryCleared(entry: StoredEntry): void {
@@ -139,7 +137,13 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       // not depend on a byte-equal text match or prefixed agents stay stuck.
       const cfg = {
         ...createHeartbeatConfig(storePath),
-        messages: { responsePrefix: "🤖" },
+        channels: {
+          ...createHeartbeatConfig(storePath).channels,
+          telegram: {
+            ...createHeartbeatConfig(storePath).channels?.telegram,
+            responsePrefix: "🤖",
+          },
+        },
       } as unknown as OpenClawConfig;
 
       const body = "Heartbeat update: everything is green.";

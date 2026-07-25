@@ -1,12 +1,21 @@
 // Mattermost plugin module implements monitor resources behavior.
-import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundMediaPayload,
+  formatInboundMediaUnavailableText,
+  formatMediaPlaceholderText,
+  toInboundMediaFacts,
+  type ChannelInboundMediaPayload,
+  type MediaPlaceholderTextFact,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  buildMattermostApiUrl,
   fetchMattermostChannel,
   fetchMattermostUser,
   sendMattermostTyping,
@@ -17,27 +26,35 @@ import {
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
 
-type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
+type MattermostMediaInfo = Omit<MediaPlaceholderTextFact, "kind" | "url"> & { kind: MediaKind };
 
-export type MattermostMediaInfo = {
-  path: string;
-  contentType?: string;
-  kind: MattermostMediaKind;
-};
+export function buildMattermostInboundMediaPayload(
+  media: readonly MattermostMediaInfo[],
+): ChannelInboundMediaPayload {
+  return buildChannelInboundMediaPayload(toInboundMediaFacts(media));
+}
+
+export function formatMattermostPendingMediaText(params: {
+  body: string;
+  media: readonly MediaPlaceholderTextFact[];
+}): string {
+  return [params.body, formatMediaPlaceholderText(params.media)].filter(Boolean).join("\n").trim();
+}
 
 export function formatMattermostInboundMediaText(params: {
   body: string;
-  mediaPlaceholder: string;
-  expectedCount: number;
-  mediaCount: number;
+  nativeMedia: readonly MediaPlaceholderTextFact[];
+  materializedMedia: readonly MediaPlaceholderTextFact[];
 }): string {
-  const unavailableCount = Math.max(0, params.expectedCount - params.mediaCount);
+  const materializedCount = params.materializedMedia.filter(
+    (media) => Boolean(media.path) || Boolean(media.url),
+  ).length;
+  const unavailableCount = Math.max(0, params.nativeMedia.length - materializedCount);
   if (unavailableCount === 0) {
     return params.body;
   }
   return formatInboundMediaUnavailableText({
     body: params.body,
-    mediaPlaceholder: params.mediaCount === 0 ? params.mediaPlaceholder : undefined,
     notice: `[mattermost ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
   });
 }
@@ -45,6 +62,9 @@ export function formatMattermostInboundMediaText(params: {
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
 const MONITOR_RESOURCE_CACHE_MAX_ENTRIES = 1000;
+// Match Telegram/Tlon inbound media: header wait is independent of body idle.
+const MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+const MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
 
 type SaveRemoteMedia = (params: {
   url: string;
@@ -52,6 +72,8 @@ type SaveRemoteMedia = (params: {
   filePathHint?: string;
   maxBytes: number;
   ssrfPolicy?: { allowedHostnames?: string[] };
+  responseHeaderTimeoutMs?: number;
+  readIdleTimeoutMs?: number;
 }) => Promise<{ path: string; contentType?: string | null }>;
 
 export function createMattermostMonitorResources(params: {
@@ -61,7 +83,7 @@ export function createMattermostMonitorResources(params: {
   logger: { debug?: (...args: unknown[]) => void };
   mediaMaxBytes: number;
   saveRemoteMedia: SaveRemoteMedia;
-  mediaKindFromMime: (contentType?: string) => MattermostMediaKind | null | undefined;
+  mediaKindFromMime: (contentType?: string) => MediaKind | null | undefined;
 }) {
   const {
     accountId,
@@ -117,9 +139,19 @@ export function createMattermostMonitorResources(params: {
     }
     const out: MattermostMediaInfo[] = [];
     for (const fileId of ids) {
+      let downloadUrl: string;
+      try {
+        downloadUrl = buildMattermostApiUrl(client.baseUrl, `/files/${fileId}`);
+      } catch (err) {
+        logger.debug?.(`mattermost: failed to resolve file ${fileId}: ${String(err)}`);
+        // Keep the fact list aligned one-per-native-file so a rejected ID cannot
+        // shift later attachments' payload positions; no download is attempted.
+        out.push({ kind: "unknown" });
+        continue;
+      }
       try {
         const saved = await saveRemoteMedia({
-          url: `${client.apiBaseUrl}/files/${fileId}`,
+          url: downloadUrl,
           requestInit: {
             headers: {
               Authorization: `Bearer ${client.token}`,
@@ -128,6 +160,10 @@ export function createMattermostMonitorResources(params: {
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
           ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
+          // Without these, a Mattermost host that never returns headers can stall
+          // inbound preprocessing indefinitely (idle timeout never starts).
+          responseHeaderTimeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+          readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
         });
         const contentType = saved.contentType ?? undefined;
         out.push({
@@ -137,6 +173,19 @@ export function createMattermostMonitorResources(params: {
         });
       } catch (err) {
         logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
+        let contentType: string | undefined;
+        try {
+          const info = await client.request<{ mime_type?: string | null }>(`/files/${fileId}/info`);
+          contentType = info.mime_type?.trim() || undefined;
+        } catch (infoErr) {
+          logger.debug?.(
+            `mattermost: failed to resolve metadata for file ${fileId}: ${String(infoErr)}`,
+          );
+        }
+        out.push({
+          contentType,
+          kind: mediaKindFromMime(contentType) ?? "unknown",
+        });
       }
     }
     return out;

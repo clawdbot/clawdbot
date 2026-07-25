@@ -2,10 +2,53 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { UsageProps } from "./types.ts";
+import { buildAggregatesFromSessions } from "./metrics.ts";
+import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 const noop = vi.fn();
+
+function usageSession(key: string, agentId: string, provider: string): UsageSessionEntry {
+  const totals: UsageTotals = {
+    input: 100,
+    output: 20,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 120,
+    totalCost: 1,
+    inputCost: 0.8,
+    outputCost: 0.2,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+  return {
+    key,
+    label: `${agentId} session`,
+    agentId,
+    modelProvider: provider,
+    model: `${provider}-model`,
+    updatedAt: Date.now(),
+    usage: {
+      ...totals,
+      messageCounts: {
+        total: 2,
+        user: 1,
+        assistant: 1,
+        toolCalls: 0,
+        toolResults: 0,
+        errors: 0,
+      },
+      modelUsage: [{ provider, model: `${provider}-model`, count: 1, totals }],
+    },
+  };
+}
+
+function insightCard(container: ParentNode, title: string): Element | undefined {
+  return Array.from(container.querySelectorAll(".usage-insight-card")).find(
+    (card) => card.querySelector(".usage-insight-title")?.textContent === title,
+  );
+}
 
 function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
   return {
@@ -49,10 +92,12 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
       timeSeriesLoading: false,
+      timeSeriesStatus: { error: null, hasLoaded: false, stale: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
       sessionLogsLoading: false,
+      sessionLogsStatus: { error: null, hasLoaded: false, stale: false },
       sessionLogsExpanded: false,
       logFilters: {
         roles: [],
@@ -100,6 +145,8 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onTimeSeriesModeChange: noop,
         onTimeSeriesBreakdownChange: noop,
         onTimeSeriesCursorRangeChange: noop,
+        onRetryTimeSeries: noop,
+        onRetrySessionLogs: noop,
       },
     },
     ...overrides,
@@ -107,6 +154,61 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
 }
 
 describe("renderUsage", () => {
+  it("keeps insight aggregates scoped to the selected agent", () => {
+    const container = document.createElement("div");
+    const sessions = [
+      usageSession("agent:main:main", "main", "openai"),
+      usageSession("agent:research:main", "research", "anthropic"),
+    ];
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            sessions,
+            totals: sessions[0]?.usage ?? null,
+            aggregates: buildAggregatesFromSessions(sessions),
+          },
+          filters: { ...createUsageProps().filters, agentId: "research" },
+        }),
+      ),
+      container,
+    );
+
+    const providers = insightCard(container, "Top Providers");
+    expect(providers?.textContent).toContain("anthropic");
+    expect(providers?.textContent).not.toContain("openai");
+  });
+
+  it("does not fall back to global insights when a query matches no sessions", () => {
+    const container = document.createElement("div");
+    const sessions = [usageSession("agent:main:main", "main", "openai")];
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            sessions,
+            totals: sessions[0]?.usage ?? null,
+            aggregates: buildAggregatesFromSessions(sessions),
+          },
+          filters: {
+            ...createUsageProps().filters,
+            query: "missing-session",
+            queryDraft: "missing-session",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const providers = insightCard(container, "Top Providers");
+    expect(providers?.textContent).toContain("No provider data");
+    expect(providers?.textContent).not.toContain("openai");
+  });
+
   it("keeps selected session labels on UTF-16 boundaries", () => {
     const container = document.createElement("div");
     const label = `${"a".repeat(19)}🚀${"b".repeat(28)}🚀tail`;
@@ -161,7 +263,7 @@ describe("renderUsage", () => {
     expect(container.querySelector(".usage-header")).not.toBeNull();
   });
 
-  it("shows configured agents in the agent filter even before their usage sessions load", () => {
+  it("leaves agent scoping to the shared page header control", () => {
     const container = document.createElement("div");
 
     render(
@@ -184,10 +286,31 @@ describe("renderUsage", () => {
       container,
     );
 
-    const agentFilter = container.querySelector(".usage-filter-select");
+    expect(container.querySelector('input[name="usage-agent-scope"]')).toBeNull();
+  });
 
-    expect(agentFilter?.textContent).toContain("main");
-    expect(agentFilter?.textContent).toContain("research");
+  it("keeps filter option values distinct from menu commands", () => {
+    const container = document.createElement("div");
+    const onQueryDraftChange = vi.fn();
+    const session = usageSession("agent:main:main", "main", "clear");
+    const props = createUsageProps({
+      data: {
+        ...createUsageProps().data,
+        sessions: [session],
+        aggregates: buildAggregatesFromSessions([session]),
+      },
+    });
+    props.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
+
+    render(renderUsage(props), container);
+    const option = [...container.querySelectorAll<HTMLElement>(".usage-filter-option")].find(
+      (item) => item.textContent?.trim() === "clear",
+    );
+    option
+      ?.closest("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));
+
+    expect(onQueryDraftChange).toHaveBeenCalledWith(expect.stringContaining("provider:clear"));
   });
 
   it("renders provider plans, quotas, and billing independently of session usage", () => {

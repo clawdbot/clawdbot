@@ -180,6 +180,59 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
   });
 
+  it("surfaces a terminal error after only a message-tool progress update", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "SECRET_PROGRESS_FAILURE",
+        content: [],
+      }),
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          sourceReplyFinal: false,
+        },
+      ],
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed.",
+      isError: true,
+    });
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+    expectNoPayloadTextContaining(payloads, "SECRET_PROGRESS_FAILURE");
+  });
+
+  it("keeps terminal errors suppressed after an explicit final message-tool reply", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "SECRET_POST_FINAL_FAILURE",
+        content: [],
+      }),
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          sourceReplyFinal: true,
+        },
+      ],
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
   it("suppresses structured provider error messages in user-facing reply payloads", () => {
     const rawError =
       '{"type":"error","error":{"type":"invalid_request_error","message":"SECRET_CANARY_69737"}}';
@@ -870,6 +923,23 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("leaves exec metadata unwrapped for plain tool results", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "plain",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ Exec failed: node -e 'console.log(1, `x`)' (exit 1)",
+      isError: true,
+    });
+  });
+
   it("preserves raw exec context before trailing raw command metadata", () => {
     const payloads = buildPayloads({
       lastToolError: {
@@ -1149,3 +1219,4 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

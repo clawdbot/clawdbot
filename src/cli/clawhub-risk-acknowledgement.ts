@@ -2,7 +2,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import type { ClawHubRiskAcknowledgementRequest } from "../infra/clawhub-install-trust.js";
 import { promptText, promptYesNo } from "./prompt.js";
 
-export type ClawHubRiskAcknowledgementCliOptions = {
+type ClawHubRiskAcknowledgementCliOptions = {
   acknowledgeClawHubRisk?: boolean;
 };
 

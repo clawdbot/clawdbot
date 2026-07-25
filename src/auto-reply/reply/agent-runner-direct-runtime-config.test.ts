@@ -1,5 +1,8 @@
 // Tests direct runtime config overrides passed into agent runner execution.
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -112,9 +115,12 @@ function createTelegramSessionCtx(): TemplateContext {
 }
 
 function createReplyOperation(): ReplyOperation {
+  let sessionId = "session-1";
   return {
     key: "test",
-    sessionId: "session-1",
+    get sessionId() {
+      return sessionId;
+    },
     abortSignal: new AbortController().signal,
     resetTriggered: false,
     phase: "queued",
@@ -123,7 +129,12 @@ function createReplyOperation(): ReplyOperation {
     lastActivityAtMs: Date.now(),
     recordActivity: vi.fn(),
     setPhase: vi.fn(),
-    updateSessionId: vi.fn(),
+    markWaitingForDeferredMaintenance: vi.fn(),
+    markDeferredMaintenanceWaitEnded: vi.fn(),
+    updateSessionId: vi.fn((nextSessionId: string) => {
+      sessionId = nextSessionId;
+    }),
+    updateSessionKey: vi.fn(),
     hasOwnedSessionId: vi.fn(() => false),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
@@ -349,98 +360,105 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("rotates, rebinds, and optionally notifies when memory flush is exhausted", async () => {
-    const { replyParams, followupRun } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
-    const sessionKey = "agent:main:telegram:default:direct:test";
-    const sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      compactionCount: 4,
-      memoryFlushFailureCount: 2,
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    replyParams.sessionKey = sessionKey;
-    replyParams.storePath = "/tmp/sessions.json";
-    replyParams.sessionEntry = sessionEntry;
-    replyParams.sessionStore = sessionStore;
-    resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
-      ...freshCfg,
-      agents: { defaults: { compaction: { notifyUser: true } } },
-    });
-    const onBlockReply = vi.fn();
-    replyParams.opts = { onBlockReply };
-    const updateSessionIdSpy = vi.fn();
-    const replyOperation = createReplyOperation();
-    replyOperation.updateSessionId = updateSessionIdSpy;
-    replyParams.replyOperation = replyOperation;
-    runPreflightCompactionIfNeededMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    );
-    runMemoryFlushIfNeededMock.mockImplementation(
-      async (params: {
-        sessionEntry?: typeof sessionEntry;
-        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
-      }) => {
-        params.onVisibleErrorPayloads?.([
-          {
-            text: "⚠️ Memory flush failed after 3 attempts; skipping for this cycle. It will retry after the next compaction.",
-            isError: true,
-          },
-        ]);
-        return {
-          sessionEntry: {
-            ...params.sessionEntry,
-            memoryFlushFailureCount: 3,
-            memoryFlushCompactionCount: 4,
-          },
-          outcome: "exhausted",
-        };
-      },
-    );
-    resetReplyRunSessionMock.mockImplementation(async (params: unknown) => {
-      const resetParams = params as {
-        activeSessionEntry?: typeof sessionEntry;
-        followupRun: typeof followupRun;
-        onActiveSessionEntry: (entry: typeof sessionEntry) => void;
-        onNewSession: (sessionId: string, sessionFile: string) => void;
-      };
-      const sessionFile = "/tmp/session-rotated.jsonl";
-      const nextEntry = {
-        ...resetParams.activeSessionEntry,
-        sessionId: "session-rotated",
+    await withTempDir({ prefix: "openclaw-direct-runtime-" }, async (tempDir) => {
+      const { replyParams, followupRun } = createDirectRuntimeReplyParams({
+        shouldFollowup: false,
+        isActive: false,
+      });
+      const sessionKey = "agent:main:telegram:default:direct:test";
+      const sessionEntry = {
+        sessionId: "session-1",
         updatedAt: 1,
-        memoryFlushFailureCount: 0,
-        compactionCount: 0,
+        compactionCount: 4,
+        memoryFlushFailureCount: 2,
       };
-      resetParams.followupRun.run.sessionId = nextEntry.sessionId;
-      resetParams.followupRun.run.sessionFile = sessionFile;
-      resetParams.onActiveSessionEntry(nextEntry);
-      resetParams.onNewSession(nextEntry.sessionId, sessionFile);
-      return true;
-    });
+      const sessionStore = { [sessionKey]: sessionEntry };
+      const storePath = join(tempDir, "sessions.json");
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      replyParams.sessionKey = sessionKey;
+      replyParams.storePath = storePath;
+      replyParams.sessionEntry = sessionEntry;
+      replyParams.sessionStore = sessionStore;
+      resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
+        ...freshCfg,
+        agents: { defaults: { compaction: { notifyUser: true } } },
+      });
+      const onBlockReply = vi.fn();
+      replyParams.opts = { onBlockReply };
+      const replyOperation = createReplyOperation();
+      replyParams.replyOperation = replyOperation;
+      runPreflightCompactionIfNeededMock.mockImplementation(
+        async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+      );
+      runMemoryFlushIfNeededMock.mockImplementation(
+        async (params: {
+          sessionEntry?: typeof sessionEntry;
+          onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
+        }) => {
+          params.onVisibleErrorPayloads?.([
+            {
+              text: "⚠️ Memory flush failed after 3 attempts; skipping for this cycle. It will retry after the next compaction.",
+              isError: true,
+            },
+          ]);
+          return {
+            sessionEntry: {
+              ...params.sessionEntry,
+              memoryFlushFailureCount: 3,
+              memoryFlushCompactionCount: 4,
+            },
+            outcome: "exhausted",
+          };
+        },
+      );
+      resetReplyRunSessionMock.mockImplementation(async (params: unknown) => {
+        const resetParams = params as {
+          activeSessionEntry?: typeof sessionEntry;
+          activeSessionStore?: Record<string, typeof sessionEntry>;
+          followupRun: typeof followupRun;
+          onActiveSessionEntry: (entry: typeof sessionEntry) => void;
+          onNewSession: (sessionId: string, sessionFile: string) => void;
+        };
+        const sessionFile = "/tmp/session-rotated.jsonl";
+        const nextEntry = {
+          ...resetParams.activeSessionEntry,
+          sessionId: "session-rotated",
+          updatedAt: 1,
+          memoryFlushFailureCount: 0,
+          compactionCount: 0,
+        };
+        if (resetParams.activeSessionStore) {
+          resetParams.activeSessionStore[sessionKey] = nextEntry;
+        }
+        await replaceSessionEntry({ storePath, sessionKey }, nextEntry);
+        resetParams.followupRun.run.sessionId = nextEntry.sessionId;
+        resetParams.followupRun.run.sessionFile = sessionFile;
+        resetParams.onActiveSessionEntry(nextEntry);
+        resetParams.onNewSession(nextEntry.sessionId, sessionFile);
+        return true;
+      });
 
-    const result = await runReplyAgent(replyParams);
+      const result = await runReplyAgent(replyParams);
 
-    expect(result).toEqual({ text: "main reply" });
-    expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
-    expect(resetReplyRunSessionMock.mock.calls[0]?.[0]).toMatchObject({
-      options: {
-        failureLabel: "memory flush exhaustion",
-        cleanupTranscripts: false,
-      },
-      sessionKey,
-      queueKey: "main",
+      expect(result).toEqual({ text: "main reply" });
+      expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
+      expect(resetReplyRunSessionMock.mock.calls[0]?.[0]).toMatchObject({
+        options: {
+          failureLabel: "memory flush exhaustion",
+          cleanupTranscripts: false,
+        },
+        sessionKey,
+        queueKey: "main",
+      });
+      expect(followupRun.run.sessionId).toBe("session-rotated");
+      expect(replyOperation.sessionId).toBe("session-rotated");
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
+        }),
+      );
+      expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
     });
-    expect(followupRun.run.sessionId).toBe("session-rotated");
-    expect(updateSessionIdSpy).toHaveBeenCalledWith("session-rotated");
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
-      }),
-    );
-    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
   });
 
   it("keeps the compacted session when preflight recovers an exhausted memory flush", async () => {

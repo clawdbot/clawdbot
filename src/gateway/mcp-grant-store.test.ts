@@ -1,28 +1,23 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   activateMcpLoopbackClientGrantCapture,
-  attachGrantStoreSize,
   deactivateMcpLoopbackClientGrantCapture,
-  mcpLoopbackClientGrantStoreSize,
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
   resolveAttachGrant,
   resolveMcpLoopbackClientGrant,
-  resetAttachGrantsForTest,
-  resetMcpLoopbackClientGrantsForTest,
   revokeAttachGrant,
   revokeAttachGrantsForSession,
   revokeMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrantsForRuntime,
-  sweepExpiredAttachGrants,
 } from "./mcp-grant-store.js";
 
 const T0 = 1_000_000_000_000;
 
 describe("mcp-grant-store", () => {
   beforeEach(() => {
-    resetAttachGrantsForTest();
-    resetMcpLoopbackClientGrantsForTest();
+    revokeMcpLoopbackClientGrantsForRuntime("runtime-one");
+    revokeMcpLoopbackClientGrantsForRuntime("runtime-two");
   });
 
   it("mints a grant bound to the sessionKey with a token and a TTL window", () => {
@@ -43,7 +38,6 @@ describe("mcp-grant-store", () => {
     expect(resolveAttachGrant(g.token, T0 + 999)?.sessionKey).toBe("agent:main:x");
     expect(resolveAttachGrant(g.token, T0 + 1_000)).toBeUndefined();
     expect(resolveAttachGrant(g.token, T0 + 1_001)).toBeUndefined();
-    expect(attachGrantStoreSize()).toBe(0);
   });
 
   it("returns undefined for an unknown token (no scope without a grant)", () => {
@@ -65,12 +59,15 @@ describe("mcp-grant-store", () => {
     expect(revokeAttachGrant(g.token)).toBe(false);
   });
 
-  it("revokes all grants for a session", () => {
-    mintAttachGrant({ sessionKey: "agent:main:x", nowMs: T0 });
-    mintAttachGrant({ sessionKey: "agent:main:x", nowMs: T0 });
-    mintAttachGrant({ sessionKey: "agent:main:y", nowMs: T0 });
-    expect(revokeAttachGrantsForSession("agent:main:x")).toBe(2);
-    expect(attachGrantStoreSize()).toBe(1);
+  it("revokes every attach grant for one session", () => {
+    const first = mintAttachGrant({ sessionKey: "agent:main:first", nowMs: T0 });
+    const second = mintAttachGrant({ sessionKey: "agent:main:first", nowMs: T0 });
+    const other = mintAttachGrant({ sessionKey: "agent:main:other", nowMs: T0 });
+
+    expect(revokeAttachGrantsForSession(" agent:main:first ")).toBe(2);
+    expect(resolveAttachGrant(first.token, T0)).toBeUndefined();
+    expect(resolveAttachGrant(second.token, T0)).toBeUndefined();
+    expect(resolveAttachGrant(other.token, T0)?.sessionKey).toBe("agent:main:other");
   });
 
   it("clamps TTL: default for non-positive, ceiling at 12h", () => {
@@ -80,20 +77,6 @@ describe("mcp-grant-store", () => {
     expect(zero.expiresAtMs).toBe(T0 + 60 * 60 * 1000);
     const huge = mintAttachGrant({ sessionKey: "s", ttlMs: 999 * 60 * 60 * 1000, nowMs: T0 });
     expect(huge.expiresAtMs).toBe(T0 + 12 * 60 * 60 * 1000);
-  });
-
-  it("sweeps expired grants", () => {
-    mintAttachGrant({ sessionKey: "s", ttlMs: 1_000, nowMs: T0 });
-    mintAttachGrant({ sessionKey: "s", ttlMs: 5_000, nowMs: T0 });
-    expect(sweepExpiredAttachGrants(T0 + 2_000)).toBe(1);
-    expect(attachGrantStoreSize()).toBe(1);
-  });
-
-  it("evicts expired grants on mint, bounding the store (no accumulation)", () => {
-    mintAttachGrant({ sessionKey: "s", ttlMs: 1_000, nowMs: T0 });
-    expect(attachGrantStoreSize()).toBe(1);
-    mintAttachGrant({ sessionKey: "s", ttlMs: 1_000, nowMs: T0 + 5_000 });
-    expect(attachGrantStoreSize()).toBe(1);
   });
 
   it("binds an immutable Gateway-selected context to a loopback client grant", () => {
@@ -209,11 +192,9 @@ describe("mcp-grant-store", () => {
     const successor = mintForRuntime("runtime-two", "agent:main:successor");
 
     expect(revokeMcpLoopbackClientGrantsForRuntime("runtime-one")).toBe(2);
-    expect(mcpLoopbackClientGrantStoreSize()).toBe(1);
     expect(revokeMcpLoopbackClientGrant(first.token)).toBe(false);
     expect(revokeMcpLoopbackClientGrant(successor.token)).toBe(true);
     expect(revokeMcpLoopbackClientGrant(successor.token)).toBe(false);
-    expect(mcpLoopbackClientGrantStoreSize()).toBe(0);
   });
 
   it("requires a session key for loopback client grants", () => {

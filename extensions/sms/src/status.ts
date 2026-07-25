@@ -16,7 +16,7 @@ type ChannelCapabilitiesDisplayLine = {
   tone?: "default" | "muted" | "success" | "warn" | "error";
 };
 
-export type SmsTwilioWebhookProbe =
+type SmsTwilioWebhookProbe =
   | {
       status: "skipped";
       reason: string;

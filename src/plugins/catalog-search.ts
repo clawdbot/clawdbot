@@ -12,7 +12,7 @@ const INSTALLABLE_PLUGIN_FAMILIES: readonly ClawHubPackageFamily[] = [
 const DEFAULT_PLUGIN_SEARCH_LIMIT = 20;
 const MAX_PLUGIN_SEARCH_LIMIT = 100;
 
-export type PluginCatalogSearchParams = {
+type PluginCatalogSearchParams = {
   query: string;
   limit?: number;
 };

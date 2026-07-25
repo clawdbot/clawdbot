@@ -1,3 +1,4 @@
+/* oxlint-disable eslint/prefer-const, eslint/no-promise-executor-return -- process-lifecycle tests retain timer initialization and callback expressions matching the exercised script. */
 import {
   execFileSync,
   spawn,
@@ -10,15 +11,19 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -31,6 +36,7 @@ const worktreeScript = join(repoRoot, "scripts/pr-lib/worktree.sh");
 const lockRef = "refs/openclaw/pr-operation-locks/42";
 const detachedChildren = new WeakSet<ChildProcess>();
 const goneProcessGroups = new Set<number>();
+let templateRepo = "";
 
 // Direct preload affects only the supervisor; operation fixtures keep real clocks.
 // The source assertions below pin the production safety durations being accelerated.
@@ -54,20 +60,39 @@ function createProcessGroupTimingPreload() {
 function spawnDetached(command: string, args: readonly string[], options: SpawnOptions = {}) {
   const child = spawn(command, args, { ...options, detached: true });
   detachedChildren.add(child);
-  if (child.pid) goneProcessGroups.delete(child.pid);
+  if (child.pid) {
+    goneProcessGroups.delete(child.pid);
+  }
   return child;
 }
 
-function createRepo(nestedName?: string) {
-  const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
-  const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
-  if (nestedName) mkdirSync(dir);
+function createTemplateRepo() {
+  const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-operation-lock-template-"));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   execFileSync("git", ["config", "user.name", "OpenClaw Test"], { cwd: dir });
   execFileSync("git", ["config", "user.email", "test@openclaw.invalid"], { cwd: dir });
   writeFileSync(join(dir, "base.txt"), "base\n");
   execFileSync("git", ["add", "base.txt"], { cwd: dir });
   execFileSync("git", ["commit", "-qm", "base"], { cwd: dir });
+  return dir;
+}
+
+beforeAll(() => {
+  templateRepo = createTemplateRepo();
+});
+
+afterAll(() => {
+  rmSync(templateRepo, { force: true, recursive: true });
+});
+
+function createRepo(nestedName?: string) {
+  const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
+  const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
+  if (nestedName) {
+    mkdirSync(dir);
+  }
+  // Preserve per-test Git isolation without paying five setup processes per fixture.
+  cpSync(templateRepo, dir, { recursive: true });
   return dir;
 }
 
@@ -104,8 +129,10 @@ function installPrCliFixture(repoDir: string) {
     "scripts/pr-lib/common.sh",
     "scripts/pr-lib/changelog.sh",
     "scripts/pr-lib/gates.sh",
+    "scripts/pr-lib/ci-dispatch.mjs",
     "scripts/pr-lib/push.sh",
     "scripts/pr-lib/review.sh",
+    "scripts/pr-lib/review-artifacts.mjs",
     "scripts/pr-lib/prepare-core.sh",
     "scripts/pr-lib/merge.sh",
   ];
@@ -129,18 +156,23 @@ function installPrCliFixture(repoDir: string) {
 async function runSupervisedFixture(
   repoDir: string,
   fixture: string,
-  options: { accelerateTimeouts?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    accelerateTimeouts?: boolean;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    runner?: string;
+  } = {},
 ) {
   const controller = spawn(
     process.execPath,
     [
       ...(options.accelerateTimeouts ? ["--require", createProcessGroupTimingPreload()] : []),
-      processGroupRunner,
+      options.runner ?? processGroupRunner,
       repoDir,
       fixture,
     ],
     {
-      cwd: repoDir,
+      cwd: options.cwd ?? repoDir,
       env: { ...process.env, ...options.env },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -196,7 +228,7 @@ function runLockShell(repoDir: string, commands: string[]) {
     detached: true,
     encoding: "utf8",
     timeout: 10_000,
-  });
+  } as { cwd: string; encoding: "utf8"; timeout: number });
 }
 
 function spawnHolder(repoDir: string, statusFile: string, pr = 42, trapTerm = true) {
@@ -250,7 +282,7 @@ function spawnHolderWithChild(repoDir: string, statusFile: string, childPidFile:
         "acquire_pr_operation_lock 42",
         `printf 'held\n' >'${statusFile}'`,
         "sleep 30 &",
-        `printf '%s\n' \"$!\" >'${childPidFile}'`,
+        `printf '%s\n' "$!" >'${childPidFile}'`,
         'wait "$!"',
       ].join("\n"),
     ],
@@ -261,8 +293,10 @@ function spawnHolderWithChild(repoDir: string, statusFile: string, childPidFile:
 async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (predicate()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   return false;
 }
@@ -272,7 +306,9 @@ function validProcessId(value: unknown): value is number {
 }
 
 function readProcessIdFile(path: string) {
-  if (!existsSync(path)) return undefined;
+  if (!existsSync(path)) {
+    return undefined;
+  }
   const value = Number(readFileSync(path, "utf8").trim());
   return validProcessId(value) ? value : undefined;
 }
@@ -295,7 +331,9 @@ function childStatus(child: ChildProcess) {
 }
 
 async function waitForExit(child: ChildProcess, timeoutMs = 5000) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
   await new Promise<void>((resolve, reject) => {
     let timeout: NodeJS.Timeout;
     const onExit = () => {
@@ -316,13 +354,17 @@ async function waitForExit(child: ChildProcess, timeoutMs = 5000) {
 }
 
 async function stopChild(child: ChildProcess, signal: NodeJS.Signals) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
   signalTestChild(child, signal);
   await waitForExit(child);
 }
 
 async function stopChildLeader(child: ChildProcess, signal: NodeJS.Signals) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
   child.kill(signal);
   await waitForExit(child);
 }
@@ -330,7 +372,9 @@ async function stopChildLeader(child: ChildProcess, signal: NodeJS.Signals) {
 async function cleanupChildren(...children: Array<ChildProcess | undefined>) {
   const failures: unknown[] = [];
   for (const child of children) {
-    if (!child) continue;
+    if (!child) {
+      continue;
+    }
     try {
       if (child.exitCode === null && child.signalCode === null) {
         signalTestChild(child, "SIGKILL");
@@ -352,19 +396,25 @@ function signalTestChild(child: ChildProcess, signal: NodeJS.Signals) {
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ESRCH" && code !== "EPERM") throw error;
+      if (code !== "ESRCH" && code !== "EPERM") {
+        throw error;
+      }
     }
   }
   child.kill(signal);
 }
 
 async function cleanupProcessGroup(pgid: number) {
-  if (!processGroupExists(pgid)) return;
+  if (!processGroupExists(pgid)) {
+    return;
+  }
   try {
     killProcessGroup(pgid, "SIGKILL");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ESRCH" || code === "EPERM") return;
+    if (code === "ESRCH" || code === "EPERM") {
+      return;
+    }
     throw error;
   }
   if (!(await waitFor(() => !processGroupExists(pgid), 2000))) {
@@ -373,7 +423,9 @@ async function cleanupProcessGroup(pgid: number) {
 }
 
 function readOperationProcessGroup(repoDir: string) {
-  if (!refExists(repoDir)) return undefined;
+  if (!refExists(repoDir)) {
+    return undefined;
+  }
   try {
     const payload = execFileSync("git", ["cat-file", "blob", refOid(repoDir)], {
       cwd: repoDir,
@@ -393,12 +445,16 @@ async function cleanupController(
 ) {
   let pgid = operationPgidFile ? readProcessIdFile(operationPgidFile) : undefined;
   pgid ??= readOperationProcessGroup(repoDir);
-  if (pgid) await cleanupProcessGroup(pgid);
+  if (pgid) {
+    await cleanupProcessGroup(pgid);
+  }
   await cleanupChildren(controller);
 
   pgid = operationPgidFile ? readProcessIdFile(operationPgidFile) : undefined;
   pgid ??= readOperationProcessGroup(repoDir);
-  if (pgid) await cleanupProcessGroup(pgid);
+  if (pgid) {
+    await cleanupProcessGroup(pgid);
+  }
 }
 
 function refOid(repoDir: string, ref = lockRef) {
@@ -417,7 +473,9 @@ function processGroupExists(pgid: number) {
   if (!validProcessId(pgid)) {
     throw new Error(`refusing to probe invalid process group ${String(pgid)}`);
   }
-  if (goneProcessGroups.has(pgid)) return false;
+  if (goneProcessGroups.has(pgid)) {
+    return false;
+  }
   try {
     process.kill(-pgid, 0);
     return true;
@@ -437,7 +495,9 @@ function killProcessGroup(pgid: number, signal: NodeJS.Signals) {
   if (!validProcessId(pgid)) {
     throw new Error(`refusing to signal invalid process group ${String(pgid)}`);
   }
-  if (!goneProcessGroups.has(pgid)) process.kill(-pgid, signal);
+  if (!goneProcessGroups.has(pgid)) {
+    process.kill(-pgid, signal);
+  }
 }
 
 describe("scripts/pr process-group platform guard", () => {
@@ -447,7 +507,9 @@ describe("scripts/pr process-group platform guard", () => {
     expect(source).toContain("use WSL on Windows");
     expect(source).toContain("const SIGNAL_GRACE_MS = 5000;");
     expect(source).toContain("const KILL_DRAIN_MS = 5000;");
-    if (process.platform !== "win32") return;
+    if (process.platform !== "win32") {
+      return;
+    }
 
     const result = spawnSync(process.execPath, [processGroupRunner, repoRoot, "unused"], {
       encoding: "utf8",
@@ -462,6 +524,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
   it("serializes the same PR and releases the waiter after SIGTERM", async () => {
     const repoDir = createRepo();
     const held = join(repoDir, "held");
+    const blocked = join(repoDir, "blocked");
     const acquired = join(repoDir, "acquired");
     const holder = spawnHolder(repoDir, held);
     let waiter: ChildProcess | undefined;
@@ -474,6 +537,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
           "-c",
           [
             ...bashSource(repoDir),
+            `sleep() { printf 'blocked\\n' >'${blocked}'; command sleep 0.01; }`,
             "acquire_pr_operation_lock 42",
             `printf 'acquired\\n' >'${acquired}'`,
             "release_pr_operation_lock",
@@ -481,7 +545,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         ],
         { cwd: repoDir, stdio: "ignore" },
       );
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(await waitFor(() => existsSync(blocked))).toBe(true);
       expect(existsSync(acquired)).toBe(false);
 
       await stopChild(holder, "SIGTERM");
@@ -717,7 +781,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       writeFileSync(stub, "#!/bin/sh\nexit 0\n");
       chmodSync(stub, 0o755);
     }
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -768,8 +832,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ]);
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      const [blockedLine] = result.stdout.trim().split("\n");
-      const [, ownerOid] = blockedLine.split("\t");
+      const blockedLine = expectDefined(
+        result.stdout.trim().split("\n")[0],
+        "blocked PR operation lock output",
+      );
+      const ownerOid = expectDefined(blockedLine.split("\t")[1], "blocked PR operation owner oid");
       expect(blockedLine).toMatch(/^2\t[0-9a-f]{40}$/u);
       expect(result.stderr).toContain("operation lock is orphaned");
       expect(result.stderr).toContain(
@@ -940,6 +1007,162 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = await runSupervisedFixture(repoDir, fixture);
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+  });
+
+  it("releases a failed lock while the child is still in validation phase", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-validation.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+  });
+
+  it("retains a failed lock after the child leaves validation phase", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-after-side-effects.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "mark_pr_operation_side_effects_started",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("reports the child exit code when retaining a failed operation", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-operation.sh", [
+      "acquire_pr_operation_lock 42",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+    expect(refExists(repoDir)).toBe(false);
+  });
+
+  it("does not re-enter validation after side effects have started", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-after-forged-validation.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "mark_pr_operation_side_effects_started",
+      "notify_pr_operation_phase validation-started",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("retains a validation-phase lock when the child exits through a trapped signal", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "signaled-validation.sh", [
+      "trap 'exit 143' TERM",
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "kill -TERM $$",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(143);
+    expect(result.stderr).toContain("reason: child exited with code 143");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("retains a validation-phase lock for untrapped signal exit statuses", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "killed-validation.sh", [
+      "acquire_pr_operation_lock 42",
+      "begin_pr_operation_validation_phase",
+      "exit 137",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(137);
+    expect(result.stderr).toContain("reason: child exited with code 137");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+  });
+
+  it("releases the lock after the operation deletes its runner worktree", async () => {
+    const repoDir = createRepo();
+    const doomedDir = tempDirs.make("openclaw-pr-self-deleting-runner-");
+    const copiedLibDir = join(doomedDir, "pr-lib");
+    mkdirSync(copiedLibDir, { recursive: true });
+    for (const file of ["operation-lock.sh", "process-group-runner.mjs"]) {
+      cpSync(join(repoRoot, "scripts/pr-lib", file), join(copiedLibDir, file));
+    }
+    const copiedRunner = join(copiedLibDir, "process-group-runner.mjs");
+    const fixture = join(doomedDir, "delete-own-worktree.sh");
+    writeFileSync(
+      fixture,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `source '${join(copiedLibDir, "operation-lock.sh")}'`,
+        `repo_root() { printf '%s\\n' '${repoDir}'; }`,
+        "acquire_pr_operation_lock 42",
+        "echo 'fixture: lock acquired'",
+        `rm -rf '${doomedDir}'`,
+        "echo 'fixture: runner worktree deleted'",
+      ].join("\n"),
+    );
+    chmodSync(fixture, 0o755);
+
+    const result = await runSupervisedFixture(repoDir, fixture, {
+      cwd: doomedDir,
+      runner: copiedRunner,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("fixture: lock acquired");
+    expect(result.stdout).toContain("fixture: runner worktree deleted");
+    expect(result.stderr).not.toContain("Retaining the operation lock");
     expect(refExists(repoDir)).toBe(false);
   });
 
@@ -1113,7 +1336,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       daemonPgid ??= readProcessIdFile(daemonPidFile);
-      if (daemonPgid) await cleanupProcessGroup(daemonPgid);
+      if (daemonPgid) {
+        await cleanupProcessGroup(daemonPgid);
+      }
     }
   });
 
@@ -1173,7 +1398,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       nestedPgid ??= readProcessIdFile(nestedPidFile);
-      if (nestedPgid) await cleanupProcessGroup(nestedPgid);
+      if (nestedPgid) {
+        await cleanupProcessGroup(nestedPgid);
+      }
     }
   });
 
@@ -1222,7 +1449,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       nestedPgid ??= readProcessIdFile(nestedPidFile);
-      if (nestedPgid) await cleanupProcessGroup(nestedPgid);
+      if (nestedPgid) {
+        await cleanupProcessGroup(nestedPgid);
+      }
     }
   }, 15_000);
 
@@ -1310,7 +1539,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       holderPgid ??= readProcessIdFile(holderPidFile);
-      if (holderPgid) await cleanupProcessGroup(holderPgid);
+      if (holderPgid) {
+        await cleanupProcessGroup(holderPgid);
+      }
       await cleanupChildren(waiter);
       await cleanupController(repoDir, controller, operationPgidFile);
     }
@@ -1348,7 +1579,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       operationPgid ??= readProcessIdFile(operationPgidFile);
-      if (operationPgid) await cleanupProcessGroup(operationPgid);
+      if (operationPgid) {
+        await cleanupProcessGroup(operationPgid);
+      }
     }
   });
 
@@ -1370,6 +1603,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
       expect(processGroupExists(operationPgid)).toBe(false);
       expect(result.stderr).toContain("process group remained active after wrapper exit");
+      expect(result.stderr).toContain(`surviving processes in group ${operationPgid}`);
+      expect(result.stderr).toMatch(/^\s+\d+ \d+ sleep$/mu);
+      expect(result.stderr).toContain("process group appears empty at report time");
       expect(result.stderr).toContain(
         `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
       );
@@ -1381,7 +1617,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(refExists(repoDir)).toBe(false);
     } finally {
       operationPgid ??= readProcessIdFile(operationPgidFile);
-      if (operationPgid) await cleanupProcessGroup(operationPgid);
+      if (operationPgid) {
+        await cleanupProcessGroup(operationPgid);
+      }
     }
   });
 
@@ -1744,7 +1982,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
       expect(refExists(repoDir)).toBe(false);
     } finally {
-      if (nestedPgid) await cleanupProcessGroup(nestedPgid);
+      if (nestedPgid) {
+        await cleanupProcessGroup(nestedPgid);
+      }
       await cleanupController(repoDir, controller);
     }
   });
@@ -1855,6 +2095,102 @@ describePosix("scripts/pr per-PR operation lock", () => {
         cwd: repoDir,
       }).status,
     ).toBe(1);
+  });
+
+  it("prunes a registered worktree whose directory is already gone", () => {
+    const repoDir = createRepo();
+    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+    mkdirSync(dirname(worktreeDir), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-42", worktreeDir], {
+      cwd: repoDir,
+    });
+    const canonicalWorktreeDir = realpathSync(worktreeDir);
+    rmSync(worktreeDir, { recursive: true });
+
+    const result = runLockShell(repoDir, ['remove_worktree_if_present ".worktrees/pr-42"']);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: repoDir,
+        encoding: "utf8",
+      }),
+    ).not.toContain(canonicalWorktreeDir);
+  });
+
+  it("surfaces git worktree remove stderr without making cleanup fatal", () => {
+    const repoDir = createRepo();
+    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+    mkdirSync(dirname(worktreeDir), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-42", worktreeDir], {
+      cwd: repoDir,
+    });
+
+    const result = runLockShell(repoDir, [
+      "git() {",
+      "  if [ \"$1 $2\" = 'worktree remove' ]; then",
+      "    echo 'fixture remove failure' >&2",
+      "    return 1",
+      "  fi",
+      '  command git "$@"',
+      "}",
+      'remove_worktree_if_present ".worktrees/pr-42"',
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "Warning: git worktree remove failed for .worktrees/pr-42: fixture remove failure",
+    );
+    expect(existsSync(worktreeDir)).toBe(true);
+  });
+
+  it("prunes a missing registration and resets its script-owned branch on worktree add", () => {
+    const repoDir = createRepo();
+    execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+    const physicalWorktreesDir = join(repoDir, "linked-worktrees");
+    mkdirSync(physicalWorktreesDir);
+    symlinkSync(physicalWorktreesDir, join(repoDir, ".worktrees"), "dir");
+    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "temp/pr-42", worktreeDir], {
+      cwd: repoDir,
+    });
+    rmSync(worktreeDir, { recursive: true });
+
+    const result = runLockShell(repoDir, [
+      "ensure_gh_api_auth() { return 0; }",
+      "enter_worktree 42",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Pruning stale worktree registration for .worktrees/pr-42");
+    expect(existsSync(worktreeDir)).toBe(true);
+    expect(
+      execFileSync("git", ["branch", "--show-current"], {
+        cwd: worktreeDir,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("temp/pr-42");
+  });
+
+  it("resets an existing script-owned branch when adding a fresh worktree", () => {
+    const repoDir = createRepo();
+    execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+    execFileSync("git", ["branch", "temp/pr-43"], { cwd: repoDir });
+    const worktreeDir = join(repoDir, ".worktrees", "pr-43");
+
+    const result = runLockShell(repoDir, [
+      "ensure_gh_api_auth() { return 0; }",
+      "enter_worktree 43",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(existsSync(worktreeDir)).toBe(true);
+    expect(
+      execFileSync("git", ["branch", "--show-current"], {
+        cwd: worktreeDir,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("temp/pr-43");
   });
 
   it("refuses a symlink alias to another registered worktree", () => {

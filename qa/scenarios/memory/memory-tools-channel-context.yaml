@@ -2,12 +2,12 @@ title: Memory tools in channel context
 
 scenario:
   id: memory-tools-channel-context
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.tools
+      - session-memory.memory-tools
     secondary:
-      - channels.group-messages
+      - channels.room-session-group-messages
   objective: Verify the agent uses memory tools in a shared channel when the answer lives only in memory files, not the live transcript.
   successCriteria:
     - Agent uses memory_search before answering.

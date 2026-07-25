@@ -30,6 +30,9 @@ const FREE_COST: ModelDefinitionConfig["cost"] = {
 // Zen publishes route-specific limits that differ from the family defaults below.
 const MODEL_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
   "claude-sonnet-5": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "gpt-5.6-luna": { contextWindow: 1_050_000, maxTokens: 128_000 },
+  "gpt-5.6-sol": { contextWindow: 1_050_000, maxTokens: 128_000 },
+  "gpt-5.6-terra": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "glm-5.2": { contextWindow: 1_000_000, maxTokens: 131_072 },
   "grok-4.5": { contextWindow: 500_000, maxTokens: 500_000 },
   "hy3-free": { contextWindow: 256_000, maxTokens: 64_000 },
@@ -89,6 +92,38 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
     ],
   },
   "gemini-3.5-flash": { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+  "gemini-3.6-flash": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+  "gpt-5.6-luna": {
+    input: 1,
+    output: 6,
+    cacheRead: 0.1,
+    cacheWrite: 1.25,
+    tieredPricing: [
+      { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, range: [0, 272_000] },
+      { input: 2, output: 9, cacheRead: 0.2, cacheWrite: 2.5, range: [272_000] },
+    ],
+  },
+  "gpt-5.6-sol": {
+    input: 5,
+    output: 30,
+    cacheRead: 0.5,
+    cacheWrite: 6.25,
+    tieredPricing: [
+      { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25, range: [0, 272_000] },
+      { input: 10, output: 45, cacheRead: 1, cacheWrite: 12.5, range: [272_000] },
+    ],
+  },
+  "gpt-5.6-terra": {
+    input: 2.5,
+    output: 15,
+    cacheRead: 0.25,
+    cacheWrite: 3.125,
+    tieredPricing: [
+      { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125, range: [0, 272_000] },
+      { input: 5, output: 22.5, cacheRead: 0.5, cacheWrite: 6.25, range: [272_000] },
+    ],
+  },
   "glm-5": { input: 1, output: 3.2, cacheRead: 0.2, cacheWrite: 0 },
   "glm-5.1": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
   "glm-5.2": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
@@ -171,6 +206,11 @@ const MODEL_NAMES: Record<string, string> = {
   "gemini-3-flash": "Gemini 3 Flash",
   "gemini-3.1-pro": "Gemini 3.1 Pro",
   "gemini-3.5-flash": "Gemini 3.5 Flash",
+  "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite",
+  "gemini-3.6-flash": "Gemini 3.6 Flash",
+  "gpt-5.6-luna": "GPT-5.6 Luna",
+  "gpt-5.6-sol": "GPT-5.6 Sol",
+  "gpt-5.6-terra": "GPT-5.6 Terra",
   "glm-5": "GLM-5",
   "glm-5.1": "GLM-5.1",
   "glm-5.2": "GLM-5.2",
@@ -207,6 +247,9 @@ const MODEL_NAMES: Record<string, string> = {
   "qwen3.6-plus": "Qwen3.6 Plus",
 };
 
+const GPT_56_MODEL_IDS = new Set(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]);
+const GPT_56_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
+
 type OpencodeZenModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
   api: NonNullable<ModelDefinitionConfig["api"]>;
@@ -214,7 +257,7 @@ type OpencodeZenModelDefinition = ModelDefinitionConfig & {
   input: Array<"text" | "image">;
 };
 
-export type FetchOpencodeZenLiveModelIdsParams = {
+type FetchOpencodeZenLiveModelIdsParams = {
   apiKey?: string;
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
@@ -343,6 +386,9 @@ function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
     compat: {
       supportsUsageInStreaming: true,
       supportsReasoningEffort: true,
+      ...(GPT_56_MODEL_IDS.has(normalizedModelId)
+        ? { supportedReasoningEfforts: GPT_56_REASONING_EFFORTS }
+        : {}),
       maxTokensField: "max_tokens",
     },
   }) as OpencodeZenModelDefinition;
@@ -360,9 +406,14 @@ const OPENCODE_ZEN_MODELS = [
   "claude-sonnet-4-5",
   "claude-sonnet-4",
   "claude-haiku-4-5",
+  "gemini-3.6-flash",
   "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
   "gemini-3.1-pro",
   "gemini-3-flash",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.5",
   "gpt-5.5-pro",
   "gpt-5.4",

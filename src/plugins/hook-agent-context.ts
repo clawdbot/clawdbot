@@ -67,7 +67,7 @@ function resolveAgentHookChannel(params: {
 }
 
 /** Resolves the channel id exposed to plugin agent hooks. */
-export function resolveAgentHookChannelId(params: {
+function resolveAgentHookChannelId(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;

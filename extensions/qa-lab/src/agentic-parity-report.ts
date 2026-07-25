@@ -21,7 +21,7 @@ type QaParityReportStep = {
   details?: string;
 };
 
-export type QaParityReportScenario = {
+type QaParityReportScenario = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;
@@ -77,7 +77,7 @@ type QaRuntimeParityScenarioReport = {
   codexToolCalls: number;
 };
 
-export type QaRuntimeParityReport = {
+type QaRuntimeParityReport = {
   runtimePair: [RuntimeId, RuntimeId];
   comparedAt: string;
   providerMode?: string;
@@ -194,9 +194,7 @@ function scenarioHasRuntimeToolCallEvidence(scenario: QaParityReportScenario): b
   );
 }
 
-export function computeQaAgenticParityMetrics(
-  summary: QaParitySuiteSummary,
-): QaAgenticParityMetrics {
+function computeQaAgenticParityMetrics(summary: QaParitySuiteSummary): QaAgenticParityMetrics {
   const scenarios = summary.scenarios.map((scenario) => ({
     ...scenario,
     status: normalizeScenarioStatus(scenario.status),
@@ -330,7 +328,7 @@ type StructuredQaParityLabel = {
 /**
  * Only treat caller labels as provenance-checked identifiers when they are
  * exact lower-case provider/model refs. Human-facing display labels like
- * "GPT-5.5 candidate" or "Candidate: GPT-5.5" should render in the report
+ * "GPT-5.6 Luna candidate" or "Candidate: GPT-5.6 Luna" should render in the report
  * without being misread as structured provider ids.
  */
 function parseStructuredLabelRef(label: string): StructuredQaParityLabel | null {
@@ -398,7 +396,7 @@ function verifySummaryLabelMatch(params: {
   });
 }
 
-export class QaParityLabelMismatchError extends Error {
+class QaParityLabelMismatchError extends Error {
   readonly role: "candidate" | "baseline";
   readonly label: string;
   readonly runProvider: string;
@@ -591,9 +589,9 @@ export function buildQaAgenticParityComparison(params: {
 
 export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityComparison): string {
   // Title is parametrized from the candidate / baseline labels so reports
-  // for any candidate/baseline pair (not only gpt-5.5 vs opus 4.6) render
+  // for any candidate/baseline pair (not only gpt-5.6-luna vs opus 4.6) render
   // with an accurate header. The default CLI labels are still
-  // openai/gpt-5.5 vs anthropic/claude-opus-4-8, but the helper works for
+  // openai/gpt-5.6-luna vs anthropic/claude-opus-4-8, but the helper works for
   // any parity comparison a caller configures.
   const lines = [
     `# OpenClaw Agentic Parity Report — ${comparison.candidateLabel} vs ${comparison.baselineLabel}`,

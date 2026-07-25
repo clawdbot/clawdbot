@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
@@ -31,8 +32,7 @@ const GENERATED_PLUGIN_ASSET_BUNDLE_HASH = "extensions/demo/src/host/assets/.bun
 const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
 const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
-const DIST_PLUGIN_SDK_INDEX = "dist/plugin-sdk/index.js";
-const DIST_PLUGIN_SDK_ROOT_ALIAS = "dist/plugin-sdk/root-alias.cjs";
+const DIST_PLUGIN_SDK_CORE = "dist/plugin-sdk/core.js";
 const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
 const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
@@ -59,8 +59,8 @@ const DIST_RUNTIME_EXTENSION_MANIFEST = "dist-runtime/extensions/demo/openclaw.p
 const DIST_RUNTIME_EXTENSION_PACKAGE = "dist-runtime/extensions/demo/package.json";
 const DIST_RUNTIME_EXTENSION_SKILL = "dist-runtime/extensions/demo/skills/SKILL.md";
 const DIST_OPENCLAW_ALIAS_PACKAGE = "dist/extensions/node_modules/openclaw/package.json";
-const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX =
-  "dist/extensions/node_modules/openclaw/plugin-sdk/index.js";
+const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE =
+  "dist/extensions/node_modules/openclaw/plugin-sdk/core.js";
 const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE =
   "dist/extensions/node_modules/openclaw/plugin-sdk/string-coerce-runtime.js";
 const DIFFS_PACKAGE = "extensions/diffs/package.json";
@@ -142,27 +142,25 @@ function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T |
 }
 
 async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
-  const pluginSdkAliasPath = path.join(tmp, "src", "plugin-sdk", "root-alias.cjs");
-  await fs.mkdir(path.dirname(pluginSdkAliasPath), { recursive: true });
   await fs.mkdir(path.join(tmp, "extensions"), { recursive: true });
-  await fs.writeFile(pluginSdkAliasPath, "module.exports = {};\n", "utf-8");
-  await fs.utimes(pluginSdkAliasPath, BUILD_TIME, BUILD_TIME);
   await writeProjectFiles(tmp, {
-    [DIST_PLUGIN_SDK_ROOT_ALIAS]: "module.exports = {};\n",
+    [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
     [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
     [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_OPENCLAW_ALIAS_PACKAGE]:
-      '{"name":"openclaw","type":"module","exports":{"./plugin-sdk":"./plugin-sdk/index.js"}}\n',
+      '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/core":"./plugin-sdk/core.js"}}\n',
+    [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE]: "export * from '../../../../plugin-sdk/core.js';\n",
   });
   await touchProjectFiles(
     tmp,
     [
-      DIST_PLUGIN_SDK_ROOT_ALIAS,
       DIST_CHANNEL_CATALOG,
+      DIST_PLUGIN_SDK_CORE,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
       DIST_OPENCLAW_ALIAS_PACKAGE,
+      DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE,
     ],
     BUILD_TIME,
   );
@@ -469,9 +467,6 @@ describe("run-node script", () => {
         statusCommandSpawn(),
       ]);
 
-      await expect(
-        fs.readFile(resolvePath(tmp, "dist/plugin-sdk/root-alias.cjs"), "utf-8"),
-      ).resolves.toContain("module.exports = {};");
       await expectManifestId(tmp, DIST_EXTENSION_MANIFEST, "demo");
       await expect(
         fs.readFile(resolvePath(tmp, DIST_EXTENSION_PACKAGE), "utf-8"),
@@ -700,7 +695,6 @@ describe("run-node script", () => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
-          [DIST_PLUGIN_SDK_ROOT_ALIAS]: "module.exports = {};\n",
           [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
           [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
           [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]:
@@ -709,7 +703,6 @@ describe("run-node script", () => {
         oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
         buildPaths: [
           DIST_ENTRY,
-          DIST_PLUGIN_SDK_ROOT_ALIAS,
           DIST_CHANNEL_CATALOG,
           DIST_LEGACY_CLI_EXIT_COMPAT,
           DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
@@ -805,9 +798,21 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[0]))).toBe(false);
-      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[1]))).toBe(false);
-      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[2]))).toBe(true);
+      expect(
+        fsSync.existsSync(
+          path.join(profileDir, expectDefined(oldProfiles[0], "oldProfiles[0] test invariant")),
+        ),
+      ).toBe(false);
+      expect(
+        fsSync.existsSync(
+          path.join(profileDir, expectDefined(oldProfiles[1], "oldProfiles[1] test invariant")),
+        ),
+      ).toBe(false);
+      expect(
+        fsSync.existsSync(
+          path.join(profileDir, expectDefined(oldProfiles[2], "oldProfiles[2] test invariant")),
+        ),
+      ).toBe(true);
       expect(fsSync.existsSync(path.join(profileDir, "openclaw-models-old.cpuprofile"))).toBe(true);
     });
   });
@@ -1154,7 +1159,6 @@ describe("run-node script", () => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
-          [DIST_PLUGIN_SDK_ROOT_ALIAS]: "module.exports = {};\n",
           [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
           [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]:
             "export function hasMemoryRuntime() { return false; }\n",
@@ -1162,7 +1166,6 @@ describe("run-node script", () => {
         oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
         buildPaths: [
           DIST_ENTRY,
-          DIST_PLUGIN_SDK_ROOT_ALIAS,
           DIST_LEGACY_CLI_EXIT_COMPAT,
           DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
           BUILD_STAMP,
@@ -1300,7 +1303,7 @@ describe("run-node script", () => {
           "--json",
           "--tools",
           "--summary",
-          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+          ".artifacts/qa-e2e/runtime-pair-core/qa-suite-summary.json",
         ],
         env: {
           ...process.env,
@@ -1321,7 +1324,7 @@ describe("run-node script", () => {
           "--json",
           "--tools",
           "--summary",
-          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+          ".artifacts/qa-e2e/runtime-pair-core/qa-suite-summary.json",
         ],
       ]);
     });
@@ -2311,8 +2314,7 @@ describe("run-node script", () => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
-          [DIST_PLUGIN_SDK_INDEX]: "export * from './core.js';\n",
-          [DIST_PLUGIN_SDK_ROOT_ALIAS]: "module.exports = {};\n",
+          [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
           [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
           [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
           [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]:
@@ -2322,8 +2324,7 @@ describe("run-node script", () => {
         buildPaths: [
           ROOT_SRC,
           DIST_ENTRY,
-          DIST_PLUGIN_SDK_INDEX,
-          DIST_PLUGIN_SDK_ROOT_ALIAS,
+          DIST_PLUGIN_SDK_CORE,
           DIST_CHANNEL_CATALOG,
           DIST_LEGACY_CLI_EXIT_COMPAT,
           DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
@@ -2352,24 +2353,26 @@ describe("run-node script", () => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
-          [DIST_PLUGIN_SDK_INDEX]: "export * from './core.js';\n",
+          [ROOT_PACKAGE]:
+            '{"name":"openclaw-test","exports":{"./plugin-sdk/core":"./dist/plugin-sdk/core.js"}}\n',
+          [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
           [DIST_OPENCLAW_ALIAS_PACKAGE]:
-            '{"name":"openclaw","type":"module","exports":{"./plugin-sdk":"./plugin-sdk/index.js"}}\n',
-          [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX]:
-            "export * from '../../../../plugin-sdk/index.js';\n",
+            '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/core":"./plugin-sdk/core.js"}}\n',
+          [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE]:
+            "export * from '../../../../plugin-sdk/core.js';\n",
           [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
         },
         buildPaths: [
           ROOT_SRC,
           DIST_ENTRY,
-          DIST_PLUGIN_SDK_INDEX,
+          DIST_PLUGIN_SDK_CORE,
           DIST_OPENCLAW_ALIAS_PACKAGE,
-          DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX,
+          DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE,
           BUILD_STAMP,
           RUNTIME_POSTBUILD_STAMP,
         ],
       });
-      await fs.rm(resolvePath(tmp, DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX));
+      await fs.rm(resolvePath(tmp, DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE));
 
       const requirement = resolveRuntimePostBuildRequirement(
         createBuildRequirementDeps(tmp, {
@@ -2394,20 +2397,16 @@ describe("run-node script", () => {
             {
               name: "openclaw-test",
               exports: {
-                "./plugin-sdk": "./dist/plugin-sdk/index.js",
                 "./plugin-sdk/string-coerce-runtime": "./dist/plugin-sdk/string-coerce-runtime.js",
               },
             },
             null,
             2,
           ),
-          [DIST_PLUGIN_SDK_INDEX]: "export * from './core.js';\n",
           "dist/plugin-sdk/string-coerce-runtime.js": "export const publicRuntime = true;\n",
           "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
           [DIST_OPENCLAW_ALIAS_PACKAGE]:
-            '{"name":"openclaw","type":"module","exports":{"./plugin-sdk":"./plugin-sdk/index.js","./plugin-sdk/string-coerce-runtime":"./plugin-sdk/string-coerce-runtime.js"}}\n',
-          [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX]:
-            "export * from '../../../../plugin-sdk/index.js';\n",
+            '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/string-coerce-runtime":"./plugin-sdk/string-coerce-runtime.js"}}\n',
           [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE]:
             "export * from '../../../../plugin-sdk/string-coerce-runtime.js';\n",
           [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
@@ -2416,11 +2415,9 @@ describe("run-node script", () => {
           ROOT_SRC,
           ROOT_PACKAGE,
           DIST_ENTRY,
-          DIST_PLUGIN_SDK_INDEX,
           "dist/plugin-sdk/string-coerce-runtime.js",
           "dist/plugin-sdk/ssrf-runtime-internal.js",
           DIST_OPENCLAW_ALIAS_PACKAGE,
-          DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX,
           DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE,
           BUILD_STAMP,
           RUNTIME_POSTBUILD_STAMP,
@@ -2607,7 +2604,6 @@ describe("run-node script", () => {
       });
 
       for (const missingPath of [
-        DIST_PLUGIN_SDK_ROOT_ALIAS,
         DIST_CHANNEL_CATALOG,
         DIST_LEGACY_CLI_EXIT_COMPAT,
         DIST_STABLE_ROOT_RUNTIME_ALIAS,
@@ -3056,3 +3052,4 @@ describe("run-node script", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

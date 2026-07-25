@@ -1,7 +1,10 @@
 /** SQLite-backed Codex app-server thread bindings. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessSessionSupersededError,
+  embeddedAgentLog,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   resolveDefaultAgentDir,
@@ -11,19 +14,20 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { z } from "zod";
-import { CODEX_PLUGINS_MARKETPLACE_NAME, normalizeCodexServiceTier } from "./config.js";
+import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
+  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  normalizeCodexServiceTier,
+} from "./config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 const BINDING_LEASE_RETRY_INTERVAL_MS = 1_000;
+const BOUNDED_BINDING_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/i;
 
 export {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -68,6 +72,15 @@ export function sessionBindingIdentity(params: {
     sessionId: params.sessionId,
     ...(sessionKey ? { sessionKey } : {}),
   };
+}
+
+/** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
+export function createCodexSessionGenerationSupersededError(
+  sessionId: string,
+): AgentHarnessSessionSupersededError {
+  return new AgentHarnessSessionSupersededError(
+    `Codex session generation is no longer current: ${sessionId}`,
+  );
 }
 
 const optionalStringSchema = z.string().optional().catch(undefined);
@@ -140,7 +153,10 @@ const pluginAppPolicyEntrySchema = z
   .object({
     source: z.literal("plugin").optional(),
     configKey: z.string(),
-    marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME),
+    marketplaceName: z.enum([
+      CODEX_PLUGINS_MARKETPLACE_NAME,
+      CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+    ]),
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
     destructiveApprovalMode: destructiveApprovalModeSchema,
@@ -157,6 +173,7 @@ const pluginAppPolicyContextSchema = z
 const threadBindingSchema = z
   .object({
     threadId: z.string().refine((value) => Boolean(value.trim())),
+    clientId: optionalStringSchema,
     cwd: z.string(),
     // Private runtime ownership. Only the supervision catalog creates this
     // marker; public OpenClaw session metadata must never authorize user-home access.
@@ -200,6 +217,8 @@ const threadBindingSchema = z
     webSearchThreadConfigFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,
+    ringZeroConfigFingerprint: optionalStringSchema,
+    ringZeroClientInstanceId: optionalStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,
@@ -375,6 +394,57 @@ const storedBindingSchema = z.discriminatedUnion("state", [
 // id fences delayed lifecycle cleanup so an old generation cannot clear its successor.
 export type StoredCodexAppServerBinding = z.infer<typeof storedBindingSchema>;
 
+export function hashCodexAppServerBindingFingerprint(canonical: string): string {
+  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+}
+
+function normalizeLegacyBindingFingerprint(value: unknown): unknown {
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value === "[]" ||
+    BOUNDED_BINDING_FINGERPRINT_PATTERN.test(value)
+  ) {
+    return value;
+  }
+  return hashCodexAppServerBindingFingerprint(value);
+}
+
+function normalizeLegacyBindingFingerprints(
+  record: Record<string, unknown>,
+): Record<string, unknown> {
+  // Shipped sidecars can contain unbounded canonical JSON fingerprints. Bound
+  // them at the legacy encoder so plugin-state registration cannot reject the row.
+  let normalized = record;
+  for (const key of ["dynamicToolsFingerprint", "userMcpServersFingerprint"] as const) {
+    const value = record[key];
+    const next = normalizeLegacyBindingFingerprint(value);
+    if (next === value) {
+      continue;
+    }
+    if (normalized === record) {
+      normalized = { ...record };
+    }
+    normalized[key] = next;
+  }
+  return normalized;
+}
+
+export function normalizeStoredCodexAppServerBindingFingerprints(
+  value: unknown,
+): StoredCodexAppServerBinding | undefined {
+  const stored = readStoredCodexAppServerBinding(value);
+  if (!stored || stored.state !== "active") {
+    return stored;
+  }
+  const binding = normalizeLegacyBindingFingerprints(
+    stored.binding as unknown as Record<string, unknown>,
+  );
+  return binding === stored.binding
+    ? stored
+    : readStoredCodexAppServerBinding({ ...stored, binding });
+}
+
 /** Encodes a migrated sidecar binding as one canonical plugin-state row. */
 export function createStoredCodexAppServerBinding(
   value: unknown,
@@ -383,10 +453,11 @@ export function createStoredCodexAppServerBinding(
     lookup?: Omit<CodexAppServerAuthProfileLookup, "authProfileId">;
   } = {},
 ): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
-  const record = asRecord(value);
-  if (!record) {
+  const rawRecord = asRecord(value);
+  if (!rawRecord) {
     return undefined;
   }
+  const record = normalizeLegacyBindingFingerprints(rawRecord);
   if (record.schemaVersion !== 1 && record.schemaVersion !== 2) {
     return undefined;
   }
@@ -474,19 +545,19 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
     return plan.result;
   }
 
-  // Only a stale stable-key owner needs filesystem authority. Resolve it before
-  // the second mutation so session JSON work never runs inside SQLite's write transaction.
+  // Only a stale stable-key owner needs session-store authority. Resolve it before
+  // the second mutation so the session read never runs inside the binding write transaction.
   try {
     const storePath = resolveStorePath(params.config?.session?.store, {
       agentId: params.identity.agentId,
     });
-    const entry = resolveSessionStoreEntry({
-      store: loadSessionStore(storePath, {
-        skipCache: true,
-        hydrateSkillPromptRefs: false,
-      }),
+    const entry = getSessionEntry({
+      agentId: params.identity.agentId,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
       sessionKey,
-    }).existing;
+      storePath,
+    });
     if (entry?.sessionId !== params.identity.sessionId) {
       return false;
     }
@@ -1231,7 +1302,8 @@ function readPluginAppPolicyContext(
       "appId" in entry ||
       (entry.source !== undefined && entry.source !== "plugin") ||
       typeof entry.configKey !== "string" ||
-      entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
+      (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME &&
+        entry.marketplaceName !== CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME) ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       destructiveApprovalMode === "invalid" ||
@@ -1369,3 +1441,4 @@ export function resolveCodexAppServerBindingModelProvider(
     (isCodexAppServerNativeAuthProfile(params) ? PUBLIC_OPENAI_MODEL_PROVIDER : undefined)
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -18,8 +18,10 @@ import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
 } from "./src/browser-gateway-contract.js";
+import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
 import { BrowserToolSchema } from "./src/browser-tool.schema.js";
+import { initializeBrowserSessionTabStore } from "./src/browser/session-tab-store.js";
 import {
   configureSystemProfileImportStateStore,
   type SystemProfileImportState,
@@ -72,7 +74,15 @@ function createLazyBrowserTool(opts?: {
     channel?: string;
     chatType?: string;
   };
+  runToolBinding?: unknown;
 }): AnyAgentTool {
+  const bindingResult =
+    opts?.runToolBinding === undefined
+      ? undefined
+      : parseBrowserTabToolBinding(opts.runToolBinding);
+  if (bindingResult && !bindingResult.ok) {
+    throw new Error(`invalid browser run binding: ${bindingResult.error}`);
+  }
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -83,7 +93,9 @@ function createLazyBrowserTool(opts?: {
     parameters: BrowserToolSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
-      const tool = createBrowserTool(opts);
+      const tool = createBrowserTool(
+        bindingResult?.ok ? { ...opts, runToolBinding: bindingResult.binding } : opts,
+      );
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
   };
@@ -104,6 +116,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
     channel?: string;
     chatType?: string;
   };
+  runToolBinding?: unknown;
 } {
   const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
   const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
@@ -131,6 +144,9 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
             ...(mediaChatType ? { chatType: mediaChatType } : {}),
           },
         }
+      : {}),
+    ...(ctx.toolBindings && Object.hasOwn(ctx.toolBindings, "browser")
+      ? { runToolBinding: ctx.toolBindings.browser }
       : {}),
   };
 }
@@ -184,7 +200,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
     stop: async (ctx) => {
       if (!service) {
         const { stopBrowserControlService } = await import("./src/control-service.js");
-        await stopBrowserControlService().catch(() => {});
+        await stopBrowserControlService();
         return;
       }
       await service.stop?.(ctx);
@@ -194,6 +210,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
 
 /** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
+  initializeBrowserSessionTabStore(api.runtime);
   configureSystemProfileImportStateStore(
     api.runtime.state.openKeyedStore<SystemProfileImportState>({
       namespace: "browser.system-profile-import",

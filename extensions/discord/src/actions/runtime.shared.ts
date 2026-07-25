@@ -12,6 +12,9 @@ import type {
   DiscordChannelMove,
 } from "../send.types.js";
 
+/** Discord REST auto_archive_duration allowlist (minutes). */
+const DISCORD_AUTO_ARCHIVE_MINUTES = new Set([60, 1440, 4320, 10080]);
+
 export function readDiscordParentIdParam(
   params: Record<string, unknown>,
 ): string | null | undefined {
@@ -22,6 +25,24 @@ export function readDiscordParentIdParam(
     return null;
   }
   return readStringParam(params, "parentId");
+}
+
+/**
+ * Reads Discord auto-archive duration minutes and rejects values Discord will
+ * not accept, so thread/channel edits fail closed before the REST call.
+ */
+export function readDiscordAutoArchiveDurationParam(
+  params: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = readPositiveIntegerParam(params, key);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!DISCORD_AUTO_ARCHIVE_MINUTES.has(value)) {
+    throw new Error(`${key} must be one of 60, 1440, 4320, or 10080 minutes`);
+  }
+  return value;
 }
 
 function readDiscordBooleanParam(
@@ -75,7 +96,7 @@ export function readDiscordChannelEditParams(params: Record<string, unknown>): D
     rateLimitPerUser: readNonNegativeIntegerParam(params, "rateLimitPerUser") ?? undefined,
     archived: readDiscordBooleanParam(params, "archived"),
     locked: readDiscordBooleanParam(params, "locked"),
-    autoArchiveDuration: readPositiveIntegerParam(params, "autoArchiveDuration") ?? undefined,
+    autoArchiveDuration: readDiscordAutoArchiveDurationParam(params, "autoArchiveDuration"),
     availableTags: parseAvailableTags(params.availableTags),
   };
 }

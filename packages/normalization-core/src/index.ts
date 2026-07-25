@@ -2,6 +2,7 @@
 
 export * from "./boolean-coercion.js";
 export * from "./error-coercion.js";
+export * from "./expect.js";
 export * from "./format.js";
 export * from "./json-coercion.js";
 export * from "./number-coercion.js";

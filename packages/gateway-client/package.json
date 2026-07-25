@@ -1,10 +1,32 @@
 {
   "name": "@openclaw/gateway-client",
-  "version": "0.0.0-private",
-  "private": true,
-  "files": [
-    "dist"
+  "version": "2026.7.2",
+  "description": "Reference WebSocket client for the OpenClaw Gateway protocol",
+  "keywords": [
+    "client",
+    "gateway",
+    "openclaw",
+    "websocket"
   ],
+  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "author": "OpenClaw Foundation (https://openclaw.org)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "packages/gateway-client"
+  },
+  "files": [
+    "dist",
+    "npm-shrinkwrap.json",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
@@ -13,6 +35,11 @@
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.mts",
+      "import": "./dist/browser.mjs",
+      "default": "./dist/browser.mjs"
     },
     "./readiness": {
       "types": "./dist/readiness.d.mts",
@@ -26,11 +53,22 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/readiness.ts src/timeouts.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/timeouts.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
     "ipaddr.js": "2.4.0",
-    "ws": "8.21.0"
+    "ws": "8.21.1"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "openclaw": {
+    "release": {
+      "publishToNpm": true
+    }
   }
 }

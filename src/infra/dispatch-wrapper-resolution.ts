@@ -9,8 +9,6 @@ import {
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 
-export { unwrapEnvInvocation } from "./command-carriers.js";
-
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 
 const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
@@ -446,22 +444,35 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
     transparentUsage: (_argv, platform) => supportsArchDispatchWrapper(platform),
   },
   { name: "caffeinate", unwrap: unwrapCaffeinateInvocation, transparentUsage: true },
+  { name: "bwrap" },
   { name: "chrt" },
+  { name: "chroot" },
+  { name: "cpulimit" },
   { name: "doas" },
+  { name: "eatmydata" },
   {
     name: "env",
     unwrap: unwrapEnvInvocation,
     transparentUsage: (argv) => !envInvocationUsesModifiers(argv),
   },
+  { name: "firejail" },
   { name: "flock", unwrap: unwrapFlockInvocation, transparentUsage: true },
+  { name: "gosu" },
   { name: "ionice" },
   { name: "nice", unwrap: unwrapNiceInvocation, transparentUsage: true },
+  { name: "nsenter" },
   { name: "nohup", unwrap: unwrapNohupInvocation, transparentUsage: true },
+  { name: "pkexec" },
+  { name: "proot" },
+  { name: "runuser" },
   { name: "sandbox-exec", unwrap: unwrapSandboxExecInvocation, transparentUsage: true },
   { name: "script", unwrap: unwrapScriptInvocation, transparentUsage: false },
   { name: "setsid" },
+  { name: "setpriv" },
   { name: "stdbuf", unwrap: unwrapStdbufInvocation, transparentUsage: true },
+  { name: "su" },
   { name: "sudo" },
+  { name: "systemd-run" },
   { name: "taskset" },
   {
     name: "time",
@@ -469,12 +480,16 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
     transparentUsage: (argv) => !timeInvocationWritesOutputFile(argv),
   },
   { name: "timeout", unwrap: unwrapTimeoutInvocation, transparentUsage: true },
+  { name: "torsocks" },
+  { name: "unshare" },
+  { name: "watch" },
   {
     name: "xcrun",
     unwrap: (argv, platform) =>
       supportsXcrunDispatchWrapper(platform) ? unwrapXcrunInvocation(argv) : null,
     transparentUsage: (_argv, platform) => supportsXcrunDispatchWrapper(platform),
   },
+  { name: "xvfb-run" },
 ];
 
 const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(

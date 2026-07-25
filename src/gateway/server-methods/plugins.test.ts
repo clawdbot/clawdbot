@@ -1,4 +1,6 @@
 // Plugin management Gateway handler tests cover DTO mapping, trust errors, and reload planning.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const managementMocks = vi.hoisted(() => {
@@ -58,12 +60,18 @@ async function callHandler(
   let ok: boolean | null = null;
   let response: unknown;
   let error: unknown;
-  await pluginsHandlers[method]({
+  await expectDefined(
+    pluginsHandlers[method],
+    "pluginsHandlers[method] test invariant",
+  )({
     params,
     req: {} as never,
     client: null as never,
     isWebchatConnect: () => false,
-    context: { getRuntimeConfig: () => runtimeConfig } as never,
+    context: {
+      getRuntimeConfig: () => runtimeConfig,
+      notifyPluginMetadataChanged: pluginMetadataChanged,
+    } as never,
     respond: (success, result, requestError) => {
       ok = success;
       response = result;
@@ -72,6 +80,8 @@ async function callHandler(
   });
   return { ok, response, error };
 }
+
+const pluginMetadataChanged = vi.fn();
 
 const workboard = {
   id: "workboard",
@@ -85,11 +95,19 @@ const workboard = {
 
 describe("plugin management Gateway handlers", () => {
   beforeEach(() => {
+    pluginMetadataChanged.mockReset();
     managementMocks.install.mockReset();
     managementMocks.list.mockReset();
     managementMocks.setEnabled.mockReset();
     managementMocks.uninstall.mockReset();
     searchMock.mockReset();
+  });
+
+  it("signals the config reloader after persisted plugin metadata changes", async () => {
+    const result = await callHandler("plugins.refresh", {});
+
+    expect(pluginMetadataChanged).toHaveBeenCalledOnce();
+    expect(result).toEqual({ ok: true, response: { ok: true }, error: undefined });
   });
 
   it("returns cold Workboard inventory without claiming runtime loaded state", async () => {
@@ -210,7 +228,7 @@ describe("plugin management Gateway handlers", () => {
 
   it.each([
     { mode: "off", restartRequired: true },
-    { mode: "restart", restartRequired: true },
+    { mode: "restart", restartRequired: false },
     { mode: "hot", restartRequired: false },
   ] as const)(
     "reports restartRequired=$restartRequired for $mode reload mode",

@@ -41,6 +41,24 @@ export function buildBaseOptions(
   };
 }
 
+export function clampMaxTokensToModel(model: Model, requestedMaxTokens: number): number;
+export function clampMaxTokensToModel(
+  model: Model,
+  requestedMaxTokens: number | undefined,
+): number | undefined;
+export function clampMaxTokensToModel(
+  model: Model,
+  requestedMaxTokens: number | undefined,
+): number | undefined {
+  return requestedMaxTokens === undefined
+    ? undefined
+    : Math.max(1, Math.min(requestedMaxTokens, model.maxTokens));
+}
+
+export function clampReasoning(effort: ThinkingLevel): Exclude<ThinkingLevel, "xhigh">;
+export function clampReasoning(
+  effort: ThinkingLevel | undefined,
+): Exclude<ThinkingLevel, "xhigh"> | undefined;
 export function clampReasoning(
   effort: ThinkingLevel | undefined,
 ): Exclude<ThinkingLevel, "xhigh"> | undefined {
@@ -54,7 +72,7 @@ export function adjustMaxTokensForThinking(
   reasoningLevel: ThinkingLevel,
   customBudgets?: ThinkingBudgets,
 ): { maxTokens: number; thinkingBudget: number } {
-  const defaultBudgets: ThinkingBudgets = {
+  const defaultBudgets: Required<ThinkingBudgets> = {
     minimal: 1024,
     low: 2048,
     medium: 8192,
@@ -64,8 +82,8 @@ export function adjustMaxTokensForThinking(
   const budgets = { ...defaultBudgets, ...customBudgets };
 
   const minOutputTokens = 1024;
-  const level = clampReasoning(reasoningLevel)!;
-  let thinkingBudget = budgets[level]!;
+  const level = clampReasoning(reasoningLevel);
+  let thinkingBudget = budgets[level];
   const maxTokens =
     baseMaxTokens === undefined
       ? modelMaxTokens

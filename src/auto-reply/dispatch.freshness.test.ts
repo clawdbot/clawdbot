@@ -1,10 +1,12 @@
 /** Tests foreground reply freshness fencing for buffered inbound dispatch. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createChannelPartialDeliveryError } from "../channels/turn/delivery-result.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { getReplyPayloadMetadata } from "./reply-payload.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatchBeforeDeliverOptions } from "./reply/reply-dispatcher.types.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { ReplyPayload } from "./types.js";
@@ -64,6 +66,7 @@ function dispatchWithDeliveries(
   deliveries: Delivery[],
   dispatcherOptions: {
     beforeDeliver?: ReplyDispatchBeforeDeliver;
+    beforeDeliverOptions?: ReplyDispatchBeforeDeliverOptions;
     deliver?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => Promise<object | void>;
     onBeforeDeliverCancelled?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => void;
     onSettled?: () => object | void | Promise<object | void>;
@@ -177,6 +180,88 @@ describe("foreground reply freshness", () => {
     expect(cancellationReasons).toEqual([undefined]);
   });
 
+  it("releases a WhatsApp-shaped lane after beforeDeliver times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliveries: Delivery[] = [];
+      const hookStarted = createDeferred<void>();
+      const onSettled = vi.fn();
+      let hookCalls = 0;
+      const beforeDeliver = vi.fn((payload: ReplyPayload) => {
+        hookCalls += 1;
+        if (hookCalls === 1) {
+          hookStarted.resolve();
+          return new Promise<ReplyPayload>(() => {});
+        }
+        return payload;
+      });
+      hoisted.dispatchReplyFromConfigMock.mockImplementation(
+        async (params: DispatchReplyFromConfigParams) => {
+          params.dispatcher.sendFinalReply({ text: "stuck final" });
+          params.dispatcher.sendFinalReply({ text: "follow-up final" });
+          return {
+            queuedFinal: true,
+            counts: { tool: 0, block: 0, final: 2 },
+          };
+        },
+      );
+
+      const dispatch = dispatchWithDeliveries(buildForegroundCtx(), deliveries, {
+        beforeDeliver,
+        onSettled,
+      });
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(dispatch).resolves.toEqual({
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        failedCounts: { tool: 0, block: 0, final: 1 },
+      });
+      expect(beforeDeliver).toHaveBeenCalledTimes(2);
+      expect(deliveries).toEqual([{ kind: "final", text: "follow-up final" }]);
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors a configured beforeDeliver budget inside the foreground fence", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliveries: Delivery[] = [];
+      const hookStarted = createDeferred<void>();
+      hoisted.dispatchReplyFromConfigMock.mockImplementation(
+        async (params: DispatchReplyFromConfigParams) => {
+          params.dispatcher.sendFinalReply({ text: "budgeted final" });
+          return queuedFinalResult();
+        },
+      );
+
+      const dispatch = dispatchWithDeliveries(buildForegroundCtx(), deliveries, {
+        beforeDeliver: async (payload) => {
+          hookStarted.resolve();
+          await new Promise((resolve) => {
+            setTimeout(resolve, 16_000);
+          });
+          return payload;
+        },
+        beforeDeliverOptions: { timeoutMs: 20_000 },
+      });
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(deliveries).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(dispatch).resolves.toEqual(queuedFinalResult());
+      expect(deliveries).toEqual([{ kind: "final", text: "budgeted final" }]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an older foreground final when a newer inbound has no visible delivery while beforeDeliver is pending", async () => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();
@@ -247,11 +332,11 @@ describe("foreground reply freshness", () => {
         if (params.ctx.MessageSid === "new-message") {
           newerStarted.resolve();
           // Same-session follow-up admission waits for the owning final delivery.
-          params.replyOptions?.onFollowupAdmissionWaitChange?.(true);
+          params.replyOptions?.onReplyAdmissionWaitChange?.(true);
           try {
             await olderDelivered.promise;
           } finally {
-            params.replyOptions?.onFollowupAdmissionWaitChange?.(false);
+            params.replyOptions?.onReplyAdmissionWaitChange?.(false);
           }
           return {
             queuedFinal: false,
@@ -463,7 +548,25 @@ describe("foreground reply freshness", () => {
     expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
   });
 
-  it("suppresses an older foreground final when a newer delivery partially sends before failing", async () => {
+  it.each([
+    {
+      label: "shared outbound error",
+      createError: () =>
+        new OutboundDeliveryError("second chunk failed", {
+          cause: new Error("second chunk failed"),
+          results: [{ channel: "whatsapp", messageId: "wa-1" }],
+        }),
+    },
+    {
+      label: "channel partial-delivery envelope",
+      createError: () =>
+        createChannelPartialDeliveryError(new Error("finalization failed"), {
+          content: "new final",
+          messageIds: ["provider-1"],
+          visibleReplySent: true,
+        }),
+    },
+  ])("suppresses an older foreground final after $label", async ({ createError }) => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
@@ -499,10 +602,7 @@ describe("foreground reply freshness", () => {
       {
         deliver: async (payload, info) => {
           deliveries.push({ kind: info.kind, text: payload.text });
-          throw new OutboundDeliveryError("second chunk failed", {
-            cause: new Error("second chunk failed"),
-            results: [{ channel: "whatsapp", messageId: "wa-1" }],
-          });
+          throw createError();
         },
       },
     );

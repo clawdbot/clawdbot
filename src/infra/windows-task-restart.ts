@@ -11,6 +11,7 @@ import { formatErrorMessage } from "./errors.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
+import { encodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
 
 const TASK_RESTART_RETRY_LIMIT = 12;
 const TASK_RESTART_RETRY_DELAY_SEC = 1;
@@ -89,15 +90,19 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
   const quotedScriptPath = quoteCmdScriptArg(scriptPath);
   const restartLog = renderCmdRestartLogSetup({ ...process.env, ...env });
   try {
+    // The script embeds host paths and the task name; cmd.exe decodes it with
+    // the console code page, so plain UTF-8 garbles CJK content (#107416).
     fs.writeFileSync(
       scriptPath,
-      `${buildScheduledTaskRestartScript({
-        quotedLogPath: restartLog.quotedLogPath,
-        setupLines: restartLog.lines,
-        taskName,
-        taskScriptPath,
-      })}\r\n`,
-      "utf8",
+      encodeWindowsLauncherScript({
+        format: "cmd",
+        content: `${buildScheduledTaskRestartScript({
+          quotedLogPath: restartLog.quotedLogPath,
+          setupLines: restartLog.lines,
+          taskName,
+          taskScriptPath,
+        })}\r\n`,
+      }),
     );
     const cmdExePath = getWindowsCmdExePath();
     const child = spawn(cmdExePath, ["/d", "/s", "/c", quotedScriptPath], {

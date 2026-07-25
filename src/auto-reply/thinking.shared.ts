@@ -22,7 +22,6 @@ export type ThinkLevel =
   | "ultra";
 export type VerboseLevel = "off" | "on" | "full";
 export type TraceLevel = "off" | "on" | "raw";
-export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 type UsageDisplayLevel = "off" | "tokens" | "full";
@@ -40,7 +39,7 @@ export type ThinkingCatalogEntry = {
 };
 
 /** Complete canonical level set accepted by user-facing thinking controls. */
-export const ALL_THINKING_LEVELS: readonly ThinkLevel[] = [
+const ALL_THINKING_LEVELS: readonly ThinkLevel[] = [
   "off",
   "minimal",
   "low",
@@ -200,12 +199,12 @@ export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
-export type ResponseUsageInput = "on" | "off" | "tokens" | "full";
-export type ResponseUsageDefaultConfig =
+type ResponseUsageInput = "on" | "off" | "tokens" | "full";
+type ResponseUsageDefaultConfig =
   | ResponseUsageInput
   | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
 
-export function resolveMessagesResponseUsageDefault(
+function resolveMessagesResponseUsageDefault(
   configured: ResponseUsageDefaultConfig | undefined,
   channel?: string,
 ): ResponseUsageInput | undefined {

@@ -5,7 +5,7 @@
 
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
-import * as Diff from "diff";
+import { createPatch, FILE_HEADERS_ONLY, structuredPatch } from "diff";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { resolveToCwd } from "./path-utils.js";
 
@@ -125,7 +125,11 @@ function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement
   }
 
   let endLine = startLine;
-  while (endLine < lines.length && lines[endLine].end < replacementEnd) {
+  while (endLine < lines.length) {
+    const line = lines.at(endLine);
+    if (!line || line.end >= replacementEnd) {
+      break;
+    }
     endLine++;
   }
   if (endLine >= lines.length) {
@@ -136,8 +140,7 @@ function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement
 
 function applyReplacements(content: string, replacements: TextReplacement[], offset = 0): string {
   let result = content;
-  for (let i = replacements.length - 1; i >= 0; i--) {
-    const replacement = replacements[i];
+  for (const replacement of replacements.toReversed()) {
     const matchIndex = replacement.matchIndex - offset;
     result =
       result.slice(0, matchIndex) +
@@ -185,8 +188,13 @@ function applyReplacementsPreservingUnchangedLines(
   let result = "";
   for (const group of groups) {
     result += originalLines.slice(originalLineIndex, group.startLine).join("");
-    const groupStartOffset = baseLines[group.startLine].start;
-    const groupEndOffset = baseLines[group.endLine - 1].end;
+    const firstLine = baseLines.at(group.startLine);
+    const lastLine = baseLines.at(group.endLine - 1);
+    if (!firstLine || !lastLine) {
+      throw new Error("Replacement group is outside the base content.");
+    }
+    const groupStartOffset = firstLine.start;
+    const groupEndOffset = lastLine.end;
     result += applyReplacements(
       baseContent.slice(groupStartOffset, groupEndOffset),
       group.replacements,
@@ -274,8 +282,8 @@ function truncateCandidateText(text: string, maxChars: number): string {
   }
   const cut =
     maxChars > 0 &&
-    /[\uD800-\uDBFF]/.test(text[maxChars - 1]) &&
-    /[\uDC00-\uDFFF]/.test(text[maxChars])
+    /[\uD800-\uDBFF]/.test(text.charAt(maxChars - 1)) &&
+    /[\uDC00-\uDFFF]/.test(text.charAt(maxChars))
       ? maxChars - 1
       : maxChars;
   return text.slice(0, cut);
@@ -319,7 +327,7 @@ function describeIndentation(line: string): string {
 function firstDifferenceIndex(left: string, right: string): number {
   const sharedLength = Math.min(left.length, right.length);
   for (let index = 0; index < sharedLength; index++) {
-    if (left[index] !== right[index]) {
+    if (left.charAt(index) !== right.charAt(index)) {
       return index;
     }
   }
@@ -461,8 +469,8 @@ export function applyEditsToNormalizedContent(
     newText: normalizeToLF(edit.newText),
   }));
 
-  for (let i = 0; i < normalizedEdits.length; i++) {
-    if (normalizedEdits[i].oldText.length === 0) {
+  for (const [i, edit] of normalizedEdits.entries()) {
+    if (edit.oldText.length === 0) {
       throw getEmptyOldTextError(path, i, normalizedEdits.length);
     }
   }
@@ -476,8 +484,7 @@ export function applyEditsToNormalizedContent(
     : normalizedContent;
 
   const matchedEdits: MatchedEdit[] = [];
-  for (let i = 0; i < normalizedEdits.length; i++) {
-    const edit = normalizedEdits[i];
+  for (const [i, edit] of normalizedEdits.entries()) {
     const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText);
     if (!matchResult.found) {
       throw getNotFoundError(path, i, normalizedEdits.length, normalizedContent, edit.oldText);
@@ -498,8 +505,11 @@ export function applyEditsToNormalizedContent(
 
   matchedEdits.sort((a, b) => a.matchIndex - b.matchIndex);
   for (let i = 1; i < matchedEdits.length; i++) {
-    const previous = matchedEdits[i - 1];
-    const current = matchedEdits[i];
+    const previous = matchedEdits.at(i - 1);
+    const current = matchedEdits.at(i);
+    if (!previous || !current) {
+      continue;
+    }
     if (previous.matchIndex + previous.matchLength > current.matchIndex) {
       throw new Error(
         `edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${path}. Merge them into one edit or target disjoint regions.`,
@@ -530,9 +540,9 @@ export function generateUnifiedPatch(
   newContent: string,
   contextLines = 4,
 ): string {
-  return Diff.createTwoFilesPatch(path, path, oldContent, newContent, undefined, undefined, {
+  return createPatch(path, oldContent, newContent, undefined, undefined, {
     context: contextLines,
-    headerOptions: Diff.FILE_HEADERS_ONLY,
+    headerOptions: FILE_HEADERS_ONLY,
   });
 }
 
@@ -545,120 +555,41 @@ export function generateDiffString(
   newContent: string,
   contextLines = 4,
 ): { diff: string; firstChangedLine: number | undefined } {
-  const parts = Diff.diffLines(oldContent, newContent);
-  const output: string[] = [];
-
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
-  const maxLineNum = Math.max(oldLines.length, newLines.length);
+  const hunks = structuredPatch("", "", oldContent, newContent, undefined, undefined, {
+    context: contextLines,
+  }).hunks;
+  const oldLineCount = oldContent.split("\n").length;
+  const newLineCount = newContent.split("\n").length;
+  const lastNewLine = newContent === "" ? 0 : newLineCount - Number(newContent.endsWith("\n"));
+  const maxLineNum = Math.max(oldLineCount, newLineCount);
   const lineNumWidth = String(maxLineNum).length;
-
-  let oldLineNum = 1;
-  let newLineNum = 1;
-  let lastWasChange = false;
+  const ellipsis = ` ${"".padStart(lineNumWidth, " ")} ...`;
+  const output: string[] = [];
   let firstChangedLine: number | undefined;
 
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    const raw = part.value.split("\n");
-    if (raw[raw.length - 1] === "") {
-      raw.pop();
+  for (const [hunkIndex, hunk] of hunks.entries()) {
+    if (hunkIndex > 0 || hunk.newStart > 1) {
+      output.push(ellipsis);
     }
 
-    if (part.added || part.removed) {
-      // Capture the first changed line (in the new file)
-      if (firstChangedLine === undefined) {
+    let oldLineNum = hunk.oldStart;
+    let newLineNum = hunk.newStart;
+    for (const line of hunk.lines) {
+      const prefix = line[0];
+      if (prefix === "\\") {
+        continue;
+      }
+      if (firstChangedLine === undefined && prefix !== " ") {
         firstChangedLine = newLineNum;
       }
+      const lineNum = prefix === "-" ? oldLineNum : newLineNum;
+      output.push(`${prefix}${String(lineNum).padStart(lineNumWidth, " ")} ${line.slice(1)}`);
+      oldLineNum += prefix === "+" ? 0 : 1;
+      newLineNum += prefix === "-" ? 0 : 1;
+    }
 
-      // Show the change
-      for (const line of raw) {
-        if (part.added) {
-          const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-          output.push(`+${lineNum} ${line}`);
-          newLineNum++;
-        } else {
-          // removed
-          const lineNum = String(oldLineNum).padStart(lineNumWidth, " ");
-          output.push(`-${lineNum} ${line}`);
-          oldLineNum++;
-        }
-      }
-      lastWasChange = true;
-    } else {
-      // Context lines - only show a few before/after changes
-      const nextPartIsChange = i < parts.length - 1 && (parts[i + 1].added || parts[i + 1].removed);
-      const hasLeadingChange = lastWasChange;
-      const hasTrailingChange = nextPartIsChange;
-
-      if (hasLeadingChange && hasTrailingChange) {
-        if (raw.length <= contextLines * 2) {
-          for (const line of raw) {
-            const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-            output.push(` ${lineNum} ${line}`);
-            oldLineNum++;
-            newLineNum++;
-          }
-        } else {
-          const leadingLines = raw.slice(0, contextLines);
-          const trailingLines = raw.slice(raw.length - contextLines);
-          const skippedLines = raw.length - leadingLines.length - trailingLines.length;
-
-          for (const line of leadingLines) {
-            const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-            output.push(` ${lineNum} ${line}`);
-            oldLineNum++;
-            newLineNum++;
-          }
-
-          output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-          oldLineNum += skippedLines;
-          newLineNum += skippedLines;
-
-          for (const line of trailingLines) {
-            const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-            output.push(` ${lineNum} ${line}`);
-            oldLineNum++;
-            newLineNum++;
-          }
-        }
-      } else if (hasLeadingChange) {
-        const shownLines = raw.slice(0, contextLines);
-        const skippedLines = raw.length - shownLines.length;
-
-        for (const line of shownLines) {
-          const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-          output.push(` ${lineNum} ${line}`);
-          oldLineNum++;
-          newLineNum++;
-        }
-
-        if (skippedLines > 0) {
-          output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-          oldLineNum += skippedLines;
-          newLineNum += skippedLines;
-        }
-      } else if (hasTrailingChange) {
-        const skippedLines = Math.max(0, raw.length - contextLines);
-        if (skippedLines > 0) {
-          output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-          oldLineNum += skippedLines;
-          newLineNum += skippedLines;
-        }
-
-        for (const line of raw.slice(skippedLines)) {
-          const lineNum = String(newLineNum).padStart(lineNumWidth, " ");
-          output.push(` ${lineNum} ${line}`);
-          oldLineNum++;
-          newLineNum++;
-        }
-      } else {
-        // Skip these context lines entirely
-        oldLineNum += raw.length;
-        newLineNum += raw.length;
-      }
-
-      lastWasChange = false;
+    if (hunkIndex === hunks.length - 1 && hunk.newStart + hunk.newLines <= lastNewLine) {
+      output.push(ellipsis);
     }
   }
 

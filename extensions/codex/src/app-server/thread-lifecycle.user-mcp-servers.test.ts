@@ -6,9 +6,11 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
+  hashCodexAppServerBindingFingerprint,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
+  seedCodexTestBinding,
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
@@ -68,6 +70,7 @@ function createAppServerOptions(): CodexAppServerRuntimeOptions {
       headers: {},
     },
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
@@ -151,6 +154,127 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       outlook: { command: "node", args: ["/opt/outlook-mcp/dist/index.js"] },
     });
   });
+
+  it("stores large user MCP server fingerprints as bounded hashes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: Object.fromEntries(
+            Array.from({ length: 120 }, (_, index) => [
+              `server_${index}`,
+              {
+                transport: "stdio",
+                command: "node",
+                args: [
+                  `/opt/openclaw/mcp/server-${index}/dist/index.js`,
+                  "--description",
+                  "x".repeat(400),
+                ],
+              },
+            ]),
+          ),
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(binding?.userMcpServersFingerprint?.length).toBe(71);
+    expect(binding?.userMcpServersFingerprint).not.toContain("server_119");
+  });
+
+  it.each(["raw", "doctor-hashed"] as const)(
+    "resumes beta5 user MCP bindings stored as %s fingerprints",
+    async (legacyForm) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const authorization = "Bearer beta5-access-token";
+      const config = {
+        mcp: {
+          servers: {
+            ducktape: {
+              transport: "streamable-http",
+              url: "https://agents.ducktape.xyz/mcp",
+              headers: {
+                Authorization: authorization,
+                "x-tenant": "keep",
+              },
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"];
+      const request = vi.fn(async (method: string, _params: unknown) => {
+        if (method === "thread/start") {
+          return threadStartResult("thread-beta5");
+        }
+        if (method === "thread/resume") {
+          return threadResumeResult("thread-beta5");
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const run = () =>
+        startOrResumeThread({
+          client: { request } as never,
+          params: createParams(sessionFile, workspaceDir, config),
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: createAppServerOptions(),
+        });
+
+      await run();
+      const currentBinding = await readCodexAppServerBinding(sessionFile);
+      expect(currentBinding).toBeDefined();
+
+      const legacyFingerprint = JSON.stringify({
+        mcp_servers: {
+          ducktape: {
+            http_headers: {
+              Authorization: authorization,
+              "x-tenant": "keep",
+            },
+            url: "https://agents.ducktape.xyz/mcp",
+          },
+        },
+      });
+      seedCodexTestBinding(sessionFile, {
+        ...currentBinding!,
+        userMcpServersFingerprint:
+          legacyForm === "raw"
+            ? legacyFingerprint
+            : hashCodexAppServerBindingFingerprint(legacyFingerprint),
+      });
+
+      request.mockClear();
+      await run();
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      const convergedBinding = await readCodexAppServerBinding(sessionFile);
+      expect(convergedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(convergedBinding?.userMcpServersFingerprint).not.toContain("beta5-access-token");
+      expect(convergedBinding?.userMcpServersFingerprint).not.toBe(legacyFingerprint);
+      expect(convergedBinding?.userMcpServersFingerprint).not.toBe(
+        hashCodexAppServerBindingFingerprint(legacyFingerprint),
+      );
+
+      request.mockClear();
+      await run();
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+    },
+  );
 
   it("projects only Codex user MCP servers scoped to the current agent", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -523,7 +647,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       appServer: createAppServerOptions(),
     });
     const firstBinding = await readCodexAppServerBinding(sessionFile);
-    expect(firstBinding?.userMcpServersFingerprint).toContain("<redacted:sha256:");
+    expect(firstBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(firstBinding?.userMcpServersFingerprint).not.toContain("access-token-one");
 
     request.mockClear();
@@ -544,7 +668,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       "Bearer access-token-two",
     );
     const secondBinding = await readCodexAppServerBinding(sessionFile);
-    expect(secondBinding?.userMcpServersFingerprint).toContain("<redacted:sha256:");
+    expect(secondBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(secondBinding?.userMcpServersFingerprint).not.toContain("access-token-two");
     expect(secondBinding?.userMcpServersFingerprint).not.toBe(
       firstBinding?.userMcpServersFingerprint,

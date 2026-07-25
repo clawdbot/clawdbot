@@ -14,13 +14,10 @@ import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import {
   clearPluginCommands,
-  clearPluginCommandsForPlugin,
   isReservedCommandName,
   listPluginInvocationKeys,
   pluginCommandSupportsChannel,
   registerPluginCommand,
-  validateCommandName,
-  validatePluginCommandDefinition,
 } from "./command-registration.js";
 import {
   canExposeSenderIsOwner,
@@ -30,7 +27,6 @@ import {
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
-import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
@@ -46,16 +42,7 @@ import type {
 // Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
 
-export {
-  clearPluginCommands,
-  clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
-  listProviderPluginCommandSpecs,
-  listRegisteredPluginAgentPromptGuidance,
-  registerPluginCommand,
-  validateCommandName,
-  validatePluginCommandDefinition,
-};
+export { clearPluginCommands, listRegisteredPluginAgentPromptGuidance, registerPluginCommand };
 
 /**
  * Check if a command body matches a registered plugin command.
@@ -141,6 +128,7 @@ function resolveBindingConversationFromCommand(params: {
   senderId?: string;
   from?: string;
   to?: string;
+  originatingTo?: string;
   accountId?: string;
   messageThreadId?: string | number;
   threadParentId?: string;
@@ -164,7 +152,7 @@ function resolveBindingConversationFromCommand(params: {
     threadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     senderId: params.senderId,
-    originatingTo: params.from,
+    originatingTo: params.originatingTo ?? params.from,
     commandTo: params.to,
     fallbackTo: params.to ?? params.from,
   });
@@ -243,6 +231,7 @@ export async function executePluginCommand(params: {
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
   to?: PluginCommandContext["to"];
+  originatingTo?: string;
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
@@ -301,6 +290,7 @@ export async function executePluginCommand(params: {
     senderId,
     from: params.from,
     to: params.to,
+    originatingTo: params.originatingTo,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
@@ -451,8 +441,3 @@ export function listPluginCommands(): Array<{
 function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): string[] {
   return listPluginInvocationKeys(command);
 }
-
-export const testing = {
-  resolveBindingConversationFromCommand,
-};
-export { testing as __testing };

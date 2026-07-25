@@ -1,17 +1,18 @@
 // Pure profile-page aggregation: turns usage.cost daily totals and
 // sessions.usage aggregates into the hero stats, streaks, and heatmap model.
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
+import { formatDurationCompact } from "../../lib/format.ts";
 
 type DailyTokensEntry = { date: string; totalTokens: number };
 
-export type ProfileHeatmapDay = {
+type ProfileHeatmapDay = {
   date: string;
   tokens: number;
   /** 0 = no activity, 1-4 = nonzero-quartile intensity buckets. */
   level: 0 | 1 | 2 | 3 | 4;
 };
 
-export type ProfileHeatmapWeek = {
+type ProfileHeatmapWeek = {
   /** Sunday-first column; null pads days outside the covered range. */
   days: Array<ProfileHeatmapDay | null>;
 };
@@ -22,13 +23,13 @@ export type ProfileHeatmap = {
   monthLabels: string[];
 };
 
-export type ProfileStreaks = {
+type ProfileStreaks = {
   current: number;
   longest: number;
 };
 
-export type ProfileTopTool = { name: string; count: number };
-export type ProfileTopChannel = { channel: string; tokens: number };
+type ProfileTopTool = { name: string; count: number };
+type ProfileTopChannel = { channel: string; tokens: number };
 
 export type ProfileInsights = {
   topModel: string | null;
@@ -83,22 +84,9 @@ export function formatTokenScale(tokens: number | null | undefined): string {
   return String(Math.round(tokens));
 }
 
-/** Hour-scale duration ("59h 4m", "12m", "45s"); profile sessions can span days. */
+/** Compact duration for profile sessions, including multi-day sessions. */
 export function formatLongDuration(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms) || ms < 1000) {
-    return "0s";
-  }
-  const totalSeconds = Math.floor(ms / 1000);
-  if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
-  }
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) {
-    return `${totalMinutes}m`;
-  }
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  return formatDurationCompact(ms, { spaced: true }) ?? "0s";
 }
 
 function activeDates(daily: readonly DailyTokensEntry[]): string[] {
@@ -120,13 +108,16 @@ export function computeStreaks(daily: readonly DailyTokensEntry[], today: string
   let longest = 1;
   let run = 1;
   for (let index = 1; index < dates.length; index += 1) {
-    const gapDays = Math.round(
-      (dateToUtcNoon(dates[index]) - dateToUtcNoon(dates[index - 1])) / DAY_MS,
-    );
+    const currentDate = dates[index];
+    const previousDate = dates[index - 1];
+    if (!currentDate || !previousDate) {
+      continue;
+    }
+    const gapDays = Math.round((dateToUtcNoon(currentDate) - dateToUtcNoon(previousDate)) / DAY_MS);
     run = gapDays === 1 ? run + 1 : 1;
     longest = Math.max(longest, run);
   }
-  const last = dates[dates.length - 1];
+  const last = dates.at(-1) ?? today;
   const sinceLast = Math.round((dateToUtcNoon(today) - dateToUtcNoon(last)) / DAY_MS);
   return { current: sinceLast <= 1 ? run : 0, longest };
 }
@@ -134,7 +125,7 @@ export function computeStreaks(daily: readonly DailyTokensEntry[], today: string
 function levelThresholds(values: number[]): [number, number, number] {
   const sorted = values.toSorted((a, b) => a - b);
   const pick = (ratio: number) =>
-    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))];
+    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))] ?? 0;
   return [pick(0.25), pick(0.5), pick(0.75)];
 }
 

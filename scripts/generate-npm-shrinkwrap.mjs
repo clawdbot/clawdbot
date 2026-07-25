@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import pMap from "p-map";
 import { parse as parseYaml } from "yaml";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
@@ -46,7 +47,23 @@ function normalizeOverrides(overrides) {
   if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
     return {};
   }
-  return normalizeOverrideValue(overrides);
+  const normalized = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    const scopedSeparator = key.indexOf(">");
+    if (scopedSeparator > 0) {
+      const parentSelector = key.slice(0, scopedSeparator).trim();
+      const dependencyName = key.slice(scopedSeparator + 1).trim();
+      if (parentSelector && dependencyName) {
+        const current = normalized[parentSelector];
+        const nested = isPlainObject(current) ? current : {};
+        nested[dependencyName] = normalizeOverrideValue(value);
+        normalized[parentSelector] = nested;
+        continue;
+      }
+    }
+    normalized[key] = normalizeOverrideValue(value);
+  }
+  return normalized;
 }
 
 function isPlainObject(value) {
@@ -403,6 +420,7 @@ function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
 
 /**
  * Resolves the npm command invocation used by shrinkwrap generation.
+ * @internal Directly tested script implementation detail.
  */
 export function createNpmShrinkwrapCommand(args, options = {}) {
   return resolveNpmRunner({
@@ -417,6 +435,7 @@ export function createNpmShrinkwrapCommand(args, options = {}) {
 
 /**
  * Reads a positive integer env override for shrinkwrap subprocess limits.
+ * @internal Directly tested script implementation detail.
  */
 export function readPositiveIntEnv(name, fallback, env = process.env) {
   const text = String(env[name] ?? fallback).trim();
@@ -432,6 +451,7 @@ export function readPositiveIntEnv(name, fallback, env = process.env) {
 
 /**
  * Builds execFileSync options with bounded timeout and output buffer limits.
+ * @internal Directly tested script implementation detail.
  */
 export function createNpmShrinkwrapExecOptions(invocation, cwd, env = process.env) {
   return {
@@ -1195,6 +1215,7 @@ function listCheckChangedPaths() {
   }
 }
 
+/** @internal Directly tested script implementation detail. */
 export function resolvePackageDirs(args) {
   const packageDirs = [];
   const check = args.includes("--check");
@@ -1327,20 +1348,7 @@ function updateOrCheckPackage(packageDir, check, changedPaths = []) {
   return `${label}: npm-shrinkwrap.json is current.`;
 }
 
-export async function runBoundedTasks(items, jobs, runTask) {
-  const results = Array.from({ length: items.length });
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(jobs, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await runTask(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
+/** @internal Directly tested script implementation detail. */
 export function resolveShrinkwrapJobs(
   rawValue,
   env = process.env,
@@ -1385,19 +1393,23 @@ async function runPackageWorker(packageDir, check, changedPaths) {
 }
 
 async function updateOrCheckPackages({ check, changedPaths, jobs, packageDirs }) {
-  const outcomes = await runBoundedTasks(packageDirs, jobs, async (packageDir) => {
-    try {
-      const output =
-        jobs === 1
-          ? updateOrCheckPackage(packageDir, check, changedPaths)
-          : await runPackageWorker(packageDir, check, changedPaths);
-      return { output };
-    } catch (error) {
-      return {
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
+  const outcomes = await pMap(
+    packageDirs,
+    async (packageDir) => {
+      try {
+        const output =
+          jobs === 1
+            ? updateOrCheckPackage(packageDir, check, changedPaths)
+            : await runPackageWorker(packageDir, check, changedPaths);
+        return { output };
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+    { concurrency: jobs, stopOnError: false },
+  );
 
   const errors = [];
   for (const outcome of outcomes) {
@@ -1447,6 +1459,7 @@ function handleMainError(error) {
   process.exitCode = 1;
 }
 
+/** @internal Directly tested and shared repository-script contracts. */
 export {
   // Test-facing helpers cover lockfile normalization, override merging, and
   // changed-package detection without invoking npm.
@@ -1457,6 +1470,7 @@ export {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   mergeOverrides,
+  normalizeOverrides,
   applyPackageExtensionPeerMetadata,
   normalizeNpmVersionDrift,
   packageJsonForShrinkwrap,

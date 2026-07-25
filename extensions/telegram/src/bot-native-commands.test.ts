@@ -1,4 +1,5 @@
 // Telegram tests cover bot native commands plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +20,6 @@ import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plug
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
-let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
 type TelegramInlineKeyboardReplyMarkup = {
@@ -148,11 +148,8 @@ function registerCustomTelegramCommandMenu(
 
 describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
-    ({
-      registerTelegramNativeCommands,
-      parseTelegramNativeCommandCallbackData,
-      resolveTelegramNativeCommandDisableBlockStreaming,
-    } = await import("./bot-native-commands.js"));
+    ({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
+      await import("./bot-native-commands.js"));
   });
 
   beforeEach(() => {
@@ -291,9 +288,10 @@ describe("registerTelegramNativeCommands", () => {
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toHaveLength(92);
+    const firstCustomCommand = expectDefined(customCommands[0], "first custom Telegram command");
     expect(
       registeredCommands.some(
-        (entry) => entry.description.length < customCommands[0].description.length,
+        (entry) => entry.description.length < firstCustomCommand.description.length,
       ),
     ).toBe(true);
     expect(runtimeLog).toHaveBeenCalledWith(
@@ -550,27 +548,6 @@ describe("registerTelegramNativeCommands", () => {
     expect(
       (sendMessageCall[2] as { message_thread_id?: number } | undefined)?.message_thread_id,
     ).toBe(77);
-  });
-
-  it("uses nested streaming.block.enabled for native command block-streaming behavior", () => {
-    expect(
-      resolveTelegramNativeCommandDisableBlockStreaming({
-        streaming: {
-          block: {
-            enabled: false,
-          },
-        },
-      } as TelegramAccountConfig),
-    ).toBe(true);
-    expect(
-      resolveTelegramNativeCommandDisableBlockStreaming({
-        streaming: {
-          block: {
-            enabled: true,
-          },
-        },
-      } as TelegramAccountConfig),
-    ).toBe(false);
   });
 
   it("uses plugin command metadata to send and edit a Telegram progress placeholder", async () => {

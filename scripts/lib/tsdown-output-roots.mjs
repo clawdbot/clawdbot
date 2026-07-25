@@ -12,6 +12,7 @@ const TSDOWN_PACKAGE_NAMES = [
   "model-catalog-core",
   "net-policy",
   "normalization-core",
+  "retry",
   "speech-core",
   "terminal-core",
   "acp-core",

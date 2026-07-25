@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+/* oxlint-disable typescript/no-base-to-string -- fetch mocks normalize standard RequestInfo inputs for registry URL assertions. */
 import {
   mkdirSync,
   mkdtempSync,
@@ -93,7 +94,7 @@ function writeExpectedArtifact(artifact: Uint8Array) {
   return artifactDir;
 }
 
-function artifactResponse(artifact: Uint8Array, body: BodyInit = artifact) {
+function artifactResponse(artifact: Uint8Array, body: BodyInit = artifact as unknown as BodyInit) {
   const artifactIdentity = identity(artifact);
   return new Response(body, {
     headers: {
@@ -310,7 +311,7 @@ describe("ClawHub published artifact verification", () => {
 
   it("rejects a missing configure-only tag before artifact or publisher requests", async () => {
     const artifact = new TextEncoder().encode("historical exact bytes");
-    const fetchImpl = vi.fn(async () =>
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL) =>
       Response.json({
         package: { tags: { beta: "2026.7.1-beta.2" } },
       }),

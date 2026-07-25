@@ -1,7 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import {
   normalizeChatWorkspaceDock,
   patchSettings,
@@ -9,9 +14,14 @@ import {
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../../../components/panel-toggle-contract.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { formatByteSize } from "../../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
   scopedAgentParamsForSession,
@@ -24,7 +34,7 @@ import {
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
   collapsed: boolean;
@@ -52,6 +62,7 @@ export type SessionWorkspaceProps = {
   onToggleBrowser?: () => void;
   /** Opens the session diff panel; absent when the gateway lacks sessions.diff. */
   onOpenDiff?: () => void;
+  diffNotGit?: boolean;
 };
 
 type SessionWorkspaceState = {
@@ -94,6 +105,7 @@ export type SessionWorkspaceHost = {
   settings?: UiSettings;
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceOpenRequest?: SessionWorkspaceOpenRequest;
+  sessionWorkspaceDraftScope?: string;
   requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarContent) => void;
 };
@@ -175,18 +187,11 @@ function languageForFile(name: string): string {
   return extension;
 }
 
-function fileSidebarContent(name: string, content: string): string {
-  if (/\.(?:md|markdown|mdx)$/i.test(name)) {
-    return content;
-  }
-  return `# ${name}\n\n\`\`\`${languageForFile(name)}\n${content}\n\`\`\``;
-}
-
 function basenameForPath(filePath: string): string {
   return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
 }
 
-export function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
+function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
   if (!root) {
     return filePath;
   }
@@ -284,6 +289,7 @@ function loadWorkspace(
       current.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
+        ...(typeof files?.gitCheckout === "boolean" ? { gitCheckout: files.gitCheckout } : {}),
         files: fileItems,
         ...(files?.browser ? { browser: files.browser } : {}),
         artifacts: artifactItems,
@@ -389,12 +395,13 @@ function openFile(
   path: string,
   opts: { line?: number | null; requestPath?: string } = {},
 ) {
+  const requestPath = opts.requestPath ?? path;
   openWorkspaceItem(
     state,
     workspace,
     `file:${path}`,
     (request) =>
-      state.sessions.getFile(request.sessionKey, opts.requestPath ?? path, {
+      state.sessions.getFile(request.sessionKey, requestPath, {
         agentId: request.agentId,
       }),
     (result) => {
@@ -403,22 +410,96 @@ function openFile(
         return null;
       }
       const name = file.name || basenameForPath(path);
-      if (/\.(?:md|markdown|mdx)$/i.test(name) && opts.line == null) {
-        return {
-          kind: "markdown",
-          content: fileSidebarContent(name, file.content),
-          rawText: file.content,
-        };
-      }
+      const canEdit =
+        typeof file.hash === "string" &&
+        hasUniformLineEndings(file.content) &&
+        isGatewayMethodAdvertised(state, "sessions.files.set") === true &&
+        hasOperatorAdminAccess(state.hello?.auth ?? null);
+      const edit = canEdit
+        ? {
+            hash: file.hash!,
+            save: async ({ content, expectedHash }: { content: string; expectedHash: string }) => {
+              try {
+                const saved = await state.sessions.setFile(
+                  result.sessionKey,
+                  requestPath,
+                  content,
+                  {
+                    agentId: workspace.agentId,
+                    expectedHash,
+                  },
+                );
+                const hash = saved?.file.hash;
+                const updatedAtMs = saved?.file.updatedAtMs;
+                return typeof hash === "string"
+                  ? {
+                      ok: true as const,
+                      hash,
+                      ...(typeof updatedAtMs === "number" ? { updatedAtMs } : {}),
+                    }
+                  : { ok: false as const, code: "error" as const, message: "Save failed." };
+              } catch (error) {
+                const details =
+                  error instanceof GatewayRequestError &&
+                  error.details &&
+                  typeof error.details === "object"
+                    ? (error.details as { type?: unknown; currentHash?: unknown })
+                    : null;
+                if (details?.type === "session_file_conflict") {
+                  return {
+                    ok: false as const,
+                    code: "conflict" as const,
+                    ...(typeof details.currentHash === "string"
+                      ? { currentHash: details.currentHash }
+                      : {}),
+                  };
+                }
+                return {
+                  ok: false as const,
+                  code: "error" as const,
+                  message: error instanceof Error ? error.message : String(error),
+                };
+              }
+            },
+            fetchLatest: async () => {
+              const latest = await state.sessions.getFile(result.sessionKey, requestPath, {
+                agentId: workspace.agentId,
+              });
+              const latestFile = latest?.file;
+              if (
+                !latestFile ||
+                typeof latestFile.content !== "string" ||
+                typeof latestFile.hash !== "string"
+              ) {
+                return null;
+              }
+              return {
+                content: latestFile.content,
+                hash: latestFile.hash,
+                // Reloaded content re-passes the uniform-endings gate so a
+                // conflict reload cannot smuggle mixed endings into edit mode.
+                editable: hasUniformLineEndings(latestFile.content),
+              };
+            },
+          }
+        : undefined;
       return {
         kind: "file",
         path: file.workspacePath || file.path || path,
         name,
         content: file.content,
+        draftKey: [
+          state.settings?.gatewayUrl ?? "",
+          state.sessionWorkspaceDraftScope ?? "",
+          result.sessionKey,
+          result.root ?? "",
+          file.workspacePath || file.path || path,
+        ].join("\u0000"),
         root: result.root ?? null,
         language: languageForFile(name),
         line: opts.line ?? null,
         rawText: file.content,
+        ...(edit ? { edit } : {}),
       };
     },
     `Failed to load ${path}`,
@@ -567,11 +648,14 @@ function openArtifact(
 
 export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
-  options?: { narrowLayout?: boolean },
+  options?: { narrowLayout?: boolean; draftScope?: string },
 ): SessionWorkspaceProps {
+  state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getWorkspaceState(state);
   if (
-    !workspace.collapsed &&
+    // The collapsed header still renders the diff action, so load its checkout
+    // capability eagerly instead of waiting for the file rail to open.
+    (!workspace.collapsed || isGatewayMethodAdvertised(state, "sessions.diff") === true) &&
     state.connected &&
     state.agentsList &&
     !workspace.loading &&
@@ -625,7 +709,7 @@ export function createSessionWorkspaceProps(
     onToggleTerminal: state.terminalAvailable
       ? () => {
           window.dispatchEvent(
-            new CustomEvent("openclaw:terminal-toggle", {
+            new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
               detail: { dock: "right", open: true },
             }),
           );
@@ -633,9 +717,10 @@ export function createSessionWorkspaceProps(
       : undefined,
     onToggleBrowser: state.browserPanelAvailable
       ? () => {
-          window.dispatchEvent(new CustomEvent("openclaw:browser-toggle", {}));
+          window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
         }
       : undefined,
+    diffNotGit: workspace.list?.gitCheckout === false,
     onOpenDiff:
       isGatewayMethodAdvertised(state, "sessions.diff") === true && state.client
         ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
@@ -665,13 +750,12 @@ function formatWorkspaceFileSize(file: { size?: number }): string {
   if (typeof size !== "number" || !Number.isFinite(size) || size < 0) {
     return "";
   }
-  if (size >= 1024 * 1024) {
-    return `${(size / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
-  }
-  if (size >= 1024) {
-    return `${(size / 1024).toFixed(1).replace(/\.0$/, "")} KB`;
-  }
-  return `${size} B`;
+  return formatByteSize(size, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "byte" ? null : Math.round(value * 10) % 10 ? 1 : 0),
+  });
 }
 
 function renderWorkspaceArtifactSize(artifact: { sizeBytes?: number }): string {
@@ -695,7 +779,7 @@ function renderWorkspaceRailSection(
 
 /** Changed-file count shown on the collapsed-rail toggles (pane header /
  * floating opener); 0 until the workspace list has loaded. */
-export function sessionWorkspaceModifiedCount(
+function sessionWorkspaceModifiedCount(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): number {
   return sessionWorkspace?.list?.files.filter((file) => file.kind === "modified").length ?? 0;
@@ -706,7 +790,6 @@ export function sessionWorkspaceModifiedCount(
  * this button is the only pointer affordance (⇧⌘B still works). */
 export function renderSessionWorkspaceToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!sessionWorkspace) {
     return nothing;
@@ -717,9 +800,7 @@ export function renderSessionWorkspaceToggle(
   return html`
     <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-workspace-open"} chat-workspace-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle"
         type="button"
         aria-label=${label}
         aria-keyshortcuts="Meta+Shift+B"
@@ -741,20 +822,19 @@ export function renderSessionWorkspaceToggle(
  * gateway does not advertise sessions.diff. */
 export function renderSessionDiffToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!sessionWorkspace?.onOpenDiff) {
     return nothing;
   }
   const label = t("chat.sessionDiff.show");
+  const tooltip = sessionWorkspace.diffNotGit ? t("chat.sessionDiff.notGit") : label;
   return html`
-    <openclaw-tooltip .content=${label}>
+    <openclaw-tooltip .content=${tooltip}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-diff-open"} chat-session-diff-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
         type="button"
         aria-label=${label}
+        ?disabled=${sessionWorkspace.diffNotGit === true}
         @click=${sessionWorkspace.onOpenDiff}
       >
         ${icons.gitBranch}
@@ -804,11 +884,16 @@ export function renderSessionWorkspaceRail(
     : nothing;
   const diffButton = sessionWorkspace.onOpenDiff
     ? html`
-        <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
+        <openclaw-tooltip
+          .content=${sessionWorkspace.diffNotGit
+            ? t("chat.sessionDiff.notGit")
+            : t("chat.sessionDiff.show")}
+        >
           <button
             type="button"
             class="chat-workspace-rail__terminal chat-session-diff-toggle"
             aria-label=${t("chat.sessionDiff.show")}
+            ?disabled=${sessionWorkspace.diffNotGit === true}
             @click=${sessionWorkspace.onOpenDiff}
           >
             ${icons.gitBranch}
@@ -1197,3 +1282,4 @@ export function renderSessionWorkspaceRail(
     </aside>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

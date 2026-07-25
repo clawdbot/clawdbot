@@ -9,9 +9,9 @@ struct TalkRuntimeIssueBanner: View {
     var body: some View {
         OpenClawNoticeBanner(
             icon: self.iconName,
-            title: self.issue.fallbackBannerTitle,
-            message: self.issue.fallbackBannerMessage,
-            ownerLabel: self.issue.fallbackBannerOwnerLabel,
+            title: .verbatim(self.issue.fallbackBannerTitle),
+            message: .verbatim(self.issue.fallbackBannerMessage),
+            ownerLabel: .verbatim(self.issue.fallbackBannerOwnerLabel),
             tint: self.tint,
             detail: .accent(self.issue.displayMessage),
             primaryActionTitle: "Open Settings",
