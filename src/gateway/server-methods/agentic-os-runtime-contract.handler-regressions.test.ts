@@ -11,7 +11,12 @@ const contractMocks = vi.hoisted(() => ({
   status: vi.fn(),
 }));
 const canonicalSession = vi.hoisted(() => ({
+  error: undefined as string | undefined,
   payload: { messages: [] as unknown[], sessionExists: false, totalMessages: 0 },
+}));
+const canonicalHistory = vi.hoisted(() => ({
+  payload: { messages: [] as unknown[] },
+  requests: [] as Record<string, unknown>[],
 }));
 
 vi.mock("../agentic-os-runtime-contract.js", async (importOriginal) => {
@@ -33,7 +38,24 @@ vi.mock("./sessions-read.js", () => ({
       respond,
     }: {
       respond: (ok: boolean, payload?: unknown, error?: { message: string }) => void;
-    }) => respond(true, canonicalSession.payload, undefined),
+    }) =>
+      canonicalSession.error
+        ? respond(false, undefined, { message: canonicalSession.error })
+        : respond(true, canonicalSession.payload, undefined),
+  },
+}));
+vi.mock("./chat-history-handler.js", () => ({
+  chatHistoryHandlers: {
+    "chat.history": ({
+      params,
+      respond,
+    }: {
+      params: Record<string, unknown>;
+      respond: (ok: boolean, payload?: unknown, error?: { message: string }) => void;
+    }) => {
+      canonicalHistory.requests.push(params);
+      respond(true, canonicalHistory.payload, undefined);
+    },
   },
 }));
 vi.mock("./agent-job.js", () => ({ waitForAgentJob: vi.fn(async () => null) }));
@@ -45,7 +67,11 @@ import { agenticOsRuntimeContractHandlers } from "./agentic-os-runtime-contract.
 
 type RespondCall = [boolean, unknown?, { message: string }?];
 
-async function invoke(method: string, testClient: GatewayClient | null): Promise<RespondCall> {
+async function invoke(
+  method: string,
+  testClient: GatewayClient | null,
+  params?: Record<string, unknown>,
+): Promise<RespondCall> {
   const respond = vi.fn();
   const handler = agenticOsRuntimeContractHandlers[method];
   if (!handler) {
@@ -53,9 +79,12 @@ async function invoke(method: string, testClient: GatewayClient | null): Promise
   }
   await handler({
     params:
-      method === "sessions_status"
+      params ??
+      (method === "sessions_status"
         ? { session_key: "agent:ai-engineer:subagent:child" }
-        : { requester_agent_id: "main" },
+        : method === "sessions_history"
+          ? { sessionKey: "agent:ai-engineer:subagent:child" }
+          : { requester_agent_id: "main" }),
     respond: respond as never,
     client: testClient,
     context: {
@@ -82,7 +111,13 @@ describe("Agentic OS runtime handler regressions", () => {
       session_key: "agent:ai-engineer:subagent:child",
       runId: "run-child",
     });
+    contractMocks.history.mockReturnValue({
+      session_key: "agent:ai-engineer:subagent:child",
+    });
+    canonicalSession.error = undefined;
     canonicalSession.payload = { messages: [], sessionExists: false, totalMessages: 0 };
+    canonicalHistory.payload = { messages: [] };
+    canonicalHistory.requests = [];
   });
 
   it("rejects device-less connected callers instead of binding authority to connId", async () => {
@@ -150,5 +185,38 @@ describe("Agentic OS runtime handler regressions", () => {
       session_exists: false,
       transcript_available: false,
     });
+  });
+
+  it("rejects malformed sessions_history limit values before canonical history reads", async () => {
+    for (const limit of ["5", Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 1.5, null, {}]) {
+      const response = await invoke("sessions_history", null, {
+        sessionKey: "agent:ai-engineer:subagent:child",
+        limit,
+      });
+
+      expect(response[0]).toBe(false);
+      expect(response[2]?.message).toContain("invalid positive integer: limit");
+    }
+    expect(canonicalHistory.requests).toEqual([]);
+  });
+
+  it("forwards numeric sessions_history limits to canonical history reads", async () => {
+    const response = await invoke("sessions_history", null, {
+      sessionKey: "agent:ai-engineer:subagent:child",
+      limit: 5,
+    });
+
+    expect(response[0]).toBe(true);
+    expect(canonicalHistory.requests).toEqual([
+      { sessionKey: "agent:ai-engineer:subagent:child", limit: 5 },
+    ]);
+  });
+
+  it("preserves canonical sessions.get failures instead of projecting transcript absence", async () => {
+    canonicalSession.error = "synthetic canonical read failure";
+    const response = await invoke("sessions_status", null);
+
+    expect(response[0]).toBe(false);
+    expect(response[2]?.message).toContain("synthetic canonical read failure");
   });
 });

@@ -77,6 +77,20 @@ function rejectConnectedClientMissingAdmin(
   return true;
 }
 
+function readOptionalPositiveInteger(
+  params: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  if (!Object.hasOwn(params, key)) {
+    return undefined;
+  }
+  const value = params[key];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new ContractInputError(`invalid positive integer: ${key}`);
+  }
+  return value;
+}
+
 async function callCanonicalHandler(
   handler: GatewayRequestHandler,
   opts: GatewayRequestHandlerOptions,
@@ -167,14 +181,18 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
     await respondWithContract(opts.params, opts.respond, async (input) => {
       const tracked = statusAgenticOsSession(input, authenticatedPrincipalId(opts.client));
       const sessionKey = tracked.session_key;
-      let canonical: Record<string, unknown> | null = null;
+      let canonical: Record<string, unknown>;
       try {
         canonical = await callCanonicalHandler(sessionReadHandlers["sessions.get"]!, opts, {
           sessionKey,
           limit: 1,
         });
-      } catch {
-        // A child can fail before its transcript is created; lifecycle remains authoritative.
+      } catch (error) {
+        throw new ContractInputError(
+          error instanceof ContractInputError
+            ? error.message
+            : "canonical sessions.get read failed",
+        );
       }
       const sessionExists = canonical?.sessionExists === true;
       const totalMessages =
@@ -222,11 +240,12 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
     await respondWithContract(opts.params, opts.respond, async (input) => {
       const tracked = historyAgenticOsSession(input, authenticatedPrincipalId(opts.client));
       const sessionKey = tracked.session_key;
+      const limit = readOptionalPositiveInteger(input, "limit");
       let canonical: Record<string, unknown>;
       try {
         canonical = await callCanonicalHandler(chatHistoryHandlers["chat.history"]!, opts, {
           sessionKey,
-          ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
+          ...(limit === undefined ? {} : { limit }),
         });
       } catch {
         throw new ContractInputError("canonical chat.history read failed");
