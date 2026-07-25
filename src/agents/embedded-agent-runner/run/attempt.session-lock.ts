@@ -124,13 +124,16 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     publishOwnedSessionFileSnapshot: () => false,
     publishValidatedSessionFileSnapshot: () => false,
     readTrustedCurrentSessionFileSnapshot: async () => undefined,
-    releaseForPrompt: async () => {
-      await serializeLifecycle(() => {});
-      promptReleased = true;
-      promptSettled = new Promise<void>((resolve) => {
-        settlePrompt = resolve;
-      });
-    },
+    releaseForPrompt: async () =>
+      await serializeLifecycle(() => {
+        if (disposed || promptAborted) {
+          throw new Error("attempt disposed before prompt submission");
+        }
+        promptReleased = true;
+        promptSettled = new Promise<void>((resolve) => {
+          settlePrompt = resolve;
+        });
+      }),
     releaseHeldLockForAbort: async () => {
       promptAborted = true;
       promptReleased = false;

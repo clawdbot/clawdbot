@@ -79,8 +79,8 @@ function buildCompactionResultSessionTarget(params: {
     marker &&
     !completeTarget &&
     candidateSessionKey &&
-    markerMatches.length > 0 &&
-    candidateEntry?.sessionId !== marker.sessionId
+    ((candidateEntry && candidateEntry.sessionId !== marker.sessionId) ||
+      (!candidateEntry && markerMatches.length > 0))
   ) {
     throw new Error("Legacy context-engine successor session key is inconsistent");
   }
@@ -89,8 +89,8 @@ function buildCompactionResultSessionTarget(params: {
     !completeTarget &&
     ((targetAgentId && targetAgentId !== marker.agentId) ||
       (targetSessionId && targetSessionId !== marker.sessionId) ||
-      (parseAgentSessionKey(targetSessionKey)?.agentId &&
-        parseAgentSessionKey(targetSessionKey)?.agentId !== marker.agentId) ||
+      (parseAgentSessionKey(candidateSessionKey)?.agentId &&
+        parseAgentSessionKey(candidateSessionKey)?.agentId !== marker.agentId) ||
       (targetStorePath && path.resolve(targetStorePath) !== path.resolve(marker.storePath)))
   ) {
     throw new Error("Legacy context-engine successor identity is inconsistent");

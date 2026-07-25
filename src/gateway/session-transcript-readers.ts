@@ -657,7 +657,15 @@ export async function readLatestSessionUsageFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
   const artifactFile = scope.sessionFile?.trim();
-  if (artifactFile && path.isAbsolute(artifactFile) && artifactFile.endsWith(".jsonl")) {
+  const hasCompleteTarget = Boolean(
+    scope.agentId?.trim() && scope.sessionKey?.trim() && scope.storePath?.trim(),
+  );
+  if (
+    !hasCompleteTarget &&
+    artifactFile &&
+    path.isAbsolute(artifactFile) &&
+    artifactFile.endsWith(".jsonl")
+  ) {
     return await readLatestSessionUsageFromTranscriptAsyncFile(
       scope.sessionId,
       scope.storePath,

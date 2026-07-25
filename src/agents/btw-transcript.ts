@@ -7,12 +7,17 @@ import {
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntries,
+  loadSessionEntry,
+  loadTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import {
   buildSessionContext,
   migrateSessionEntries,
@@ -126,8 +131,33 @@ export async function readBtwTranscriptMessages(params: {
             storePath: marker.storePath,
           }).filter(({ entry }) => entry.sessionId === marker.sessionId)
         : [];
-    const sessionKey =
-      params.sessionKey ?? (markerMatches.length === 1 ? markerMatches[0]?.sessionKey : undefined);
+    const suppliedEntry =
+      marker && params.sessionKey && !completeTarget
+        ? loadSessionEntry({
+            agentId: marker.agentId,
+            sessionKey: params.sessionKey,
+            storePath: marker.storePath,
+          })
+        : undefined;
+    if (
+      marker &&
+      !completeTarget &&
+      params.sessionKey &&
+      ((suppliedEntry && suppliedEntry.sessionId !== marker.sessionId) ||
+        (!suppliedEntry && markerMatches.length > 0))
+    ) {
+      return [];
+    }
+    const sessionKey = completeTarget
+      ? params.sessionKey
+      : marker
+        ? suppliedEntry?.sessionId === marker.sessionId
+          ? params.sessionKey
+          : (resolvePreferredSessionKeyForSessionIdMatches(
+              markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+              marker.sessionId,
+            ) ?? (markerMatches.length === 0 ? params.sessionKey : undefined))
+        : params.sessionKey;
     if (!sessionKey || !storePath) {
       return [];
     }
