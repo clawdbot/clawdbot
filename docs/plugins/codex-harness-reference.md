@@ -131,7 +131,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.144.6`):
+with the official plugin (currently `@openai/codex` `0.145.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -255,7 +255,7 @@ networking, so a full-access profile would not protect outbound traffic.
 
 The plugin blocks older, newer-unvalidated, prerelease, build-suffixed, or
 unversioned app-server handshakes. Codex app-server must report a stable version
-from `0.143.0` through the bundled `0.144.6`.
+from `0.143.0` through the bundled `0.145.0`.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
@@ -507,6 +507,11 @@ toward native `spawn_agent` for Codex-native subagent work, while
 Message-tool-only source replies also stay direct, since that is a
 turn-control contract.
 
+Codex Code Mode projects generic OpenClaw dynamic-tool results as text. Parse a
+JSON result before reading fields. Nested dynamic calls are serialized by the
+Codex runtime, so `Promise.all` does not submit them concurrently; use a
+bounded sequential launch loop when starting collector children.
+
 Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
 tool, are grouped under `openclaw_direct`. OpenClaw adds that namespace to
 Codex's `code_mode.direct_only_tool_namespaces` list without replacing
@@ -534,15 +539,16 @@ first available timeout in this order:
   converted to milliseconds, or the 60 second media default. For image
   understanding, this applies to the request itself and is not reduced by
   earlier preparation work.
-- For the `message` tool, a fixed 120 second default.
+- For the `message` tool, a fixed 600 second outer budget that covers Gateway delivery and bounded same-key reconciliation.
 - The 90 second dynamic-tool default.
 
 This watchdog is the outer dynamic `item/tool/call` budget. Provider-specific
 request timeouts run inside that call and keep their own timeout semantics.
-Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
-tool signal where supported and returns a failed dynamic-tool response to
-Codex so the turn can continue instead of leaving the session in
-`processing`.
+Dynamic tool budgets are capped at 600000 ms. `agents_wait` adds 30000 ms of
+outer completion grace, and the app-server client allows 660000 ms so that
+structured wait result can reach Codex. On timeout, OpenClaw aborts the tool
+signal where supported and returns a failed dynamic-tool response to Codex so
+the turn can continue instead of leaving the session in `processing`.
 
 After Codex accepts a turn, and after OpenClaw responds to a turn-scoped
 app-server request, the harness expects Codex to make current-turn progress
@@ -599,7 +605,7 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog:
 | `gpt-5.4-mini` | GPT-5.4-Mini | low, medium, high, xhigh |
 
 <Note>
-The current bundled harness is `@openai/codex` `0.144.6`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.145.0`. A `model/list` probe
 against that bundled app-server returned these public picker rows:
 
 | Model id        | Input modalities | Reasoning efforts                    |
@@ -608,8 +614,6 @@ against that bundled app-server returned these public picker rows:
 | `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
 | `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
 | `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
 | `gpt-5.2`       | text, image      | low, medium, high, xhigh             |
 
 The app-server catalog can report `ultra`; OpenClaw reasoning controls currently

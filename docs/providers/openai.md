@@ -459,35 +459,81 @@ for the full example.
     or session state, `openclaw doctor --fix` rewrites them to `openai/*` with
     the Codex runtime unless OpenClaw is explicitly configured.
 
-    ### Context window cap
+    ### Context window defaults and long-context opt-in
 
-    OpenClaw treats model metadata and the runtime context cap as separate
-    values. For `openai/gpt-5.5` through the Codex OAuth catalog:
+    OpenClaw treats native model capacity and the active runtime budget as
+    separate values:
 
-    - Native `contextWindow`: `400000`
-    - Default runtime `contextTokens` cap: `272000`
+    - `contextWindow` declares the provider's total model window.
+    - `contextTokens` caps how much of that window OpenClaw uses for active input.
 
-    The smaller default cap has better latency and quality characteristics in
-    practice. Override it with `contextTokens`:
+    ChatGPT/Codex OAuth follows the live Codex account catalog. The current
+    catalog commonly advertises a `272000` token active window for GPT-5.6.
+    Direct API-key GPT-5.5 and GPT-5.6 models also default to `272000`
+    `contextTokens`, even though the Platform API exposes a larger native
+    window. This keeps the normal latency, quality, and cost profile consistent
+    across auth modes. A configured `agents.defaults.contextTokens` value can
+    lower that budget further, but it cannot raise a model above its configured
+    `contextTokens` cap.
+
+    For direct API-key GPT-5.5 and GPT-5.6, OpenAI documents a `1050000`
+    token provider window and `128000` maximum output tokens. Reserving the
+    full output allowance leaves `922000` tokens for input. This is a derived
+    operating budget, not a separate provider-published input limit. See the
+    official [model comparison](https://developers.openai.com/api/docs/models/compare)
+    and [GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5).
+    The following example opts one Terra model into that allowance and asks
+    OpenAI to compact at `700000` active tokens:
 
     ```json5
     {
       models: {
         providers: {
           openai: {
-            models: [{ id: "gpt-5.5", contextTokens: 160000 }],
+            models: [
+              {
+                id: "gpt-5.6-terra",
+                name: "GPT-5.6 Terra",
+                contextWindow: 1050000,
+                contextTokens: 922000,
+                maxTokens: 128000,
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-terra" },
+          models: {
+            "openai/gpt-5.6-terra": {
+              agentRuntime: { id: "openclaw" },
+              params: {
+                responsesServerCompaction: true,
+                responsesCompactThreshold: 700000,
+              },
+            },
           },
         },
       },
     }
     ```
 
-    <Note>
-    Use `contextWindow` to declare native model metadata. Use `contextTokens`
-    to limit the runtime context budget. The direct OpenAI API-key route
-    reports a larger native `contextWindow` (`1000000`) for `gpt-5.5`; the two
-    routes are tracked separately because upstream catalogs differ.
-    </Note>
+    `agentRuntime.id: "openclaw"` is intentional in this example. It proves the
+    embedded OpenClaw Responses path is using the model metadata and server-side
+    compaction settings above. A native Codex harness thread owns its context
+    budget in Codex config instead; see
+    [Codex harness long context](/plugins/codex-harness#direct-api-long-context).
+
+    <Warning>
+    OpenAI applies higher long-context pricing once a GPT-5.5 or GPT-5.6
+    request exceeds `272000` input tokens: the whole qualifying request is
+    billed at 2× input and 1.5× output rates. Large prompts are resent or
+    compacted across turns, so an opt-in session can cost substantially more
+    than the default even when the visible reply is short. See
+    [OpenAI API pricing](https://developers.openai.com/api/docs/pricing). The API
+    remains authoritative for account access, actual limits, and billing.
+    </Warning>
 
     ### Catalog recovery
 

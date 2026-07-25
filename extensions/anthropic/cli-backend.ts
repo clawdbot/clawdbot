@@ -20,7 +20,6 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
-  resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
 type ClaudeCliAuthCredential =
@@ -128,6 +127,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
+    toolAvailabilityEnforcement: "execution-args",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     // Anthropic routes direct anthropic-messages calls on subscription OAuth
@@ -210,6 +210,5 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         : undefined;
     },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
-    resolveRuntimeToolAvailability: resolveClaudeCliRuntimeToolAvailability,
   };
 }

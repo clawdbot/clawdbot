@@ -258,7 +258,7 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     const settingsItem = firstMenu?.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="command:settings"]',
+      'wa-dropdown-item[value="command:agent-settings"]',
     );
     expect(firstMenu).not.toBeNull();
     expect(settingsItem).not.toBeNull();
@@ -394,7 +394,9 @@ describe("AppSidebar custom group reordering", () => {
     }
     dispatchDragEvent(alphaSection, "drop", dataTransfer);
 
-    expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
+    await waitForFast(() =>
+      expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]),
+    );
   });
 });
 describe("AppSidebar catalog session rows", () => {

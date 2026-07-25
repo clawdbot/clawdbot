@@ -9,7 +9,7 @@ import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import type {
   MeetingAgentConsultSurface,
   MeetingPlatformRuntimeMetadata,
-} from "./platform-adapter.js";
+} from "./platform-adapter-contract.js";
 
 const surface: MeetingAgentConsultSurface = {
   id: "test-meeting",

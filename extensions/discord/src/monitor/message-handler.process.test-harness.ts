@@ -611,7 +611,7 @@ export function getLastDispatchCtx():
       CommandBody?: string;
       From?: string;
       GroupRequireMention?: boolean;
-      MediaTranscribedIndexes?: number[];
+      media?: Array<{ transcribed?: boolean }>;
       MessageSid?: string;
       MessageSidFull?: string;
       MessageThreadId?: string | number;
@@ -636,7 +636,7 @@ export function getLastDispatchCtx():
           CommandBody?: string;
           From?: string;
           GroupRequireMention?: boolean;
-          MediaTranscribedIndexes?: number[];
+          media?: Array<{ transcribed?: boolean }>;
           MessageSid?: string;
           MessageSidFull?: string;
           MessageThreadId?: string | number;

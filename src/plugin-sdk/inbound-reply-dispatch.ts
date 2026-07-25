@@ -6,9 +6,7 @@
 
 export {
   runPreparedInboundReply,
-  runPreparedInboundReplyTurn,
   runChannelInboundEvent,
-  runInboundReplyTurn,
   dispatchChannelInboundReply,
   hasFinalInboundReplyDispatch,
   hasVisibleInboundReplyDispatch,

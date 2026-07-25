@@ -44,6 +44,7 @@ export type CodexSessionCatalogPageParams = {
 };
 
 export type CodexSessionCatalogControl = {
+  clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;

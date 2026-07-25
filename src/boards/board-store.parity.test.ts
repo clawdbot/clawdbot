@@ -510,7 +510,7 @@ describe("SqliteBoardStore persistence", () => {
     expect(store.readWidgetMcpApp(sessionKey, "legacy-app")).toBeUndefined();
   });
 
-  it("lazily creates board tables for an existing v13 database", () => {
+  it("lazily creates board tables for an existing v14 database", () => {
     const stateDir = tempDirs.make("openclaw-board-lazy-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:board";
@@ -521,14 +521,14 @@ describe("SqliteBoardStore persistence", () => {
     closeOpenClawStateDatabaseForTest();
 
     const { DatabaseSync } = requireNodeSqlite();
-    const existingV13 = new DatabaseSync(databasePath);
-    existingV13.exec(`
+    const existingV14 = new DatabaseSync(databasePath);
+    existingV14.exec(`
       DROP TABLE board_widgets;
       DROP TABLE board_tabs;
-      PRAGMA user_version = 13;
-      UPDATE schema_meta SET schema_version = 13 WHERE meta_key = 'primary';
+      PRAGMA user_version = 14;
+      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
-    existingV13.close();
+    existingV14.close();
 
     const reopened = openOpenClawAgentDatabase({ agentId: "main", env });
     expect(
@@ -682,6 +682,39 @@ describe("SqliteBoardStore persistence", () => {
       ),
     ).toBe(false);
     expect(existsSync(path.join(stateDir, "agents", "attacker-selected"))).toBe(false);
+  });
+
+  it("rejects board writes for transcript-only placeholder nodes", () => {
+    const stateDir = tempDirs.make("openclaw-board-transcript-only-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:transcript-only";
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare(
+        `INSERT INTO session_nodes (
+           session_key, current_session_id, entry_json, updated_at
+         ) VALUES (?, 'transcript-only-session', '{}', 1)`,
+      )
+      .run(sessionKey);
+    database.db
+      .prepare(
+        `INSERT INTO session_windows (
+           session_id, session_key, session_scope, created_at, updated_at
+         ) VALUES ('transcript-only-session', ?, 'conversation', 1, 1)`,
+      )
+      .run(sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+
+    expect(() =>
+      store.putWidget({
+        sessionKey,
+        name: "status",
+        content: { kind: "html", html: "no" },
+      }),
+    ).toThrow("board session not found");
   });
 
   it("canonicalizes aliases before reading and writing board rows", () => {

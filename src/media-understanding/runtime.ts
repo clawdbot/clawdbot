@@ -96,14 +96,12 @@ function buildFileContext(params: {
     (remoteRef && params.capability ? `${params.capability}/*` : undefined);
   if (remoteRef) {
     return {
-      MediaUrl: remoteRef,
-      MediaType: mediaType,
+      media: [{ url: remoteRef, contentType: mediaType }],
       ...scopeFields,
     };
   }
   return {
-    MediaPath: params.filePath,
-    MediaType: mediaType,
+    media: [{ path: params.filePath, contentType: mediaType }],
     ...scopeFields,
   };
 }

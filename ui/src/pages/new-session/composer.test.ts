@@ -9,7 +9,14 @@ import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
 
-function renderComposer(overrides: { submitting?: boolean; messageLocked?: boolean } = {}) {
+function renderComposer(
+  overrides: {
+    submitting?: boolean;
+    messageLocked?: boolean;
+    incognito?: boolean;
+    onToggleIncognito?: () => void;
+  } = {},
+) {
   const container = document.createElement("div");
   const attachmentDraft = new NewSessionAttachmentDraft(() => undefined);
   attachmentDrafts.push(attachmentDraft);
@@ -21,11 +28,13 @@ function renderComposer(overrides: { submitting?: boolean; messageLocked?: boole
       context: undefined,
       isCatalogTarget: true,
       message: "",
+      incognito: overrides.incognito,
       modelControl: new NewSessionModelControl(() => undefined),
       requiresModifier: false,
       submitting: overrides.submitting ?? false,
       messageLocked: overrides.messageLocked,
       onInput: () => undefined,
+      onToggleIncognito: overrides.onToggleIncognito,
       onSubmit: () => undefined,
     }),
     container,
@@ -54,6 +63,24 @@ afterEach(() => {
 });
 
 describe("new-session composer attachment drops", () => {
+  it("renders the incognito switch off by default and forwards toggles", () => {
+    const onToggleIncognito = vi.fn();
+    const { composer } = renderComposer({ onToggleIncognito });
+    const toggle = composer.querySelector<HTMLButtonElement>('[role="switch"]');
+
+    expect(toggle?.getAttribute("aria-checked")).toBe("false");
+    toggle?.click();
+    expect(onToggleIncognito).toHaveBeenCalledOnce();
+  });
+
+  it("renders a distinct active state when incognito is selected", () => {
+    const { composer } = renderComposer({ incognito: true });
+    const toggle = composer.querySelector<HTMLButtonElement>('[role="switch"]');
+
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    expect(toggle?.classList.contains("new-session-page__incognito--active")).toBe(true);
+  });
+
   it("adds a dropped file through the shared attachment handling", async () => {
     const { attachmentDraft, composer } = renderComposer();
     const replace = vi.spyOn(attachmentDraft, "replace");

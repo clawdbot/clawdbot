@@ -4,6 +4,7 @@
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
+import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import {
   cancelPendingAgentQuestionForSession,
@@ -24,6 +25,7 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     images?: ImageContent[],
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
+    imageOrder?: PromptImageOrderEntry[],
   ): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
@@ -37,9 +39,10 @@ function steerActiveSession(
   images?: ImageContent[],
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
   media?: MediaFact[],
+  imageOrder?: PromptImageOrderEntry[],
 ): Promise<void> {
   if (media?.length) {
-    return activeSession.steer(text, images, userTurnTranscriptRecorder, media);
+    return activeSession.steer(text, images, userTurnTranscriptRecorder, media, imageOrder);
   }
   return userTurnTranscriptRecorder
     ? activeSession.steer(text, images, userTurnTranscriptRecorder)
@@ -157,6 +160,7 @@ async function steerAndWaitForTranscriptCommit(
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
   images?: ImageContent[],
   media?: MediaFact[],
+  imageOrder?: PromptImageOrderEntry[],
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -243,6 +247,7 @@ async function steerAndWaitForTranscriptCommit(
       images,
       userTurnTranscriptRecorder,
       media,
+      imageOrder,
     );
     steer.catch((err: unknown) => {
       finish(err);
@@ -291,6 +296,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       options?.images,
       options?.userTurnTranscriptRecorder,
       options?.media,
+      options?.imageOrder,
     );
     return;
   }
@@ -301,5 +307,6 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     options.userTurnTranscriptRecorder,
     options.images,
     options.media,
+    options.imageOrder,
   );
 }

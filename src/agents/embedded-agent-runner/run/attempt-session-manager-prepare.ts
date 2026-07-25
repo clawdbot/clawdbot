@@ -23,6 +23,7 @@ import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { createUserTranscriptContextRegistry } from "./attempt.user-transcript-context-registry.js";
+import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
@@ -116,6 +117,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
     missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
     allowedToolNames: input.replayAllowedToolNames,
+    trigger: attempt.trigger,
     suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
@@ -154,6 +156,12 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     onAssistantErrorMessagePersisted: (message) => {
       attempt.onAssistantErrorMessagePersisted?.(message);
     },
+  });
+  attempt.promptCacheKey = resolveSessionBoundaryPromptCacheKey({
+    api: attempt.model.api,
+    boundaryCount: sessionManager.getBoundaryCount(),
+    promptCacheKey: attempt.promptCacheKey,
+    sessionId: attempt.sessionId,
   });
   // Publish ownership before async bootstrap. Outer cleanup must close this manager
   // even when a context-engine or transcript preparation step fails.

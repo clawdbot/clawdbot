@@ -13,12 +13,9 @@ import {
   loadSettings,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
-  normalizeTextScale,
   patchSettings,
-  TEXT_SCALE_STOPS,
   type ChatFollowUpMode,
   type ChatSendShortcut,
-  type TextScaleStop,
   type UiSettings,
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
@@ -61,11 +58,6 @@ const SYNCED_PREFS = {
     extract: (value) => (THEME_MODES.has(value as ThemeMode) ? (value as ThemeMode) : undefined),
     local: (settings) => settings.themeMode,
   }),
-  textScale: prefSpec<TextScaleStop>({
-    extract: (value) =>
-      TEXT_SCALE_STOPS.includes(value as TextScaleStop) ? normalizeTextScale(value) : undefined,
-    local: (settings) => normalizeTextScale(settings.textScale),
-  }),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
@@ -99,10 +91,6 @@ const SYNCED_PREFS = {
   sidebarEntries: prefSpec<string[]>({
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
     local: (settings) => settings.sidebarEntries,
-  }),
-  sidebarLiveActivity: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.sidebarLiveActivity !== false,
   }),
   showAdvancedSettings: prefSpec<boolean>({
     extract: (value) => (typeof value === "boolean" ? value : undefined),

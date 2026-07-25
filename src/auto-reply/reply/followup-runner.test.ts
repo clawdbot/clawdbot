@@ -37,10 +37,9 @@ let resolveQueuedReplyExecutionConfigActual:
   | undefined;
 let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
-let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
-let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+let loadSessionEntry: typeof import("../../config/sessions/session-accessor.js").loadSessionEntry;
 let replaceSessionEntrySync: typeof import("../../config/sessions/session-accessor.js").replaceSessionEntrySync;
-let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
+let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store-writer-state.js").clearSessionStoreCacheForTest;
 let clearFollowupQueue: typeof import("./queue/state.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
@@ -334,8 +333,7 @@ async function persistRunSessionUsageForFollowupTest(
     return;
   }
   const registeredStore = FOLLOWUP_TEST_SESSION_STORES.get(storePath);
-  const store = registeredStore ?? loadSessionStore(storePath, { skipCache: true });
-  const entry = store[sessionKey];
+  const entry = registeredStore?.[sessionKey] ?? loadSessionEntry({ storePath, sessionKey });
   if (!entry) {
     return;
   }
@@ -377,11 +375,11 @@ async function persistRunSessionUsageForFollowupTest(
   if (params.cliSessionBinding && params.providerUsed && !preserveUserFacingRunState) {
     setCliSessionBinding(nextEntry, params.providerUsed, params.cliSessionBinding);
   }
-  store[sessionKey] = nextEntry;
   if (registeredStore) {
+    registeredStore[sessionKey] = nextEntry;
     return;
   }
-  await saveSessionStore(storePath, store);
+  replaceSessionEntrySync({ storePath, sessionKey }, nextEntry);
 }
 
 async function loadFreshFollowupRunnerModuleForTest() {
@@ -532,9 +530,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
-  ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
-    await import("../../config/sessions/store.js"));
-  ({ replaceSessionEntrySync } = await import("../../config/sessions/session-accessor.js"));
+  ({ clearSessionStoreCacheForTest } = await import("../../config/sessions/store-writer-state.js"));
+  ({ loadSessionEntry, replaceSessionEntrySync } =
+    await import("../../config/sessions/session-accessor.js"));
   ({ clearFollowupQueue } = await import("./queue/state.js"));
   ({ enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
@@ -4690,9 +4688,10 @@ describe("createFollowupRunner compaction", () => {
             if (registeredStore) {
               registeredStore[params.sessionKey] = updatedEntry;
             } else {
-              const store = loadSessionStore(params.storePath, { skipCache: true });
-              store[params.sessionKey] = updatedEntry;
-              await saveSessionStore(params.storePath, store);
+              replaceSessionEntrySync(
+                { storePath: params.storePath, sessionKey: params.sessionKey },
+                updatedEntry,
+              );
             }
           }
         }

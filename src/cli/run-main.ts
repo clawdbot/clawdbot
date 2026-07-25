@@ -35,7 +35,7 @@ import {
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
-import { flushExitAfterOneShotOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
@@ -1116,7 +1116,6 @@ export async function runCli(argv: string[] = process.argv) {
     });
   }
 
-  let flushedHelpExit = false;
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
@@ -1420,10 +1419,9 @@ export async function runCli(argv: string[] = process.argv) {
       }
       if (completedHelpOrVersion) {
         // Lazy command-group registrars can import native/runtime resources solely to
-        // render complete help. Exit after Commander has rendered and streams flush.
+        // render complete help. Request an exit now; the top-level finally flushes it
+        // after shared async teardown completes.
         requestExitAfterOneShotOutput();
-        flushExitAfterOneShotOutput();
-        flushedHelpExit = true;
       }
     } finally {
       stopStartupProgress();
@@ -1434,9 +1432,6 @@ export async function runCli(argv: string[] = process.argv) {
     await disposeCliAgentHarnesses();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
-    if (!flushedHelpExit) {
-      flushExitAfterOneShotOutput();
-    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

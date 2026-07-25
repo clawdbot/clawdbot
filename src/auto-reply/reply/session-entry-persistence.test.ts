@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
@@ -73,6 +73,7 @@ describe("persistReplySessionEntry", () => {
         sessionId: "session-2",
         updatedAt: 400,
         thinkingLevel: "medium",
+        delivery: { kind: "none" },
       };
       await replaceSessionEntry({ sessionKey: "main", storePath }, currentEntry);
 
@@ -136,6 +137,7 @@ describe("persistReplySessionEntry", () => {
         ...initialEntry,
         updatedAt: 400,
         archivedAt: 300,
+        delivery: { kind: "none" },
       };
       await replaceSessionEntry({ sessionKey: "main", storePath }, archivedEntry);
 

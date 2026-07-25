@@ -17,6 +17,7 @@ import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import {
@@ -449,7 +450,7 @@ describe("subagent registry seam flow", () => {
         runId: `run-collector-${suffix}`,
         childSessionKey: `agent:main:subagent:collector-${suffix}`,
         task: "retain lifetime group count",
-        cleanup: "delete",
+        cleanup: suffix === "one" ? "keep" : "delete",
         createdAt: now - 10_000,
         endedAt: now - 5_000,
         cleanupCompletedAt: now - 4_000,
@@ -720,6 +721,8 @@ describe("subagent registry seam flow", () => {
 
     expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
     expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
+    expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
+    expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
 
     expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
     expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toMatchObject({
@@ -874,7 +877,7 @@ describe("subagent registry seam flow", () => {
     );
   });
 
-  it("rehydrates persisted collector FIFO queues after registry restore", async () => {
+  it("rehydrates persisted collector FIFO queues after admission reopens", async () => {
     const now = Date.now();
     mocks.getRuntimeConfig.mockReturnValue({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
@@ -921,7 +924,15 @@ describe("subagent registry seam flow", () => {
       return request.method === "agent.wait" ? { status: "pending" } : {};
     });
 
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
     mod.initSubagentRegistry();
+    await Promise.resolve();
+    expect(mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent")).toEqual(
+      [],
+    );
+
+    suspension?.release();
     await waitForFast(() => {
       const agentCalls = mocks.callGateway.mock.calls.filter(
         ([request]) => request.method === "agent",
@@ -937,12 +948,120 @@ describe("subagent registry seam flow", () => {
       });
     });
     expect(mod.getSubagentRunByRunId("run-queued-one")?.execution?.status).toBe("running");
-    expect(mod.getSubagentRunByRunId("gateway-run-one")).toMatchObject({
+    const acceptedRun = mod.getSubagentRunByRunId("gateway-run-one");
+    expect(acceptedRun).toMatchObject({
       runId: "gateway-run-one",
       swarmRunId: "run-queued-one",
       schedulerSlotId: "run-queued-one",
+      execution: { status: "running" },
     });
+    expect(acceptedRun).not.toHaveProperty("startedAt");
+    expect(acceptedRun).not.toHaveProperty("sessionStartedAt");
+    expect(acceptedRun?.execution).not.toHaveProperty("startedAt");
     expect(mod.getSubagentRunByRunId("run-queued-two")?.execution?.status).toBe("queued");
+  });
+
+  it("preserves a lifecycle start that arrives before collector acceptance returns", async () => {
+    const startedAt = 12_345;
+    mod.registerSubagentRun({
+      runId: "run-start-race",
+      childSessionKey: "agent:main:subagent:start-race",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "start before acceptance",
+      cleanup: "keep",
+      collect: true,
+      groupId: "start-race",
+      queued: true,
+      expectsCompletionMessage: false,
+    });
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls.at(-1) as unknown as
+      | [(event: AgentEventPayload) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-start-race",
+      seq: 1,
+      stream: "lifecycle",
+      ts: startedAt,
+      data: { phase: "start", startedAt },
+    });
+    await waitForFast(() =>
+      expect(mod.getSubagentRunByRunId("run-start-race")?.startedAt).toBe(startedAt),
+    );
+
+    expect(mod.startQueuedSubagentRun("run-start-race", "gateway-start-race")).toBe(true);
+    expect(mod.getSubagentRunByRunId("gateway-start-race")).toMatchObject({
+      startedAt,
+      sessionStartedAt: startedAt,
+      execution: { status: "running", acceptedAt: expect.any(Number), startedAt },
+    });
+  });
+
+  it("remaps a collector that completed before its acceptance response", () => {
+    mod.addSubagentRunForTests({
+      runId: "run-terminal-race",
+      childSessionKey: "agent:main:subagent:terminal-race",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish before acceptance",
+      cleanup: "keep",
+      collect: true,
+      swarmRunId: "run-terminal-race",
+      schedulerSlotId: "run-terminal-race",
+      swarmLaunchPending: false,
+      queuedLaunch: {
+        request: { sessionKey: "agent:main:subagent:terminal-race" },
+        timeoutMs: 1_000,
+        schedulerGroupKey: "terminal-race",
+        maxConcurrent: 1,
+      },
+      groupId: "terminal-race",
+      createdAt: 1_000,
+      endedAt: 2_000,
+      execution: { status: "terminal", endedAt: 2_000 },
+      completion: { required: false, resultText: "done", capturedAt: 2_000 },
+      collectorCompletion: { status: "done" },
+    });
+
+    expect(mod.startQueuedSubagentRun("run-terminal-race", "gateway-terminal-race")).toBe(true);
+    const remapped = mod.getSubagentRunByRunId("gateway-terminal-race");
+    expect(mod.getSubagentRunByRunId("run-terminal-race")).toBe(remapped);
+    expect(remapped).toMatchObject({
+      runId: "gateway-terminal-race",
+      swarmRunId: "run-terminal-race",
+      collectorCompletion: { status: "done" },
+      swarmLaunchPending: false,
+    });
+  });
+
+  it("refuses to remap an unrelated terminal collector without a pending launch", () => {
+    mod.addSubagentRunForTests({
+      runId: "run-terminal-stale",
+      childSessionKey: "agent:main:subagent:terminal-stale",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale acceptance callback",
+      cleanup: "keep",
+      collect: true,
+      swarmRunId: "run-terminal-stale",
+      schedulerSlotId: "run-terminal-stale",
+      groupId: "terminal-stale",
+      createdAt: 1_000,
+      endedAt: 2_000,
+      execution: { status: "terminal", endedAt: 2_000 },
+      completion: { required: false, resultText: "done", capturedAt: 2_000 },
+      collectorCompletion: { status: "done" },
+    });
+
+    expect(mod.startQueuedSubagentRun("run-terminal-stale", "gateway-terminal-stale")).toBe(false);
+    expect(mod.getSubagentRunByRunId("run-terminal-stale")).toMatchObject({
+      runId: "run-terminal-stale",
+      collectorCompletion: { status: "done" },
+    });
+    expect(mod.getSubagentRunByRunId("gateway-terminal-stale")).toBeUndefined();
   });
 
   it("holds a restored FIFO slot until an accepted collector is confirmed stopped", async () => {

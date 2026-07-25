@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 type SqliteIndexListRow = {
   name: string;
@@ -24,6 +24,7 @@ type SqliteIndexTermContract = Omit<SqliteIndexTermRow, "cid"> & {
 type SqliteSchemaRow = {
   name: string;
   sql: string | null;
+  tbl_name?: string;
 };
 
 type SqliteTableListRow = {
@@ -57,6 +58,14 @@ type SqliteTableContract = {
 
 type SqliteSchemaContract = Map<string, SqliteTableContract>;
 
+export type CanonicalSqliteNamedIndexContract = {
+  definition: string;
+  fingerprint: SqliteIndexContract;
+  name: string;
+  tableName: string;
+  unique: boolean;
+};
+
 export type SqliteSchemaCompatibility = {
   /**
    * Exact definitions produced by supported additive migrations when SQLite
@@ -89,11 +98,7 @@ export function assertSqliteSchemaContains(
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
 ): void {
-  let expected = schemaContractCache.get(schemaSql);
-  if (!expected) {
-    expected = buildSqliteSchemaContract(schemaSql);
-    schemaContractCache.set(schemaSql, expected);
-  }
+  const expected = getSqliteSchemaContract(schemaSql);
 
   const mismatches: string[] = [];
   for (const [tableName, expectedTable] of expected) {
@@ -184,6 +189,53 @@ export function assertSqliteSchemaContains(
   }
 }
 
+/** Return every explicit named index owned by one committed schema. */
+export function getCanonicalSqliteNamedIndexContracts(
+  schemaSql: string,
+): CanonicalSqliteNamedIndexContract[] {
+  const schema = getSqliteSchemaContract(schemaSql);
+  const indexes: CanonicalSqliteNamedIndexContract[] = [];
+  for (const [tableName, table] of schema) {
+    for (const fingerprint of table.indexes) {
+      if (fingerprint.name === null || fingerprint.sql === null || fingerprint.origin !== "c") {
+        continue;
+      }
+      indexes.push({
+        definition: readCanonicalIndexDefinition(fingerprint),
+        fingerprint,
+        name: fingerprint.name,
+        tableName,
+        unique: fingerprint.unique === 1,
+      });
+    }
+  }
+  return indexes;
+}
+
+/** Return every table owned by one committed schema. */
+export function getCanonicalSqliteTableNames(schemaSql: string): string[] {
+  return [...getSqliteSchemaContract(schemaSql).keys()];
+}
+
+/** Inspect one explicit main-schema index using the canonical schema fingerprint shape. */
+export function collectSqliteNamedIndexContract(
+  database: DatabaseSync,
+  indexName: string,
+): SqliteIndexContract | undefined {
+  const row = database
+    .prepare("SELECT name, sql, tbl_name FROM main.sqlite_schema WHERE type = 'index' AND name = ?")
+    .get(indexName) as SqliteSchemaRow | undefined;
+  if (!row || typeof row.tbl_name !== "string") {
+    return undefined;
+  }
+  const index = (
+    database.prepare(`PRAGMA main.index_list(${quoteSqliteIdentifier(row.tbl_name)})`).all() as
+      | SqliteIndexListRow[]
+      | undefined
+  )?.find((candidate) => candidate.name === indexName);
+  return index ? collectSqliteIndexContract(database, index) : undefined;
+}
+
 function collectOptionalCanonicalTriggerGroups(
   compatibility: SqliteSchemaCompatibility,
   tableName: string,
@@ -203,9 +255,17 @@ function normalizeOptionalCanonicalTriggerSql(sql: string): string | null {
   return normalizeSchemaSql(sql)?.replace(/^(CREATE TRIGGER) main\./iu, "$1 ") ?? null;
 }
 
+function getSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
+  let expected = schemaContractCache.get(schemaSql);
+  if (!expected) {
+    expected = buildSqliteSchemaContract(schemaSql);
+    schemaContractCache.set(schemaSql, expected);
+  }
+  return expected;
+}
+
 function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(":memory:");
+  const database = openNodeSqliteDatabase(":memory:");
   try {
     database.exec(schemaSql);
     const rows = database
@@ -231,6 +291,27 @@ function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
   } finally {
     database.close();
   }
+}
+
+function readCanonicalIndexDefinition(index: SqliteIndexContract): string {
+  if (index.name === null || index.sql === null) {
+    throw new Error("Canonical SQLite named index is missing its schema definition.");
+  }
+  const createPrefix =
+    index.unique === 1 ? /^CREATE\s+UNIQUE\s+INDEX\s+/iu : /^CREATE\s+INDEX\s+/iu;
+  const prefix = createPrefix.exec(index.sql);
+  if (!prefix) {
+    throw new Error(`Canonical SQLite index ${index.name} has an unreadable definition.`);
+  }
+  const name = readSqlToken(index.sql, prefix[0].length);
+  if (!name || normalizeSqlIdentifier(name.raw) !== index.name.toLowerCase()) {
+    throw new Error(`Canonical SQLite index ${index.name} has an unexpected schema name.`);
+  }
+  const definition = index.sql.slice(name.end).trim();
+  if (!/^ON\s+/iu.test(definition)) {
+    throw new Error(`Canonical SQLite index ${index.name} has an unreadable target.`);
+  }
+  return definition;
 }
 
 function collectSqliteTableContract(

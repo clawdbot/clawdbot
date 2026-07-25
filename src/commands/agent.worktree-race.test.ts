@@ -10,7 +10,7 @@ import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { upsertSqliteSessionEntry } from "../config/sessions/session-accessor.sqlite.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { testing as agentCommandTesting } from "./agent.js";

@@ -136,6 +136,7 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
           bundleMcpMode: backend.bundleMcpMode,
           authEpochMode: backend.authEpochMode,
           nativeToolMode: backend.nativeToolMode,
+          toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
           sideQuestionToolMode: backend.sideQuestionToolMode,
         },
         ...(profileId ? { authProfileId: profileId } : {}),

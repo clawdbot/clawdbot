@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="accessibility_service_label" translatable="false">OpenClaw UI control</string>
-    <string name="accessibility_service_summary" translatable="false">Developer UI observation and control</string>
-    <string name="accessibility_service_description" translatable="false">Allows the third-party OpenClaw build to inspect and control the active app during local development.</string>
-    <string name="accessibility_dev_activity_label" translatable="false">OpenClaw Accessibility Developer</string>
+<!-- Locale siblings are generated after source merge; native i18n checks own their parity. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="accessibility_service_label">OpenClaw UI control</string>
+    <string name="accessibility_service_summary">Developer UI observation and control</string>
+    <string name="accessibility_service_description">Allows the third-party OpenClaw build to inspect and control the active app during local development.</string>
+    <string name="accessibility_dev_activity_label">OpenClaw Accessibility Developer</string>
 </resources>

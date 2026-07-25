@@ -26,6 +26,7 @@ import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
+import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
   abortActiveCronTaskRuns,
@@ -36,7 +37,7 @@ import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type {
@@ -272,7 +273,7 @@ export function buildGatewayCronService(params: {
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const env = params.env ?? process.env;
-  const storePath = resolveCronJobsStorePath(undefined, env);
+  const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
@@ -606,6 +607,11 @@ export function buildGatewayCronService(params: {
               state,
               streamBatch,
               toolsAllow: job.payload.toolsAllow,
+              scheduledToolPolicy: resolveCronScheduledToolPolicy({
+                toolsAllow: job.payload.toolsAllow,
+                scheduledToolPolicy: job.scheduledToolPolicy,
+                owner: job.owner,
+              }),
               abortSignal,
             }),
         }
@@ -656,6 +662,13 @@ export function buildGatewayCronService(params: {
         agentId,
         sessionKey,
         heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
+        ...(opts?.scheduledEveryMs !== undefined
+          ? { scheduledEveryMs: opts.scheduledEveryMs }
+          : {}),
+        ...(opts?.scheduledAnchorMs !== undefined
+          ? { scheduledAnchorMs: opts.scheduledAnchorMs }
+          : {}),
+        ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
       });
     },
     runHeartbeatOnce: async (opts) => {
@@ -829,6 +842,11 @@ export function buildGatewayCronService(params: {
         state: job.state.triggerState,
         streamBatch,
         toolsAllow: job.payload.toolsAllow,
+        scheduledToolPolicy: resolveCronScheduledToolPolicy({
+          toolsAllow: job.payload.toolsAllow,
+          scheduledToolPolicy: job.scheduledToolPolicy,
+          owner: job.owner,
+        }),
         timeoutSeconds: job.payload.timeoutSeconds,
         toolBudget: job.payload.toolBudget,
         abortSignal,
@@ -1252,13 +1270,13 @@ export function buildGatewayCronService(params: {
     }
   };
   const removeCron = cron.remove.bind(cron);
-  cron.remove = async (jobId) => {
+  cron.remove = async (jobId, opts) => {
     const previous = cron.getJob(jobId);
     try {
       if (previous?.schedule.kind === "stream") {
         await streamWatchersRef.current?.stop(jobId, "removed", previous);
       }
-      const result = await removeCron(jobId);
+      const result = await removeCron(jobId, opts);
       if (!result.removed) {
         await routeLiveStreamJobLogged(jobId);
       }

@@ -1,6 +1,5 @@
 // Msteams plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import {
@@ -9,6 +8,7 @@ import {
   formatUnknownError,
 } from "./errors.js";
 import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
+import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
@@ -121,7 +121,7 @@ export async function sendMessageMSTeams(
     cfg: scopedCfg,
     channel: "msteams",
   });
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
   const ctx = await resolveMSTeamsSendContext({
     cfg,
     ...(accountId ? { accountId } : {}),

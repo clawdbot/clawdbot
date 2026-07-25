@@ -73,6 +73,7 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "canvas",
   "device-pair",
   "file-transfer",
+  "google-meet",
   "linux-canvas",
   "linux-node",
   "memory-core",
@@ -80,6 +81,8 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "opencode",
   "phone-control",
   "talk-voice",
+  "teams-meetings",
+  "zoom-meetings",
 ] as const;
 
 installGeneratedPluginTempRootCleanup();

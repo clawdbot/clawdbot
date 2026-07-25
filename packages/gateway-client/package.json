@@ -58,7 +58,7 @@
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
     "ipaddr.js": "2.4.0",
-    "ws": "8.21.0"
+    "ws": "8.21.1"
   },
   "engines": {
     "node": ">=22.19.0"

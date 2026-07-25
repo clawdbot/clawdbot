@@ -231,11 +231,13 @@ describeLive("copilot agent runtime live smoke", () => {
         prompt,
       });
       const settledResult = await harness.runAttempt(attempt);
+      if (!("terminal" in settledResult)) {
+        throw new Error("Copilot harness returned the deprecated attempt result shape");
+      }
       const matchingCalls = liveToolState.calls.filter(
         (text) => text === liveToolState.expectedText,
       );
-      expect(settledResult.promptError).toBeUndefined();
-      expect(settledResult.timedOut).toBe(false);
+      expect(settledResult.terminal).toEqual({ kind: "ok" });
       expect(matchingCalls).toHaveLength(1);
       expect(
         settledResult.toolMetas.some(

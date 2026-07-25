@@ -66,6 +66,7 @@ function normalizeMockProviderId(providerId?: string): string {
 type SessionManagerMocks = {
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
+  getBoundaryCount: UnknownMock;
   branch: UnknownMock;
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
@@ -216,7 +217,9 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const prepareSessionManagerForRunMock = vi.fn(async (_params?: unknown) => undefined);
   const detectAndLoadPromptImagesMock = vi.fn(async () => ({
     images: [],
+    imageFactIndexes: [],
     detectedRefs: [],
+    failedMediaCount: 0,
     loadedCount: 0,
     skippedCount: 0,
   }));
@@ -234,6 +237,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
+    getBoundaryCount: vi.fn(() => 0),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
@@ -1120,6 +1124,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
   hoisted.sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();

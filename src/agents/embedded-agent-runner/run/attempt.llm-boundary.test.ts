@@ -244,8 +244,12 @@ describe("normalizeMessagesForLlmBoundary", () => {
       timestamp,
       MediaPath: "/tmp/input.png",
       MediaPaths: ["/tmp/input.png"],
+      __openclaw: {
+        media: [{ path: "/tmp/input.png", contentType: "image/png" }],
+      },
     };
-    const legacy = { ...persisted, content: MEDIA_ONLY_USER_TEXT };
+    const { __openclaw: _canonicalMedia, ...legacyFields } = persisted;
+    const legacy = { ...legacyFields, content: MEDIA_ONLY_USER_TEXT };
     const [normalizedPersisted] = normalizeMessagesForLlmBoundary(
       [persisted] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
@@ -256,7 +260,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     ) as unknown as Array<{ content?: unknown }>;
     const expectedText = `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${MEDIA_ONLY_USER_TEXT}`;
 
-    expect(normalizedPersisted).toEqual(normalizedLegacy);
+    const { __openclaw: _persistedFacts, ...persistedProviderFields } =
+      normalizedPersisted as Record<string, unknown>;
+    expect(persistedProviderFields).toEqual(normalizedLegacy);
     expect(normalizedPersisted?.content).toBe(expectedText);
 
     const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };

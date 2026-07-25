@@ -21,7 +21,7 @@ async function loadPluginsRouteData(
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const client = gatewaySnapshot.client;
-  if (!gatewaySnapshot.connected || !client) {
+  if (gatewaySnapshot.phase !== "connected" || !client) {
     return { gateway, gatewaySnapshot, result: null, error: null, initialTab };
   }
   try {

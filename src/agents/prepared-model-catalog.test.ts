@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   config: {} as object,
+  agentIds: ["main"],
+  agentDirs: new Map<string, string>(),
   activateSnapshot: vi.fn(),
   acquireSnapshot: vi.fn(),
   getSnapshot: vi.fn(),
@@ -15,8 +17,9 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
-  listAgentIds: () => ["main"],
-  resolveAgentDir: () => "/tmp/prepared-model-catalog-agent",
+  listAgentIds: () => mocks.agentIds,
+  resolveAgentDir: (_config: object, agentId: string) =>
+    mocks.agentDirs.get(agentId) ?? "/tmp/prepared-model-catalog-agent",
   resolveAgentWorkspaceDir: () => "/tmp/prepared-model-catalog-workspace",
   resolveDefaultAgentDir: () => "/tmp/prepared-model-catalog-agent",
   resolveDefaultAgentId: () => "main",
@@ -47,6 +50,8 @@ import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalo
 import {
   getPreparedModelCatalogSnapshot,
   loadPreparedModelCatalogSnapshot,
+  loadPublishedPreparedModelCatalog,
+  loadPublishedPreparedModelCatalogOwnerSnapshot,
 } from "./prepared-model-catalog.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.js";
 
@@ -64,6 +69,8 @@ const readOnlySnapshot = {
 
 describe("prepared model catalog access", () => {
   beforeEach(() => {
+    mocks.agentIds = ["main"];
+    mocks.agentDirs.clear();
     mocks.activateSnapshot.mockReset();
     mocks.acquireSnapshot.mockReset();
     mocks.getSnapshot.mockReset();
@@ -126,6 +133,70 @@ describe("prepared model catalog access", () => {
       PreparedModelCatalogConfigReplacedError,
     );
     expect(mocks.loadSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each([{ readOnly: true }, { readOnly: false }])(
+    "returns the published replacement owner for Gateway reads (readOnly=$readOnly)",
+    async ({ readOnly }) => {
+      const committedConfig = { agents: { defaults: { model: "openai/committed" } } };
+      const committedSnapshot = {
+        ...fullSnapshot,
+        agentDir: "/tmp/prepared-model-catalog-agent",
+        config: committedConfig,
+      };
+      mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
+
+      await expect(
+        loadPublishedPreparedModelCatalogOwnerSnapshot({ readOnly }),
+      ).resolves.toMatchObject({
+        ...committedSnapshot,
+        agentId: "main",
+      });
+      expect(mocks.loadSnapshot).not.toHaveBeenCalled();
+      expect(mocks.activateSnapshot).not.toHaveBeenCalled();
+      expect(mocks.acquireSnapshot).not.toHaveBeenCalled();
+    },
+  );
+
+  it("restores the unique configured agent identity for a published replacement owner", async () => {
+    const committedSnapshot = {
+      ...fullSnapshot,
+      agentDir: "/tmp/prepared-model-catalog-agent",
+      config: { agents: { list: [{ id: "main", default: true }] } },
+    };
+    mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
+
+    await expect(
+      loadPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "MAIN", readOnly: true }),
+    ).resolves.toMatchObject({ agentId: "main", agentDir: committedSnapshot.agentDir });
+  });
+
+  it("keeps a shared-directory published replacement owner ambiguous", async () => {
+    mocks.agentIds = ["main", "worker"];
+    mocks.agentDirs.set("main", "/tmp/shared-agent-dir");
+    mocks.agentDirs.set("worker", "/tmp/shared-agent-dir");
+    const committedSnapshot = {
+      ...fullSnapshot,
+      agentDir: "/tmp/shared-agent-dir",
+      config: { agents: { list: [{ id: "main", default: true }, { id: "worker" }] } },
+    };
+    mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
+
+    await expect(
+      loadPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "worker", readOnly: true }),
+    ).resolves.not.toHaveProperty("agentId");
+  });
+
+  it("projects published replacement entries for runtime callers", async () => {
+    const committedSnapshot = {
+      ...fullSnapshot,
+      config: { agents: { defaults: { model: "openai/committed" } } },
+    };
+    mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
+
+    await expect(loadPublishedPreparedModelCatalog({ readOnly: true })).resolves.toBe(
+      committedSnapshot.modelCatalog.entries,
+    );
   });
 
   it("prefers the full published generation for read-only access", () => {

@@ -1060,34 +1060,41 @@ export async function* parseNdjsonStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
       }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          continue;
+        }
+        try {
+          yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
+        } catch {
+          log.warn(`Skipping malformed NDJSON line: ${truncateUtf16Safe(trimmed, 120)}`);
+        }
+      }
+    }
+
+    if (buffer.trim()) {
       try {
-        yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
+        yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
       } catch {
-        log.warn(`Skipping malformed NDJSON line: ${truncateUtf16Safe(trimmed, 120)}`);
+        log.warn(`Skipping malformed trailing data: ${truncateUtf16Safe(buffer.trim(), 120)}`);
       }
     }
-  }
-
-  if (buffer.trim()) {
-    try {
-      yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
-    } catch {
-      log.warn(`Skipping malformed trailing data: ${truncateUtf16Safe(buffer.trim(), 120)}`);
-    }
+  } finally {
+    // Start cancellation best-effort; do not await it — a pending cancel
+    // must not stall releaseLock() and keep the reader locked.
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 }
 

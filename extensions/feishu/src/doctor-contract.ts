@@ -4,7 +4,11 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  defineChannelAliasMigration,
+  normalizeChannelConfigEntries,
+} from "openclaw/plugin-sdk/runtime-doctor";
 
 // Feishu's legacy boolean `streaming` gated streaming-card replies with an
 // enabled default, so it migrates through the mode path (true → "partial",
@@ -80,61 +84,19 @@ function sanitizeLegacyCoalesceFields(params: {
 }
 
 function sanitizeFeishuCoalesce(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = asObjectRecord(channels?.feishu);
-  if (!entry) {
-    return cfg;
-  }
-  const root = sanitizeLegacyCoalesceFields({
-    entry,
-    pathPrefix: "channels.feishu",
+  return normalizeChannelConfigEntries({
+    cfg,
+    channelId: "feishu",
     changes,
-  });
-  const rootHeartbeat = sanitizeLegacyHeartbeatFields({
-    entry: root.entry,
-    pathPrefix: "channels.feishu",
-    changes,
-  });
-  let updated = rootHeartbeat.entry;
-  let changed = root.changed || rootHeartbeat.changed;
-
-  const accounts = asObjectRecord(updated.accounts);
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts = { ...accounts };
-    for (const [accountId, rawAccount] of Object.entries(accounts)) {
-      const account = asObjectRecord(rawAccount);
-      if (!account) {
-        continue;
-      }
-      const sanitized = sanitizeLegacyCoalesceFields({
-        entry: account,
-        pathPrefix: `channels.feishu.accounts.${accountId}`,
-        changes,
-      });
-      const sanitizedHeartbeat = sanitizeLegacyHeartbeatFields({
-        entry: sanitized.entry,
-        pathPrefix: `channels.feishu.accounts.${accountId}`,
-        changes,
-      });
-      if (sanitized.changed || sanitizedHeartbeat.changed) {
-        nextAccounts[accountId] = sanitizedHeartbeat.entry;
-        accountsChanged = true;
-      }
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    channels: { ...channels, feishu: updated },
-  } as OpenClawConfig;
+    normalizeEntry: (params) => {
+      const coalesce = sanitizeLegacyCoalesceFields(params);
+      const heartbeat = sanitizeLegacyHeartbeatFields({ ...params, entry: coalesce.entry });
+      return {
+        entry: heartbeat.entry,
+        changed: coalesce.changed || heartbeat.changed,
+      };
+    },
+  }).config;
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] =

@@ -33,7 +33,7 @@ describe("resolveSessionNavigation", () => {
   it("hides cron sessions unless showCron opts in", () => {
     const rows: GatewaySessionRow[] = [
       { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
-      { key: "agent:main:cron:job", kind: "cron", updatedAt: 200 },
+      { key: "agent:main:cron:job", kind: "cron" as never, updatedAt: 200 },
     ];
 
     const hidden = resolveSessionNavigation({

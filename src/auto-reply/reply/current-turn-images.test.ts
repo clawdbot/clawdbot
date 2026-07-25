@@ -178,9 +178,14 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPaths: [imagePath, path.join(base, "scan.pdf")],
-          MediaTypes: ["image/png", "application/pdf"],
-          MediaWorkspaceDir: base,
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: base },
+            {
+              path: path.join(base, "scan.pdf"),
+              contentType: "application/pdf",
+              workspaceDir: base,
+            },
+          ],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
         extractedFileImages: [pdfPage],
@@ -216,9 +221,14 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPaths: [path.join(base, "scan.pdf"), imagePath],
-          MediaTypes: ["application/pdf", "image/png"],
-          MediaWorkspaceDir: base,
+          media: [
+            {
+              path: path.join(base, "scan.pdf"),
+              contentType: "application/pdf",
+              workspaceDir: base,
+            },
+            { path: imagePath, contentType: "image/png", workspaceDir: base },
+          ],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
         extractedFileImages: [pdfPage],

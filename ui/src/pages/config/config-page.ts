@@ -69,6 +69,7 @@ type ConfigSelection = { activeSection: string | null; activeSubsection: string 
 type ConfigPageSetting =
   | "textScale"
   | "sidebarLiveActivity"
+  | "chatMessageMaxWidth"
   | "showAdvancedSettings"
   | "chatSendShortcut"
   | "chatFollowUpMode"
@@ -541,11 +542,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.sessionObserverModelsClient = null;
       this.sessionObserverModels = [];
       this.sessionObserverModelsUnavailable = false;
-    } else if (!snapshot.connected) {
+    } else if (snapshot.phase !== "connected") {
       this.invalidateSystemInfoRequest();
       this.systemInfo = null;
     }
-    if (snapshot.connected && snapshot.hello) {
+    if (snapshot.phase === "connected" && snapshot.hello) {
       this.systemInfoUnavailable = !hasSystemInfo;
       if (!hasSystemInfo) {
         this.invalidateSystemInfoRequest();
@@ -561,7 +562,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isConnected &&
       this.isSystemInfoVisible() &&
       !this.systemInfoUnavailable &&
-      gateway.connected &&
+      gateway.phase === "connected" &&
       supportsSystemInfo(gateway.hello) &&
       gateway.client != null;
     if (!shouldPoll) {
@@ -590,7 +591,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       requestId === this.systemInfoRequestId &&
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway === gatewaySource &&
-      gateway.connected &&
+      gateway.phase === "connected" &&
       gateway.client === client
     );
   }
@@ -603,7 +604,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const gateway = gatewaySource.snapshot;
     const client = gateway.client;
     if (
-      !gateway.connected ||
+      gateway.phase !== "connected" ||
       !client ||
       !this.isSystemInfoVisible() ||
       this.systemInfoUnavailable ||
@@ -713,6 +714,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       sidebarLiveActivity: next.sidebarLiveActivity,
+      chatMessageMaxWidth: next.chatMessageMaxWidth,
       showAdvancedSettings: next.showAdvancedSettings,
       chatSendShortcut: next.chatSendShortcut,
       chatFollowUpMode: next.chatFollowUpMode,
@@ -940,6 +942,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       sidebarLiveActivity: this.settings.sidebarLiveActivity !== false,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
+      chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
+      setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
       forceAdvancedSection: this.routeData?.advanced ? this.routeData.section : null,

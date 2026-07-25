@@ -32,6 +32,7 @@ type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuth
 type VerifySetupInferenceConfig =
   typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
 type ConfigureGatewayForSetup = typeof import("./setup.gateway-config.js").configureGatewayForSetup;
+type RunSetupMigrationImport = typeof import("./setup.migration-import.js").runSetupMigrationImport;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const keepCurrentAuthChoice = vi.hoisted(() => "__keep-current" as const);
@@ -127,7 +128,9 @@ const enableDefaultOnboardingInternalHooks = vi.hoisted(() =>
 );
 const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
 const listSetupMigrationOptions = vi.hoisted(() => vi.fn(async () => []));
-const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
+const runSetupMigrationImport = vi.hoisted(() =>
+  vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
+);
 const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
 const verifySetupInferenceConfig = vi.hoisted(() =>
   vi.fn<VerifySetupInferenceConfig>(async () => ({
@@ -569,6 +572,8 @@ describe("runSetupWizard", () => {
     warnIfModelConfigLooksOff.mockResolvedValue(undefined);
     buildPluginCompatibilitySnapshotNotices.mockReset();
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([]);
+    runSetupMigrationImport.mockReset();
+    runSetupMigrationImport.mockResolvedValue({ kind: "no-imported-inference" });
     verifySetupInferenceConfig.mockReset();
     verifySetupInferenceConfig.mockResolvedValue({
       ok: true,
@@ -1157,8 +1162,42 @@ describe("runSetupWizard", () => {
     expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
   });
 
-  it("requires a live check before keeping an imported default model", async () => {
+  it("continues onboarding after a recovered promotion", async () => {
+    const workspaceDir = await makeCaseDir("resumed-import-flow-");
+    const acknowledgePromotion = vi.fn(async () => {});
+    runSetupMigrationImport.mockResolvedValueOnce({
+      kind: "no-imported-inference",
+      acknowledgePromotion,
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        importFrom: "hermes",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      createRuntime(),
+      buildWizardPrompter(),
+    );
+
+    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
+    expect(acknowledgePromotion).toHaveBeenCalledOnce();
+  });
+
+  it("consumes a verified imported model without testing it twice", async () => {
     const workspaceDir = await makeCaseDir("verified-import-flow-");
+    runSetupMigrationImport.mockResolvedValueOnce({
+      kind: "verified-inference",
+      modelRef: "openai/gpt-5.6-sol",
+    });
     const importedConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
     };
@@ -1186,21 +1225,45 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
-    expect(verifySetupInferenceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              model: { primary: "openai/gpt-5.6-sol" },
-            }),
-          }),
-        }),
-      }),
-    );
+    expect(verifySetupInferenceConfig).not.toHaveBeenCalled();
+    expect(applyAuthChoice).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalledWith(
       expect.objectContaining({ message: "Test AI access now with a live completion?" }),
     );
+  });
+
+  it("does not reuse verification when the recovered model changed", async () => {
+    const workspaceDir = await makeCaseDir("changed-verified-import-flow-");
+    runSetupMigrationImport.mockResolvedValueOnce({
+      kind: "verified-inference",
+      modelRef: "openai/gpt-5.6-sol",
+    });
+    const importedConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+    };
+    readConfigFileSnapshot
+      .mockResolvedValueOnce(configSnapshot({}, false))
+      .mockResolvedValue(configSnapshot(importedConfig));
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        importFrom: "hermes",
+        authChoice: "demo-provider",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      createRuntime(),
+      buildWizardPrompter(),
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledOnce();
   });
 
   it("keeps verification optional when provider setup supplies the post-import model", async () => {
@@ -1232,57 +1295,11 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
+    expect(applyAuthChoice).toHaveBeenCalledOnce();
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Test AI access now with a live completion?" }),
     );
     expect(verifySetupInferenceConfig).not.toHaveBeenCalled();
-  });
-
-  it("repairs an imported route that fails its mandatory live check", async () => {
-    const workspaceDir = await makeCaseDir("repair-import-flow-");
-    const importedConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
-    };
-    readConfigFileSnapshot
-      .mockResolvedValueOnce(configSnapshot({}, false))
-      .mockResolvedValue(configSnapshot(importedConfig));
-    promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
-    applyAuthChoice.mockResolvedValue({
-      config: { agents: { defaults: { model: { primary: "openai/gpt-5.6" } } } },
-    });
-    verifySetupInferenceConfig
-      .mockResolvedValueOnce({ ok: false, status: "auth", error: "imported login expired" })
-      .mockResolvedValueOnce({
-        ok: true,
-        modelRef: "openai/gpt-5.6",
-        latencyMs: 250,
-      });
-    const select = vi.fn() as unknown as WizardPrompter["select"];
-    const prompter = buildWizardPrompter({ select });
-
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        importFrom: "hermes",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
-      createRuntime(),
-      prompter,
-    );
-
-    expect(verifySetupInferenceConfig).toHaveBeenCalledTimes(2);
-    expect(applyAuthChoice).toHaveBeenCalledOnce();
-    expect(select).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "How would you like to continue?" }),
-    );
   });
 
   it("treats --import-source alone as import intent instead of prompting for a setup mode", async () => {

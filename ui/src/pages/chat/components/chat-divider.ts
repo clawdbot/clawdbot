@@ -47,3 +47,11 @@ export function renderChatDivider(
     </div>
   `;
 }
+
+export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
+  return html`
+    <div class="chat-notice" data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+      ${item.text}
+    </div>
+  `;
+}

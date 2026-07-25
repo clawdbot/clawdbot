@@ -196,6 +196,7 @@ export function resolveMSTeamsGroupToolPolicy(
   });
   // No messageProvider: channel-prefixed sender keys were historically dead here.
   const senderScope = {
+    senderPolicyMode: params.senderPolicyMode,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

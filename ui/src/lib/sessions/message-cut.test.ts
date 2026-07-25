@@ -13,13 +13,13 @@ function deferred<T>() {
 function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: {
     client: GatewayBrowserClient | null;
-    connected: boolean;
+    phase: "connected" | "reconnecting";
     sessionKey: string;
     assistantAgentId: string | null;
     hello: GatewayHelloOk | null;
   } = {
     client,
-    connected: true,
+    phase: "connected",
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello: null,
@@ -41,7 +41,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
     },
     publish: (connected: boolean) => {
-      snapshot = { ...snapshot, connected };
+      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
         listener(snapshot);
       }

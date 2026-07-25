@@ -122,7 +122,7 @@ describe("chat pane pull request refresh", () => {
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
-      connected: false,
+      phase: "reconnecting" as const,
     });
 
     expect(pane.sessionPullRequests).toEqual([]);

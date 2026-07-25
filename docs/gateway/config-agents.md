@@ -63,7 +63,7 @@ Optional default skill allowlist for agents that do not set
 
 ### `agents.defaults.skipBootstrap`
 
-Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`).
+Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`).
 
 ```json5
 {
@@ -73,7 +73,7 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 
 ### `agents.defaults.skipOptionalBootstrapFiles`
 
-Skips creation of selected optional workspace files while still writing required bootstrap files (`AGENTS.md`, `TOOLS.md`, `BOOTSTRAP.md`). Valid values: `SOUL.md`, `USER.md`, `HEARTBEAT.md`, and `IDENTITY.md`.
+Skips creation of selected optional workspace files while still writing required bootstrap files (`AGENTS.md`, `TOOLS.md`, `BOOTSTRAP.md`). Valid values: `SOUL.md`, `USER.md`, and `IDENTITY.md` (`HEARTBEAT.md` is accepted but a no-op since heartbeat context moved to cron monitor scratch).
 
 ```json5
 {
@@ -227,7 +227,6 @@ Shared defaults for bounded runtime context surfaces.
     defaults: {
       contextLimits: {
         memoryGetMaxChars: 12000,
-        memoryGetDefaultLines: 120,
         postCompactionMaxChars: 1800,
       },
     },
@@ -237,15 +236,10 @@ Shared defaults for bounded runtime context surfaces.
 
 - `memoryGetMaxChars`: default `memory_get` excerpt cap before truncation
   metadata and continuation notice are added.
-- `memoryGetDefaultLines`: default `memory_get` line window when `lines` is
-  omitted.
-- `toolResultMaxChars`: advanced live tool-result ceiling used for persisted
-  results and overflow recovery. Leave unset for the model-context auto cap:
-  `16000` chars below 100K tokens, `32000` chars at 100K+ tokens, and `64000`
-  chars at 200K+ tokens. Explicit values up to `1000000` are accepted for
-  long-context models, but the effective cap is still limited to about 30% of
-  the model context window. `openclaw doctor --deep` prints the effective cap,
-  and doctor warns only when an explicit override is stale or has no effect.
+- When `memory_get` omits `lines`, OpenClaw uses a built-in 120-line window and
+  then applies `memoryGetMaxChars`.
+- Live tool results use a model-context auto cap: `16000` chars below 100K
+  tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+ tokens.
 - `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
   refresh injection.
 
@@ -265,7 +259,6 @@ from `agents.defaults.contextLimits`.
         id: "tiny-local",
         contextLimits: {
           memoryGetMaxChars: 6000,
-          toolResultMaxChars: 8000, // advanced ceiling for this agent
         },
       },
     ],
@@ -434,6 +427,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `reasoningDefault`: default reasoning visibility for agents. Values: `"off"`, `"on"`, `"stream"`. Per-agent `agents.entries.*.reasoningDefault` overrides this default. Configured reasoning defaults are only applied for owners, authorized senders, or operator-admin gateway contexts when no per-message or session reasoning override is set.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.6-sol` for Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
+- `contextTokens`: optional agent-wide cap. It can lower the effective budget of a larger model but cannot raise a model above its configured or discovered `contextTokens`. To opt one direct OpenAI model into its larger native window, set `models.providers.openai.models[].contextWindow` and `contextTokens` for that model; see [OpenAI context window defaults](/providers/openai#context-window-defaults-and-long-context-opt-in).
 - `models`: configured aliases and per-model settings. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`). Adding entries does not restrict model overrides.
   - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
   - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
@@ -469,7 +463,7 @@ Time format in system prompt. Default: `auto` (OS preference).
     defaults: {
       model: "openai/gpt-5.6-sol",
       models: {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },
         },
         "vllm/*": {
@@ -487,15 +481,15 @@ Time format in system prompt. Default: `auto` (OS preference).
 - Runtime precedence is exact model policy first (`agents.entries.*.models["provider/model"]`, `agents.defaults.models["provider/model"]`, or `models.providers.<provider>.models[]`), then `agents.entries.*` / `agents.defaults.models["provider/*"]`, then provider-wide policy at `models.providers.<provider>.agentRuntime`.
 - Whole-agent runtime keys are legacy. `agents.defaults.agentRuntime`, `agents.entries.*.agentRuntime`, session runtime pins, and `OPENCLAW_AGENT_RUNTIME` are ignored by runtime selection. Run `openclaw doctor --fix` to remove stale values.
 - Eligible exact official HTTPS OpenAI Responses/ChatGPT routes with no authored request override may use the Codex harness implicitly. Provider/model `agentRuntime.id: "codex"` makes Codex a fail-closed requirement but does not make an incompatible route compatible.
-- For Claude CLI deployments, prefer `model: "anthropic/claude-opus-4-8"` plus model-scoped `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/<model>` refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in provider/model runtime policy.
+- For Claude CLI deployments, prefer `model: "anthropic/claude-opus-5"` plus model-scoped `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/<model>` refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in provider/model runtime policy.
 - This only controls text agent-turn execution. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
 | Alias               | Model                           |
 | ------------------- | ------------------------------- |
-| `opus`              | `anthropic/claude-opus-4-8`     |
-| `sonnet`            | `anthropic/claude-sonnet-4-6`   |
+| `opus`              | `anthropic/claude-opus-5`       |
+| `sonnet`            | `anthropic/claude-sonnet-5`     |
 | `gpt`               | `openai/gpt-5.4`                |
 | `gpt-mini`          | `openai/gpt-5.4-mini`           |
 | `gpt-nano`          | `openai/gpt-5.4-nano`           |
@@ -552,14 +546,14 @@ Periodic heartbeat runs.
         model: "openai/gpt-5.4-mini",
         includeReasoning: false,
         includeSystemPromptSection: true, // default: true; false omits the Heartbeat section from the system prompt
-        lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
+        lightContext: false, // default: false; true skips workspace bootstrap files for heartbeat runs
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
         skipWhenBusy: false, // default: false; true also waits for this agent's subagent/nested lanes
         session: "main",
         to: "+15555550123",
         directPolicy: "allow", // allow (default) | block
         target: "none", // default: none | options: last | whatsapp | telegram | discord | ...
-        prompt: "Read HEARTBEAT.md if it exists...",
+        prompt: "Follow the heartbeat monitor scratch context...",
         ackMaxChars: 300,
         suppressToolErrorWarnings: false,
         timeoutSeconds: 45,
@@ -570,11 +564,12 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
-- `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt and skips `HEARTBEAT.md` injection into bootstrap context. Default: `true`.
+- Cadence is written into a system-owned cron monitor row. Run `openclaw doctor --fix` to materialize a missing or stale row. If cron is disabled, scheduled heartbeats do not run and the gateway logs a startup warning.
+- `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt. Default: `true`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
-- `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
+- `lightContext`: when true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
 - `skipWhenBusy`: when true, heartbeat runs defer on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeats, even without this flag.
 - Per-agent: set `agents.entries.*.heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
@@ -710,7 +705,7 @@ See [Streaming](/concepts/streaming) for behavior + chunking details.
 
 - Defaults: `instant` for direct chats/mentions, `message` for unmentioned group chats.
 - `typingIntervalSeconds` default: `6`.
-- Per-agent overrides: `agents.entries.*.typingMode` and `agents.entries.*.typingIntervalSeconds`.
+- Per-agent override: `agents.entries.*.typingMode`.
 
 See [Typing Indicators](/concepts/typing-indicators).
 
@@ -1221,6 +1216,11 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       idleHours: 24, // default inactivity auto-unfocus in hours (`0` disables)
       maxAgeHours: 0, // default hard max age in hours (`0` disables)
     },
+    sharing: {
+      readOnly: true,
+      suggest: true,
+      drafts: true,
+    },
     mainKey: "main", // legacy (runtime always uses "main")
     sendPolicy: {
       rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
@@ -1261,6 +1261,12 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `maxAgeHours`: default hard max age in hours (`0` disables; providers can override)
   - `spawnSessions`: default gate for creating thread-bound work sessions from `sessions_spawn` and ACP thread spawns. Defaults to `true` when thread bindings are enabled; providers/accounts can override.
   - `defaultSpawnContext`: default native subagent context for thread-bound spawns (`"fork"` or `"isolated"`). Defaults to `"fork"`.
+- **`sharing`**: controls which per-session collaboration modes owners and `operator.admin` connections may select. Every flag defaults to `true`; setting one to `false` removes that choice from the Control UI and makes create-time visibility or `session.visibility.set` reject it. New sessions start `shared` unless the Control UI starts one as a draft.
+  - `readOnly`: allow `read-only`, where non-members can watch but cannot send, steer, abort, approve, or mutate session state.
+  - `suggest`: allow `suggest`. In this phase it enforces the same admission behavior as `read-only`; the suggestion queue is a later feature.
+  - `drafts`: allow `draft`, which hides the session from non-admin, non-owner session lists and event broadcasts.
+
+Membership and visibility changes are written into the session transcript as system notes. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
 
 </Accordion>
 

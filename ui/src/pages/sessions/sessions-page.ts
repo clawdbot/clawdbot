@@ -236,10 +236,10 @@ class SessionsPage extends OpenClawLightDomElement {
     resetForSourceBind = false,
   ) {
     const clientChanged = resetForSourceBind || snapshot.client !== this.gatewayClient;
-    const connectionChanged = snapshot.connected !== this.gatewayConnected;
-    const becameConnected = snapshot.connected && !this.gatewayConnected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.gatewayConnected;
+    const becameConnected = snapshot.phase === "connected" && !this.gatewayConnected;
     this.gatewayClient = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (clientChanged || connectionChanged) {
       this.invalidatePageWork();
       this.ignorePendingSharedRefresh = false;
@@ -247,7 +247,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (clientChanged) {
       this.resetProviderState();
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       this.requestUpdate();
       return;
     }
@@ -295,7 +295,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     const gateway = context.gateway;
     const client = gateway.snapshot.client;
-    if (!gateway.snapshot.connected || !client) {
+    if (gateway.snapshot.phase !== "connected" || !client) {
       return null;
     }
     return {
@@ -318,7 +318,7 @@ class SessionsPage extends OpenClawLightDomElement {
       gateway === scope.gateway &&
       context.sessions === scope.sessions &&
       context.workboard === scope.workboard &&
-      gateway.snapshot.connected &&
+      gateway.snapshot.phase === "connected" &&
       gateway.snapshot.client === scope.client
     );
   }
@@ -359,7 +359,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const gateway = context.gateway;
     const snapshot = gateway.snapshot;
     this.gatewayClient = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
       this.routeDataEnabled = false;
       void this.loadSessions();
@@ -397,7 +397,7 @@ class SessionsPage extends OpenClawLightDomElement {
       if (
         this.isConnected &&
         context &&
-        gateway?.connected &&
+        gateway?.phase === "connected" &&
         gateway.client &&
         !context.sessions.state.loading
       ) {

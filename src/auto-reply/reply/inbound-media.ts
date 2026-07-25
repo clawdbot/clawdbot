@@ -1,13 +1,10 @@
 /** Detects inbound media and audio facts in channel message context. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveMediaFacts, resolveMeaningfulMediaFacts } from "../../media/media-facts.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 
 /** Minimal inbound media fields used by media/audio detection. */
-type InboundMediaContext = Pick<
-  MsgContext,
-  "MediaPath" | "MediaPaths" | "MediaType" | "MediaTypes" | "MediaUrl" | "MediaUrls" | "media"
-> & {
+type InboundMediaContext = Pick<MsgContext, "media"> & {
   Body?: unknown;
   StickerMediaIncluded?: unknown;
   SkipStickerMediaUnderstanding?: unknown;
@@ -38,10 +35,7 @@ function normalizeMediaType(value: unknown): string | undefined {
 export function hasInboundAudio(ctx: InboundMediaContext): boolean {
   const isAudio = (type: string | undefined) =>
     type === "audio" || type?.startsWith("audio/") === true;
-  return (
-    isAudio(normalizeMediaType(ctx.MediaType)) ||
-    resolveMediaFacts(ctx).some(
-      (media) => media.kind === "audio" || isAudio(normalizeMediaType(media.contentType)),
-    )
+  return resolveMediaFacts(ctx).some(
+    (media) => media.kind === "audio" || isAudio(normalizeMediaType(media.contentType)),
   );
 }

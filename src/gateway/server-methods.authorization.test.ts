@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  loadSessionEntry,
+  patchSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptor,
 } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const METHOD = "workboard.cards.dispatch";
@@ -230,5 +237,104 @@ describe("gateway method authorization", () => {
         scopes: ["operator.admin"],
       }),
     ).toHaveBeenCalledWith(true, { profile });
+  });
+
+  it("rejects a mutation when its authorized session instance is replaced before commit", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:commit-bound-authorization";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-shared",
+          updatedAt: 1,
+          visibility: "shared",
+        },
+      );
+
+      let continueHandler = () => {};
+      const handlerCanContinue = new Promise<void>((resolve) => {
+        continueHandler = resolve;
+      });
+      let markHandlerStarted = () => {};
+      const handlerStarted = new Promise<void>((resolve) => {
+        markHandlerStarted = resolve;
+      });
+      const patchHandler = sessionMutationHandlers["sessions.patch"];
+      if (!patchHandler) {
+        throw new Error("sessions.patch handler is not registered");
+      }
+      const respond = vi.fn();
+      const request = handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "req-session-commit-bound",
+          method: "sessions.patch",
+          params: { key: sessionKey, label: "stale mutation" },
+        },
+        respond,
+        client: {
+          connId: "conn-session-commit-bound",
+          authenticatedUserId: "member@example.com",
+          authenticatedUserProfile: {
+            profileId: "member",
+            displayName: "Member",
+            hasAvatar: false,
+            updatedAt: 1,
+          },
+          connect: {
+            role: "operator",
+            scopes: ["operator.write"],
+            client: { id: "test", version: "1", platform: "test", mode: "test" },
+            minProtocol: 1,
+            maxProtocol: 1,
+          },
+        } as Parameters<typeof handleGatewayRequest>[0]["client"],
+        isWebchatConnect: () => false,
+        context: {
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+          broadcast: vi.fn(),
+          broadcastToConnIds: vi.fn(),
+          getSessionEventSubscriberConnIds: () => new Set(),
+          chatAbortControllers: new Map(),
+        } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+        extraHandlers: {
+          "sessions.patch": async (options) => {
+            markHandlerStarted();
+            await handlerCanContinue;
+            await patchHandler(options);
+          },
+        },
+      });
+
+      await handlerStarted;
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-draft-replacement",
+          updatedAt: 2,
+          visibility: "draft",
+          createdActor: { type: "human", id: "owner" },
+        },
+      );
+      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({
+        visibility: "draft",
+      }));
+      continueHandler();
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
+        }),
+      );
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+        sessionId: "session-draft-replacement",
+        visibility: "draft",
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("label");
+    });
   });
 });

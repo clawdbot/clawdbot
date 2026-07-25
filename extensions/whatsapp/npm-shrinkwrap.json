@@ -10,7 +10,7 @@
       "dependencies": {
         "audio-decode": "2.2.3",
         "baileys": "7.0.0-rc13",
-        "typebox": "1.3.3"
+        "typebox": "1.3.6"
       },
       "peerDependencies": {
         "openclaw": ">=2026.7.2"
@@ -168,15 +168,15 @@
       "license": "BSD-3-Clause"
     },
     "node_modules/@protobufjs/utf8": {
-      "version": "1.1.1",
-      "resolved": "https://registry.npmjs.org/@protobufjs/utf8/-/utf8-1.1.1.tgz",
-      "integrity": "sha512-oOAWABowe8EAbMyWKM0tYDKi8Yaox52D+HWZhAIJqQXbqe0xI/GV7FhLWqlEKreMkfDjshR5FKgi3mnle0h6Eg==",
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/@protobufjs/utf8/-/utf8-1.1.2.tgz",
+      "integrity": "sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==",
       "license": "BSD-3-Clause"
     },
     "node_modules/@thi.ng/bitstream": {
-      "version": "2.4.53",
-      "resolved": "https://registry.npmjs.org/@thi.ng/bitstream/-/bitstream-2.4.53.tgz",
-      "integrity": "sha512-nhSs378SbSVrHNGb2mRDMVeHn+j2Ss78lK4+G/8IYAVBh461sBcSpj80FkBhDyTAr/yAa53ZFlyrKjkj7Volvw==",
+      "version": "2.4.54",
+      "resolved": "https://registry.npmjs.org/@thi.ng/bitstream/-/bitstream-2.4.54.tgz",
+      "integrity": "sha512-uInkAJge5O0bWWEaYKrQpMccPbFg0z6eIA5NDCJXPm7l3rjlDje6RBHBXll3LiQz9Y051EdzlAEQRaB5hEifdg==",
       "funding": [
         {
           "type": "github",
@@ -193,16 +193,16 @@
       ],
       "license": "Apache-2.0",
       "dependencies": {
-        "@thi.ng/errors": "^2.6.15"
+        "@thi.ng/errors": "^2.6.16"
       },
       "engines": {
         "node": ">=18"
       }
     },
     "node_modules/@thi.ng/errors": {
-      "version": "2.6.15",
-      "resolved": "https://registry.npmjs.org/@thi.ng/errors/-/errors-2.6.15.tgz",
-      "integrity": "sha512-kkd42XRB+D1PVI9IRyEVK/URF0fgTE7SscoehHyuuZ6UHn/4N60ODiTwOONJHRHxLQVQLJ7EwM0t6AuxBufRUA==",
+      "version": "2.6.16",
+      "resolved": "https://registry.npmjs.org/@thi.ng/errors/-/errors-2.6.16.tgz",
+      "integrity": "sha512-a7Lv/G0La5eTNUEIyLldpeYziyFSj3rOlWNeXFu8v+ZSb8w8EnQ/L0r0sKHux7Ru6RhUkAXrcaHU7xd1ZkWovA==",
       "funding": [
         {
           "type": "github",
@@ -246,9 +246,9 @@
       "license": "MIT"
     },
     "node_modules/@types/node": {
-      "version": "26.1.0",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.0.tgz",
-      "integrity": "sha512-O0A1G3xPGy4w7AgQdAQYUlQ+BKk2Oovw8eRpofyp5KdBZULnbe+WqaOVNrm705SHphCiG4XHsACrSmPu1f+Kgw==",
+      "version": "26.1.1",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.1.tgz",
+      "integrity": "sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw==",
       "license": "MIT",
       "dependencies": {
         "undici-types": "~8.3.0"
@@ -346,12 +346,15 @@
       }
     },
     "node_modules/audio-type": {
-      "version": "2.4.1",
-      "resolved": "https://registry.npmjs.org/audio-type/-/audio-type-2.4.1.tgz",
-      "integrity": "sha512-dK9Z/P83C/rBfTrXXgPD3jZ+aXxx2o/P4rq8+H1JqxbXklitEeJw4CrcwMC5CkON3CX3yy2gaWnIEVYejYh0zQ==",
+      "version": "2.4.2",
+      "resolved": "https://registry.npmjs.org/audio-type/-/audio-type-2.4.2.tgz",
+      "integrity": "sha512-E9Bl1FGGDS81H/mKvaoPq0iQ8uT3qTBe6XWjipOo5kYrhLMAbjD7hREAVle0YJFahZOVbztxTdkwi0VBDJutSA==",
       "license": "MIT",
       "engines": {
         "node": ">=14"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/audiojs"
       }
     },
     "node_modules/baileys": {
@@ -540,9 +543,9 @@
       "license": "Apache-2.0"
     },
     "node_modules/lru-cache": {
-      "version": "11.5.1",
-      "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.1.tgz",
-      "integrity": "sha512-RPimw/7aMdv2oqRrxKwvZXcPfwBrn/JZ2xYcY9Hus/6LaS3VOAKVWKWgNLCFSiOm1ESXinjsDlidVU7JlnCN2A==",
+      "version": "11.5.2",
+      "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.2.tgz",
+      "integrity": "sha512-4pfM1Ff0x50o0tQwb5ucw/RzNyD0/YJME6IVcStalZuMWxdt3sR3huStTtxz4PUmvZfRguvDejasvQ2kifR11g==",
       "license": "BlueOak-1.0.0",
       "engines": {
         "node": "20 || >=22"
@@ -581,9 +584,9 @@
       "license": "MIT"
     },
     "node_modules/music-metadata": {
-      "version": "11.13.0",
-      "resolved": "https://registry.npmjs.org/music-metadata/-/music-metadata-11.13.0.tgz",
-      "integrity": "sha512-uXRaov9dfjSpQufXIU7sMxVZnh+FilCQv2mXn+K5EJ/decP3dTWrgvPYa5r6MtRbieNSCE708Da4J0u1UGfQIw==",
+      "version": "11.14.0",
+      "resolved": "https://registry.npmjs.org/music-metadata/-/music-metadata-11.14.0.tgz",
+      "integrity": "sha512-RyOSq98kuVfXB1emJ+NjBF0av8Ph3oBuqNy+Z5sFFfLhjYrkBQEB53V8u+U0RNTVwNo20WoPUwNkfKwZfrOqmQ==",
       "funding": [
         {
           "type": "github",
@@ -659,9 +662,9 @@
       }
     },
     "node_modules/p-queue": {
-      "version": "9.3.0",
-      "resolved": "https://registry.npmjs.org/p-queue/-/p-queue-9.3.0.tgz",
-      "integrity": "sha512-7NED7xhQ74Ngp4JP/2e0VZHp7vSWfJfqeiR92jPgxsz6m0Se4P03YoTKa9dDXyZ3r6P616gUXttrB6nnHYKang==",
+      "version": "9.3.2",
+      "resolved": "https://registry.npmjs.org/p-queue/-/p-queue-9.3.2.tgz",
+      "integrity": "sha512-pCsnA4piiqkrwAJ555Xh/lc717SijJrTBr96P1q6BRnUdm2XPB4v91oiXVAUr5HbIbXW4D8kIslfJUE28Rud6A==",
       "license": "MIT",
       "dependencies": {
         "eventemitter3": "^5.0.4",
@@ -891,9 +894,9 @@
       "license": "0BSD"
     },
     "node_modules/typebox": {
-      "version": "1.3.3",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.3.tgz",
-      "integrity": "sha512-URXGUE31PJDQC+PtRMJeLdF4kmmOdFoVPikPCtV2oOIhUpNpppEdIz7W8bH8cFYPYHdDpaRvqwdegMTmHliudg==",
+      "version": "1.3.6",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.6.tgz",
+      "integrity": "sha512-Sc8RA0NCMEFmApHNU9ZMzqcpQj46She44J8ffpLM/bdhLNUZKq7DJumcLcsFx1gRmDfQPgCgOmFFJ7rcnfWNyA==",
       "license": "MIT"
     },
     "node_modules/uint8array-extras": {
@@ -927,9 +930,9 @@
       "license": "MIT"
     },
     "node_modules/ws": {
-      "version": "8.21.0",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
-      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
+      "version": "8.21.1",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.1.tgz",
+      "integrity": "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"

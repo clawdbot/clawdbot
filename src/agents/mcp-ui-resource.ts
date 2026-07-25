@@ -332,6 +332,16 @@ export function getMcpAppViewLease(
   return view?.runtime === runtime ? view : undefined;
 }
 
+/** Resolve a live view owned by its originating session, including harness-native runtimes. */
+export function getMcpAppViewLeaseForSession(
+  viewId: string,
+  sessionKey: string,
+): McpAppViewLease | undefined {
+  pruneViewStore();
+  const view = getViewStore().get(viewId);
+  return view?.runtime.sessionKey === sessionKey ? view : undefined;
+}
+
 export function acquireMcpAppViewRequest(
   view: McpAppViewLease,
   kind: "read" | "tool",

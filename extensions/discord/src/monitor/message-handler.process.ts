@@ -129,8 +129,7 @@ async function processDiscordMessageInner(
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const routedAgentConfig = resolveAgentConfig(cfg, route.agentId);
   const configuredTypingMode = routedAgentConfig?.typingMode ?? cfg.agents?.defaults?.typingMode;
-  const configuredTypingInterval =
-    routedAgentConfig?.typingIntervalSeconds ?? cfg.agents?.defaults?.typingIntervalSeconds;
+  const configuredTypingInterval = cfg.agents?.defaults?.typingIntervalSeconds;
   const shouldDisableCoreTypingKeepalive =
     sourceRepliesAreToolOnly &&
     configuredTypingMode === undefined &&

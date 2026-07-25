@@ -580,6 +580,35 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("pins the session observer to the pane header edge", async () => {
+    const page = await openBrowserPage(922, 282);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
+          <div class="chat-split-view__cell" style="width: 922px; height: 282px;">
+            <div class="chat-pane__header">Current session</div>
+            <div class="chat-split-view__pane">
+              <div class="chat-main" style="height: 100%;">
+                <div class="chat-observer-hud chat-observer-hud--pill">
+                  <span class="chat-observer-hud__status" data-health="on-track">On track</span>
+                  <span class="chat-observer-hud__headline">Investigating repository guidance</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const header = await getBoundingBox(page, ".chat-pane__header");
+      const observer = await getBoundingBox(page, ".chat-observer-hud");
+
+      expect(observer.y).toBeCloseTo(header.y + header.height, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it.each([
     [430, 720],
     [1366, 900],
@@ -687,6 +716,43 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
+
+  it("gives inline MCP Apps the full assistant message column", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="chat-thread chat-thread--direct" role="log">
+          <div class="chat-thread-inner">
+            <div class="chat-group assistant chat-group--with-footer">
+              <div class="chat-group-messages">
+                <div class="chat-bubble">
+                  <div class="chat-tool-card__preview" data-content-kind="mcp-app">
+                    <div class="chat-tool-card__preview-panel">
+                      <mcp-app-view style="display:block;width:100%;height:320px"></mcp-app-view>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </body></html>`);
+
+      await expectNoHorizontalOverflow(page);
+      const widths = await page.evaluate(() => ({
+        app: document.querySelector("mcp-app-view")!.getBoundingClientRect().width,
+        bubble: document.querySelector<HTMLElement>(".chat-bubble")!.getBoundingClientRect().width,
+        messages: document
+          .querySelector<HTMLElement>(".chat-group-messages")!
+          .getBoundingClientRect().width,
+      }));
+      expect(widths.bubble).toBeCloseTo(widths.messages, 0);
+      expect(widths.app).toBeGreaterThan(600);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps wrapped message footers inside measured virtual rows", async () => {
     const page = await openBrowserPage(1366, 900);
     try {

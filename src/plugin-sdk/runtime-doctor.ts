@@ -16,10 +16,18 @@ export {
   normalizeLegacyStreamingAliases,
   resolveLegacyAliasStreamingMode,
 } from "../config/channel-compat-normalization.js";
+export {
+  materializeInheritedAccountStreaming,
+  normalizeChannelAccounts,
+  normalizeChannelConfigEntries,
+  stripRetiredChannelKeys,
+} from "../config/channel-doctor-helpers.js";
 export type {
   CompatMutationResult,
   LegacyStreamingAliasOptions,
+  NormalizeChannelConfigEntryParams,
   NormalizeLegacyChannelAccountParams,
+  RetiredChannelKeyRemoval,
 } from "../config/channel-compat-normalization.js";
 export {
   detectPluginInstallPathIssue,

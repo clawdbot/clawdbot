@@ -133,4 +133,47 @@ describe("quoted message metadata cache", () => {
       lookupInboundMessageMetaForTarget("account-d", "222@s.whatsapp.net", "msg-3"),
     ).toBeUndefined();
   });
+
+  it.each(["account-a-first", "account-b-first"] as const)(
+    "keeps same-id cache entries isolated with $s insertion order",
+    (order) => {
+      const messageId = `shared-${order}`;
+      const entries = [
+        {
+          accountId: "isolation-a",
+          remoteJid: "11111@s.whatsapp.net",
+          participant: "11111@s.whatsapp.net",
+          body: "account a body",
+        },
+        {
+          accountId: "isolation-b",
+          remoteJid: "22222@s.whatsapp.net",
+          participant: "22222@s.whatsapp.net",
+          body: "account b body",
+        },
+      ];
+      if (order === "account-b-first") {
+        entries.reverse();
+      }
+      for (const entry of entries) {
+        cacheInboundMessageMeta(entry.accountId, entry.remoteJid, messageId, {
+          participant: entry.participant,
+          body: entry.body,
+        });
+      }
+
+      expect(
+        lookupInboundMessageMetaForTarget("isolation-a", "11111@s.whatsapp.net", messageId)?.body,
+      ).toBe("account a body");
+      expect(
+        lookupInboundMessageMetaForTarget("isolation-b", "22222@s.whatsapp.net", messageId)?.body,
+      ).toBe("account b body");
+      expect(
+        lookupInboundMessageMetaForTarget("isolation-a", "22222@s.whatsapp.net", messageId),
+      ).toBeUndefined();
+      expect(
+        lookupInboundMessageMetaForTarget("isolation-b", "11111@s.whatsapp.net", messageId),
+      ).toBeUndefined();
+    },
+  );
 });

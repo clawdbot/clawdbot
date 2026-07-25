@@ -32,7 +32,7 @@ function createTerminalController() {
 const createTerminal = vi.fn(async () => createTerminalController());
 
 class ReadinessTestTerminalPanel extends OpenClawTerminalPanel {
-  protected override createTerminal =
+  override createTerminalController =
     createTerminal as unknown as typeof createIsolatedGhosttyTerminal;
 }
 

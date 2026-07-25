@@ -1,5 +1,6 @@
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
+import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob } from "../cron/types.js";
 import {
   openOpenClawStateDatabase,
@@ -252,6 +253,9 @@ export function clawCronGatewayJobMatchesRef(
   ) {
     return false;
   }
+  const comparableLive = { ...live, payload: { ...live.payload } } as CronJob;
+  applyDefaultCronToolsAllow(expected);
+  applyDefaultCronToolsAllow(comparableLive);
   try {
     return (
       resolveCronJobConfigRevision({
@@ -260,7 +264,7 @@ export function clawCronGatewayJobMatchesRef(
         createdAtMs: live.createdAtMs,
         updatedAtMs: live.updatedAtMs,
         state: live.state,
-      }) === resolveCronJobConfigRevision(live as CronJob)
+      }) === resolveCronJobConfigRevision(comparableLive)
     );
   } catch {
     return false;

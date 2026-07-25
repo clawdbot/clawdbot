@@ -61,6 +61,7 @@ function renderSessionRowBadge(
 
 export function renderSessionRowBadges(params: {
   isChild?: boolean;
+  incognito?: boolean;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
@@ -90,6 +91,7 @@ export function renderSessionRowBadges(params: {
         })
       : "";
   if (
+    !params.incognito &&
     !hasAutomation &&
     !pullRequestLabel &&
     !params.hasApproval &&
@@ -120,6 +122,13 @@ export function renderSessionRowBadges(params: {
       ? t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
       : "";
   return html`<span class="session-row-badges">
+    ${params.incognito
+      ? renderSessionRowBadge(
+          t("sessionsView.incognito"),
+          icons.lock,
+          "session-row-badge--incognito",
+        )
+      : nothing}
     ${hasAutomation
       ? renderSessionRowBadge(t("sessionsView.automationAttached"), icons.clock)
       : nothing}

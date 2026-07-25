@@ -90,10 +90,10 @@ class WorktreesPage extends OpenClawLightDomElement {
     sourceChanged = false,
   ) {
     const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.gatewayConnected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.gatewayConnected;
     const identityChanged = sourceChanged || clientChanged;
     this.client = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (identityChanged || connectionChanged) {
       this.invalidateLoad();
       this.invalidateOperations();
@@ -102,7 +102,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       this.records = [];
       this.error = null;
     }
-    if (snapshot.connected && snapshot.client) {
+    if (snapshot.phase === "connected" && snapshot.client) {
       void this.load();
     }
   }

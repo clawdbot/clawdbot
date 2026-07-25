@@ -20,7 +20,7 @@ import { prepareMinGitZip } from "../../scripts/e2e/parallels/windows-git.ts";
 
 describe("Parallels Windows MinGit preparation", () => {
   it("bounds the host asset download across connections, transfers, and retries", async () => {
-    const assetName = "MinGit-2.53.0.2-64-bit.zip";
+    const assetName = "MinGit-2.55.0.3-64-bit.zip";
     const assetUrl = `https://example.test/${assetName}`;
     const targetDir = path.join("tmp", "windows-smoke");
     const targetPath = path.join(targetDir, assetName);

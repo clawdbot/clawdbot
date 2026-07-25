@@ -52,7 +52,7 @@ flow:
             expr: "originalTools ? (Object.prototype.hasOwnProperty.call(originalTools, 'deny') ? structuredClone(originalTools.deny) : undefined) : undefined"
         - set: originalImageGenerationModelPrimary
           value:
-            expr: "original.config.agents?.defaults?.imageGenerationModel?.primary ?? null"
+            expr: "original.config.agents?.defaults?.mediaModels?.image?.primary ?? null"
         - set: denied
           value:
             expr: "Array.isArray(originalToolsDeny) ? originalToolsDeny.map((entry) => String(entry)) : []"
@@ -105,9 +105,10 @@ flow:
                           expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
                       agents:
                         defaults:
-                          imageGenerationModel:
-                            primary:
-                              ref: originalImageGenerationModelPrimary
+                          mediaModels:
+                            image:
+                              primary:
+                                ref: originalImageGenerationModelPrimary
                     sessionKey:
                       ref: sessionKey
                     note:

@@ -4,12 +4,10 @@ import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
 import "../../../components/web-awesome.ts";
-import {
-  handleMarkdownCodeBlockCopy,
-  markdownFileLinkFromEvent,
-  toSanitizedMarkdownHtml,
-} from "../../../components/markdown.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/tooltip.ts";
 import { extractRawText } from "../../../lib/chat/message-extract.ts";

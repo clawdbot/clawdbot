@@ -7,6 +7,7 @@ import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type {
@@ -555,7 +556,12 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
       expected: { channel: "topicchat", to: "topicchat:room-a" },
     },
   ])("$name", ({ stored, requester, expected }) => {
-    expect(resolveAnnounceOrigin(stored, requester)).toEqual(expected);
+    expect(
+      resolveAnnounceOrigin(
+        normalizeLegacySessionEntryDelivery(stored as unknown as SessionEntry),
+        requester,
+      ),
+    ).toEqual(expected);
   });
 });
 

@@ -30,7 +30,7 @@ import {
 } from "./session-accessor.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "./session-transcript-turn-lifecycle.types.js";
 import { parseSqliteSessionFileMarker, type SqliteSessionFileMarker } from "./sqlite-marker.js";
-import { resolveSessionStoreEntry } from "./store.js";
+import { resolveSessionStoreEntry } from "./store-entry.js";
 import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,

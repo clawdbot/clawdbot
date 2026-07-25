@@ -967,6 +967,123 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStreamSegments).toEqual([]);
   });
 
+  it("does not replay persisted keyed commentary after retiring a same-run steer", () => {
+    const originalUser = {
+      role: "user",
+      content: [{ type: "text", text: "Ask" }],
+      timestamp: 1,
+    };
+    const persistedCommentary = {
+      role: "assistant",
+      content: [{ type: "text", text: "Looking into it." }],
+      timestamp: 2,
+      openclawStreamFallback: {
+        itemId: "preamble-1",
+        replacementText: "Looking into it.",
+        source: "segment",
+      },
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [originalUser, persistedCommentary],
+      chatQueue: [
+        {
+          id: "steer-1",
+          text: "Focus on the deployment too",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "run-1",
+          sendRunId: "steer-send-1",
+          sessionKey: "main",
+        },
+      ],
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer." }],
+          timestamp: 5,
+        },
+      }),
+    ).toBe("final");
+
+    expect(state.chatQueue).toEqual([]);
+    expect(state.chatMessages).toHaveLength(4);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
+    expectTextChatMessage(state.chatMessages[2], "user", "Focus on the deployment too");
+    expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
+  });
+
+  it("uses an already-persisted steer to recover the active stream boundary", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [
+        { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Looking into it." }],
+          timestamp: 2,
+          openclawStreamFallback: {
+            itemId: "preamble-1",
+            replacementText: "Looking into it.",
+            source: "segment",
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Focus on deployment" }],
+          timestamp: 3,
+          __openclaw: { idempotencyKey: "steer-send-1:user" },
+        },
+      ],
+      chatQueue: [
+        {
+          id: "steer-1",
+          text: "Focus on deployment",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "run-1",
+          sendRunId: "steer-send-1",
+          sessionKey: "main",
+        },
+      ],
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+
+    handleChatGatewayEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    });
+
+    expect(state.chatQueue).toEqual([]);
+    expect(state.chatMessages).toHaveLength(4);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
+    expectTextChatMessage(state.chatMessages[2], "user", "Focus on deployment");
+    expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
+  });
+
   it("clears keyed commentary when chatPersistCommentary is false", () => {
     const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
     const state = createState({
@@ -2568,6 +2685,7 @@ describe("loadChatHistory filtering", () => {
       thinkingLevel: "low",
       verboseLevel: "full",
       sessionInfo: {
+        activeLeafEntryId: "leaf-rendered",
         key: "main",
         sessionId: "session-main",
         effectiveQueueMode: "interrupt",
@@ -2587,10 +2705,31 @@ describe("loadChatHistory filtering", () => {
 
     expect(result?.sessionInfo?.sessionId).toBe("session-main");
     expect(state.currentSessionId).toBe("session-main");
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-rendered");
     expect(state.chatThinkingLevel).toBe("medium");
     expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatQueueModeOverride).toBe("interrupt");
     expect(state.chatEffectiveQueueMode).toBe("interrupt");
+  });
+
+  it("preserves the displayed leaf when history metadata is not authoritative for it", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      sessionInfo: {
+        key: "main",
+        sessionId: "session-main",
+        updatedAt: 123,
+      },
+    });
+    const state = createState({
+      chatDisplayedLeafEntryId: "leaf-from-tail",
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-from-tail");
   });
 
   it("omits literal global agentId until selected/default agent is known", async () => {

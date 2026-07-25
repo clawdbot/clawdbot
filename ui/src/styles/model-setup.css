@@ -58,6 +58,10 @@
   border-radius: 5px;
 }
 
+.model-setup__icon.provider-brand-icon--fallback {
+  font-size: 11px;
+}
+
 .model-setup__provider-copy,
 .model-setup__manual-provider {
   display: flex;
@@ -102,6 +106,10 @@
   width: 28px;
   height: 28px;
   flex-basis: 28px;
+}
+
+.model-setup__icon--recommendation.provider-brand-icon--fallback {
+  font-size: 12px;
 }
 
 .model-setup__chip {

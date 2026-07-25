@@ -468,10 +468,13 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
 
-    expectRecordFields(requireRecord(ctx, "remote media inbound context"), {
-      MediaUrl: "https://media.example/image.jpg",
-      MediaUrls: ["https://media.example/image.jpg"],
-      MediaType: "image/jpeg",
+    expect(requireRecord(ctx, "remote media inbound context")).toMatchObject({
+      media: [
+        expect.objectContaining({
+          url: "https://media.example/image.jpg",
+          contentType: "image/jpeg",
+        }),
+      ],
     });
   });
 

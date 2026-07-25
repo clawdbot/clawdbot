@@ -59,18 +59,7 @@ export function startGatewayMaintenanceTimers(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
-  chatRunState: Pick<
-    ChatRunState,
-    | "abortedRuns"
-    | "bufferUpdatedAt"
-    | "clearRun"
-    | "deltaLastBroadcastText"
-    | "agentDeltaSentAt"
-    | "bufferedAgentEvents"
-  >;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatRunState: ChatRunState;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -264,16 +253,6 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
 
-    const resolveAgentThrottleRunId = (key: string) => {
-      if (key.endsWith(":assistant")) {
-        return key.slice(0, -":assistant".length);
-      }
-      if (key.endsWith(":thinking")) {
-        return key.slice(0, -":thinking".length);
-      }
-      return key;
-    };
-
     for (const [runId, entry] of params.chatAbortControllers) {
       if (entry.projectSessionTerminalPending === true) {
         continue;
@@ -309,14 +288,6 @@ export function startGatewayMaintenanceTimers(params: {
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
-    for (const [runId, abortMarker] of params.chatRunState.abortedRuns) {
-      if (now - chatAbortMarkerTimestampMs(abortMarker) <= ABORTED_RUN_TTL_MS) {
-        continue;
-      }
-      params.chatRunState.abortedRuns.delete(runId);
-      params.chatRunState.clearRun(runId);
-    }
-
     // Prune expired control-plane rate-limit buckets to prevent unbounded
     // growth when many unique clients connect over time.
     pruneStaleControlPlaneBuckets(now);
@@ -324,42 +295,26 @@ export function startGatewayMaintenanceTimers(params: {
     // Sweep stale buffers for runs that were never explicitly aborted.
     // Only reap orphaned buffers after the abort controller is gone; active
     // runs can legitimately sit idle while tools/models work.
-    for (const [runId, lastSentAt] of params.chatDeltaSentAt) {
-      if (params.chatRunState.abortedRuns.has(runId)) {
-        continue; // already handled above
-      }
-      if (params.chatAbortControllers.has(runId)) {
-        continue;
-      }
-      if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
-        continue;
-      }
-      params.chatRunState.clearRun(runId);
-    }
-    for (const [runId, lastUpdatedAt] of params.chatRunState.bufferUpdatedAt) {
-      if (params.chatRunState.abortedRuns.has(runId)) {
+    for (const [runId, record] of params.chatRunState.runs) {
+      if (record.abortMarker !== undefined) {
+        if (now - chatAbortMarkerTimestampMs(record.abortMarker) > ABORTED_RUN_TTL_MS) {
+          params.chatRunState.deleteAbortMarker(runId);
+          params.chatRunState.clearRun(runId);
+        }
         continue;
       }
       if (params.chatAbortControllers.has(runId)) {
         continue;
       }
-      if (now - lastUpdatedAt <= ABORTED_RUN_TTL_MS) {
-        continue;
+      const staleTimestamp = [
+        record.deltaSentAt,
+        record.bufferUpdatedAt,
+        record.agentText?.assistant?.lastSentAt,
+        record.agentText?.thinking?.lastSentAt,
+      ].some((timestamp) => timestamp !== undefined && now - timestamp > ABORTED_RUN_TTL_MS);
+      if (staleTimestamp) {
+        params.chatRunState.clearRun(runId);
       }
-      params.chatRunState.clearRun(runId);
-    }
-    for (const [key, lastSentAt] of params.chatRunState.agentDeltaSentAt) {
-      const runId = resolveAgentThrottleRunId(key);
-      if (params.chatRunState.abortedRuns.has(runId)) {
-        continue;
-      }
-      if (params.chatAbortControllers.has(runId)) {
-        continue;
-      }
-      if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
-        continue;
-      }
-      params.chatRunState.clearRun(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();

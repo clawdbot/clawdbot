@@ -14,10 +14,11 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pluginExtensionSlotKeys",
   "pluginNextTurnInjections",
   "sessionId",
-  "createdBy",
   "lifecycleRevision",
   "updatedAt",
+  "incognito",
   "archivedAt",
+  "archivedBy",
   "pinnedAt",
   "icon",
   "lastReadAt",
@@ -32,6 +33,11 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "spawnedCwd",
   "worktree",
   "parentSessionKey",
+  "createdVia",
+  "createdActor",
+  "createdAt",
+  "forkSource",
+  "previousSessionId",
   "forkedFromParent",
   "spawnDepth",
   "swarmGroupId",
@@ -154,24 +160,18 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "label",
   "category",
   "displayName",
-  "channel",
+  "delivery",
   "groupId",
   "subject",
   "groupChannel",
   "space",
-  "origin",
-  "route",
-  "deliveryContext",
-  "lastChannel",
-  "lastTo",
-  "lastAccountId",
-  "lastThreadId",
   "skillsSnapshot",
   "systemPromptReport",
   "pluginDebugEntries",
   "hookExternalContentSource",
   "acp",
   "quotaSuspension",
+  "visibility",
 ] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
 
 type ReservedSessionEntrySlotKey = Extract<
@@ -187,6 +187,16 @@ type SessionEntryReservedSlotSetValue = [MissingSessionEntryReservedSlotKey] ext
 const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValue>(
   SESSION_ENTRY_RESERVED_SLOT_KEY_LIST,
 );
+const RETIRED_SESSION_DELIVERY_SLOT_KEYS = new Set<string>([
+  "channel",
+  "origin",
+  "route",
+  "deliveryContext",
+  "lastChannel",
+  "lastTo",
+  "lastAccountId",
+  "lastThreadId",
+]);
 const OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS = new Set<string>([
   "prototype",
   ...Object.getOwnPropertyNames(Object.prototype),
@@ -210,7 +220,7 @@ export function normalizeSessionEntrySlotKey(
       error: "sessionEntrySlotKey must be an identifier-style field name",
     };
   }
-  if (SESSION_ENTRY_RESERVED_SLOT_KEYS.has(key)) {
+  if (SESSION_ENTRY_RESERVED_SLOT_KEYS.has(key) || RETIRED_SESSION_DELIVERY_SLOT_KEYS.has(key)) {
     return {
       ok: false,
       error: `sessionEntrySlotKey is reserved by SessionEntry: ${key}`,

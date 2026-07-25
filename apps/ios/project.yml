@@ -114,7 +114,6 @@ targets:
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         OPENCLAW_ACTIVE_APP_GROUP_ID: "$(OPENCLAW_APP_GROUP_ID)"
-        OPENCLAW_APP_DISPLAY_NAME: OpenClaw
         OPENCLAW_URL_SCHEME: openclaw
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID)"
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_APP_PROFILE)"
@@ -129,7 +128,6 @@ targets:
           ASSETCATALOG_COMPILER_APPICON_NAME: AppIconDebug
           CODE_SIGN_STYLE: Automatic
           OPENCLAW_ACTIVE_APP_GROUP_ID: "$(OPENCLAW_DEBUG_APP_GROUP_ID)"
-          OPENCLAW_APP_DISPLAY_NAME: OpenClaw
           OPENCLAW_CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
           OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT: development
           OPENCLAW_URL_SCHEME: openclaw-debug
@@ -145,7 +143,7 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: "$(OPENCLAW_APP_DISPLAY_NAME)"
+        CFBundleDisplayName: OpenClaw
         CFBundleIconName: "$(ASSETCATALOG_COMPILER_APPICON_NAME)"
         CFBundleURLTypes:
           - CFBundleURLName: ai.openclawfoundation.app

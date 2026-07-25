@@ -10,12 +10,13 @@
   "dependencies": {
     "@discord/embedded-app-sdk": "2.5.0",
     "@discordjs/voice": "0.19.2",
-    "discord-api-types": "0.38.49",
+    "discord-api-types": "0.38.50",
     "libopus-wasm": "0.2.0",
+    "mdast-util-from-markdown": "2.0.3",
     "p-map": "7.0.5",
-    "typebox": "1.3.3",
-    "undici": "8.5.0",
-    "ws": "8.21.0",
+    "typebox": "1.3.6",
+    "undici": "8.6.0",
+    "ws": "8.21.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -47,7 +48,9 @@
           ]
         }
       },
-      "approvalFlags": ["native"],
+      "approvalFlags": [
+        "native"
+      ],
       "label": "Discord",
       "selectionLabel": "Discord (Bot API)",
       "detailLabel": "Discord Bot",

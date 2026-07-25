@@ -9,13 +9,23 @@ import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engin
 import { runExec } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  requireNodeSqlite,
+  resolveSqliteFilesystemPath,
+} from "./node-sqlite.js";
 import { resolveSystemBin } from "./resolve-system-bin.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import {
+  openSqliteDirectoryForDurability,
+  syncSqliteDirectoryForDurability,
+  type SqlitePathIdentityReceipt,
+} from "./sqlite-path-durability.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
 const SQLITE_DIRECTORY_MODE = 0o700;
 const WINDOWS_DIRECTORY_EXISTS_MARKER = "OPENCLAW_SQLITE_DIRECTORY_EXISTS";
+
 // Managed directory creation accepts existing paths. CreateDirectoryW applies the
 // protected DACL atomically while preserving fail-if-exists semantics.
 const WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE = `
@@ -86,6 +96,7 @@ type CreateVerifiedSqliteSnapshotOptions = {
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
+  requireNonEmptySource?: boolean;
   transform?: (database: DatabaseSync) => void | Promise<void>;
   validate?: SqliteSnapshotValidator;
 };
@@ -122,7 +133,9 @@ export async function createPrivateSqliteDirectory(directoryPath: string): Promi
     await fs.mkdir(directoryPath, { mode: SQLITE_DIRECTORY_MODE });
     return;
   }
-  const encodedPath = Buffer.from(directoryPath, "utf8").toString("base64");
+  // This raw Win32 call bypasses Node's automatic long-path normalization.
+  const nativeDirectoryPath = path.toNamespacedPath(path.resolve(directoryPath));
+  const encodedPath = Buffer.from(nativeDirectoryPath, "utf8").toString("base64");
   const encodedNativeSource = Buffer.from(WINDOWS_PRIVATE_DIRECTORY_NATIVE_SOURCE, "utf8").toString(
     "base64",
   );
@@ -182,10 +195,16 @@ export async function createPrivateSqliteTempDirectory(
   return directoryPath;
 }
 
-async function assertRegularSourceFile(sourcePath: string): Promise<void> {
+async function assertRegularSourceFile(
+  sourcePath: string,
+  requireNonEmptySource: boolean,
+): Promise<void> {
   const stat = await fs.lstat(sourcePath);
   if (!stat.isFile()) {
     throw new Error(`SQLite snapshot source must be a regular file: ${sourcePath}`);
+  }
+  if (requireNonEmptySource && stat.size === 0) {
+    throw new Error(`SQLite snapshot source must not be empty: ${sourcePath}`);
   }
 }
 
@@ -549,11 +568,25 @@ export async function publishVerifiedSqliteFile(
   options: PublishVerifiedSqliteFileOptions,
 ): Promise<void> {
   await assertTargetAbsent(options.targetPath);
-  const targetDirectory = path.dirname(options.targetPath);
-  const stagingDir = await createPrivateSqliteTempDirectory(
-    targetDirectory,
-    `.sqlite-publish-${randomUUID()}-`,
+  const targetDirectory = path.resolve(path.dirname(options.targetPath));
+  const targetDirectoryReceipt: SqlitePathIdentityReceipt = {
+    path: targetDirectory,
+    identity: await fs.lstat(targetDirectory),
+  };
+  const targetDirectoryPin = await openSqliteDirectoryForDurability(
+    targetDirectoryReceipt,
+    "SQLite publication directory",
   );
+  let stagingDir: string;
+  try {
+    stagingDir = await createPrivateSqliteTempDirectory(
+      targetDirectory,
+      `.sqlite-publish-${randomUUID()}-`,
+    );
+  } catch (error) {
+    await targetDirectoryPin.close().catch(() => undefined);
+    throw error;
+  }
   const stagedPath = path.join(stagingDir, "database.sqlite");
   let stagingIdentity: Stats | undefined;
   let source: FileHandle | undefined;
@@ -637,12 +670,12 @@ export async function publishVerifiedSqliteFile(
     target ??= await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
     ownershipPinned = true;
-    await syncDirectoryBestEffort(targetDirectory);
+    await syncSqliteDirectoryForDurability(targetDirectoryReceipt);
     await fs.unlink(stagedPath);
     const expectedIdentity = await target.stat();
     publishedIdentity = expectedIdentity;
     await fs.rmdir(stagingDir);
-    await syncDirectoryBestEffort(targetDirectory);
+    await syncSqliteDirectoryForDurability(targetDirectoryReceipt);
     const linkedContent = await hashOpenPublishedFile(target, options.targetPath, expectedIdentity);
     assertExpectedContent(linkedContent, expectedContent, options.targetPath);
     await target.close();
@@ -719,7 +752,7 @@ export async function publishVerifiedSqliteFile(
         !ownershipPinned,
       );
       if (removed) {
-        await syncDirectoryBestEffort(targetDirectory).catch(() => undefined);
+        await syncSqliteDirectoryForDurability(targetDirectoryReceipt).catch(() => undefined);
       }
     }
     if (stagingIdentity) {
@@ -738,6 +771,7 @@ export async function publishVerifiedSqliteFile(
     if (source) {
       await source.close().catch(() => undefined);
     }
+    await targetDirectoryPin.close().catch(() => undefined);
   }
 }
 
@@ -775,7 +809,7 @@ async function removePublicationStagingDirectory(
 export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
-  await assertRegularSourceFile(options.sourcePath);
+  await assertRegularSourceFile(options.sourcePath, options.requireNonEmptySource === true);
   await assertTargetAbsent(options.targetPath);
 
   const stagingDir = await createPrivateSqliteTempDirectory(
@@ -787,7 +821,7 @@ export async function createVerifiedSqliteSnapshot(
   const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
-    const source = new sqlite.DatabaseSync(options.sourcePath, {
+    const source = openNodeSqliteDatabase(options.sourcePath, {
       allowExtension: true,
       readOnly: true,
     });
@@ -796,22 +830,29 @@ export async function createVerifiedSqliteSnapshot(
       await loadSqliteVecExtension({ db: source });
       assertSqliteIntegrity(source, options.sourcePath);
       options.validate?.(source, options.sourcePath);
-      source.prepare("VACUUM INTO ?").run(stagedPath);
+      // Copy in incremental steps so concurrent writers are blocked only while
+      // each batch is read. Compaction happens after releasing the live source.
+      await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
     } finally {
       source.close();
     }
 
     await fs.chmod(stagedPath, 0o600);
-    const snapshot = new sqlite.DatabaseSync(stagedPath, { allowExtension: true });
+    const snapshot = openNodeSqliteDatabase(stagedPath, {
+      allowExtension: true,
+    });
     try {
       snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
       await loadSqliteVecExtension({ db: snapshot });
+      // Online backup preserves WAL mode. Switch the private copy to rollback
+      // journaling so verification and restore need only the published file.
+      snapshot.exec("PRAGMA journal_mode = DELETE;");
       if (options.transform) {
         await options.transform(snapshot);
-        // A transform may delete sensitive rows. Compact again so the
-        // published artifact cannot retain their bytes in free pages.
-        snapshot.exec("VACUUM;");
       }
+      // Compact the private copy so the published artifact is single-file and
+      // cannot retain deleted or transformed data in free pages.
+      snapshot.exec("VACUUM;");
       assertSqliteIntegrity(snapshot, options.targetPath);
       options.validate?.(snapshot, options.targetPath);
       const userVersion = readSqliteUserVersion(snapshot);
@@ -827,7 +868,7 @@ export async function createVerifiedSqliteSnapshot(
         beforePublish: options.beforePublish,
         afterPublish: options.afterPublish,
         validatePublished: async (publishedPath) => {
-          const published = new sqlite.DatabaseSync(publishedPath, {
+          const published = openNodeSqliteDatabase(publishedPath, {
             allowExtension: true,
             readOnly: true,
           });

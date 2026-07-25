@@ -33,23 +33,23 @@ This is the **deep architecture reference** for the OpenClaw plugin system. For 
 
 Capabilities are the public **native plugin** model inside OpenClaw. Every native OpenClaw plugin registers against one or more capability types:
 
-| Capability             | Registration method                              | Example plugins                |
-| ---------------------- | ------------------------------------------------ | ------------------------------ |
-| Text inference         | `api.registerProvider(...)`                      | `anthropic`, `openai`          |
-| CLI inference backend  | `api.registerCliBackend(...)`                    | `anthropic`, `openai`          |
-| Embeddings             | `api.registerEmbeddingProvider(...)`             | Provider-owned vector plugins  |
-| Speech                 | `api.registerSpeechProvider(...)`                | `elevenlabs`, `microsoft`      |
-| Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                       |
-| Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `google`, `openai`             |
-| Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | `google`, `openai`             |
-| Transcripts source     | `api.registerTranscriptSourceProvider(...)`      | `discord`                      |
-| Image generation       | `api.registerImageGenerationProvider(...)`       | `fal`, `google`, `openai`      |
-| Music generation       | `api.registerMusicGenerationProvider(...)`       | `fal`, `google`, `minimax`     |
-| Video generation       | `api.registerVideoGenerationProvider(...)`       | `fal`, `google`, `qwen`        |
-| Web fetch              | `api.registerWebFetchProvider(...)`              | `firecrawl`                    |
-| Web search             | `api.registerWebSearchProvider(...)`             | `brave`, `firecrawl`, `google` |
-| Channel / messaging    | `api.registerChannel(...)`                       | `matrix`, `msteams`            |
-| Gateway discovery      | `api.registerGatewayDiscoveryService(...)`       | `bonjour`                      |
+| Capability             | Registration method                              | Example plugins                                             |
+| ---------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
+| Text inference         | `api.registerProvider(...)`                      | `anthropic`, `openai`                                       |
+| CLI inference backend  | `api.registerCliBackend(...)`                    | `anthropic`, `openai`                                       |
+| Embeddings             | `api.registerEmbeddingProvider(...)`             | Provider-owned vector plugins                               |
+| Speech                 | `api.registerSpeechProvider(...)`                | `elevenlabs`, `microsoft`                                   |
+| Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                                                    |
+| Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `google`, `openai`                                          |
+| Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | `google`, `openai`                                          |
+| Transcripts source     | `api.registerTranscriptSourceProvider(...)`      | `discord`, `google-meet`, `teams-meetings`, `zoom-meetings` |
+| Image generation       | `api.registerImageGenerationProvider(...)`       | `fal`, `google`, `openai`                                   |
+| Music generation       | `api.registerMusicGenerationProvider(...)`       | `fal`, `google`, `minimax`                                  |
+| Video generation       | `api.registerVideoGenerationProvider(...)`       | `fal`, `google`, `qwen`                                     |
+| Web fetch              | `api.registerWebFetchProvider(...)`              | `firecrawl`                                                 |
+| Web search             | `api.registerWebSearchProvider(...)`             | `brave`, `firecrawl`, `google`                              |
+| Channel / messaging    | `api.registerChannel(...)`                       | `matrix`, `msteams`                                         |
+| Gateway discovery      | `api.registerGatewayDiscoveryService(...)`       | `bonjour`                                                   |
 
 <Note>
 A plugin that registers zero capabilities but provides hooks, tools, discovery services, or background services is a **legacy hook-only** plugin. That pattern is still fully supported.

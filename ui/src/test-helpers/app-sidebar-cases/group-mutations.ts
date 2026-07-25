@@ -102,8 +102,8 @@ describe("AppSidebar group mutation collapsed state", () => {
     menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
     await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
 
-    gatewayHarness.publish({ connected: false });
-    gatewayHarness.publish({ connected: true });
+    gatewayHarness.publish({ phase: "stopped" });
+    gatewayHarness.publish({ phase: "connected" });
     resolveRename("stale");
     await Promise.resolve();
     await Promise.resolve();

@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Full Release Validation stages, child workflows, release profiles, rerun handles, and evidence"
 title: "Full release validation"
 read_when:
@@ -35,11 +36,33 @@ report that same workflow SHA. Pass
 reachable from current `origin/main`. The workflow never creates or updates
 repository refs itself.
 
-When the Code SHA is green, generate and commit only `CHANGELOG.md`. This new
-commit is the **Release SHA**. Run the same helper for the Release SHA. Product
-evidence is reused only when GitHub proves the Release SHA descends from the
-Code SHA and the complete changed path set is exactly `CHANGELOG.md`; npm
-preflight and package/install acceptance still run on the Release SHA.
+## Extended-stable exception
+
+Extended-stable publish requires a run whose workflow and target are both the
+canonical branch:
+
+```bash
+gh workflow run full-release-validation.yml \
+  --ref extended-stable/YYYY.M.33 \
+  -f ref=extended-stable/YYYY.M.33 \
+  -f release_profile=stable
+```
+
+Do not use `pnpm ci:full-release` or `release-ci/*`. Publish binds the run's
+branch, head/target SHA, manifest `workflowRef`, ID, and attempt to the canonical
+branch and release commit.
+
+Backport product failures; make the smallest behavior-preserving repair for
+frozen-target tooling; retry provider, approval, or runner failures without a
+source change. Any branch change needs a complete new run. Do not omit required
+package, installer, update, channel, or live behavior because the target is old.
+
+For a regular release, when the Code SHA is green, generate and commit only
+`CHANGELOG.md`. This new commit is the **Release SHA**. Run the same helper for
+the Release SHA. Product evidence is reused only when GitHub proves the Release
+SHA descends from the Code SHA and the complete changed path set is exactly
+`CHANGELOG.md`; npm preflight and package/install acceptance still run on the
+Release SHA.
 
 `release_profile=stable` and `release_profile=full` always run the exhaustive
 live/Docker soak. Pass `run_release_soak=true` to include the same soak lanes
@@ -272,8 +295,11 @@ Keep the `Full Release Validation` summary as the release-level index. It links
 child run ids and includes slowest-job tables. For failures, inspect the child
 workflow first, then rerun the smallest matching handle above.
 
-Record both Code SHA and Release SHA, the reuse policy and changed-path set, the
-green Code SHA parent run, and the lightweight Release SHA parent run.
+For a regular release, record both Code SHA and Release SHA, the reuse policy
+and changed-path set, the green Code SHA parent run, and the lightweight Release
+SHA parent run. For extended-stable, record the canonical branch, exact release
+SHA, fresh parent run id and attempt, workflow ref, every child run, and any
+frozen-target compatibility repair or intentional omission.
 
 Useful artifacts:
 

@@ -2,12 +2,12 @@
 import { kindFromMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { describe, expect, it } from "vitest";
-import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
 import {
   hasStagedMediaProjection,
   normalizeMediaFacts,
   projectMediaFacts,
   resolveMediaFacts,
+  resolveStagedMediaFacts,
   type MediaFactInput,
   type MediaFactLegacyProjection,
 } from "../../media/media-facts.js";
@@ -125,6 +125,182 @@ const mediaMergeMatrix = canonicalModes.flatMap((canonicalMode) =>
     })),
   ),
 );
+
+const stagedMediaMergeMatrix: Array<{
+  name: string;
+  source: MergeMatrixSource;
+  expected: Array<Partial<MediaFactInput>>;
+  expectedStaged: boolean;
+}> = [
+  {
+    name: "staged singular plus multi-canonical",
+    source: {
+      media: [
+        {
+          path: "/canonical/photo.jpg",
+          url: "https://canonical.test/photo.jpg",
+          contentType: "image/jpeg",
+          kind: "image",
+          transcribed: true,
+          messageId: "photo",
+        },
+        {
+          path: "/canonical/voice.ogg",
+          contentType: "audio/ogg",
+          kind: "audio",
+          messageId: "voice",
+          hydrationSuppressed: true,
+        },
+      ],
+      MediaPath: "/staged/photo.jpg",
+      MediaStaged: true,
+    },
+    expected: [
+      {
+        path: "/staged/photo.jpg",
+        url: "https://canonical.test/photo.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+        transcribed: true,
+        messageId: "photo",
+        staged: true,
+      },
+      {
+        path: "/canonical/voice.ogg",
+        contentType: "audio/ogg",
+        kind: "audio",
+        messageId: "voice",
+        hydrationSuppressed: true,
+      },
+    ],
+    expectedStaged: false,
+  },
+  {
+    name: "staged aligned arrays plus canonical metadata",
+    source: {
+      media: [
+        {
+          path: "/canonical/one.bin",
+          contentType: "application/octet-stream",
+          kind: "document",
+          transcribed: true,
+          messageId: "one",
+        },
+        {
+          path: "/canonical/two.bin",
+          contentType: "application/octet-stream",
+          kind: "audio",
+          messageId: "two",
+          hydrationSuppressed: true,
+        },
+      ],
+      MediaPaths: ["/staged/one.jpg", "/staged/two.ogg"],
+      MediaUrls: ["file:///staged/one.jpg", "file:///staged/two.ogg"],
+      MediaTypes: ["image/jpeg", "audio/ogg"],
+      MediaWorkspaceDir: "/staged",
+    },
+    expected: [
+      {
+        path: "/staged/one.jpg",
+        url: "file:///staged/one.jpg",
+        contentType: "image/jpeg",
+        kind: "document",
+        transcribed: true,
+        messageId: "one",
+        workspaceDir: "/staged",
+      },
+      {
+        path: "/staged/two.ogg",
+        url: "file:///staged/two.ogg",
+        contentType: "audio/ogg",
+        kind: "audio",
+        messageId: "two",
+        workspaceDir: "/staged",
+        hydrationSuppressed: true,
+      },
+    ],
+    expectedStaged: true,
+  },
+  {
+    name: "staged-only",
+    source: {
+      MediaPaths: ["/staged/photo.jpg", "/staged/voice.ogg"],
+      MediaUrls: ["file:///staged/photo.jpg", "file:///staged/voice.ogg"],
+      MediaTypes: ["image/jpeg", "audio/ogg"],
+      MediaTranscribedIndexes: [1],
+      MediaWorkspaceDir: "/staged",
+    },
+    expected: [
+      {
+        path: "/staged/photo.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+        transcribed: false,
+        workspaceDir: "/staged",
+      },
+      {
+        path: "/staged/voice.ogg",
+        contentType: "audio/ogg",
+        kind: "audio",
+        transcribed: true,
+        workspaceDir: "/staged",
+      },
+    ],
+    expectedStaged: true,
+  },
+  {
+    name: "canonical-only with an empty staged projection",
+    source: {
+      media: [
+        {
+          path: "/canonical/photo.jpg",
+          contentType: "image/jpeg",
+          kind: "image",
+          messageId: "photo",
+          hydrationSuppressed: true,
+        },
+      ],
+      MediaStaged: true,
+    },
+    expected: [
+      {
+        path: "/canonical/photo.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+        messageId: "photo",
+        hydrationSuppressed: true,
+        staged: true,
+      },
+    ],
+    expectedStaged: true,
+  },
+  {
+    name: "canonical path with staged URL metadata only",
+    source: {
+      media: [
+        {
+          path: "/canonical/photo.jpg",
+          contentType: "image/jpeg",
+          kind: "image",
+          messageId: "photo",
+        },
+      ],
+      MediaUrl: "file:///canonical/photo.jpg",
+      MediaStaged: true,
+    },
+    expected: [
+      {
+        path: "/canonical/photo.jpg",
+        url: "file:///canonical/photo.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+        messageId: "photo",
+        staged: true,
+      },
+    ],
+    expectedStaged: true,
+  },
+];
 
 describe("channel inbound media facts", () => {
   it("formats media placeholder text with kind precedence and normalized MIME fallback", () => {
@@ -311,8 +487,12 @@ describe("channel inbound media facts", () => {
       legacy.MediaPath || legacy.MediaUrl ? 1 : 0,
     );
 
+    const stageableFacts = facts.filter((fact) => Boolean(normalizeOptionalString(fact.path)));
     expect(hasStagedMediaProjection(source)).toBe(
-      legacyMode === "staged-MediaStaged" || legacyMode === "staged-MediaWorkspaceDir",
+      legacyMode === "staged-MediaStaged" ||
+        legacyMode === "staged-MediaWorkspaceDir" ||
+        (stageableFacts.length > 0 &&
+          stageableFacts.every((fact) => Boolean(normalizeOptionalString(fact.workspaceDir)))),
     );
     expect(facts).toHaveLength(expectedCount);
     for (let index = 0; index < expectedCount; index += 1) {
@@ -341,6 +521,36 @@ describe("channel inbound media facts", () => {
         expect(facts[index]).not.toHaveProperty("workspaceDir");
       }
     }
+  });
+
+  it.each(stagedMediaMergeMatrix)("merges $name", ({ source, expected, expectedStaged }) => {
+    const facts = resolveStagedMediaFacts(source);
+    expect(facts).toHaveLength(expected.length);
+    for (const [index, expectedFact] of expected.entries()) {
+      expect(facts[index]).toMatchObject(expectedFact);
+    }
+    expect(hasStagedMediaProjection(source)).toBe(expectedStaged);
+  });
+
+  it("requires every stageable fact to carry a workspace before skipping staging", () => {
+    expect(
+      hasStagedMediaProjection({
+        media: [
+          { path: "media/inbound/staged.png", workspaceDir: "/tmp/workspace" },
+          { path: "/tmp/unstaged.png" },
+          { kind: "document" },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      hasStagedMediaProjection({
+        media: [
+          { path: "media/inbound/one.png", workspaceDir: "/tmp/workspace" },
+          { path: "media/inbound/two.png", workspaceDir: "/tmp/workspace" },
+          { kind: "document" },
+        ],
+      }),
+    ).toBe(true);
   });
 
   it("builds legacy media payload fields from inbound media facts", () => {
@@ -375,10 +585,6 @@ describe("channel inbound media facts", () => {
     expect(payload.MediaPaths).toEqual(["/tmp/image.png", ""]);
     expect(payload.MediaUrls).toEqual(["/tmp/image.png", "https://example.test/remote.png"]);
     expect(payload.MediaTypes).toEqual(["image/png", "image/png"]);
-    expect(normalizeAttachments(payload)).toMatchObject([
-      { path: "/tmp/image.png", url: "/tmp/image.png", mime: "image/png" },
-      { path: undefined, url: "https://example.test/remote.png", mime: "image/png" },
-    ]);
   });
 
   it("keeps compact and cardinality-preserving adapter projections byte-identical", () => {

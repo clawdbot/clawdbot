@@ -204,6 +204,7 @@ struct LiveActivityPresentationArbiterTests {
                 "LiveActivity/VoiceLiveActivityCoordinator.swift"),
             encoding: .utf8)
 
+        #expect(appSource.contains("if !Self.screenshotModeEnabled {"))
         #expect(appSource.contains("self.voiceLiveActivityCoordinator.start(appModel: self.appModel)"))
         #expect(coordinatorSource.contains("LiveActivityManager.shared.showVoice("))
         #expect(coordinatorSource.contains("LiveActivityManager.shared.updateVoiceLevel("))

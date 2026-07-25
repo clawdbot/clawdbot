@@ -50,10 +50,6 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
 }));
 
-vi.mock("../../config/sessions/store.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
-}));
-
 vi.mock("../../config/sessions/session-accessor.js", () => {
   const loadSessionEntry = (scope: { storePath?: string; sessionKey: string }) =>
     (hoisted.loadSessionStoreMock(scope.storePath) as Record<string, unknown>)[scope.sessionKey];

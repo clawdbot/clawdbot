@@ -202,7 +202,7 @@ describe("ConfigPage system info", () => {
     const client = {} as GatewayBrowserClient;
     const snapshot = {
       client,
-      connected: false,
+      phase: "stopped",
       hello: null,
     } as ApplicationGatewaySnapshot;
     const page = new ConfigPage();
@@ -232,7 +232,7 @@ describe("ConfigPage system info", () => {
     } as unknown as GatewayBrowserClient;
     const snapshot = {
       client,
-      connected: true,
+      phase: "connected",
       hello: { features: { methods: ["system.info"] } },
     } as ApplicationGatewaySnapshot;
     const firstGateway = { snapshot } as ApplicationGateway;
@@ -286,7 +286,7 @@ describe("ConfigPage session observer models", () => {
     const firstClient = {} as GatewayBrowserClient;
     const secondClient = {} as GatewayBrowserClient;
     const gateway = {
-      snapshot: { client: firstClient, connected: true },
+      snapshot: { client: firstClient, phase: "connected" },
     } as unknown as ApplicationGateway;
     const page = new ConfigPage();
     const state = page as unknown as {
@@ -303,7 +303,7 @@ describe("ConfigPage session observer models", () => {
     const firstLoad = state.ensureSessionObserverModels(firstClient);
     (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
       client: secondClient,
-      connected: true,
+      phase: "connected",
     } as ApplicationGatewaySnapshot;
     const secondLoad = state.ensureSessionObserverModels(secondClient);
     const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
@@ -322,7 +322,7 @@ describe("ConfigPage session observer models", () => {
     vi.spyOn(chatModels, "loadModels").mockRejectedValue(new Error("catalog unavailable"));
     const client = {} as GatewayBrowserClient;
     const gateway = {
-      snapshot: { client, connected: true },
+      snapshot: { client, phase: "connected" },
     } as unknown as ApplicationGateway;
     const page = new ConfigPage();
     const state = page as unknown as {

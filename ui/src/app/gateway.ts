@@ -2,16 +2,17 @@ import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";
 
+export type ApplicationGatewayPhase =
+  | "stopped"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "offline";
+
 export type ApplicationGatewaySnapshot = {
   client: GatewayBrowserClient | null;
-  connected: boolean;
+  phase: ApplicationGatewayPhase;
   offlineStable: boolean;
-  /**
-   * Disconnected, but a session existed this page lifetime and the client is
-   * still auto-retrying. The shell stays mounted with offline presentation in
-   * this state instead of falling back to the login gate.
-   */
-  reconnecting: boolean;
   hello: GatewayHelloOk | null;
   assistantAgentId: string | null;
   sessionKey: string;

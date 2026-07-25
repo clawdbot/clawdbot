@@ -62,6 +62,7 @@ describe("OpenClaw setup detection protocol", () => {
       candidates: [
         {
           kind: "provider-auto:ollama",
+          brandId: "ollama",
           label: "Ollama",
           detail: "available locally",
           modelRef: "ollama/qwen3",
@@ -73,6 +74,7 @@ describe("OpenClaw setup detection protocol", () => {
       manualProviders: [
         {
           id: "ollama",
+          brandId: "ollama",
           label: "Ollama",
           icon: "https://cdn.simpleicons.org/ollama",
           website: "https://ollama.com/download",
@@ -82,6 +84,7 @@ describe("OpenClaw setup detection protocol", () => {
       recommendedInstalls: [
         {
           id: "ollama",
+          brandId: "ollama",
           label: "Ollama",
           hint: "Run open models locally",
           website: "https://ollama.com/download",
@@ -93,6 +96,18 @@ describe("OpenClaw setup detection protocol", () => {
     };
 
     expect(Value.Check(SystemAgentSetupDetectResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SystemAgentSetupDetectResultSchema, {
+        ...result,
+        candidates: result.candidates.map(({ brandId: _brandId, ...candidate }) => candidate),
+        manualProviders: result.manualProviders.map(
+          ({ brandId: _brandId, ...provider }) => provider,
+        ),
+        recommendedInstalls: result.recommendedInstalls.map(
+          ({ brandId: _brandId, ...install }) => install,
+        ),
+      }),
+    ).toBe(true);
     expect(
       Value.Check(SystemAgentSetupDetectResultSchema, {
         ...result,

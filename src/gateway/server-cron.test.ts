@@ -1987,6 +1987,8 @@ describe("buildGatewayCronService", () => {
                 source?: string;
                 intent?: string;
                 heartbeat?: { target?: string };
+                scheduledEveryMs?: number;
+                scheduledAnchorMs?: number;
               }) => void;
             };
           };
@@ -1999,6 +2001,8 @@ describe("buildGatewayCronService", () => {
         reason: "cron:test",
         sessionKey: "discord:channel:ops",
         heartbeat: { target: "last" },
+        scheduledEveryMs: 15 * 60_000,
+        scheduledAnchorMs: 42_000,
       });
 
       expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -2008,6 +2012,8 @@ describe("buildGatewayCronService", () => {
         agentId: "main",
         sessionKey: "agent:main:discord:channel:ops",
         heartbeat: { target: "last", to: undefined, accountId: undefined },
+        scheduledEveryMs: 15 * 60_000,
+        scheduledAnchorMs: 42_000,
       });
     } finally {
       state.cron.stop();

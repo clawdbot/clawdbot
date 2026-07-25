@@ -77,13 +77,13 @@ describe("AppSidebar viewer presence", () => {
 
     await vi.waitFor(() => {
       const avatar = sidebar.querySelector<HTMLImageElement>(
-        ".sidebar-footer-bar__identity openclaw-viewer-avatar img",
+        ".sidebar-identity-card openclaw-viewer-avatar img",
       );
       expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
     });
   });
 
-  it("groups identified viewers for session rows and the footer", async () => {
+  it("groups identified viewers for session rows and keeps the footer identity-only", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -91,9 +91,6 @@ describe("AppSidebar viewer presence", () => {
       createSessions("main", ["agent:main:main", "agent:main:work"]),
     );
     sidebar.connected = true;
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-
     gatewayHarness.publishEvent("presence", {
       presence: [
         {
@@ -152,13 +149,7 @@ describe("AppSidebar viewer presence", () => {
     const sessionFacepile = sidebar.querySelector<HTMLElement>(
       '[data-session-key="agent:main:work"] openclaw-viewer-facepile',
     );
-    const footerFacepile = sidebar.querySelector<HTMLElement>(
-      ".sidebar-footer-bar openclaw-viewer-facepile",
-    );
-    await Promise.all([
-      (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
-      (footerFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
-    ]);
+    await (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete;
     expect(
       sessionFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
     ).toBe("6");
@@ -175,35 +166,22 @@ describe("AppSidebar viewer presence", () => {
       ),
     ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
 
-    expect(
-      footerFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
-    ).toBe("6");
-    expect(footerFacepile?.querySelector('.viewer-facepile [data-viewer-id="00-self"]')).toBeNull();
-    expect(footerFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+1");
-    expect(footerFacepile?.querySelector(".viewer-facepile openclaw-tooltip")).toBeNull();
-    expect(
-      [
-        ...(footerFacepile?.querySelectorAll(
-          ".sidebar-presence-hover-card .sidebar-hover-card__person",
-        ) ?? []),
-      ].map((row) => row.getAttribute("data-viewer-id")),
-    ).toEqual(["00-self", "alice", "bob", "carol", "dave", "erin", "frank"]);
-    expect(footerFacepile?.querySelector(".sidebar-presence-hover-card")?.textContent).toContain(
-      "Server",
-    );
-
-    const identityChip = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__identity");
-    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+    const identityCard = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
       "Self User",
     );
-    expect(identityChip?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
-    identityChip?.click();
-    expect(onNavigate).toHaveBeenCalledWith("profile", {
-      hash: "#settings-profile-identity",
-    });
+    expect(identityCard?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
 
-    const avatar = identityChip?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
+    const avatar = identityCard?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
     expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=1");
+    const footer = sidebar.querySelector(".sidebar-footer-bar");
+    expect(footer?.querySelector("openclaw-viewer-facepile")).toBeNull();
+    expect(footer?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
+    expect(footer?.querySelector(".sidebar-brand__logo-slot")).toBeNull();
+    expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
+      "openclaw-tooltip",
+      "span",
+    ]);
     gatewayHarness.gateway.updateSelfUser?.({
       name: "Augusta Ada",
       avatarUrl: "/api/users/00-self/avatar?v=4",
@@ -211,17 +189,17 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
 
     // Profile mutations update gateway state directly; no presence event follows them.
-    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
       "Augusta Ada",
     );
     expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=4");
 
     sidebar.connected = false;
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Augusta Ada");
   });
 
-  it("leaves the footer identity chip absent for an unidentified connection", async () => {
+  it("renders an Account fallback for an unidentified connection", async () => {
     const client = { instanceId: "anonymous-self" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -237,8 +215,11 @@ describe("AppSidebar viewer presence", () => {
     });
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-footer-bar")?.textContent).not.toContain("Sign in");
+    const identityCard = sidebar.querySelector(".sidebar-identity-card");
+    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent).toBe(
+      "Account",
+    );
+    expect(identityCard?.querySelector('[data-viewer-id="account"]')?.textContent).toContain("A");
   });
 });
 
@@ -269,6 +250,9 @@ describe("AppSidebar brand actions", () => {
     );
     expect(brandButton?.getAttribute("aria-label")).toBe("New thread");
     expect(brandButton?.disabled).toBe(true);
+    expect(actions?.querySelectorAll("button")).toHaveLength(1);
+    expect(sidebar.querySelector(".sidebar-search")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
 
     sidebar.connected = true;
     await sidebar.updateComplete;
@@ -353,7 +337,7 @@ describe("AppSidebar agent chip", () => {
     expect(onNavigate).not.toHaveBeenCalledWith("config");
   });
 
-  it("renders the canonical offline retry button only for a stable disconnect", async () => {
+  it("keeps the identity card available offline with reconnect and retry actions", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const onRetryConnect = vi.fn();
@@ -361,40 +345,42 @@ describe("AppSidebar agent chip", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
     expect(
       sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
     ).not.toContain("Online");
 
     sidebar.connected = false;
     sidebar.offline = true;
-    sidebar.queuedOutboxCount = 3;
-    sidebar.lastError = "gateway unavailable?token=sidebar-secret";
     await sidebar.updateComplete;
-    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
-    expect(button?.textContent).toContain("Offline");
-    expect(button?.textContent).toContain("Reconnecting…");
-    expect(button?.textContent).toContain("3 queued");
-    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
-    expect(button?.getAttribute("aria-live")).toBe("polite");
-    // The redacted error detail moved from a native title to the shared
-    // tooltip's accessible description.
-    expect(button?.hasAttribute("title")).toBe(false);
-    const descriptionId = button?.getAttribute("aria-describedby") ?? "";
-    expect(document.getElementById(descriptionId)?.textContent).toBe(
-      "gateway unavailable?[redacted-credential]",
+    const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
+    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Account");
+    expect(card?.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
+      "Reconnecting…",
     );
-    expect(button?.querySelector(".sidebar-footer-bar__status-dot")).not.toBeNull();
+    expect(
+      card?.querySelector(".sidebar-identity-card__subtitle")?.getAttribute("aria-hidden"),
+    ).toBe("true");
+    const connectionStatus = sidebar.querySelector(".sidebar-identity-card__status");
+    expect(connectionStatus?.getAttribute("role")).toBe("status");
+    expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
+    expect(connectionStatus?.textContent).toBe("Reconnecting…");
+    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).not.toContain(
       "Offline",
     );
 
-    button?.click();
+    card?.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
+    const retry = menu?.querySelector('wa-dropdown-item[value="command:retry-connect"]');
+    menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: retry }, bubbles: true }));
     expect(onRetryConnect).toHaveBeenCalledOnce();
 
     sidebar.offline = false;
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-identity-card__status")?.textContent).toBe("");
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {

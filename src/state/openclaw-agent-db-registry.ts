@@ -5,7 +5,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -149,8 +149,9 @@ export function listOpenClawRegisteredAgentDatabases(
     );
   }
 
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  const database = openNodeSqliteDatabase(pathname, {
+    readOnly: true,
+  });
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     if (readSqliteUserVersion(database) > OPENCLAW_STATE_SCHEMA_VERSION) {

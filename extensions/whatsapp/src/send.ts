@@ -4,13 +4,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
-import {
-  convertMarkdownTables,
-  resolveMarkdownTableMode,
-} from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveDefaultWhatsAppAccountId,
@@ -26,7 +24,7 @@ import {
   prepareWhatsAppOutboundMedia,
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
-import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
+import { markdownToWhatsAppChunks, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
@@ -180,8 +178,21 @@ export async function sendMessageWhatsApp(
     channel: "whatsapp",
     accountId: resolvedAccountId ?? options.accountId,
   });
-  text = convertMarkdownTables(text ?? "", tableMode);
-  text = markdownToWhatsApp(text);
+  const accountIdForFormatting = resolvedAccountId ?? options.accountId;
+  const textLimit = Math.min(
+    resolveTextChunkLimit(cfg, "whatsapp", accountIdForFormatting, { fallbackLimit: 4_000 }),
+    4_096,
+  );
+  const textChunks = markdownToWhatsAppChunks(
+    text,
+    textLimit,
+    tableMode,
+    resolveChunkMode(cfg, "whatsapp", accountIdForFormatting),
+  );
+  text = textChunks.shift() ?? "";
+  if (!text && !hasMedia) {
+    return { messageId: "", toJid: jid };
+  }
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({
     module: "web-outbound",
@@ -252,17 +263,22 @@ export async function sendMessageWhatsApp(
       : await active.sendMessage(to, text, mediaBuffer, mediaType);
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
-    if (visibleTextAfterVoice) {
-      // Voice captions require a second platform send. Persist the accepted voice
-      // first so a caption failure cannot make recovery replay the voice note.
+    const trailingTextChunks = [visibleTextAfterVoice, ...textChunks].filter(
+      (chunk): chunk is string => Boolean(chunk),
+    );
+    if (trailingTextChunks.length > 0) {
+      // Persist each accepted part before the next fallible send so recovery
+      // cannot replay already-delivered media or text chunks.
       await options.onDeliveryResult?.({ messageId, toJid: sentRemoteJid });
-      const captionResult = sendOptions
-        ? await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined, sendOptions)
-        : await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined);
-      await options.onDeliveryResult?.({
-        messageId: (captionResult as { messageId?: string })?.messageId ?? "unknown",
-        toJid: resolveActualSentRemoteJid(captionResult, jid),
-      });
+      for (const trailingText of trailingTextChunks) {
+        const trailingResult = sendOptions
+          ? await active.sendMessage(to, trailingText, undefined, undefined, sendOptions)
+          : await active.sendMessage(to, trailingText, undefined, undefined);
+        await options.onDeliveryResult?.({
+          messageId: (trailingResult as { messageId?: string })?.messageId ?? "unknown",
+          toJid: resolveActualSentRemoteJid(trailingResult, jid),
+        });
+      }
     }
     const durationMs = Date.now() - startedAt;
     outboundLog.info(

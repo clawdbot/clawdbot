@@ -15,12 +15,12 @@ import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
-import { projectMediaFacts, resolveMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { resolveMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { CONFIG_DIR } from "../../utils.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
 const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
 const SCP_STDERR_TAIL_CHARS = 16_384;
@@ -173,13 +173,9 @@ export async function stageSandboxMedia(params: {
       };
     }
   }
-  const legacyWorkspaceDir =
-    hostWorkspaceStagingDir && staged.size === pathEntries.length
-      ? path.join(effectiveWorkspaceDir, hostWorkspaceStagingDir)
-      : undefined;
-  applyStagedMediaContext(ctx, nextMedia, legacyWorkspaceDir);
+  applyStagedMediaContext(ctx, nextMedia);
   if (sessionCtx !== ctx) {
-    applyStagedMediaContext(sessionCtx, nextMedia, undefined);
+    applyStagedMediaContext(sessionCtx, nextMedia);
   }
 
   return { staged };
@@ -227,18 +223,8 @@ async function resolveLocalSourceIdentity(sourcePath: string): Promise<string> {
   return await fs.realpath(sourcePath).catch(() => path.resolve(sourcePath));
 }
 
-function applyStagedMediaContext(
-  ctx: MsgContext,
-  media: MediaFact[],
-  legacyWorkspaceDir: string | undefined,
-): void {
+function applyStagedMediaContext(ctx: MsgContext, media: MediaFact[]): void {
   ctx.media = media;
-  Object.assign(ctx, projectMediaFacts(media));
-  if (legacyWorkspaceDir) {
-    ctx.MediaWorkspaceDir = legacyWorkspaceDir;
-  } else {
-    delete ctx.MediaWorkspaceDir;
-  }
 }
 
 function toPosixRelativePath(filePath: string): string {

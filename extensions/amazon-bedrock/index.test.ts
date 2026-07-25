@@ -393,6 +393,27 @@ describe("amazon-bedrock provider plugin", () => {
     }
   });
 
+  it("defaults Claude Opus 5 Bedrock model refs to high adaptive thinking", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    for (const modelId of [
+      "anthropic.claude-opus-5",
+      "us.anthropic.claude-opus-5",
+      "global.anthropic.claude-opus-5",
+    ]) {
+      expectThinkingProfile(
+        provider.resolveThinkingProfile?.({
+          provider: "amazon-bedrock",
+          modelId,
+        } as never),
+        {
+          levelIds: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
+          defaultLevel: "high",
+        },
+      );
+    }
+  });
+
   it("leaves Claude Opus 4.8 Bedrock model refs off by default", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
@@ -457,6 +478,7 @@ describe("amazon-bedrock provider plugin", () => {
   it("recognizes direct Claude 5 model refs as prompt-cache eligible", () => {
     expect(supportsBedrockPromptCaching("us.anthropic.claude-fable-5")).toBe(true);
     expect(supportsBedrockPromptCaching("us.anthropic.claude-mythos-5")).toBe(true);
+    expect(supportsBedrockPromptCaching("global.anthropic.claude-opus-5")).toBe(true);
     expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5")).toBe(true);
   });
 
@@ -1160,7 +1182,7 @@ describe("amazon-bedrock provider plugin", () => {
       expect(result).not.toHaveProperty("capturedPayload");
     });
 
-    it.each(["fable", "sonnet"])(
+    it.each(["fable", "opus", "sonnet"])(
       "omits unsupported service tiers for Claude %s 5",
       async (family) => {
         const provider = await registerWithConfig(undefined);
@@ -1180,7 +1202,7 @@ describe("amazon-bedrock provider plugin", () => {
       },
     );
 
-    it.each(["fable", "sonnet"])(
+    it.each(["fable", "opus", "sonnet"])(
       "keeps the standard service tier for Claude %s 5",
       async (family) => {
         const provider = await registerWithConfig(undefined);

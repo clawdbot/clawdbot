@@ -4,6 +4,8 @@ import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choice
 export type SetupInferenceManualProvider = {
   /** Provider-auth choice id sent back to `openclaw.setup.activate`. */
   id: string;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
   label: string;
   hint?: string;
   icon?: string;
@@ -13,6 +15,8 @@ export type SetupInferenceManualProvider = {
 export type SetupInferenceAuthOption = {
   /** Provider-auth choice id sent to `openclaw.setup.auth.start`. */
   id: string;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
   label: string;
   hint?: string;
   groupLabel?: string;
@@ -43,6 +47,7 @@ export function listSetupInferenceManualProviders(
     }
     choices.set(id, {
       id,
+      brandId: choice.providerId,
       label: choice.choiceLabel,
       ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
       ...(choice.icon ? { icon: choice.icon } : {}),
@@ -76,6 +81,7 @@ export function listSetupInferenceAuthOptions(
       metadata: choice,
       option: {
         id,
+        brandId: choice.providerId,
         label: choice.choiceLabel,
         ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
         ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),

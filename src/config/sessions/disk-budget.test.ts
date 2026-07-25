@@ -4,6 +4,7 @@ import type { PathLike, StatOptions } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   resolveTrajectoryFilePath,
@@ -16,7 +17,6 @@ import {
   pruneUnreferencedSessionArtifacts,
 } from "./disk-budget.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {

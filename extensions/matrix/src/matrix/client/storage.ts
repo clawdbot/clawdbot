@@ -17,9 +17,7 @@ import {
   MATRIX_RECOVERY_KEY_FILENAME,
   migrateLegacyMatrixLegacyCryptoMigrationFileToStore,
   migrateLegacyMatrixRecoveryKeyFileToStore,
-  readMatrixIdbSnapshotJson,
   scoreMatrixCryptoStateInStore,
-  writeMatrixIdbSnapshotJson,
 } from "../crypto-state-store.js";
 import { resolveMatrixSqliteStateEnv } from "../sqlite-state.js";
 import type { MatrixAuth } from "./types.js";
@@ -394,14 +392,12 @@ export async function maybeMigrateLegacyStorage(params: {
     hasAccountScopedLegacyStorageFile &&
     (await syncCache?.readLegacyMatrixSyncCacheState(params.storagePaths.rootDir)) !== null;
   const hasAccountScopedRecoveryKey = fs.existsSync(params.storagePaths.recoveryKeyPath);
-  const hasAccountScopedIdbSnapshot = fs.existsSync(params.storagePaths.idbSnapshotPath);
   const hasAccountScopedLegacyCryptoMigration = fs.existsSync(
     path.join(params.storagePaths.rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
   );
   if (
     !hasAccountScopedLegacyStorage &&
     !hasAccountScopedRecoveryKey &&
-    !hasAccountScopedIdbSnapshot &&
     !hasAccountScopedLegacyCryptoMigration
   ) {
     return;
@@ -439,14 +435,6 @@ export async function maybeMigrateLegacyStorage(params: {
         label: "legacy crypto migration",
       });
     }
-    if (hasAccountScopedIdbSnapshot) {
-      await migrateLegacyIdbSnapshotToSqlite({
-        storageRootDir: params.storagePaths.rootDir,
-        snapshotPath: params.storagePaths.idbSnapshotPath,
-        moved,
-        pendingArchives,
-      });
-    }
   } catch (err) {
     const rollbackError = rollbackLegacyMoves(moved);
     throw new Error(
@@ -474,40 +462,6 @@ export async function maybeMigrateLegacyStorage(params: {
       `matrix: legacy client storage files were left in place because their migrated targets already existed.\n${skippedExistingTargets.join("\n")}`,
     );
   }
-}
-
-async function migrateLegacyIdbSnapshotToSqlite(params: {
-  storageRootDir: string;
-  snapshotPath: string;
-  moved: LegacyMoveRecord[];
-  pendingArchives: LegacyArchiveRecord[];
-}): Promise<void> {
-  if (readMatrixIdbSnapshotJson(params.storageRootDir)) {
-    params.pendingArchives.push({
-      sourcePath: params.snapshotPath,
-      label: "IndexedDB snapshot",
-    });
-    return;
-  }
-  const { readLegacyMatrixIdbSnapshotState } = await import("../sdk/idb-persistence.js");
-  const snapshot = await readLegacyMatrixIdbSnapshotState(params.storageRootDir);
-  if (!snapshot) {
-    return;
-  }
-  writeMatrixIdbSnapshotJson({
-    storageRootDir: params.storageRootDir,
-    snapshotJson: JSON.stringify(snapshot),
-    databaseCount: snapshot.length,
-  });
-  params.moved.push({
-    sourcePath: params.snapshotPath,
-    targetPath: `${params.storageRootDir} SQLite IndexedDB snapshot state`,
-    label: "IndexedDB snapshot",
-  });
-  params.pendingArchives.push({
-    sourcePath: params.snapshotPath,
-    label: "IndexedDB snapshot",
-  });
 }
 
 async function migrateLegacySyncCacheToSqlite(params: {

@@ -47,7 +47,7 @@ const CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS = 30_000;
 /** Timeout for image-understanding style dynamic tool calls. */
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
-const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
+const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 600_000;
 /** Outer default for collector waits: full swarm budget plus completion grace. */
 const CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS =
   CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS;
@@ -334,13 +334,25 @@ export function toCodexDynamicToolProtocolResponse(
 export function toCodexDynamicToolProgressResponse(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
-): CodexDynamicToolCallResponse & { details?: { async: true; status: "started" } } {
-  if (response.asyncStarted !== true) {
+): CodexDynamicToolCallResponse & {
+  details?: { async: true; status: "started" } | { mcpAppPreview: unknown };
+} {
+  const transcriptDetails = response.transcriptDetails;
+  if (response.asyncStarted !== true && transcriptDetails === undefined) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    details: { async: true, status: "started" },
+    ...(transcriptDetails ? { details: transcriptDetails } : {}),
+    ...(response.asyncStarted === true
+      ? {
+          details: {
+            ...transcriptDetails,
+            async: true as const,
+            status: "started" as const,
+          },
+        }
+      : {}),
   };
 }
 
@@ -554,12 +566,12 @@ function readConfiguredDynamicToolTimeoutMs(
   config: EmbeddedRunAttemptParams["config"],
 ): number | undefined {
   if (toolName === "image_generate") {
-    const imageGenerationModel = config?.agents?.defaults?.imageGenerationModel;
-    if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
+    const imageModel = config?.agents?.defaults?.mediaModels?.image;
+    if (!imageModel || typeof imageModel !== "object") {
       return CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS;
     }
     return (
-      readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs) ??
+      readPositiveFiniteTimeoutMs(imageModel.timeoutMs) ??
       CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS
     );
   }

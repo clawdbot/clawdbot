@@ -40,15 +40,13 @@ describe("normalizeAttachments", () => {
     ).toEqual([1, 2]);
   });
 
-  it("prefers ordered facts over conflicting legacy projections", () => {
+  it("normalizes ordered facts", () => {
     expect(
       normalizeAttachments({
         media: [
           { path: " /tmp/voice.ogg ", contentType: " audio/ogg ", transcribed: true },
           { url: "https://example.test/photo.jpg", kind: "image" },
         ],
-        MediaPaths: ["/tmp/stale.bin"],
-        MediaTypes: ["application/octet-stream"],
       }),
     ).toEqual([
       {
@@ -68,20 +66,23 @@ describe("normalizeAttachments", () => {
     ]);
   });
 
-  it("uses explicitly staged compatibility paths at the attachment consumer", () => {
+  it("uses staged fact paths at the attachment consumer", () => {
     expect(
       normalizeAttachments({
-        media: [{ path: "/remote/voice.ogg", contentType: "audio/ogg" }],
-        MediaStaged: true,
-        MediaPath: "/tmp/staged/voice.ogg",
-        MediaPaths: ["/tmp/staged/voice.ogg"],
-        MediaUrl: "/tmp/staged/voice.ogg",
-        MediaUrls: ["/tmp/staged/voice.ogg"],
+        media: [
+          {
+            path: "/tmp/staged/voice.ogg",
+            url: "/tmp/staged/voice.ogg",
+            contentType: "audio/ogg",
+            workspaceDir: "/tmp/staged",
+          },
+        ],
       }),
     ).toEqual([
       expect.objectContaining({
         path: "/tmp/staged/voice.ogg",
         url: "/tmp/staged/voice.ogg",
+        workspaceDir: "/tmp/staged",
       }),
     ]);
   });

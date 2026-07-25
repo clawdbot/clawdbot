@@ -2,6 +2,7 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   chunkTextForOutbound,
+  FormatCapabilityProfile,
   markdownToIR,
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
@@ -105,6 +106,22 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
 type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
 };
+
+const SLACK_FORMAT_PROFILE = FormatCapabilityProfile.define({
+  mechanism: "markdown",
+  constructs: {
+    underline: "strip",
+    spoiler: "fallback",
+    codeLanguage: "fallback",
+    heading: "fallback",
+    bulletList: "fallback",
+    orderedList: "fallback",
+    taskList: "fallback",
+    table: "fallback",
+    image: "fallback",
+  },
+  chunk: { limit: 4000, unit: "chars", hardCap: 40_000 },
+});
 
 type SlackCodeMarker = "`" | "```";
 const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";
@@ -356,11 +373,11 @@ function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions =
     assistantTranscriptRoleHeaders: true,
     linkify: false,
     autolink: false,
-    headingStyle: "bold",
+    headingStyle: "rich",
     blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
-  return renderMarkdownWithMarkers(ir, buildSlackRenderOptions());
+  return renderMarkdownWithMarkers(ir, buildSlackRenderOptions(), SLACK_FORMAT_PROFILE);
 }
 
 export function normalizeSlackOutboundText(markdown: string): string {
@@ -443,7 +460,7 @@ export function markdownToSlackMrkdwnChunks(
     assistantTranscriptRoleHeaders: true,
     linkify: false,
     autolink: false,
-    headingStyle: "bold",
+    headingStyle: "rich",
     blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
@@ -452,7 +469,9 @@ export function markdownToSlackMrkdwnChunks(
     ir,
     limit,
     renderChunk: (chunk) =>
-      protectSlackAssistantTranscriptRoleHeaders(renderMarkdownWithMarkers(chunk, renderOptions)),
+      protectSlackAssistantTranscriptRoleHeaders(
+        renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE),
+      ),
     measureRendered: (rendered) => rendered.length,
   }).map(({ rendered }) => rendered);
 }

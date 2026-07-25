@@ -57,11 +57,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
   it("runs the package and Docker product lanes through the existing scheduler", () => {
     const plan = createPluginPrereleaseTestPlan();
+    const channelLaneScript = readFileSync(
+      "scripts/e2e/npm-onboard-channel-agent-docker.sh",
+      "utf8",
+    );
 
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
-      "npm-onboard-discord-channel-agent",
-      "npm-onboard-slack-channel-agent",
+      "npm-onboard-discord-candidate-channel-agent",
+      "npm-onboard-slack-candidate-channel-agent",
       "doctor-switch",
       "update-channel-switch",
       "plugins-offline",
@@ -82,6 +86,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     for (const lane of plan.dockerLanes) {
       expect(getDockerLane(lane).name).toBe(lane);
     }
+    expect(channelLaneScript).toContain("OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE");
+    expect(channelLaneScript).toContain("bash scripts/plugin-npm-publish.sh --pack");
+    expect(channelLaneScript).toContain("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1");
+    expect(channelLaneScript).toContain("npm-pack:$container_package");
+    const candidateLane = getDockerLane("npm-onboard-discord-candidate-channel-agent");
+    expect(candidateLane.command).toContain("OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR");
+    expect(candidateLane.command).toContain(
+      'OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}"',
+    );
   });
 
   it("keeps live-ish coverage outside provider-backed Docker lanes", () => {

@@ -70,24 +70,10 @@ export async function runPreparedInboundReply<TDispatchResult>(
   return await runPreparedInboundReplyCore(params);
 }
 
-/** @deprecated Use `runPreparedInboundReply`. */
-export async function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>> {
-  return await runPreparedInboundReply(params);
-}
-
 export async function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
   params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
 ) {
   return await runChannelInboundEventCore(params);
-}
-
-/** @deprecated Use `runChannelInboundEvent`. */
-export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
-  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
-) {
-  return await runChannelInboundEvent(params);
 }
 
 export async function dispatchChannelInboundReply(params: AssembledInboundReply) {

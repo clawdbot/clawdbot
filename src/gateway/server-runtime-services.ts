@@ -3,7 +3,12 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
-import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import {
+  resolveHeartbeatAgents,
+  startHeartbeatRunner,
+  type HeartbeatRunner,
+} from "../infra/heartbeat-runner.js";
+import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
 import {
   schedulePendingSessionDeliveries,
   startSessionDeliveryRuntime,
@@ -355,6 +360,18 @@ export function activateGatewayScheduledServices(params: {
       heartbeatRunner: createNoopHeartbeatRunner(),
       stopModelPricingRefresh: () => {},
     };
+  }
+  if (
+    !params.cronState.cronEnabled &&
+    resolveHeartbeatAgents(params.cfgAtStart).some((agent) =>
+      Boolean(resolveHeartbeatIntervalMs(params.cfgAtStart, undefined, agent.heartbeat)),
+    )
+  ) {
+    params.log
+      .child("heartbeat")
+      .warn(
+        "scheduled heartbeats are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
+      );
   }
   const heartbeatRunner = startHeartbeatRunner({
     cfg: params.cfgAtStart,

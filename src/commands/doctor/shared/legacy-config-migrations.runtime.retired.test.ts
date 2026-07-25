@@ -276,6 +276,107 @@ describe("retired runtime config migrations", () => {
     );
   });
 
+  it("migrates the config tranche while preserving canonical settings", () => {
+    const result = applyAll({
+      ui: {
+        prefs: {
+          chatMessageMaxWidth: "82%",
+          textScale: 125,
+          sidebarLiveActivity: false,
+          showAdvancedSettings: true,
+        },
+      },
+      skills: { load: { watch: true, watchDebounceMs: 500 } },
+      agents: {
+        defaults: {
+          typingIntervalSeconds: 6,
+          contextLimits: {
+            memoryGetMaxChars: 12_000,
+            memoryGetDefaultLines: 180,
+            toolResultMaxChars: 24_000,
+          },
+        },
+        entries: {
+          writer: {
+            typingMode: "message",
+            typingIntervalSeconds: 8,
+            contextLimits: { toolResultMaxChars: 8_000 },
+          },
+        },
+        list: [
+          {
+            id: "legacy",
+            typingIntervalSeconds: 10,
+            contextLimits: { memoryGetDefaultLines: 80 },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: {
+          defaultAccount: "Work",
+          debounceMs: 2_000,
+          accounts: {
+            default: { debounceMs: 3_000 },
+            work: { debounceMs: 4_000 },
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toMatchObject({
+      ui: { prefs: { showAdvancedSettings: true } },
+      skills: { load: { watch: true } },
+      agents: {
+        defaults: {
+          typingIntervalSeconds: 6,
+          contextLimits: { memoryGetMaxChars: 12_000 },
+        },
+        entries: { writer: { typingMode: "message" } },
+        list: [{ id: "legacy" }],
+      },
+      messages: { inbound: { byChannel: { whatsapp: 4_000 } } },
+    });
+    expect(result.raw).not.toHaveProperty("channels.whatsapp.debounceMs");
+    expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.default.debounceMs");
+    expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.work.debounceMs");
+    expect(result.changes).toContain(
+      "Collapsed conflicting WhatsApp debounce values into messages.inbound.byChannel.whatsapp using channels.whatsapp.accounts.work.debounceMs (4000 ms); account-specific debounce is no longer supported.",
+    );
+  });
+
+  it("keeps an existing canonical WhatsApp debounce value", () => {
+    const result = applyAll({
+      messages: { inbound: { byChannel: { whatsapp: 900 } } },
+      channels: {
+        whatsapp: {
+          debounceMs: 2_000,
+          accounts: { work: { debounceMs: 4_000 } },
+        },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("messages.inbound.byChannel.whatsapp", 900);
+    expect(result.raw).not.toHaveProperty("channels.whatsapp.debounceMs");
+    expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.work.debounceMs");
+  });
+
+  it("preserves accounts.default debounce inheritance for a named default account", () => {
+    const result = applyAll({
+      channels: {
+        whatsapp: {
+          defaultAccount: "work",
+          debounceMs: 2_000,
+          accounts: {
+            default: { debounceMs: 3_000 },
+            work: { name: "Work" },
+          },
+        },
+      },
+    });
+
+    expect(result.raw).toHaveProperty("messages.inbound.byChannel.whatsapp", 3_000);
+  });
+
   it("moves aliases and strips dead keys", () => {
     const result = applyAll({
       tui: { footer: { showRemoteHost: true } },

@@ -7,7 +7,6 @@ import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import { TelegramConfigSchema } from "./zod-schema.providers-core.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -657,17 +656,6 @@ describe("config schema", () => {
         subagents: { model: { primary: "openai/gpt-5.5" } },
       }).success,
     ).toBe(false);
-  });
-
-  it("accepts progress commentary for shared progress streaming config", () => {
-    expect(
-      TelegramConfigSchema.safeParse({
-        streaming: {
-          mode: "progress",
-          progress: { commentary: true },
-        },
-      }).success,
-    ).toBe(true);
   });
 
   it("keeps per-agent model overrides limited to model selection", () => {

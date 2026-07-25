@@ -11,6 +11,7 @@ import {
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   normalizeCatalogOpenTarget,
+  normalizeChatMessageMaxWidth,
   TEXT_SCALE_STOPS,
   type ChatFollowUpMode,
   type ChatSendShortcut,
@@ -42,7 +43,7 @@ import {
   canonicalLobsterLook,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
-import { highlightJsonHtml } from "../../components/markdown.ts";
+import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsRow,
   renderSettingsSegmented,
@@ -186,6 +187,8 @@ export type ConfigProps = {
   setTextScale: (value: number) => void;
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
+  chatMessageMaxWidth?: string;
+  setChatMessageMaxWidth: (value: string | undefined) => void;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (enabled: boolean) => void;
   forceAdvancedSection?: string | null;
@@ -1067,6 +1070,43 @@ function renderChatPreferencesSection(props: ConfigProps) {
         ${t("configView.chatPrefs.hint")} ${t("configView.syncedHint")}
       </p>
       <div class="settings-group">
+        ${renderSettingsRow({
+          title: t("configView.chatPrefs.messageWidth"),
+          description: t("configView.chatPrefs.messageWidthHint"),
+          control: html`
+            <input
+              class="settings-input"
+              data-settings-chat-message-width
+              type="text"
+              spellcheck="false"
+              placeholder="48rem"
+              .value=${props.chatMessageMaxWidth ?? ""}
+              @change=${(event: Event) => {
+                const input = event.currentTarget as HTMLInputElement;
+                const normalized = normalizeChatMessageMaxWidth(input.value);
+                if (input.value.trim() && !normalized) {
+                  input.setCustomValidity(t("configView.chatPrefs.messageWidthInvalid"));
+                  input.reportValidity();
+                  return;
+                }
+                input.setCustomValidity("");
+                input.value = normalized ?? "";
+                props.setChatMessageMaxWidth(normalized);
+              }}
+            />
+            ${props.chatMessageMaxWidth
+              ? html`
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    @click=${() => props.setChatMessageMaxWidth(undefined)}
+                  >
+                    ${t("common.reset")}
+                  </button>
+                `
+              : nothing}
+          `,
+        })}
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),
           value: props.chatSendShortcut,
@@ -1226,9 +1266,7 @@ function renderSidebarPreferencesSection(props: ConfigProps) {
       <div class="settings-section__header">
         <h2 class="settings-section__heading">${t("configView.sidebarPrefs.title")}</h2>
       </div>
-      <p class="settings-section__desc">
-        ${t("configView.sidebarPrefs.hint")} ${t("configView.syncedHint")}
-      </p>
+      <p class="settings-section__desc">${t("configView.sidebarPrefs.hint")}</p>
       <div class="settings-group">
         ${renderSettingsToggleRow({
           title: t("configView.sidebarPrefs.liveActivity"),

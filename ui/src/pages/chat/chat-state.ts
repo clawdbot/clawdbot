@@ -77,16 +77,16 @@ import {
   resetChatRealtimeConversation,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import type { ChatSendTimingEntry } from "./chat-send-contract.ts";
-import { recordChatSendServerTiming } from "./chat-send-timing.ts";
+import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import {
   flushChatQueueForEvent,
-  handleSendChat,
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
-  type ChatHost,
-} from "./chat-send.ts";
+} from "./chat-send-actions.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
+import { handleSendChat } from "./chat-send-submit.ts";
+import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
   refreshCurrentChatSessionList,
@@ -130,6 +130,7 @@ import {
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
   reconcileStaleChatRunAfterSessionStatePublication,
+  type PendingChatAbort,
 } from "./run-lifecycle.ts";
 import {
   cancelChatScroll,
@@ -215,7 +216,6 @@ export type ChatPageHost = ChatHost &
     localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
-    chatMessageMaxWidth: string | null;
     chatToolMessages: Record<string, unknown>[];
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
@@ -241,7 +241,7 @@ export type ChatPageHost = ChatHost &
     agentsList: AgentsListResult | null;
     agentsSelectedId: string | null;
     refreshSessionsAfterChat: Map<string, { sessionKey: string; agentId?: string }>;
-    pendingAbort: { runId?: string | null; sessionKey: string; agentId?: string } | null;
+    pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Map<string, Promise<void>>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
@@ -375,6 +375,9 @@ function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
     state,
     { sessionKey },
     {
+      ...(state.chatDisplayedLeafEntryId !== undefined
+        ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
+        : {}),
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination ?? { hasMore: false },
       sessionId: state.currentSessionId ?? null,
@@ -540,6 +543,7 @@ export function resetChatStateForRouteSession(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
     ) === true;
   state.currentSessionId = snapshot.sessionId;
+  state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
   state.reconnectResumeSessionId = null;
   state.chatHistoryPagination = snapshot.pagination;
   state.chatMessage = "";
@@ -1267,7 +1271,6 @@ export function createPageState(
     localMediaPreviewRoots: appConfig.localMediaPreviewRoots,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
-    chatMessageMaxWidth: appConfig.chatMessageMaxWidth,
     client: null,
     connected: false,
     connectionEpoch: 0,
@@ -1281,6 +1284,7 @@ export function createPageState(
     chatSending: false,
     chatMessage: "",
     chatMessages: [] as unknown[],
+    chatDisplayedLeafEntryId: undefined as string | null | undefined,
     chatBranches: [],
     chatBranchesSessionKey: null,
     chatBranchesConnectionEpoch: null,

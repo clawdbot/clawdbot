@@ -387,8 +387,22 @@ runs:
         append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
         append_pnpm_option_arg PNPM_CONFIG_STORE_DIR store-dir
         append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
+        sticky_writer_rebuild="false"
+        if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ] &&
+          [ "$sticky_snapshot_matches" != "true" ]; then
+          # Pnpm can trust stale hidden install metadata even with --force. Clear only
+          # the writer-owned modules tree; the warmed store remains on the sticky disk.
+          find "$GITHUB_WORKSPACE/node_modules" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          install_args+=(--force)
+          sticky_writer_rebuild="true"
+        fi
         run_pnpm_install() {
-          if [ "$STICKY_DISK" = "true" ]; then
+          if [ "$sticky_writer_rebuild" = "true" ]; then
+            # A full relink exceeds the ordinary retry cap; restarting discards
+            # several minutes of progress even when the warmed store is healthy.
+            timeout --signal=TERM --kill-after=15s 15m \
+              pnpm "${install_args[@]}" --config.fetch-retries=0
+          elif [ "$STICKY_DISK" = "true" ]; then
             # Pnpm can keep retrying optional platform tarballs after the
             # required tree is linked. Retry the whole frozen transaction from
             # its warmed store instead of letting minute backoffs outlive this cap.
@@ -418,7 +432,9 @@ runs:
             rm -f "$sticky_marker"
           fi
           install_attempts=2
-          if [ "$STICKY_DISK" = "true" ]; then
+          if [ "$sticky_writer_rebuild" = "true" ]; then
+            install_attempts=1
+          elif [ "$STICKY_DISK" = "true" ]; then
             install_attempts=3
           fi
           install_status=1

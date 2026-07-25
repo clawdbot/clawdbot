@@ -19,6 +19,7 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "../infra/plugin-approvals.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
@@ -83,6 +84,7 @@ import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 // Gateway unit coverage owns quiet-admission timing. These spawn cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.
@@ -105,6 +107,12 @@ vi.mock("../plugin-sdk/anthropic-cli.js", () => ({
   CLAUDE_CLI_BACKEND_ID: "claude-cli",
   isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
 }));
+
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: vi.fn(),
+}));
+
+const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
@@ -138,6 +146,8 @@ beforeEach(() => {
     resolveRegisteredExecApprovalDecision,
   });
   supervisorSpawnMock.mockClear();
+  mockCallGatewayTool.mockReset();
+  mockCallGatewayTool.mockResolvedValue({ id: "claude-native-approval", decision: "deny" });
 });
 
 afterEach(() => {
@@ -149,6 +159,10 @@ afterEach(() => {
 });
 
 const CLAUDE_OK_JSONL = `${JSON.stringify({ type: "result", result: "ok" })}\n`;
+const GEMINI_OK_JSONL = `${[
+  JSON.stringify({ type: "message", role: "assistant", content: "ok", delta: true }),
+  JSON.stringify({ type: "result", status: "success" }),
+].join("\n")}\n`;
 
 describe("runCliAgent spawn path", () => {
   it("formats output digests without logging response content", () => {
@@ -270,7 +284,7 @@ describe("runCliAgent spawn path", () => {
         toolAvailability = execution.toolAvailability;
         return [...execution.baseArgs];
       },
-      cliToolAvailability: { native: [], mcp: ["mcp__openclaw__message"] },
+      cliToolAvailability: { native: [], openClaw: ["message"] },
     });
     context.preparedBackend.secretInput = {
       fd: 3,
@@ -287,8 +301,8 @@ describe("runCliAgent spawn path", () => {
 
     expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
     // Node runs keep the gateway's native tool policy; loopback MCP tools do
-    // not exist on the node so the mcp list is projected empty.
-    expect(toolAvailability).toEqual({ native: [], mcp: [] });
+    // not exist on the node so the OpenClaw list is projected empty.
+    expect(toolAvailability).toEqual({ native: [], openClaw: [], mcp: [] });
     expect(writeSystemPrompt).not.toHaveBeenCalled();
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
     expect(invokeNode).toHaveBeenCalledWith(
@@ -593,7 +607,48 @@ describe("runCliAgent spawn path", () => {
     await expect(executePreparedCliRun(context)).rejects.toThrow(
       "paired-node Claude CLI sessions do not support attachments or images",
     );
+    context.params.imagePrompt = undefined;
+    context.params.media = [{ path: "/tmp/hydratable.png", kind: "image" }];
+    await expect(executePreparedCliRun(context)).rejects.toThrow(
+      "paired-node Claude CLI sessions do not support attachments or images",
+    );
     expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("allows non-hydratable image facts on a text-only node turn", async () => {
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      params.onProgress(
+        [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "node-text-only" }),
+          JSON.stringify({ type: "result", session_id: "node-text-only", result: "ok" }),
+          "",
+        ].join("\n"),
+      );
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-text-only-media-facts",
+      prompt: "already described",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+    context.params.media = [
+      { kind: "image" },
+      { kind: "image", url: "https://example.test/described.png" },
+    ];
+
+    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "ok" });
+    expect(invokeNode).toHaveBeenCalledOnce();
   });
 
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
@@ -1129,7 +1184,7 @@ describe("runCliAgent spawn path", () => {
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
     const toolAvailability: NonNullable<PreparedCliRunContext["params"]["cliToolAvailability"]> = {
       native: [],
-      mcp: ["mcp__openclaw__openclaw"],
+      openClaw: ["openclaw"],
     };
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
 
@@ -1142,7 +1197,12 @@ describe("runCliAgent spawn path", () => {
     );
 
     expect(resolveExecutionArgs).toHaveBeenCalledWith(
-      expect.objectContaining({ toolAvailability }),
+      expect.objectContaining({
+        toolAvailability: {
+          ...toolAvailability,
+          mcp: ["mcp__openclaw__openclaw"],
+        },
+      }),
     );
   });
 
@@ -1154,13 +1214,28 @@ describe("runCliAgent spawn path", () => {
         buildPreparedCliRunContext({
           cliToolAvailability: {
             native: [],
-            mcp: ["mcp__openclaw__openclaw"],
+            openClaw: ["openclaw"],
           },
           resolveExecutionArgs,
         }),
       ),
     ).rejects.toThrow("did not enforce exact per-run tool availability");
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not require an argv rewrite after prepared-execution enforcement", async () => {
+    mockSuccessfulCliRun(GEMINI_OK_JSONL);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        cliToolAvailability: { native: [], openClaw: ["openclaw"] },
+        toolAvailabilityEnforcement: "prepare-execution",
+      }),
+    );
+
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   });
 
   it("maps Ultra to the strongest generic CLI backend level", async () => {
@@ -2774,6 +2849,155 @@ describe("runCliAgent spawn path", () => {
     });
   });
 
+  it("honors allow-once from a Claude native tool Gateway approval", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "claude-native-allow-once",
+      decision: "allow-once",
+    });
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      events: buildClaudeControlRequestEvents({
+        requestId: "req-allow-once",
+        toolUseId: "tool-allow-once-1",
+        input: { command: "ls" },
+        sessionId: "live-control-allow-once",
+      }),
+      pid: 3011,
+    });
+
+    const result = await executePreparedCliRun(
+      buildClaudeLiveRunContext({
+        prompt: "hello",
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      }),
+    );
+
+    expect(result.text).toBe("ok");
+    await vi.waitFor(() =>
+      expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+    );
+    expectClaudeControlDecision(live, {
+      behavior: "allow",
+      requestId: "req-allow-once",
+      toolUseId: "tool-allow-once-1",
+      updatedInput: { command: "ls" },
+    });
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        pluginId: "claude-cli",
+        toolName: "Bash",
+        toolCallId: "tool-allow-once-1",
+      }),
+      { expectFinal: false },
+    );
+  });
+
+  it("sends full reviewer detail for oversized non-Bash tool input", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "claude-native-bounded-detail",
+      decision: "allow-once",
+    });
+    const content = `line one ${"x".repeat(500)} line end`;
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      events: buildClaudeControlRequestEvents({
+        requestId: "req-write-bounded-detail",
+        toolUseId: "tool-write-bounded-detail-1",
+        toolName: "Write",
+        input: { file_path: "/tmp/out.txt", content },
+        sessionId: "live-control-write-bounded-detail",
+      }),
+      pid: 3012,
+    });
+
+    const result = await executePreparedCliRun(
+      buildClaudeLiveRunContext({
+        prompt: "hello",
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      }),
+    );
+
+    expect(result.text).toBe("ok");
+    await vi.waitFor(() =>
+      expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+    );
+    expectClaudeControlDecision(live, {
+      behavior: "allow",
+      requestId: "req-write-bounded-detail",
+      toolUseId: "tool-write-bounded-detail-1",
+      updatedInput: { file_path: "/tmp/out.txt", content },
+    });
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        detail: JSON.stringify({ file_path: "/tmp/out.txt", content }),
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+      { expectFinal: false },
+    );
+  });
+
+  it("fails closed when a Claude native tool Gateway approval is unavailable", async () => {
+    mockCallGatewayTool.mockRejectedValueOnce(new Error("gateway unavailable"));
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      events: buildClaudeControlRequestEvents({
+        requestId: "req-approval-unavailable",
+        toolUseId: "tool-approval-unavailable-1",
+        input: { command: "ls" },
+        sessionId: "live-control-approval-unavailable",
+      }),
+      pid: 3013,
+    });
+
+    const result = await executePreparedCliRun(
+      buildClaudeLiveRunContext({
+        prompt: "hello",
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      }),
+    );
+
+    expect(result.text).toBe("ok");
+    await vi.waitFor(() =>
+      expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+    );
+    expectClaudeControlDecision(live, {
+      behavior: "deny",
+      requestId: "req-approval-unavailable",
+      messageIncludes: "OpenClaw approval was not granted",
+    });
+  });
+
+  it("denies oversized Claude Bash approval requests before calling the Gateway", async () => {
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      events: buildClaudeControlRequestEvents({
+        requestId: "req-bash-oversized",
+        toolUseId: "tool-bash-oversized-1",
+        input: { command: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) },
+        sessionId: "live-control-bash-oversized",
+      }),
+      pid: 3014,
+    });
+
+    const result = await executePreparedCliRun(
+      buildClaudeLiveRunContext({
+        prompt: "hello",
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      }),
+    );
+
+    expect(result.text).toBe("ok");
+    await vi.waitFor(() =>
+      expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+    );
+    expectClaudeControlDecision(live, {
+      behavior: "deny",
+      requestId: "req-bash-oversized",
+      messageIncludes: "too large to display",
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("reports Claude live stream progress without timer heartbeats", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
@@ -3304,7 +3528,7 @@ describe("runCliAgent spawn path", () => {
     },
   );
 
-  it("answers Claude live control_request can_use_tool with deny when exec policy is restrictive", async () => {
+  it("answers Claude live control_request can_use_tool with deny when the user rejects approval", async () => {
     const diagnosticEvents: Array<Record<string, unknown>> = [];
     const stopDiagnostics = onInternalDiagnosticEvent((event) => {
       if (
@@ -3315,46 +3539,55 @@ describe("runCliAgent spawn path", () => {
         diagnosticEvents.push(event as unknown as Record<string, unknown>);
       }
     });
+    const controlEvents = buildClaudeControlRequestEvents({
+      requestId: "req-deny",
+      toolUseId: "tool-deny-1",
+      input: { command: "rm -rf /" },
+      sessionId: "live-control-deny",
+    });
     const live = mockClaudeLiveRun(supervisorSpawnMock, {
-      events: [
-        ...buildClaudeControlRequestEvents({
-          requestId: "req-deny",
-          toolUseId: "tool-deny-1",
-          input: { command: "rm -rf /" },
-          sessionId: "live-control-deny",
-        }).slice(0, 2),
-        {
-          type: "assistant",
-          session_id: "live-control-deny",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "tool_use",
-                id: "tool-deny-1",
-                name: "Bash",
-                input: { command: "rm -rf /" },
-              },
-            ],
+      onWrite: ({ data, emit, writeIndex }) => {
+        if (writeIndex === 0) {
+          emit(controlEvents.slice(0, 2));
+          return;
+        }
+        if (!data.includes('"control_response"')) {
+          return;
+        }
+        emit([
+          {
+            type: "assistant",
+            session_id: "live-control-deny",
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "tool-deny-1",
+                  name: "Bash",
+                  input: { command: "rm -rf /" },
+                },
+              ],
+            },
           },
-        },
-        {
-          type: "user",
-          session_id: "live-control-deny",
-          message: {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "tool-deny-1",
-                content: "denied",
-                is_error: true,
-              },
-            ],
+          {
+            type: "user",
+            session_id: "live-control-deny",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tool-deny-1",
+                  content: "denied",
+                  is_error: true,
+                },
+              ],
+            },
           },
-        },
-        { type: "result", session_id: "live-control-deny", result: "ok" },
-      ],
+          { type: "result", session_id: "live-control-deny", result: "ok" },
+        ]);
+      },
       pid: 3002,
     });
 
@@ -3366,6 +3599,9 @@ describe("runCliAgent spawn path", () => {
           config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
         }),
       );
+      await vi.waitFor(() =>
+        expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+      );
       await waitForDiagnosticEventsDrained();
     } finally {
       stopDiagnostics();
@@ -3374,7 +3610,7 @@ describe("runCliAgent spawn path", () => {
     expectClaudeControlDecision(live, {
       behavior: "deny",
       requestId: "req-deny",
-      messageIncludes: "security=allowlist",
+      messageIncludes: "OpenClaw user denied Claude native tool use (Bash).",
     });
     expect(diagnosticEvents).toMatchObject([
       {
@@ -3393,6 +3629,149 @@ describe("runCliAgent spawn path", () => {
     expect(diagnosticEvents).toHaveLength(2);
     expect(JSON.stringify(diagnosticEvents)).not.toContain("rm -rf");
     expect(requireArgAfter(live.spawnInput.argv, "--permission-mode")).toBe("default");
+  });
+
+  it("reuses a Claude native tool allow-always grant within the live process", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "claude-native-allow-always",
+      decision: "allow-always",
+    });
+    let promptCount = 0;
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      onWrite: ({ data, emit }) => {
+        if (data.includes('"control_response"')) {
+          return;
+        }
+        promptCount += 1;
+        emit(
+          buildClaudeControlRequestEvents({
+            requestId: `req-grant-${promptCount}`,
+            toolUseId: `tool-grant-${promptCount}`,
+            toolName: "Write",
+            input: {
+              file_path: `/tmp/grant-${promptCount}.txt`,
+              content: `content ${promptCount}`,
+            },
+            sessionId: "live-control-allow-always",
+          }),
+        );
+      },
+      pid: 3012,
+    });
+    const buildContext = (runId: string, prompt: string) =>
+      buildClaudeLiveRunContext({
+        runId,
+        prompt,
+        sessionId: "session-allow-always",
+        sessionKey: "agent:main:allow-always",
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      });
+
+    await expect(
+      executePreparedCliRun(buildContext("run-grant-1", "first")),
+    ).resolves.toMatchObject({ text: "ok" });
+    await vi.waitFor(() =>
+      expect(live.writes.filter((entry) => entry.includes('"control_response"'))).toHaveLength(1),
+    );
+    await expect(
+      executePreparedCliRun(buildContext("run-grant-2", "second")),
+    ).resolves.toMatchObject({ text: "ok" });
+    await vi.waitFor(() =>
+      expect(live.writes.filter((entry) => entry.includes('"control_response"'))).toHaveLength(2),
+    );
+
+    expect(mockCallGatewayTool).toHaveBeenCalledTimes(1);
+    expectClaudeControlDecision(live, {
+      behavior: "allow",
+      requestId: "req-grant-1",
+      toolUseId: "tool-grant-1",
+      updatedInput: { file_path: "/tmp/grant-1.txt", content: "content 1" },
+    });
+    const secondResponse = live.writes.find(
+      (entry) => entry.includes('"control_response"') && entry.includes("req-grant-2"),
+    );
+    expect(secondResponse).toContain('"behavior":"allow"');
+  });
+
+  it("prompts on every Claude native tool request when exec ask is always", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "claude-native-always-seed",
+      decision: "allow-always",
+    });
+    let promptCount = 0;
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      onWrite: ({ data, emit }) => {
+        if (data.includes('"control_response"')) {
+          return;
+        }
+        promptCount += 1;
+        emit(
+          buildClaudeControlRequestEvents({
+            requestId: `req-always-${promptCount}`,
+            toolUseId: `tool-always-${promptCount}`,
+            toolName: "Write",
+            input: {
+              file_path: `/tmp/always-${promptCount}.txt`,
+              content: `content ${promptCount}`,
+            },
+            sessionId: "live-control-ask-always",
+          }),
+        );
+      },
+      pid: 3015,
+    });
+    const buildContext = (runId: string, prompt: string, ask: "always" | "on-miss") =>
+      buildClaudeLiveRunContext({
+        runId,
+        prompt,
+        sessionId: "session-ask-always",
+        sessionKey: "agent:main:ask-always",
+        sessionEntry: { execAsk: ask } as PreparedCliRunContext["params"]["sessionEntry"],
+        config: { tools: { exec: { security: "full", ask: "on-miss" } } },
+      });
+
+    await expect(
+      executePreparedCliRun(buildContext("run-always-seed", "seed", "on-miss")),
+    ).resolves.toMatchObject({ text: "ok" });
+    await vi.waitFor(() =>
+      expect(live.writes.filter((entry) => entry.includes('"control_response"'))).toHaveLength(1),
+    );
+    mockCallGatewayTool.mockClear();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({
+        id: "claude-native-always-1",
+        decision: "allow-once",
+      })
+      .mockResolvedValueOnce({
+        id: "claude-native-always-2",
+        decision: "allow-once",
+      });
+
+    await expect(
+      executePreparedCliRun(buildContext("run-always-1", "first", "always")),
+    ).resolves.toMatchObject({ text: "ok" });
+    await vi.waitFor(() =>
+      expect(live.writes.filter((entry) => entry.includes('"control_response"'))).toHaveLength(2),
+    );
+    await expect(
+      executePreparedCliRun(buildContext("run-always-2", "second", "always")),
+    ).resolves.toMatchObject({ text: "ok" });
+    await vi.waitFor(() =>
+      expect(live.writes.filter((entry) => entry.includes('"control_response"'))).toHaveLength(3),
+    );
+
+    expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
+    for (const call of mockCallGatewayTool.mock.calls) {
+      expect(call[2]).toMatchObject({ allowedDecisions: ["allow-once", "deny"] });
+    }
+    const firstResponse = live.writes.find(
+      (entry) => entry.includes('"control_response"') && entry.includes("req-always-2"),
+    );
+    const secondResponse = live.writes.find(
+      (entry) => entry.includes('"control_response"') && entry.includes("req-always-3"),
+    );
+    expect(firstResponse).toContain('"behavior":"allow"');
+    expect(secondResponse).toContain('"behavior":"allow"');
   });
 
   it("does not create exec approvals file while resolving Claude live policy", async () => {
@@ -3434,7 +3813,7 @@ describe("runCliAgent spawn path", () => {
       requestId: "req-approval-default-deny",
       toolUseId: "tool-approval-default-deny-1",
       input: { command: "ls" },
-      expected: { behavior: "deny", messageIncludes: "security=allowlist" },
+      expected: { behavior: "deny", messageIncludes: "OpenClaw user denied" },
       approvals: {
         version: 1,
         defaults: { security: "allowlist", ask: "on-miss" },
@@ -3453,7 +3832,7 @@ describe("runCliAgent spawn path", () => {
       requestId: "req-session-ask-deny",
       toolUseId: "tool-session-ask-deny-1",
       input: { command: "ls" },
-      expected: { behavior: "deny", messageIncludes: "ask=always" },
+      expected: { behavior: "deny", messageIncludes: "OpenClaw user denied" },
       context: {
         backend: {
           liveSession: "claude-stdio",
@@ -3529,6 +3908,9 @@ describe("runCliAgent spawn path", () => {
       );
 
       expect(result.text).toBe("ok");
+      await vi.waitFor(() =>
+        expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+      );
       expectClaudeControlDecision(live, {
         ...testCase.expected,
         requestId: testCase.requestId,

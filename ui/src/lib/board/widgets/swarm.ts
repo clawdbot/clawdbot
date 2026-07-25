@@ -5,15 +5,20 @@ import { areUiSessionKeysEquivalent } from "../../sessions/session-key.ts";
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
 
+const SWARM_DOT_STATUS_RANK = { running: 0, queued: 1, failed: 2, done: 3 } as const;
+
 type SwarmDot = {
   key: string;
   label: string;
   status: SwarmDotStatus;
 };
 
+const MAX_RENDERED_DOTS_PER_PHASE = 256;
+
 type SwarmPhase = {
   title?: string;
   dots: SwarmDot[];
+  hidden: number;
 };
 
 type SwarmGroup = {
@@ -140,7 +145,20 @@ function collectActiveSwarmGroups(
         narrator: entries.map((entry) => entry.log).find(Boolean),
         phases: [...phases.entries()]
           .toSorted((left, right) => left[1].rank - right[1].rank)
-          .map(([title, bucket]) => ({ title, dots: bucket.dots })),
+          .map(([title, bucket]) => {
+            const visibleFirst =
+              bucket.dots.length > MAX_RENDERED_DOTS_PER_PHASE
+                ? bucket.dots.toSorted(
+                    (left, right) =>
+                      SWARM_DOT_STATUS_RANK[left.status] - SWARM_DOT_STATUS_RANK[right.status],
+                  )
+                : bucket.dots;
+            return {
+              title,
+              dots: visibleFirst.slice(0, MAX_RENDERED_DOTS_PER_PHASE),
+              hidden: Math.max(0, visibleFirst.length - MAX_RENDERED_DOTS_PER_PHASE),
+            };
+          }),
       } satisfies SwarmGroup;
     })
     .filter((group) =>
@@ -196,6 +214,11 @@ export function renderSwarmWidget({
                         ></span>
                       `,
                     )}
+                    ${phase.hidden > 0
+                      ? html`<span class="swarm-widget__more" role="listitem"
+                          >+${phase.hidden}</span
+                        >`
+                      : nothing}
                   </div>
                 </div>
               `,

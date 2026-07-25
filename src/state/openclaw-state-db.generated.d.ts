@@ -408,6 +408,15 @@ export interface ConfigMachineState {
   value_json: string;
 }
 
+export interface CronJobScratch {
+  content: string | null;
+  job_id: string;
+  revision: number;
+  source_sha256: string | null;
+  store_key: string;
+  updated_at_ms: number;
+}
+
 export interface CronJobs {
   agent_id: string | null;
   anchor_ms: number | null;
@@ -781,6 +790,47 @@ export interface MediaBlobs {
   size_bytes: number;
   subdir: string;
   updated_at: number;
+}
+
+export interface MeetingTranscriptSessions {
+  created_at_ms: number;
+  export_key: string;
+  export_manifest_json: Generated<string>;
+  export_pending_json: Generated<string>;
+  metadata_json: string | null;
+  next_utterance_seq: Generated<number>;
+  provider_id: string;
+  selector: string;
+  session_id: string;
+  session_slug: string;
+  source_json: string;
+  started_at: string;
+  stopped_at: string | null;
+  title: string | null;
+  updated_at_ms: number;
+}
+
+export interface MeetingTranscriptSummaries {
+  generated_at: string | null;
+  markdown: string | null;
+  session_id: string;
+  session_started_at: string;
+  summary_json: string | null;
+  utterance_count: number;
+}
+
+export interface MeetingTranscriptUtterances {
+  ended_at: string | null;
+  final: number | null;
+  metadata_json: string | null;
+  sequence: number;
+  session_id: string;
+  session_started_at: string;
+  speaker_id: string | null;
+  speaker_label: string | null;
+  started_at: string | null;
+  text: string;
+  utterance_id: string | null;
 }
 
 export interface MigrationRuns {
@@ -1459,6 +1509,7 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
+  cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
@@ -1481,6 +1532,9 @@ export interface DB {
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
+  meeting_transcript_sessions: MeetingTranscriptSessions;
+  meeting_transcript_summaries: MeetingTranscriptSummaries;
+  meeting_transcript_utterances: MeetingTranscriptUtterances;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;

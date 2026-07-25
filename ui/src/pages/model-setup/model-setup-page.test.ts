@@ -18,6 +18,7 @@ type TestModelSetupPage = HTMLElement & {
 };
 
 const recommendedIconUrl = "https://cdn.simpleicons.org/ollama";
+const customIconUrl = "https://cdn.example.com/acme.png";
 
 const detection: SystemAgentSetupDetectResult = {
   candidates: [],
@@ -27,6 +28,7 @@ const detection: SystemAgentSetupDetectResult = {
   recommendedInstalls: [
     {
       id: "ollama",
+      brandId: "ollama",
       label: "Ollama",
       hint: "Run open models locally",
       website: "https://ollama.com/download",
@@ -41,8 +43,7 @@ function createContext(): { context: ApplicationContext; client: GatewayBrowserC
   const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
     hello: {
       type: "hello-ok" as const,
       protocol: 1,
@@ -105,9 +106,27 @@ describe("ModelSetupPage catalog icons", () => {
     vi.unstubAllGlobals();
   });
 
-  it("loads wire icons through the authenticated same-origin catalog proxy", async () => {
+  it("uses bundled brand icons without enqueueing their remote artwork", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const { context, client } = createContext();
+    const { page } = await mountPage(context, {
+      state: { phase: "ready", result: detection },
+      client,
+      firstRun: false,
+    });
+
+    expect(
+      page.querySelector('.model-setup__recommendation [data-provider-icon="ollama"]'),
+    ).not.toBeNull();
+    expect(page.querySelector(".model-setup__recommendation img")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(page.innerHTML).not.toContain(recommendedIconUrl);
+  });
+
+  it("loads unknown wire icons through the authenticated same-origin catalog proxy", async () => {
     const NativeUrl = URL;
-    const createObjectURL = vi.fn(() => "blob:ollama-icon");
+    const createObjectURL = vi.fn(() => "blob:acme-icon");
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
       "URL",
@@ -125,7 +144,21 @@ describe("ModelSetupPage catalog icons", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const { context, client } = createContext();
     const { page } = await mountPage(context, {
-      state: { phase: "ready", result: detection },
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          recommendedInstalls: [
+            {
+              id: "acme",
+              label: "Acme",
+              hint: "Install the Acme runtime",
+              website: "https://example.com/acme",
+              icon: customIconUrl,
+            },
+          ],
+        },
+      },
       client,
       firstRun: false,
     });
@@ -135,15 +168,60 @@ describe("ModelSetupPage catalog icons", () => {
         page
           .querySelector<HTMLImageElement>(".model-setup__recommendation img")
           ?.getAttribute("src"),
-      ).toBe("blob:ollama-icon");
+      ).toBe("blob:acme-icon");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/openclaw/__openclaw__/catalog-icon/${encodeURIComponent(customIconUrl)}`,
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+    expect(page.innerHTML).not.toContain(customIconUrl);
+
+    page.remove();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:acme-icon");
+  });
+
+  it("keeps legacy known-provider artwork on the authenticated proxy path", async () => {
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => "blob:legacy-ollama");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" }), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const { context, client } = createContext();
+    const { page } = await mountPage(context, {
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          recommendedInstalls: detection.recommendedInstalls?.map(
+            ({ brandId: _brandId, ...entry }) => entry,
+          ),
+        },
+      },
+      client,
+      firstRun: false,
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        page
+          .querySelector<HTMLImageElement>(".model-setup__recommendation img")
+          ?.getAttribute("src"),
+      ).toBe("blob:legacy-ollama");
     });
     expect(fetchMock).toHaveBeenCalledWith(
       `/openclaw/__openclaw__/catalog-icon/${encodeURIComponent(recommendedIconUrl)}`,
       expect.objectContaining({ credentials: "same-origin" }),
     );
-    expect(page.innerHTML).not.toContain(recommendedIconUrl);
-
-    page.remove();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:ollama-icon");
+    expect(page.querySelector(".model-setup__recommendation [data-provider-icon]")).toBeNull();
   });
 });

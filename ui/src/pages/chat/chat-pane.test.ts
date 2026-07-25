@@ -80,7 +80,6 @@ function createInitializationContext(): ApplicationContext {
         localMediaPreviewRoots: [],
         embedSandboxMode: "strict",
         allowExternalEmbedUrls: false,
-        chatMessageMaxWidth: null,
         terminalEnabled: false,
       },
     },
@@ -163,7 +162,7 @@ describe("chat pane pull request refresh", () => {
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
-      connected: false,
+      phase: "reconnecting" as const,
     });
 
     expect(pane.sessionPullRequests).toEqual([]);
@@ -543,7 +542,7 @@ describe("chat pane initialization", () => {
     const snapshot = {
       ...pane.context.gateway.snapshot,
       client,
-      connected: true,
+      phase: "connected" as const,
       hello,
       sessionKey: canonicalSessionKey,
     };

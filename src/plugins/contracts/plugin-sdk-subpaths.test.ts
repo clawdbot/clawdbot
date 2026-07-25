@@ -597,6 +597,10 @@ describe("plugin-sdk subpath exports", () => {
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
     ]);
+    expectSourceMentions("media-local-roots", [
+      "getAgentScopedMediaLocalRoots",
+      "getAgentScopedMediaLocalRootsForSources",
+    ]);
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
       "isImplicitSameChatApprovalAuthorization",

@@ -69,9 +69,6 @@ async function loadFreshHealthModulesForTest() {
   vi.doMock("../config/sessions/paths.js", () => ({
     resolveStorePath: () => "/tmp/sessions.json",
   }));
-  vi.doMock("../config/sessions/store.js", () => ({
-    loadSessionStore: () => testStore,
-  }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
     listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
       listHealthSessionEntriesCalls.push(scope ?? {});

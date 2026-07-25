@@ -16,6 +16,7 @@ import {
   registerTestMemoryPromptBuilder,
 } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,
@@ -1986,8 +1987,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps hook prompt context visible while hiding inter-session provenance", async () => {
+    const recalledMemoryContext = [
+      "<relevant-memories>",
+      "1. [fact] stale [media attached: /tmp/some.png] and /tmp/other.png",
+      "</relevant-memories>",
+    ].join("\n");
     const runBeforePromptBuild = vi.fn(async () => ({
-      prependContext: "dynamic hook context",
+      prependContext: recalledMemoryContext,
       appendContext: "dynamic hook tail",
     }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
@@ -2043,7 +2049,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBe("visible ask");
     expect(seen.prompt).not.toContain("[Inter-session message]");
     expect(seen.prompt).not.toContain("secret runtime context");
-    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook context");
+    expect(JSON.stringify(seen.modelMessages)).toContain("<relevant-memories>");
+    expect(JSON.stringify(seen.modelMessages)).toContain("/tmp/some.png");
+    expect(JSON.stringify(seen.modelMessages)).toContain("/tmp/other.png");
     expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
     expect(JSON.stringify(seen.modelMessages)).not.toContain("[Inter-session message]");
     expect(JSON.stringify(seen.modelMessages)).not.toContain("secret runtime context");
@@ -2057,10 +2065,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runtimeContext.content).toContain("isUser=false");
     expect(runtimeContext.content).not.toContain("visible ask");
     expect(runtimeContext.content).toContain("secret runtime context");
-    expect(runtimeContext.content).not.toContain("dynamic hook context");
+    expect(runtimeContext.content).not.toContain(recalledMemoryContext);
     expect(runtimeContext.content).not.toContain("dynamic hook tail");
-    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook context");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(recalledMemoryContext);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
+    expect(hoisted.detectAndLoadPromptImagesMock).toHaveBeenCalledTimes(1);
+    expect(mockParams(hoisted.detectAndLoadPromptImagesMock, 0, "prompt image params").prompt).toBe(
+      "visible ask",
+    );
   });
 
   it("submits runtime-only context through system prompt without visible prompt", async () => {
@@ -2310,7 +2322,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
-    expect(result.promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
     expect(result.messagesSnapshot).toHaveLength(1);
     expectFields(requireRecord(result.messagesSnapshot[0], "messages snapshot seed"), {
       role: "user",
@@ -2351,7 +2363,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runBeforeAgentRun).toHaveBeenCalledTimes(1);
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
-    expect(result.promptErrorSource).toBe("hook:before_agent_run");
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBe(
+      "hook:before_agent_run",
+    );
     expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
@@ -2443,8 +2457,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
   });
 
@@ -2483,8 +2497,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 
@@ -2520,8 +2534,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
@@ -2595,8 +2609,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
@@ -2638,8 +2652,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
@@ -3452,7 +3466,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       },
     });
 
-    expect(result.promptErrorSource).toBe("precheck");
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBe("precheck");
     expect(result.preflightRecovery).toEqual({
       route: "compact_only",
       source: "mid-turn",
@@ -3630,19 +3644,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       sessionKey,
       tempPaths,
       sessionMessages,
-      attemptOverrides: {
-        contextTokenBudget: 128_000,
-        config: {
-          agents: {
-            defaults: {
-              contextLimits: {
-                toolResultMaxChars: 2_000,
-              },
-            },
-            list: [{ id: "main" }],
-          },
-        } as OpenClawConfig,
-      },
+      attemptOverrides: { contextTokenBudget: 128_000 },
       createSession: () => {
         const session = createDefaultEmbeddedSession({ initialMessages: sessionMessages });
         session.agent.streamFn = async (_model, context) => {
@@ -3664,7 +3666,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
               toolCallId: `current_call_${index}`,
               toolName: "process",
               content: [
-                { type: "text", text: `current ${index}: ${"current output ".repeat(300)}` },
+                { type: "text", text: `current ${index}: ${"current output ".repeat(3_000)}` },
               ],
               isError: false,
               timestamp: 100 + index,
@@ -3685,7 +3687,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(
       submittedMessages
         .filter((message) => message.role === "toolResult")
-        .every((message) => sumToolResultTextChars([message]) <= 2_000),
+        .every((message) => sumToolResultTextChars([message]) <= 32_000),
     ).toBe(true);
     expect(JSON.stringify(submittedCurrentPromptMessages)).toContain("truncated");
     expect(afterTurn).toHaveBeenCalledTimes(1);
@@ -3734,8 +3736,8 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
   });
@@ -3780,8 +3782,8 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     });
 
     expect(sawPrompt).toBe(true);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
   });

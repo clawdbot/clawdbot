@@ -22,6 +22,7 @@ import {
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
+  reportClawHubPluginInstallTelemetry,
   reportClawHubSkillInstallTelemetry,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
@@ -427,6 +428,43 @@ describe("clawhub helpers", () => {
     await reportClawHubSkillInstallTelemetry({
       token: "token-123",
       slug: "calendar",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("sends canonical plugin install telemetry", async () => {
+    let requestBody: unknown;
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected JSON request body");
+      }
+      requestBody = JSON.parse(init.body) as unknown;
+      return new Response(null, { status: 200 });
+    });
+
+    await reportClawHubPluginInstallTelemetry({
+      token: "token-123",
+      packageName: "@openclaw/voice-call",
+      version: "2026.7.23",
+      fetchImpl,
+    });
+
+    expect(requestBody).toEqual({
+      event: "plugin_install",
+      packageName: "@openclaw/voice-call",
+      version: "2026.7.23",
+    });
+  });
+
+  it("applies the install telemetry opt-out to plugin reports", async () => {
+    process.env.CLAWHUB_DISABLE_TELEMETRY = "true";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await reportClawHubPluginInstallTelemetry({
+      token: "token-123",
+      packageName: "@openclaw/voice-call",
       fetchImpl,
     });
 

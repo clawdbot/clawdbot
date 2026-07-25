@@ -160,8 +160,6 @@ export type OpenClawConfig = {
       theme?: "claw" | "knot" | "dash" | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
-      /** Text scale percentage stop. */
-      textScale?: 90 | 100 | 110 | 125 | 140;
       /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
       locale?: string;
       /** Show model thinking output in chat. */
@@ -176,10 +174,6 @@ export type OpenClawConfig = {
       chatFollowUpMode?: "steer" | "queue";
       /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
       sidebarEntries?: string[];
-      /** Maximum chat message width CSS value. */
-      chatMessageMaxWidth?: string;
-      /** Show live agent activity beneath running Control UI sidebar sessions. */
-      sidebarLiveActivity?: boolean;
       /** Expand advanced settings in schema-driven Control UI forms. */
       showAdvancedSettings?: boolean;
     };

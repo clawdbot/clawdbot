@@ -2,7 +2,7 @@ import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 // Anthropic tests cover stream wrappers plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -125,6 +125,11 @@ describe("anthropic stream wrappers", () => {
     expect(captured.payload?.service_tier).toBeUndefined();
   });
 
+  it("skips unsupported service_tier for Claude Opus 5", () => {
+    const captured = runComposedAnthropicProviderStream("sk-ant-api-123", "claude-opus-5");
+    expect(captured.payload?.service_tier).toBeUndefined();
+  });
+
   it("skips unsupported service_tier for Claude Sonnet 5", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123", "claude-sonnet-5");
     expect(captured.payload?.service_tier).toBeUndefined();
@@ -170,6 +175,14 @@ describe("anthropic stream wrappers", () => {
 
     expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
+  });
+
+  it("uses Opus 5 identity boundaries for context1m beta wrapper activation", () => {
+    const opus5 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-opus-5");
+    const opus50 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-opus-50");
+
+    expect(opus5.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
+    expect(opus50.headers?.["anthropic-beta"]).toBeUndefined();
   });
 
   it("uses Fable 5 identity boundaries for context1m beta wrapper activation", () => {

@@ -53,6 +53,47 @@ openclaw-new-session-page {
   text-align: left;
 }
 
+.new-session-page__incognito {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.new-session-page__incognito:hover:not(:disabled),
+.new-session-page__incognito--active {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.new-session-page__incognito--active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
+  font-weight: 650;
+}
+
+.new-session-page__incognito:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.new-session-page__incognito svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+}
+
 /* Quiet chip row directly above the composer: the agent and place pickers
    share one trigger treatment so the row reads as a single control
    strip. Web Awesome owns popup/listbox behavior. */
@@ -134,6 +175,21 @@ openclaw-new-session-page {
 }
 
 .new-session-page__trigger:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.new-session-page__draft-toggle {
+  gap: 6px;
+  cursor: pointer;
+}
+
+.new-session-page__draft-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.new-session-page__draft-toggle:has(input:disabled) {
   cursor: default;
   opacity: 0.6;
 }

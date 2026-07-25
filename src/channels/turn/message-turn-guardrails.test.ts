@@ -48,9 +48,7 @@ const lowLevelHistoryHelpers = [
   "buildInboundHistoryFromMap",
   "buildHistoryContextFromMap",
   "buildPendingHistoryContextFromMap",
-  "clearHistoryEntries",
   "clearHistoryEntriesIfEnabled",
-  "recordPendingHistoryEntry",
   "recordPendingHistoryEntryIfEnabled",
   "recordPendingHistoryEntryWithMedia",
 ];

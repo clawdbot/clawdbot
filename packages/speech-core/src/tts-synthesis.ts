@@ -6,19 +6,8 @@ import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plug
 import { scheduleCleanup, type TtsDirectiveOverrides } from "openclaw/plugin-sdk/speech-core";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
-import { resolveSpeechProviderTimeoutMs } from "./tts-provider-resolution.js";
-import {
-  buildTtsFailureResult,
-  formatTtsProviderError,
-  prepareSpeechSynthesis,
-  resolvePersonaBinding,
-  resolveReadySpeechProvider,
-  resolveTtsRequestSetup,
-  resolveTtsResultModel,
-  resolveTtsResultVoice,
-  sanitizeTtsErrorForLog,
-} from "./tts-synthesis-support.js";
-import type { TtsProviderAttempt, TtsResult, TtsSynthesisResult } from "./tts-types.js";
+import { executeTtsProviderAttempts, resolveTtsRequestSetup } from "./tts-synthesis-support.js";
+import type { TtsResult, TtsSynthesisResult } from "./tts-types.js";
 
 export function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
   return resolveChannelTtsVoiceDelivery(channel) !== undefined;
@@ -214,122 +203,37 @@ export async function synthesizeSpeech(params: {
   }
 
   const { cfg, config, persona, providers } = setup;
-  const textForSynthesis = normalizeSpeechText(params.text);
   const target = resolveTtsSynthesisTarget(params.channel);
-
-  const errors: string[] = [];
-  const attemptedProviders: string[] = [];
-  const attempts: TtsProviderAttempt[] = [];
-  const primaryProvider = providers[0]?.provider;
-  logVerbose(
-    `TTS: starting with provider ${primaryProvider}, fallbacks: ${
-      providers
-        .slice(1)
-        .map((entry) => entry.provider)
-        .join(", ") || "none"
-    }`,
-  );
-
-  for (const { provider, voiceModel } of providers) {
-    attemptedProviders.push(provider);
-    const providerStart = Date.now();
-    try {
-      const resolvedProvider = resolveReadySpeechProvider({
-        provider,
-        cfg,
-        config,
-        persona,
-        voiceModel,
-      });
-      if (resolvedProvider.kind === "skip") {
-        errors.push(resolvedProvider.message);
-        attempts.push({
-          provider,
-          outcome: "skipped",
-          reasonCode: resolvedProvider.reasonCode,
-          persona: persona?.id,
-          ...(resolvedProvider.personaBinding
-            ? { personaBinding: resolvedProvider.personaBinding }
-            : {}),
-          error: resolvedProvider.message,
-        });
-        logVerbose(`TTS: provider ${provider} skipped (${resolvedProvider.message})`);
-        continue;
-      }
-      const timeoutMs = resolveSpeechProviderTimeoutMs({
-        timeoutMs: params.timeoutMs ?? voiceModel?.timeoutMs,
-        config,
-        provider: resolvedProvider.provider,
-      });
-      const prepared = await prepareSpeechSynthesis({
-        provider: resolvedProvider.provider,
-        text: textForSynthesis,
-        cfg,
-        providerConfig: resolvedProvider.providerConfig,
-        providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
-        persona: resolvedProvider.synthesisPersona,
-        personaProviderConfig: resolvedProvider.personaProviderConfig,
-        target,
-        timeoutMs,
-      });
-      const synthesis = await resolvedProvider.provider.synthesize({
-        text: prepared.text,
-        cfg,
-        providerConfig: prepared.providerConfig,
-        target,
-        providerOverrides: prepared.providerOverrides,
-        timeoutMs,
-      });
-      const latencyMs = Date.now() - providerStart;
-      attempts.push({
-        provider,
-        outcome: "success",
-        reasonCode: "success",
-        persona: persona?.id,
-        personaBinding: resolvedProvider.personaBinding,
-        latencyMs,
-      });
-      return {
-        success: true,
-        audioBuffer: synthesis.audioBuffer,
-        latencyMs,
-        provider,
-        providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
-        providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
-        persona: persona?.id,
-        fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
-        attemptedProviders,
-        attempts,
-        outputFormat: synthesis.outputFormat,
-        voiceCompatible: synthesis.voiceCompatible,
-        fileExtension: synthesis.fileExtension,
-        target,
-      };
-    } catch (err) {
-      const errorMsg = formatTtsProviderError(provider, err);
-      const latencyMs = Date.now() - providerStart;
-      errors.push(errorMsg);
-      attempts.push({
-        provider,
-        outcome: "failed",
-        reasonCode:
-          err instanceof Error && err.name === "AbortError" ? "timeout" : "provider_error",
-        latencyMs,
-        persona: persona?.id,
-        personaBinding: resolvePersonaBinding(persona, provider),
-        error: errorMsg,
-      });
-      const rawError = sanitizeTtsErrorForLog(err);
-      if (provider === primaryProvider) {
-        const hasFallbacks = providers.length > 1;
-        logVerbose(
-          `TTS: primary provider ${provider} failed (${rawError})${hasFallbacks ? "; trying fallback providers." : "; no fallback providers configured."}`,
-        );
-      } else {
-        logVerbose(`TTS: ${provider} failed (${rawError}); trying next provider.`);
-      }
-    }
-  }
-
-  return buildTtsFailureResult(errors, attemptedProviders, attempts, persona?.id);
+  return await executeTtsProviderAttempts({
+    cfg,
+    config,
+    persona,
+    providers,
+    synthesisText: normalizeSpeechText(params.text),
+    providerOverrides: params.overrides?.providerOverrides,
+    timeoutMs: params.timeoutMs,
+    target,
+    logLabel: "TTS",
+    selectOperation: ({ resolvedProvider }) => ({
+      kind: "ready",
+      synthesize: ({ prepared, cfg: runtimeCfg, target: synthesisTarget, timeoutMs }) =>
+        resolvedProvider.provider.synthesize({
+          text: prepared.text,
+          cfg: runtimeCfg,
+          providerConfig: prepared.providerConfig,
+          target: synthesisTarget,
+          providerOverrides: prepared.providerOverrides,
+          timeoutMs,
+        }),
+    }),
+    buildSuccess: ({ synthesis, ...metadata }) => ({
+      success: true,
+      ...metadata,
+      audioBuffer: synthesis.audioBuffer,
+      outputFormat: synthesis.outputFormat,
+      voiceCompatible: synthesis.voiceCompatible,
+      fileExtension: synthesis.fileExtension,
+      target,
+    }),
+  });
 }

@@ -74,9 +74,8 @@ function expiredApproval(): ExpiredApprovalSnapshot {
 function createGateway(client: GatewayBrowserClient, connected = true) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
+    phase: connected ? "connected" : "stopped",
     offlineStable: false,
-    reconnecting: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",
@@ -191,6 +190,35 @@ describe("ApprovalPage", () => {
     });
     expect(page.querySelector("h1")?.textContent).toBe("Approved here");
     expect(document.activeElement).toBe(page.querySelector("h1"));
+  });
+
+  it("renders reviewer-only plugin detail in a preformatted block", async () => {
+    const approval = pendingApproval({
+      id: "plugin:approval-1",
+      urlPath: "/approve/plugin%3Aapproval-1",
+      presentation: {
+        kind: "plugin",
+        title: "Claude native tool: Bash",
+        description: '{"command":"printf …"}',
+        detail: '{"command":"printf \\\"line one\\nline two\\\""}',
+        severity: "warning",
+        pluginId: "claude-cli",
+        toolName: "Bash",
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+    const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      id: approval.id,
+    });
+
+    await settle(page);
+
+    expect(page.querySelector("pre.approval-page__preview.mono")?.textContent).toBe(
+      approval.presentation.kind === "plugin" ? approval.presentation.detail : undefined,
+    );
   });
 
   it("keeps the selected decision named while a resolution is in flight", async () => {
@@ -321,8 +349,8 @@ describe("ApprovalPage", () => {
     const { page, source } = createPage({ client });
     await settle(page);
 
-    source.update({ connected: false, reconnecting: true });
-    source.update({ connected: true, reconnecting: false });
+    source.update({ phase: "reconnecting" });
+    source.update({ phase: "connected" });
     await settle(page);
     resolveFirst({ approval: pendingApproval() });
     await settle(page);
@@ -388,7 +416,7 @@ describe("ApprovalPage", () => {
     const { page, source } = createPage({ client });
     await settle(page);
 
-    source.update({ connected: false, reconnecting: true });
+    source.update({ phase: "reconnecting" });
     await page.updateComplete;
 
     expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");

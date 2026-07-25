@@ -20,6 +20,7 @@ import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth.js"
 import {
   buildProviderConfigModelCatalogForBrowse,
   loadPreparedModelCatalogSnapshotForBrowse,
+  modelCatalogBrowseRequiresFullDiscovery,
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
 import {
@@ -48,6 +49,7 @@ import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -444,45 +446,110 @@ function apiKeyProviderCapabilities(params: {
   return { providers: capabilities, resolveProvider };
 }
 
-export async function buildModelsListResult(params: {
+type BuildModelsListResultParams = {
   context: GatewayRequestContext;
   agentId?: string;
   params: Record<string, unknown>;
   preloadedCatalog?: {
     agentId: string;
+    config: OpenClawConfig;
     snapshot: ModelCatalogSnapshot;
   };
   catalogProjector?: ReturnType<typeof createGatewayAgentModelCatalogProjector>;
+  preloadedOnly?: boolean;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-}): Promise<{ models: ModelsListEntryWithCapabilities[] }> {
-  const cfg = params.context.getRuntimeConfig();
-  const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
+};
+
+export async function buildModelsListResult(
+  params: BuildModelsListResultParams,
+): Promise<{ models: ModelsListEntryWithCapabilities[] }> {
+  const initialConfig = params.context.getRuntimeConfig();
+  const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
   const view = resolveModelsListView(params.params);
-  const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
-    cfg,
+  const preloadedCatalog =
+    params.preloadedCatalog?.agentId === initialAgentId &&
+    params.preloadedCatalog.config === initialConfig
+      ? params.preloadedCatalog
+      : undefined;
+  let loadedSnapshot:
+    | Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
+    | undefined;
+  let loadedReadOnly = true;
+  let usedPreloadedCatalog = false;
+  const handleCatalogTimeout = (timeoutMs: number) => {
+    if (loggedSlowModelsListCatalog) {
+      return;
+    }
+    loggedSlowModelsListCatalog = true;
+    params.context.logGateway.debug(
+      `models.list continuing without model catalog after ${timeoutMs}ms`,
+    );
+  };
+  let snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
+    cfg: initialConfig,
     view,
     loadCatalog: async (loadParams) => {
-      const readOnlyLoad = loadParams.readOnly ?? true;
-      if (params.preloadedCatalog?.agentId === agentId && readOnlyLoad) {
-        return params.preloadedCatalog.snapshot;
+      loadedReadOnly = loadParams.readOnly ?? true;
+      if (preloadedCatalog && loadedReadOnly) {
+        usedPreloadedCatalog = true;
+        return preloadedCatalog.snapshot;
       }
-      return await params.context.loadGatewayModelCatalogSnapshot({
-        ...loadParams,
-        agentId,
-        agentDir: resolveAgentDir(cfg, agentId),
+      if (params.preloadedOnly) {
+        return { entries: [], routeVariants: [] };
+      }
+      loadedSnapshot = await params.context.loadGatewayModelCatalogSnapshot({
+        agentId: initialAgentId,
+        readOnly: loadedReadOnly,
       });
+      return loadedSnapshot;
     },
-    onTimeout: (timeoutMs) => {
-      if (loggedSlowModelsListCatalog) {
-        return;
-      }
-      loggedSlowModelsListCatalog = true;
-      params.context.logGateway.debug(
-        `models.list continuing without model catalog after ${timeoutMs}ms`,
-      );
-    },
+    onTimeout: handleCatalogTimeout,
   });
+  if (loadedSnapshot && !loadedSnapshot.agentId) {
+    return { models: [] };
+  }
+  if (
+    loadedSnapshot &&
+    loadedReadOnly &&
+    modelCatalogBrowseRequiresFullDiscovery({ cfg: loadedSnapshot.config, view })
+  ) {
+    const escalationAgentId = loadedSnapshot.agentId;
+    let escalationTimedOut = false;
+    let fullSnapshot: typeof loadedSnapshot | undefined;
+    const escalatedCatalog = await loadPreparedModelCatalogSnapshotForBrowse({
+      cfg: loadedSnapshot.config,
+      view,
+      loadCatalog: async ({ readOnly }) => {
+        fullSnapshot = await params.context.loadGatewayModelCatalogSnapshot({
+          agentId: escalationAgentId,
+          readOnly,
+        });
+        return fullSnapshot;
+      },
+      timeoutFullDiscovery: true,
+      onTimeout: (timeoutMs) => {
+        escalationTimedOut = true;
+        handleCatalogTimeout(timeoutMs);
+      },
+    });
+    if (!escalationTimedOut && fullSnapshot) {
+      loadedSnapshot = fullSnapshot;
+      snapshot = escalatedCatalog;
+    }
+  }
+  if (
+    loadedSnapshot &&
+    (!loadedSnapshot.agentId ||
+      (params.agentId !== undefined && normalizeAgentId(loadedSnapshot.agentId) !== initialAgentId))
+  ) {
+    return { models: [] };
+  }
+  const cfg = loadedSnapshot?.config ?? initialConfig;
+  const agentId = loadedSnapshot?.agentId ?? initialAgentId;
+  const workspaceDir =
+    loadedSnapshot?.workspaceDir ??
+    resolveAgentWorkspaceDir(cfg, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
   const catalog = snapshot.entries;
   const routeVariants = snapshot.routeVariants;
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
@@ -531,7 +598,7 @@ export async function buildModelsListResult(params: {
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
   const evaluateEntry =
-    params.catalogProjector?.evaluateEntry ??
+    (usedPreloadedCatalog ? params.catalogProjector?.evaluateEntry : undefined) ??
     createModelsListEntryEvaluator({
       cfg,
       agentId,

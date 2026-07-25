@@ -1,6 +1,35 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { buildDraftSessionCreateParams, canStartSessionAsDraft } from "./create-params.ts";
+
+describe("create-as-draft availability", () => {
+  it("requires both draft policy and multiple creator identities", () => {
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared", "draft"],
+        hasMultipleIdentities: true,
+      }),
+    ).toBe(true);
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared"],
+        hasMultipleIdentities: true,
+      }),
+    ).toBe(false);
+    expect(canStartSessionAsDraft({ hasMultipleIdentities: true })).toBe(false);
+  });
+
+  it("stays dormant when the gateway has fewer than two identities", () => {
+    for (const hasMultipleIdentities of [undefined, false]) {
+      expect(
+        canStartSessionAsDraft({
+          allowedVisibilities: ["shared", "draft"],
+          hasMultipleIdentities,
+        }),
+      ).toBe(false);
+    }
+  });
+});
 
 describe("buildDraftSessionCreateParams", () => {
   it("keeps plain chats minimal", () => {
@@ -15,6 +44,32 @@ describe("buildDraftSessionCreateParams", () => {
         workspace: "/workspace",
       }),
     ).toEqual({ agentId: "main", message: "hello" });
+  });
+
+  it("adds incognito only when the draft toggle is on", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "private task",
+        incognito: true,
+        worktree: false,
+      }),
+    ).toEqual({ agentId: "main", message: "private task", incognito: true });
+  });
+
+  it("adds draft visibility only when selected", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "private work in progress",
+        worktree: false,
+        startAsDraft: true,
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "private work in progress",
+      visibility: "draft",
+    });
   });
 
   it("includes initial-message attachments", () => {

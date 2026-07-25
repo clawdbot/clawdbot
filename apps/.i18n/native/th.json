@@ -4,6 +4,16 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.8a2fec00ed1d71b5",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "ฉันสามารถตรวจสอบสถานะ Gateway ซ่อมการกำหนดค่า เปลี่ยนโมเดล หรือเชื่อมต่อช่องทางได้"
+    },
+    {
+      "id": "native.android.53ec61863e575d82",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "ฉันจะแยกการสนทนานี้ออกจากแชทเอเจนต์ทั่วไป"
+    },
+    {
       "id": "native.android.85cc8de945e3929c",
       "source": "OpenClaw translations · $languageTag",
       "translated": "การแปล OpenClaw · $languageTag"
@@ -1222,6 +1232,26 @@
       "id": "native.android.a79d6ccab877c9ca",
       "source": "OpenClaw Active",
       "translated": "OpenClaw ทำงานอยู่"
+    },
+    {
+      "id": "native.android.2aa3ad1a12683954",
+      "source": "Skip for now",
+      "translated": "ข้ามไปก่อน"
+    },
+    {
+      "id": "native.android.9fa262fa4e057a3b",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.android.e1a8681198e91766",
+      "source": "OpenClaw request failed.",
+      "translated": "คำขอ OpenClaw ล้มเหลว"
+    },
+    {
+      "id": "native.android.a71a93ec69cee4d9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "การเชื่อมต่อ Gateway เปลี่ยนแปลง รีสตาร์ท OpenClaw เพื่อเชื่อมต่อใหม่"
     },
     {
       "id": "native.android.356609f717b92350",
@@ -5879,11 +5909,6 @@
       "translated": "กำลังตรวจสอบ · งานที่กำหนดเวลาไว้ $cronJobCount รายการ"
     },
     {
-      "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.b5ee8fce135f41e6",
       "source": "Connect before chat, voice, and live status.",
       "translated": "เชื่อมต่อก่อนใช้แชต เสียง และสถานะแบบเรียลไทม์"
@@ -5947,6 +5972,16 @@
       "id": "native.android.7b1f86aeacad732c",
       "source": "Load from gateway",
       "translated": "โหลดจาก Gateway"
+    },
+    {
+      "id": "native.android.4f369a09c8731092",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.4878165188c0310c",
+      "source": "Setup, status, and repair",
+      "translated": "การตั้งค่า สถานะ และการซ่อม"
     },
     {
       "id": "native.android.c6997ee4400492f6",
@@ -6902,6 +6937,106 @@
       "id": "native.android.14d7845e9790eaab",
       "source": "Skill",
       "translated": "ทักษะ"
+    },
+    {
+      "id": "native.android.9ee4764599e5979c",
+      "source": "Back",
+      "translated": "กลับ"
+    },
+    {
+      "id": "native.android.4b2c29c94377f235",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7a7da7d8f8613d33",
+      "source": "Gateway Required",
+      "translated": "ต้องมี Gateway"
+    },
+    {
+      "id": "native.android.aebc338b09b0a24d",
+      "source": "Full Access Required",
+      "translated": "ต้องมีสิทธิ์เข้าถึงเต็มรูปแบบ"
+    },
+    {
+      "id": "native.android.69e0b2ce76a5ff7a",
+      "source": "Checking Gateway",
+      "translated": "กำลังตรวจสอบ Gateway"
+    },
+    {
+      "id": "native.android.93c293872c6deb49",
+      "source": "Gateway Update Required",
+      "translated": "ต้องอัปเดต Gateway"
+    },
+    {
+      "id": "native.android.06e5bfbad4b42e3b",
+      "source": "Connect this phone to a Gateway before opening OpenClaw.",
+      "translated": "เชื่อมต่อโทรศัพท์เครื่องนี้กับ Gateway ก่อนเปิด OpenClaw"
+    },
+    {
+      "id": "native.android.44cca3625b125c19",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "เชื่อมต่อใหม่ด้วยสิทธิ์เข้าถึง operator.admin เพื่อตรวจสอบและเปลี่ยนการตั้งค่า Gateway"
+    },
+    {
+      "id": "native.android.6089cc78ebd95573",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "กำลังตรวจสอบว่า Gateway นี้รองรับผู้ช่วยตั้งค่า OpenClaw หรือไม่"
+    },
+    {
+      "id": "native.android.3c3a35369bc2f1f9",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "อัปเดต Gateway นี้เพื่อใช้ผู้ช่วยตั้งค่า OpenClaw"
+    },
+    {
+      "id": "native.android.41b7b9cd883e3e81",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw กำลังทำงาน…"
+    },
+    {
+      "id": "native.android.072481856dd25c89",
+      "source": "Restart",
+      "translated": "รีสตาร์ท"
+    },
+    {
+      "id": "native.android.25fcaa5f2ef2546e",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw พร้อมดำเนินการต่อในแชทปกติของคุณแล้ว"
+    },
+    {
+      "id": "native.android.88377fbc76395226",
+      "source": "Open Chat",
+      "translated": "เปิดแชท"
+    },
+    {
+      "id": "native.android.7d0cd72ff8d9c80c",
+      "source": "$label · $recommendation",
+      "translated": "$label · $recommendation"
+    },
+    {
+      "id": "native.android.3ca44882cf461305",
+      "source": "Recommended",
+      "translated": "แนะนำ"
+    },
+    {
+      "id": "native.android.56968d3bbeb687f9",
+      "source": "Skip for now",
+      "translated": "ข้ามไปก่อน"
+    },
+    {
+      "id": "native.android.6b255d7620170498",
+      "source": "Enter secret…",
+      "translated": "ป้อนรหัสลับ…"
+    },
+    {
+      "id": "native.android.4753194a1f8c6c6b",
+      "source": "Reply to OpenClaw…",
+      "translated": "ตอบกลับ OpenClaw…"
+    },
+    {
+      "id": "native.android.07d2609a561a43b0",
+      "source": "Send",
+      "translated": "ส่ง"
     },
     {
       "id": "native.android.efc938b5cc23e079",
@@ -8869,6 +9004,206 @@
       "translated": "คัดลอกประทับเวลาการสร้างแล้ว"
     },
     {
+      "id": "native.android.522a27f673db3ea7",
+      "source": "Observed nodes: $count",
+      "translated": "โหนดที่สังเกต: $count"
+    },
+    {
+      "id": "native.android.db6c0a629047ec45",
+      "source": "Observing…",
+      "translated": "กำลังสังเกต…"
+    },
+    {
+      "id": "native.android.dae7cd6ba0f54d14",
+      "source": "Observing in ${remaining}s — switch to the target app",
+      "translated": "กำลังสังเกตในอีก ${remaining} วินาที — สลับไปยังแอปเป้าหมาย"
+    },
+    {
+      "id": "native.android.a57da8b7813642c5",
+      "source": "unknown",
+      "translated": "ไม่ทราบ"
+    },
+    {
+      "id": "native.android.c3bf7f7fca67def2",
+      "source": "Accessibility executor",
+      "translated": "ตัวดำเนินการช่วยการเข้าถึง"
+    },
+    {
+      "id": "native.android.3be1e4745a17f488",
+      "source": "Service connected",
+      "translated": "เชื่อมต่อบริการแล้ว"
+    },
+    {
+      "id": "native.android.cc9389562c8b2c59",
+      "source": "Service disabled",
+      "translated": "ปิดใช้งานบริการแล้ว"
+    },
+    {
+      "id": "native.android.137a6854a7a38355",
+      "source": "Open settings",
+      "translated": "เปิดการตั้งค่า"
+    },
+    {
+      "id": "native.android.21324b63c1100d44",
+      "source": "Observe",
+      "translated": "สังเกต"
+    },
+    {
+      "id": "native.android.060ac865b282278b",
+      "source": "Observe in 3s",
+      "translated": "สังเกตในอีก 3 วินาที"
+    },
+    {
+      "id": "native.android.e2d3ac19479204af",
+      "source": "Back",
+      "translated": "ย้อนกลับ"
+    },
+    {
+      "id": "native.android.d60b8ecd62fc0d80",
+      "source": "Home",
+      "translated": "หน้าหลัก"
+    },
+    {
+      "id": "native.android.3fce53a0ad295cf0",
+      "source": "Recents",
+      "translated": "รายการล่าสุด"
+    },
+    {
+      "id": "native.android.6b32ca413d180a5d",
+      "source": "Snapshot: $snapshotLabel",
+      "translated": "สแนปช็อต: $snapshotLabel"
+    },
+    {
+      "id": "native.android.8f5985122be4fc64",
+      "source": "Packages: snapshot=$snapshotPackage foreground=$foregroundPackage",
+      "translated": "แพ็กเกจ: snapshot=$snapshotPackage foreground=$foregroundPackage"
+    },
+    {
+      "id": "native.android.73c790b2ef43795b",
+      "source": "No action result",
+      "translated": "ไม่มีผลลัพธ์การดำเนินการ"
+    },
+    {
+      "id": "native.android.7cef45c1a4398242",
+      "source": "Selected $reference",
+      "translated": "เลือก $reference แล้ว"
+    },
+    {
+      "id": "native.android.080308b933291f72",
+      "source": "Node actions run only when the target app is foreground (validated via the remote path). Global actions and same-app actions work here.",
+      "translated": "การดำเนินการกับโหนดจะทำงานเฉพาะเมื่อแอปเป้าหมายอยู่เบื้องหน้า (ตรวจสอบผ่านเส้นทางระยะไกล) การดำเนินการระดับส่วนกลางและการดำเนินการในแอปเดียวกันสามารถทำงานได้ที่นี่"
+    },
+    {
+      "id": "native.android.7904ab3dbc7630d6",
+      "source": "Activate",
+      "translated": "เปิดใช้งาน"
+    },
+    {
+      "id": "native.android.720bad3536516e4c",
+      "source": "Scroll forward",
+      "translated": "เลื่อนไปข้างหน้า"
+    },
+    {
+      "id": "native.android.a9d246ec2201f652",
+      "source": "Scroll back",
+      "translated": "เลื่อนกลับ"
+    },
+    {
+      "id": "native.android.d5d6c692bf76ab30",
+      "source": "Text",
+      "translated": "ข้อความ"
+    },
+    {
+      "id": "native.android.b807999e8142fb16",
+      "source": "Set text",
+      "translated": "ตั้งค่าข้อความ"
+    },
+    {
+      "id": "native.android.234771b574070dbd",
+      "source": "$reference  $role",
+      "translated": "$reference  $role"
+    },
+    {
+      "id": "native.android.08bf43b43713bc39",
+      "source": "text: $value",
+      "translated": "text: $value"
+    },
+    {
+      "id": "native.android.b9b90cd213056618",
+      "source": "description: $value",
+      "translated": "description: $value"
+    },
+    {
+      "id": "native.android.b2932adead8a9404",
+      "source": "bounds: $value",
+      "translated": "bounds: $value"
+    },
+    {
+      "id": "native.android.96941ff341555a3c",
+      "source": "actions: $value",
+      "translated": "actions: $value"
+    },
+    {
+      "id": "native.android.595a568daf3c9686",
+      "source": "none",
+      "translated": "ไม่มี"
+    },
+    {
+      "id": "native.android.1bacd6da6858db46",
+      "source": "Control other apps",
+      "translated": "ควบคุมแอปอื่น"
+    },
+    {
+      "id": "native.android.7bb0d8ca016a7496",
+      "source": "Shown in Android Accessibility settings.",
+      "translated": "แสดงในการตั้งค่าการช่วยการเข้าถึงของ Android"
+    },
+    {
+      "id": "native.android.499618d59ec50110",
+      "source": "Other apps stay untouched.",
+      "translated": "แอปอื่นจะไม่ถูกแตะต้อง"
+    },
+    {
+      "id": "native.android.8132ebc5e9beff1a",
+      "source": "Allow control of other apps?",
+      "translated": "อนุญาตให้ควบคุมแอปอื่นหรือไม่?"
+    },
+    {
+      "id": "native.android.16d2abc828935351",
+      "source": "Enabling lets OpenClaw observe and control other apps' screens when armed. Android accessibility access is required.",
+      "translated": "การเปิดใช้งานจะทำให้ OpenClaw สังเกตและควบคุมหน้าจอของแอปอื่นได้เมื่อเปิดใช้ ต้องมีการเข้าถึงการช่วยการเข้าถึงของ Android"
+    },
+    {
+      "id": "native.android.2762510a90e577a3",
+      "source": "Enable and Open Settings",
+      "translated": "เปิดใช้งานและเปิดการตั้งค่า"
+    },
+    {
+      "id": "native.android.9f278b579e510dda",
+      "source": "Not Now",
+      "translated": "ไว้ภายหลัง"
+    },
+    {
+      "id": "native.android.b3cae8c7b0ac2222",
+      "source": "OpenClaw UI control",
+      "translated": "การควบคุม UI ของ OpenClaw"
+    },
+    {
+      "id": "native.android.d980d910a3466dc2",
+      "source": "Developer UI observation and control",
+      "translated": "การสังเกตและควบคุม UI สำหรับนักพัฒนา"
+    },
+    {
+      "id": "native.android.7f56eb025a774101",
+      "source": "Allows the third-party OpenClaw build to inspect and control the active app during local development.",
+      "translated": "อนุญาตให้บิลด์ OpenClaw ของบุคคลที่สามตรวจสอบและควบคุมแอปที่ใช้งานอยู่ระหว่างการพัฒนาบนเครื่อง"
+    },
+    {
+      "id": "native.android.e1c713595c555f5f",
+      "source": "OpenClaw Accessibility Developer",
+      "translated": "นักพัฒนา OpenClaw Accessibility"
+    },
+    {
       "id": "native.android.342644995c7fa39d",
       "source": "Chat",
       "translated": "แชท"
@@ -9289,11 +9624,6 @@
       "translated": "พร็อกซีโทรศัพท์"
     },
     {
-      "id": "native.apple.8f741d09cc1d5495",
-      "source": "OpenClaw Activity",
-      "translated": "กิจกรรม OpenClaw"
-    },
-    {
       "id": "native.apple.093081590556db7f",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -9367,11 +9697,6 @@
       "id": "native.apple.18d4f8a4eea7f930",
       "source": "Disconnected",
       "translated": "ยกเลิกการเชื่อมต่อแล้ว"
-    },
-    {
-      "id": "native.apple.9168fcd110c3019a",
-      "source": "OpenClaw Share",
-      "translated": "OpenClaw Share"
     },
     {
       "id": "native.apple.382fd936eaf238f7",
@@ -14887,6 +15212,36 @@
       "id": "native.apple.8904786f15a5e8c6",
       "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
       "translated": "ฉันสามารถตรวจสอบสถานะ Gateway ซ่อมแซมการกำหนดค่า เปลี่ยนโมเดล หรือเชื่อมต่อช่องทางได้"
+    },
+    {
+      "id": "native.apple.c541930fceee5dd7",
+      "source": "What should we look at first?",
+      "translated": "เราควรดูอะไรก่อนดี?"
+    },
+    {
+      "id": "native.apple.5877f7ad2a71eb89",
+      "source": "Check status",
+      "translated": "ตรวจสอบสถานะ"
+    },
+    {
+      "id": "native.apple.16a0d6cf12b8dffb",
+      "source": "Review the Gateway and active services.",
+      "translated": "ตรวจสอบ Gateway และบริการที่กำลังทำงาน"
+    },
+    {
+      "id": "native.apple.0408526f52d7c028",
+      "source": "Review setup",
+      "translated": "ตรวจสอบการตั้งค่า"
+    },
+    {
+      "id": "native.apple.ba578b311be24908",
+      "source": "Inspect models, channels, and configuration.",
+      "translated": "ตรวจสอบโมเดล ช่องทาง และการกำหนดค่า"
+    },
+    {
+      "id": "native.apple.1e1de0223a6380ef",
+      "source": "Gateway is not connected",
+      "translated": "Gateway ไม่ได้เชื่อมต่อ"
     },
     {
       "id": "native.apple.3c75d45619e216db",
@@ -25999,9 +26354,29 @@
       "translated": "อุปกรณ์นี้ไม่เชื่อถือใบรับรอง TLS ที่ %@ แสดง"
     },
     {
+      "id": "native.apple.7bd4905348ab44b0",
+      "source": "Gateway certificate unavailable",
+      "translated": "ไม่มีใบรับรอง Gateway"
+    },
+    {
+      "id": "native.apple.7493b8bf5dcaa05f",
+      "source": "OpenClaw could not securely save the TLS certificate pin for %@.",
+      "translated": "OpenClaw ไม่สามารถบันทึก TLS certificate pin สำหรับ %@ ได้อย่างปลอดภัย"
+    },
+    {
       "id": "native.apple.9a4c4bd6b41420ae",
       "source": "Retry",
       "translated": "ลองใหม่"
+    },
+    {
+      "id": "native.apple.957ce87193e74f59",
+      "source": "Gateway certificate is not trusted",
+      "translated": "ใบรับรอง Gateway ไม่น่าเชื่อถือ"
+    },
+    {
+      "id": "native.apple.ad21028cb2974851",
+      "source": "The TLS challenge came from a different host or port than the requested Gateway.",
+      "translated": "การท้าทาย TLS มาจากโฮสต์หรือพอร์ตที่ต่างจาก Gateway ที่ร้องขอ"
     },
     {
       "id": "native.apple.2ace7dd34f4ca3a2",

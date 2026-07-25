@@ -627,6 +627,7 @@ async function runUnifiedQaSuite(params: {
   const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
   const scriptPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const unavailableChannelCredentialDetails = new Map<string, string>();
   if (params.plan.flowScenarios.length > 0) {
     const channelGroups = (
       await resolveQaFlowChannelGroups(params.runParams, params.plan.flowScenarios)
@@ -713,6 +714,41 @@ async function runUnifiedQaSuite(params: {
         ]
           .filter((part): part is string => Boolean(part))
           .join("-");
+        const buildCredentialUnavailableResult = (details: string): QaUnifiedPartitionResult => {
+          const blockedResults = partition.scenarios.map((scenario) => ({
+            name: scenario.title,
+            status: "blocked" as const,
+            details,
+          }));
+          return {
+            evidenceSummaries: [
+              buildQaSuiteEvidenceSummary({
+                artifactPaths: [],
+                evidenceMode: params.runParams?.evidenceMode,
+                channelId: channelGroup.channelId ?? transportId,
+                channelDriver:
+                  params.runParams?.channelDriver ??
+                  channelGroup.channelDriverSelection?.channelDriver,
+                env: process.env,
+                generatedAt: new Date().toISOString(),
+                primaryModel,
+                providerMode,
+                repoRoot,
+                scenarioDefinitions: partition.scenarios,
+                scenarioResults: blockedResults,
+              }),
+            ],
+            scenarioResults: partition.scenarios.map((scenario) => ({
+              scenarioId: scenario.id,
+              result: {
+                name: scenario.title,
+                status: "fail",
+                details,
+                steps: [{ name: "Acquire channel credential", status: "fail", details }],
+              },
+            })),
+          };
+        };
         const task = {
           // One channel's credential and Gateway state stay serial unless each adapter create()
           // owns an isolated runtime. Distinct channels may always run together.
@@ -721,6 +757,12 @@ async function runUnifiedQaSuite(params: {
             : undefined,
           weight: partition.concurrency,
           run: async () => {
+            const unavailableDetails = channelGroup.channelId
+              ? unavailableChannelCredentialDetails.get(channelGroup.channelId)
+              : undefined;
+            if (unavailableDetails) {
+              return buildCredentialUnavailableResult(unavailableDetails);
+            }
             const result = await runFlowSuite({
               ...params.runParams,
               outputDir: partitionName
@@ -755,39 +797,10 @@ async function runUnifiedQaSuite(params: {
               // Preserve other channels' evidence, but keep the suite failed: maturity
               // docs must not publish until every required channel can run.
               const details = `channel credential unavailable: ${formatErrorMessage(error)}`;
-              const blockedResults = partition.scenarios.map((scenario) => ({
-                name: scenario.title,
-                status: "blocked" as const,
-                details,
-              }));
-              return {
-                evidenceSummaries: [
-                  buildQaSuiteEvidenceSummary({
-                    artifactPaths: [],
-                    evidenceMode: params.runParams?.evidenceMode,
-                    channelId: channelGroup.channelId ?? transportId,
-                    channelDriver:
-                      params.runParams?.channelDriver ??
-                      channelGroup.channelDriverSelection?.channelDriver,
-                    env: process.env,
-                    generatedAt: new Date().toISOString(),
-                    primaryModel,
-                    providerMode,
-                    repoRoot,
-                    scenarioDefinitions: partition.scenarios,
-                    scenarioResults: blockedResults,
-                  }),
-                ],
-                scenarioResults: partition.scenarios.map((scenario) => ({
-                  scenarioId: scenario.id,
-                  result: {
-                    name: scenario.title,
-                    status: "fail",
-                    details,
-                    steps: [{ name: "Acquire channel credential", status: "fail", details }],
-                  },
-                })),
-              } satisfies QaUnifiedPartitionResult;
+              if (channelDriverFlowRequiresExclusiveWorkers && channelGroup.channelId) {
+                unavailableChannelCredentialDetails.set(channelGroup.channelId, details);
+              }
+              return buildCredentialUnavailableResult(details);
             });
             if ("evidenceSummaries" in result) {
               return result;

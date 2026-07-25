@@ -3741,10 +3741,11 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     );
   });
 
-  it("keeps private bundled plugins discoverable in the functional Docker E2E image", () => {
+  it("keeps private bundled plugins discoverable without persisting a curated registry", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
 
-    expect(dockerfile).toContain("node /app/scripts/postinstall-bundled-plugins.mjs");
+    expect(dockerfile).toContain("runBundledPluginPostinstall");
+    expect(dockerfile).not.toContain("node /app/scripts/postinstall-bundled-plugins.mjs");
   });
 
   it("keeps onboarding Docker E2E resource-guarded", () => {
@@ -3851,6 +3852,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain("sample_openwebui_stats_once()");
     expect(runner).toContain("start_openwebui_stats_sampler()");
     expect(runner).toContain("start_openwebui_stats_sampler\n");
+    expect(runner).toContain('node "$entry" doctor --fix --yes --force');
+    expect(runner).toContain(`openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan`);
     expect(runner).toContain('for container_name in "$GW_NAME" "$OW_NAME"; do');
     expect(runner).toContain('"$GW_NAME" \\');
     expect(runner).toContain('"$OW_NAME" \\');
@@ -4840,6 +4843,9 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     );
     expect(runner).toContain('docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"');
     expect(runner).not.toMatch(/(^|\n)docker run --rm/u);
+    expect(runner).toContain(
+      "lets authorized gateway-style plugin commands escape plugin-owned bindings",
+    );
     expect(runner).toContain(
       "keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin",
     );

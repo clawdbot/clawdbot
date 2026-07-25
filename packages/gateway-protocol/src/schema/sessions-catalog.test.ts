@@ -31,7 +31,7 @@ describe("SessionsCatalogListResultSchema", () => {
                     threadId: "thread-1",
                     status: "idle",
                     archived: false,
-                    createdBy: { id: "profile-ada", label: "Ada" },
+                    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
                     canContinue: true,
                     canArchive: false,
                     canOpenTerminal: true,

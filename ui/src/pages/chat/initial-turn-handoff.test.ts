@@ -118,6 +118,75 @@ describe("initial user message handoff", () => {
     ).toBe(false);
   });
 
+  it("reconciles an image prompt by accepted message sequence", () => {
+    const sessionKey = "agent:main:image-session";
+    const hello = {};
+    const handoff = createInitialUserMessageHandoff();
+    prepareInitialUserMessageHandoff(
+      handoff,
+      sessionKey,
+      {
+        text: "inspect this image",
+        attachments: [
+          {
+            id: "image-1",
+            mimeType: "image/png",
+            fileName: "image.png",
+            sizeBytes: 68,
+            dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+          },
+        ],
+        createdAt: 123,
+      },
+      hello,
+      { messageId: "initial-image-send", messageSeq: 1 },
+    );
+    const projectedSession = { chatMessages: [] as unknown[], hello };
+    expect(admitInitialUserMessageHandoff(handoff, projectedSession, sessionKey)).toBe(true);
+    expect(projectedSession.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this image" },
+          {
+            type: "image",
+            url: "data:image/png;base64,iVBORw0KGgo=",
+            source: { type: "url", url: "data:image/png;base64,iVBORw0KGgo=" },
+          },
+        ],
+        timestamp: 123,
+        __openclaw: { idempotencyKey: "initial-image-send:user", seq: 1 },
+      },
+    ]);
+    const persisted = {
+      role: "user",
+      content: "inspect this image",
+      MediaPath: "/media/image-1",
+      MediaType: "image/png",
+      idempotencyKey: "initial-image-send:user",
+      __openclaw: { id: "persisted-image-prompt", seq: 1 },
+    };
+    const createdSession = { chatMessages: [persisted] as unknown[], hello };
+    const projectedMessage = projectedSession.chatMessages[0];
+
+    expect(
+      reconcileInitialUserMessageHandoff(handoff, createdSession, sessionKey, [persisted], true),
+    ).toBe(true);
+    expect(createdSession.chatMessages).toEqual([
+      {
+        role: "user",
+        content: (projectedMessage as { content: unknown }).content,
+        timestamp: 123,
+        idempotencyKey: "initial-image-send:user",
+        __openclaw: {
+          id: "persisted-image-prompt",
+          idempotencyKey: "initial-image-send:user",
+          seq: 1,
+        },
+      },
+    ]);
+  });
+
   it("does not expose a pending prompt after reconnecting", () => {
     const sessionKey = "agent:main:new-session";
     const originalConnection = {};

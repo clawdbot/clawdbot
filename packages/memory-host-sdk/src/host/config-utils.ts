@@ -104,7 +104,6 @@ type MemorySearchConfig = {
 /** Agent context limits that bound memory file reads. */
 type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
-  memoryGetDefaultLines?: number;
 };
 
 /** Secret reference accepted by provider header config. */

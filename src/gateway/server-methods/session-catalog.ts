@@ -24,7 +24,7 @@ import { bindPluginSessionConversation } from "../../plugins/session-conversatio
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -158,28 +158,28 @@ function catalogResult(
   return result;
 }
 
-function projectCatalogHostCreators(
+function projectCatalogHostCreatedActors(
   host: SessionCatalogHost,
   agentId: string,
-  creatorBySessionKey: Map<string, SessionCatalogSession["createdBy"]>,
+  actorBySessionKey: Map<string, SessionCatalogSession["createdActor"]>,
 ): SessionCatalogHost {
   return {
     ...host,
-    sessions: host.sessions.map(({ createdBy: _providerCreatedBy, ...session }) => {
+    sessions: host.sessions.map(({ createdActor: _providerCreatedActor, ...session }) => {
       // Catalog providers do not own creator identity; the persisted session entry does.
       const sessionKey = session.sessionKey;
-      let createdBy: SessionCatalogSession["createdBy"];
-      if (sessionKey && creatorBySessionKey.has(sessionKey)) {
-        createdBy = creatorBySessionKey.get(sessionKey);
+      let createdActor: SessionCatalogSession["createdActor"];
+      if (sessionKey && actorBySessionKey.has(sessionKey)) {
+        createdActor = actorBySessionKey.get(sessionKey);
       } else {
-        createdBy = sessionKey
-          ? loadSessionEntryReadOnly(sessionKey, { agentId }).entry?.createdBy
+        createdActor = sessionKey
+          ? loadGatewaySessionRow(sessionKey, { agentId })?.createdActor
           : undefined;
         if (sessionKey) {
-          creatorBySessionKey.set(sessionKey, createdBy);
+          actorBySessionKey.set(sessionKey, createdActor);
         }
       }
-      return createdBy ? { ...session, createdBy: { ...createdBy } } : session;
+      return createdActor ? { ...session, createdActor: { ...createdActor } } : session;
     }),
   };
 }
@@ -228,7 +228,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     const search = normalizeSessionCatalogSearch(request.search);
     const progressId = request.progressId;
     const progressConnId = progressId && client?.connId ? client.connId : undefined;
-    const creatorBySessionKey = new Map<string, SessionCatalogSession["createdBy"]>();
+    const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
@@ -244,7 +244,13 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
                   agentId: resolvedAgent.agentId,
                   catalog: catalogResult(
                     provider,
-                    [projectCatalogHostCreators(host, resolvedAgent.agentId, creatorBySessionKey)],
+                    [
+                      projectCatalogHostCreatedActors(
+                        host,
+                        resolvedAgent.agentId,
+                        actorBySessionKey,
+                      ),
+                    ],
                     undefined,
                     createSession,
                   ),
@@ -265,7 +271,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           return catalogResult(
             provider,
             hosts.map((host) =>
-              projectCatalogHostCreators(host, resolvedAgent.agentId, creatorBySessionKey),
+              projectCatalogHostCreatedActors(host, resolvedAgent.agentId, actorBySessionKey),
             ),
             undefined,
             createSession,

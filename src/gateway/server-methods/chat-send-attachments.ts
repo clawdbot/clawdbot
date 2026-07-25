@@ -57,23 +57,6 @@ function logAttachmentFailure(
   });
 }
 
-function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
-  if (refs.length === 0) {
-    return message;
-  }
-  const removableRefs = new Set(refs.map((ref) => ref.mediaRef));
-  const lines = message.split(/\r?\n/);
-  while (lines.length > 0) {
-    const last = lines[lines.length - 1]?.trim() ?? "";
-    const match = /^\[media attached:\s*(media:\/\/inbound\/[^\]\s]+)\]$/.exec(last);
-    if (!match?.[1] || !removableRefs.delete(match[1])) {
-      break;
-    }
-    lines.pop();
-  }
-  return lines.join("\n").trimEnd();
-}
-
 function isPdfOffloadedRef(ref: OffloadedRef): boolean {
   const mime = ref.mimeType.trim().toLowerCase();
   if (mime === "application/pdf" || mime.endsWith("+pdf")) {
@@ -263,14 +246,11 @@ export async function prepareChatSendAttachments(params: {
             supportsImages,
             acceptNonImage: true,
           });
-          parsedMessage = stripTrailingOffloadedMediaMarkers(
-            parsed.message,
-            routeImageOffloadsAsMediaPaths
-              ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
-              : [],
-          );
+          parsedMessage = routeImageOffloadsAsMediaPaths
+            ? parsed.messageWithoutOffloadedImageRefs
+            : parsed.message;
           parsedImages = parsed.images;
-          imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
+          imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
           ({
             paths: mediaPathOffloadPaths,

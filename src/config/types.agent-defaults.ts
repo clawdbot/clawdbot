@@ -16,7 +16,11 @@ import type {
 
 /** Workspace bootstrap-file injection policy for agent system prompts. */
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
-/** Optional bootstrap files that setup can skip while still creating required agent files. */
+/**
+ * Optional bootstrap files that setup can skip while still creating required
+ * agent files. "HEARTBEAT.md" stays accepted as legacy config input even
+ * though workspace setup no longer writes it.
+ */
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 /** Embedded runner behavior contract used by strict-agentic provider flows. */
 export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
@@ -96,10 +100,6 @@ export type AgentStartupContextConfig = {
 export type AgentContextLimitsConfig = {
   /** Default max chars returned by memory_get before truncation metadata/notice (default: 12000). */
   memoryGetMaxChars?: number;
-  /** Default line window for memory_get when lines is omitted (default: 120). */
-  memoryGetDefaultLines?: number;
-  /** Advanced max chars for a single live tool result; unset uses model-context auto cap. */
-  toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
 };
@@ -165,9 +165,9 @@ export type AgentDefaultsConfig = {
   skipBootstrap?: boolean;
   /**
    * List of optional bootstrap filenames to skip writing to the workspace root.
-   * Applies to: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
+   * Applies to: SOUL.md, USER.md, IDENTITY.md ("HEARTBEAT.md" is accepted but a no-op).
    * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
-   * Example: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]
+   * Example: ["SOUL.md", "USER.md", "IDENTITY.md"]
    */
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   /**
@@ -309,20 +309,20 @@ export type AgentDefaultsConfig = {
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
-    /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
+    /** Override the heartbeat prompt body. The default treats scratch as monitor prose and directs recurring work to cron jobs. */
     prompt?: string;
     /** Run timeout in seconds for heartbeat agent turns. Unset uses global timeout or heartbeat cadence capped at 600 seconds. */
     timeoutSeconds?: number;
     /**
      * If true, run heartbeat turns with lightweight bootstrap context.
-     * Lightweight mode keeps only HEARTBEAT.md from workspace bootstrap files.
+     * Lightweight mode skips workspace bootstrap files; monitor scratch is
+     * injected by the heartbeat runner either way.
      */
     lightContext?: boolean;
     /**
      * If true, run heartbeat turns in an isolated session with no prior
-     * conversation history. The heartbeat only sees its bootstrap context
-     * (HEARTBEAT.md when lightContext is also enabled). Dramatically reduces
-     * per-heartbeat token cost by avoiding the full session transcript.
+     * conversation history. Dramatically reduces per-heartbeat token cost by
+     * avoiding the full session transcript.
      */
     isolatedSession?: boolean;
   };

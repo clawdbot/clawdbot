@@ -22,6 +22,7 @@ import {
   listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
   recordSessionCompacted,
+  recordSessionCreated,
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
@@ -776,6 +777,17 @@ describe("session state events", () => {
 
   it("projects spawn, terminal, goal, and compaction producer helpers", () => {
     const database = createDatabaseOptions();
+    recordSessionCreated({
+      sessionKey: child,
+      agentId: "main",
+      entry: {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: watcher },
+        createdAt: Date.now(),
+      },
+    });
     recordSubagentSpawned({
       childSessionKey: child,
       childRunId: "run-child",
@@ -823,13 +835,19 @@ describe("session state events", () => {
 
     const events = listSessionStateEventsSince(child, "main", 0, 200, database).events;
     expect(events.map((event) => event.kind)).toEqual([
+      "created",
       "child_spawned",
       "run_completed",
       "run_failed",
       "goal_changed",
       "compacted",
     ]);
-    expect(events[2]).toMatchObject({
+    expect(events[0]).toMatchObject({
+      actorType: "agent",
+      actorId: watcher,
+      summary: "session created",
+    });
+    expect(events[3]).toMatchObject({
       runId: "run-child-cancelled",
       summary: "child run cancelled",
       payload: { outcome: "cancelled" },

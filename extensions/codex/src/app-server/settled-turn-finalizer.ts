@@ -94,9 +94,17 @@ export async function runCodexSettledTurnFinalization(
     throw new Error("Codex settled-turn final answer transcript attestation mismatch");
   }
   const persistedAssistant = persistedMessage;
+  const persistedAssistantRecord = persistedAssistant as unknown as {
+    idempotencyKey?: unknown;
+  };
+  const assistantTranscriptIdempotencyKey =
+    typeof persistedAssistantRecord.idempotencyKey === "string"
+      ? persistedAssistantRecord.idempotencyKey.trim()
+      : "";
   return {
     assistant: persistedAssistant,
     assistantTranscriptOwned: true,
+    ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
     ...(bounded.usage ? { usage: bounded.usage } : {}),
   };
 }

@@ -18,6 +18,9 @@ type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
   const mutableCtx = ctx as Record<string, unknown>;
+  mutableCtx.commandText = resetTail;
+  mutableCtx.agentText = resetTail;
+  mutableCtx.rawText = resetTail;
   mutableCtx.Body = resetTail;
   mutableCtx.RawBody = resetTail;
   mutableCtx.CommandBody = resetTail;

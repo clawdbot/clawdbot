@@ -5,7 +5,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { hydrateSessionStoreSkillPromptRefs } from "../config/sessions/skill-prompt-blobs.js";
-import { updateSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +12,7 @@ import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.j
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -563,7 +563,7 @@ export async function noteSessionSnapshotHealth(params?: {
 
     for (const [storePath, findings] of findingsByStore) {
       try {
-        const repairResult = await updateSessionStore(
+        const repairResult = await updateLegacySessionStore(
           storePath,
           async (store) => {
             const raw = fs.readFileSync(storePath, "utf-8");

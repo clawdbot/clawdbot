@@ -470,7 +470,7 @@ suite("Claude native session catalog", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     await expandCodingSection(page);
-    await page.getByRole("button", { name: "Load more threads" }).click();
+    await page.locator('[data-session-catalog-load-more="claude"]').click();
     await page.getByText("Older remote review", { exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",

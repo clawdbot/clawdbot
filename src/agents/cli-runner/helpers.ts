@@ -23,6 +23,7 @@ import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
@@ -32,16 +33,13 @@ import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
-  loadImageFromRef,
 } from "../embedded-agent-runner/run/images.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
-import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
-import { sanitizeImageBlocks } from "../tool-images.js";
 import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 /** Re-export CLI reliability helpers used by older runner call sites. */
@@ -362,44 +360,6 @@ function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""):
   return `${trimmed}${separator}${paths.map((entry) => `${prefix}${entry}`).join("\n")}`;
 }
 
-/** Loads and sanitizes image references found in prompt text. */
-async function loadPromptRefImages(params: {
-  prompt: string;
-  workspaceDir: string;
-  maxBytes?: number;
-  workspaceOnly?: boolean;
-  sandbox?: { root: string; bridge: SandboxFsBridge };
-}): Promise<ImageContent[]> {
-  const refs = detectImageReferences(params.prompt);
-  if (refs.length === 0) {
-    return [];
-  }
-
-  const maxBytes = params.maxBytes ?? MAX_IMAGE_BYTES;
-  const seen = new Set<string>();
-  const images: ImageContent[] = [];
-  for (const ref of refs) {
-    const key = `${ref.type}:${ref.resolved}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    const image = await loadImageFromRef(ref, params.workspaceDir, {
-      maxBytes,
-      workspaceOnly: params.workspaceOnly,
-      sandbox: params.sandbox,
-    });
-    if (image) {
-      images.push(image);
-    }
-  }
-
-  const { images: sanitizedImages } = await sanitizeImageBlocks(images, "prompt:images", {
-    maxBytes,
-  });
-  return sanitizedImages;
-}
-
 /** Writes CLI image payloads to private paths and returns their file paths. */
 async function writeCliImages(params: {
   backend: CliBackendConfig;
@@ -459,27 +419,35 @@ export async function prepareCliPromptImagePayload(params: {
   workspaceDir: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  media?: MediaFact[];
 }): Promise<{
   prompt: string;
   imagePaths?: string[];
   cleanupImages?: () => Promise<void>;
 }> {
   let prompt = params.prompt;
-  const resolvedImages =
-    params.imagePrompt !== undefined
-      ? (
-          await detectAndLoadPromptImages({
-            prompt: params.imagePrompt,
-            workspaceDir: params.workspaceDir,
-            model: { input: ["text", "image"] },
-            existingImages: params.images,
-            imageOrder: params.imageOrder,
-            maxBytes: MAX_IMAGE_BYTES,
-          })
-        ).images
-      : params.images && params.images.length > 0
-        ? params.images
-        : await loadPromptRefImages({ prompt, workspaceDir: params.workspaceDir });
+  const imagePrompt = params.imagePrompt ?? prompt;
+  const needsHydration =
+    params.imagePrompt !== undefined ||
+    Boolean(params.media?.length) ||
+    (!params.images?.length && detectImageReferences(imagePrompt).length > 0);
+  const imageResult = needsHydration
+    ? await detectAndLoadPromptImages({
+        prompt: imagePrompt,
+        media: params.media,
+        workspaceDir: params.workspaceDir,
+        model: { input: ["text", "image"] },
+        existingImages: params.images,
+        imageOrder: params.imageOrder,
+        maxBytes: MAX_IMAGE_BYTES,
+      })
+    : undefined;
+  if (imageResult?.failedMediaCount) {
+    throw new Error(
+      `failed to hydrate ${imageResult.failedMediaCount} structured image attachment(s) for CLI input`,
+    );
+  }
+  const resolvedImages = imageResult?.images ?? params.images ?? [];
   if (resolvedImages.length === 0) {
     return { prompt };
   }

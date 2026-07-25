@@ -1601,7 +1601,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("reuses manifest metadata while applying bundled compat", () => {
+  it("reloads unprepared manifest metadata while applying bundled compat", () => {
     const { cfg, enablementCompat } = createCompatChainConfig();
     setBundledCapabilityFixture("mediaUnderstandingProviders");
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
@@ -1614,10 +1614,10 @@ describe("resolvePluginCapabilityProviders", () => {
       resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
     );
 
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
   });
 
-  it("reuses equivalent manifest metadata while applying bundled compat", () => {
+  it("reloads equivalent unprepared manifest metadata while applying bundled compat", () => {
     const first = createCompatChainConfig();
     const second = createCompatChainConfig();
     setBundledCapabilityFixture("mediaUnderstandingProviders");
@@ -1637,7 +1637,7 @@ describe("resolvePluginCapabilityProviders", () => {
       }),
     );
 
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
   });
 
   it("reuses a compatible active registry even when the capability list is empty", () => {

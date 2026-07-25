@@ -73,6 +73,9 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.message": [READ_SCOPE],
   "session.observer": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
+  "session.sharing": [READ_SCOPE],
+  "session.suggestion": [READ_SCOPE],
+  "session.typing": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
   // methods; also targeted to the owning connection at broadcast time.
@@ -98,6 +101,36 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
   return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
 }
 
+function resolveBroadcastSessionScope(
+  payload: unknown,
+  explicit: readonly string[] | undefined,
+  explicitAgentId: string | undefined,
+): { sessionKeys: readonly string[]; agentId?: string } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      sessionKeys: explicit ?? [],
+      ...(explicitAgentId ? { agentId: explicitAgentId } : {}),
+    };
+  }
+  const record = payload as {
+    sessionKey?: unknown;
+    agentId?: unknown;
+    suggestion?: { sessionKey?: unknown; agentId?: unknown };
+    request?: { sessionKey?: unknown; agentId?: unknown };
+  };
+  const source = [record, record.suggestion, record.request].find(
+    (candidate) => typeof candidate?.sessionKey === "string" && candidate.sessionKey.trim(),
+  );
+  const sessionKey = typeof source?.sessionKey === "string" ? source.sessionKey.trim() : "";
+  const agentId =
+    explicitAgentId ??
+    (typeof source?.agentId === "string" ? source.agentId.trim() || undefined : undefined);
+  return {
+    sessionKeys: explicit?.length ? explicit : sessionKey ? [sessionKey] : [],
+    ...(agentId ? { agentId } : {}),
+  };
+}
+
 function hasEventScope(
   client: GatewayWsClient,
   event: string,
@@ -106,11 +139,12 @@ function hasEventScope(
   if (client.connectionKind === "worker") {
     return false;
   }
+  const role = client.connect.role ?? "operator";
+  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   if (explicitPluginScope) {
-    if ((client.connect.role ?? "operator") !== "operator") {
+    if (role !== "operator") {
       return false;
     }
-    const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
     if (scopes.includes(ADMIN_SCOPE)) {
       return true;
     }
@@ -123,11 +157,9 @@ function hasEventScope(
   // for operator.write and operator.admin scopes. Explicit plugin.* entries
   // in EVENT_SCOPE_GUARDS take precedence (e.g., plugin.approval.*).
   if (!required && event.startsWith("plugin.")) {
-    const role = client.connect.role ?? "operator";
     if (role !== "operator") {
       return false;
     }
-    const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
     return scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE);
   }
   if (!required) {
@@ -136,11 +168,9 @@ function hasEventScope(
   if (required.length === 0) {
     return true;
   }
-  const role = client.connect.role ?? "operator";
   if (role !== "operator") {
     return false;
   }
-  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
   }
@@ -153,6 +183,13 @@ function hasEventScope(
 export function createGatewayBroadcaster(params: {
   clients: Set<GatewayWsClient>;
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
+  canReceiveSessionEvent?: (
+    client: GatewayWsClient,
+    sessionKeys: readonly string[],
+    agentId?: string,
+    event?: string,
+    payload?: unknown,
+  ) => boolean;
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
@@ -167,6 +204,11 @@ export function createGatewayBroadcaster(params: {
     if (params.clients.size === 0) {
       return;
     }
+    const { sessionKeys, agentId } = resolveBroadcastSessionScope(
+      payload,
+      opts?.sessionKeys,
+      opts?.agentId,
+    );
     const isTargeted = Boolean(targetConnIds);
     if (shouldLogWs()) {
       const logMeta: Record<string, unknown> = {
@@ -214,9 +256,19 @@ export function createGatewayBroadcaster(params: {
         continue;
       }
       if (
-        (isBrowserCopilotClient(c.connect.client) ||
+        sessionKeys.length > 0 &&
+        params.canReceiveSessionEvent &&
+        !params.canReceiveSessionEvent(c, sessionKeys, agentId, event, payload)
+      ) {
+        continue;
+      }
+      const requiresSessionSubscription =
+        event === "session.typing" ||
+        ((isBrowserCopilotClient(c.connect.client) ||
           hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)) &&
-        SESSION_SUBSCRIPTION_EVENTS.has(event) &&
+          SESSION_SUBSCRIPTION_EVENTS.has(event));
+      if (
+        requiresSessionSubscription &&
         (!opts?.sessionKeys?.length ||
           !opts.sessionKeys.some((sessionKey) =>
             params.sessionMessageSubscribers?.get(sessionKey).has(c.connId),

@@ -256,6 +256,7 @@ describe("trusted-proxy browser device auto-approval", () => {
     const paired = await getPairedDevice(identity.deviceId);
     expect(paired?.approvedScopes).toEqual([
       "operator.approvals",
+      "operator.questions",
       "operator.read",
       "operator.write",
     ]);

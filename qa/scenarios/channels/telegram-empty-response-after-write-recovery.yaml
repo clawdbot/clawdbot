@@ -5,8 +5,8 @@ scenario:
   surface: channel-framework
   category: channel-framework.channel-actions-commands-and-approvals
   coverage:
-    primary: [runtime.empty-response-recovery]
-    secondary: [runtime.retry-policy]
+    primary: [agent-runtime.failure-recovery-empty-response-recovery]
+    secondary: [agent-runtime.failure-recovery-retry-policy]
   regressionRefs:
     - openclaw/openclaw#108738
   objective: Verify a settled side-effecting tool followed by an empty stop gets one fresh continuation and one visible Telegram final reply.

@@ -13,6 +13,7 @@ import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
@@ -122,9 +123,9 @@ describe("cron service timer seam coverage", () => {
       {
         sessionId: "main-pr-router-session",
         updatedAt: now,
-        lastChannel: "discord",
-        lastTo: "channel-1",
-        lastAccountId: "default",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", to: "channel-1", accountId: "default" },
+        }),
       },
     );
 

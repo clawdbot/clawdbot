@@ -9,7 +9,6 @@ import {
   defineChannelMessageAdapter,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import {
   composeAccountWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
@@ -22,12 +21,10 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./approval-card-actions.js";
 import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
 import {
   type ResolvedGoogleChatAccount,
-  chunkTextForOutbound,
   isGoogleChatUserTarget,
   missingTargetError,
   normalizeGoogleChatTarget,
@@ -36,6 +33,11 @@ import {
   resolveGoogleChatOutboundSpace,
   type OpenClawConfig,
 } from "./channel.deps.runtime.js";
+import {
+  formatGoogleChatTextChunks,
+  GOOGLE_CHAT_FORMAT_PROFILE,
+  sanitizeGoogleChatText,
+} from "./format.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
@@ -188,14 +190,10 @@ export const googlechatPairingTextAdapter = {
 export const googlechatOutboundAdapter = {
   base: {
     deliveryMode: "direct" as const,
-    chunker: chunkTextForOutbound,
+    chunker: (text: string, limit: number) => formatGoogleChatTextChunks(text, limit),
     chunkerMode: "markdown" as const,
-    textChunkLimit: 4000,
-    // Google Chat's plain-text pass does not remove assistant scaffolding.
-    // Run the canonical delivery sanitizer first so internal tool traces are
-    // dropped before channel formatting.
-    sanitizeText: ({ text }: { text: string }) =>
-      sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
+    textChunkLimit: GOOGLE_CHAT_FORMAT_PROFILE.chunk.limit,
+    sanitizeText: ({ text }: { text: string }) => sanitizeGoogleChatText(text),
     normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {

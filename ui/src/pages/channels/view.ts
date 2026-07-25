@@ -17,7 +17,7 @@ import type {
   WhatsAppStatus,
 } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
-import { highlightJsonHtml } from "../../components/markdown.ts";
+import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import "../../components/openclaw-mascot.ts";
 import {
   renderSettingsEmpty,

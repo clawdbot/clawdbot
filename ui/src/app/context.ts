@@ -64,6 +64,7 @@ export type ApplicationInitialUserMessage = {
   role: "user";
   content: unknown[];
   timestamp: number;
+  __openclaw?: { idempotencyKey?: string; seq?: number };
 };
 
 type InitialUserMessageHandoff = {

@@ -382,6 +382,24 @@ export const mainLanes = [
     "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
+  // Prerelease validation must pair frozen core bytes with matching target plugin bytes.
+  // Keep the registry-backed lanes above unchanged for published-package proof.
+  npmLane(
+    "npm-onboard-discord-candidate-channel-agent",
+    liveDockerScriptCommand(
+      "e2e/npm-onboard-channel-agent-docker.sh",
+      "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
+    ),
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
+  npmLane(
+    "npm-onboard-slack-candidate-channel-agent",
+    liveDockerScriptCommand(
+      "e2e/npm-onboard-channel-agent-docker.sh",
+      "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
+    ),
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
   npmLane(
     "release-user-journey",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-user-journey",

@@ -21,9 +21,9 @@ extended-stable package and publication constraints.
 - Cover the core `openclaw` package and every npm-publishable official plugin
   included by the canonical `all-publishable` release inventory at the same
   exact version.
-- Carry the complete current-main Docker release-channel change in the tagged
-  tree, including its workflow, promoter, policy, shared release-version
-  classifier, tests, and workflow validation changes.
+- Carry the complete current-main Docker release-channel unit in the tagged
+  tree: workflow, promoter, policy, shared release-version classifier, tests,
+  and workflow validation. GitHub evaluates tag-push workflows from that tree.
 - Exclude ClawHub publication, GitHub Releases, the macOS app, Windows Hub,
   mobile apps, website downloads, and private-repository dist-tags.
 - Review the complete mainline delta using the shared evidence-driven audit.
@@ -245,7 +245,7 @@ ledger and release set before changing branches.
    per fix, then combined changed-surface and release-relevant checks. Use
    Crabbox/Testbox for broad, package, cross-OS, release, or E2E proof.
 5. Set the intended root version and run `pnpm release:prep` on the same staging
-   branch. Verify every publishable official extension package has that exact
+   branch. Verify every publishable official plugin package has that exact
    version. Do not create the tag or dispatch publication before the PR lands.
 6. Run `$autoreview` until no accepted/actionable findings remain.
 7. Open one coordinated PR targeting the canonical extended-stable branch.
@@ -261,6 +261,20 @@ unresolved blocked candidates so the next run carries them forward. Dispatch
 npm preflight only after the canonical branch or tag has that exact final
 version and SHA.
 
+## Stabilize the landed candidate
+
+Keep product backports separate from release-tooling compatibility. After the
+coordinated PR lands:
+
+1. Verify the branch tip, root/plugin versions, and complete Docker
+   release-channel unit identify one candidate.
+2. Run focused proof, npm preflight, and complete branch-owned validation.
+3. Use another approved PR for product defects; use the smallest
+   behavior-preserving repair for frozen-target tooling; retry external failures
+   without changing the candidate.
+4. Record repairs and omitted unsupported scenarios. Any branch change requires
+   new exact-head evidence. Tag only the final green tip.
+
 ## Handoff
 
 Report:
@@ -271,18 +285,13 @@ Report:
 - included, skipped, blocked, not-affected, and already-covered candidates;
 - affected core/plugin packages, adaptations, and commit order;
 - proof commands, run IDs, and autoreview result;
+- candidate-stabilization failures, their classification, every workflow or
+  harness compatibility repair, and superseded validation runs;
 - remaining security, release, or maintainer approvals;
 - the coordinated PR URL or why no PR was opened;
-- explicit confirmation that no non-npm publication is planned.
+- exact intended Docker images and aliases, plus explicit confirmation that no
+  other non-npm publication is planned.
 
-After the PR lands, continue with this skill's canonical extended-stable
-release flow. Require exact branch-tip/tag/package identity; run npm preflight
-and Full Release Validation from the canonical branch; publish every
-npm-publishable official plugin from the exact release SHA; publish the
-prepared core tarball with the referenced successful run IDs; verify every
-exact package and `extended-stable` selector; and preserve the generated
-core `openclaw` selector-repair command. Repair missing or stale official-
-plugin selectors on already-published versions with the approved credential-
-isolated release tooling for manual tag repair; the OIDC source workflow cannot
-mutate those tags. Never republish the same version when only a selector
-needs repair.
+Then follow the parent skill's publish and recovery sequence. Keep exact
+branch/tag/package/run identity, never republish for selector repair, and move
+only the `extended-stable*` Docker aliases.

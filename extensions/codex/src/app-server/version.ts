@@ -6,6 +6,6 @@
 /** Minimum Codex app-server version supported by the OpenClaw Codex bridge. */
 export const MIN_CODEX_APP_SERVER_VERSION = "0.143.0";
 /** Newest Codex app-server version validated by the OpenClaw Codex bridge. */
-export const MAX_CODEX_APP_SERVER_VERSION = "0.144.6";
+export const MAX_CODEX_APP_SERVER_VERSION = "0.145.0";
 /** npm package name for the managed Codex app-server binary. */
 export const MANAGED_CODEX_APP_SERVER_PACKAGE = "@openai/codex";

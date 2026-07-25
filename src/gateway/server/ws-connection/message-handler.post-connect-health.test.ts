@@ -628,7 +628,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           displayName: "alice",
           hasAvatar: false,
         },
-        operatorIdentity: { id: "alice@example.com", label: "alice" },
       });
 
       expect(setAvatar(profileId!, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
@@ -665,10 +664,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         }),
       );
     });
-    expect(harness.client).toMatchObject({
-      authenticatedUserId: "alice@example.com",
-      operatorIdentity: { id: "alice@example.com", label: "alice@example.com" },
-    });
+    expect(harness.client).toMatchObject({ authenticatedUserId: "alice@example.com" });
     expect(harness.client).not.toMatchObject({ authenticatedUserProfile: expect.anything() });
     expect(harness.logWsControl.warn).toHaveBeenCalledTimes(1);
     expect(harness.logWsControl.warn).toHaveBeenCalledWith(

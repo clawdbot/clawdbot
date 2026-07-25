@@ -266,6 +266,8 @@ export type PluginManifestDashboard = {
   actionVerbs?: PluginManifestDashboardActionVerb[];
 };
 
+export type PluginManifestMcpServer = Record<string, unknown>;
+
 type PluginManifestConfigLiteral = string | number | boolean | null;
 
 type PluginManifestDangerousConfigFlag = {
@@ -397,6 +399,8 @@ export type PluginManifest = {
   qaRunners?: PluginManifestQaRunner[];
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
+  /** Static MCP servers contributed while this plugin is enabled. */
+  mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
   name?: string;
   description?: string;
@@ -604,6 +608,23 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
       continue;
     }
     normalized[key] = valueLocal;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestMcpServers(
+  value: unknown,
+): Record<string, PluginManifestMcpServer> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestMcpServer> = Object.create(null);
+  for (const [rawName, rawServer] of Object.entries(value)) {
+    const name = normalizeOptionalString(rawName) ?? "";
+    if (!name || isBlockedObjectKey(name) || !isRecord(rawServer)) {
+      continue;
+    }
+    normalized[name] = { ...rawServer };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -2003,6 +2024,7 @@ export function loadPluginManifest(
     });
   }
   const dashboard = dashboardResult.dashboard;
+  const mcpServers = normalizeManifestMcpServers(raw.mcpServers);
   const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
   const mediaUnderstandingProviderMetadata = normalizeMediaUnderstandingProviderMetadata(
@@ -2057,6 +2079,7 @@ export function loadPluginManifest(
       setup,
       qaRunners,
       dashboard,
+      mcpServers,
       skills,
       name,
       description,
@@ -2170,10 +2193,13 @@ type OpenClawPackageSetupFeatures = {
 
 type OpenClawPackageCompat = {
   pluginApi?: string;
+  minGatewayVersion?: string;
 };
 
 export type OpenClawPackageBuild = {
   bundledDist?: boolean;
+  openclawVersion?: string;
+  pluginSdkVersion?: string;
 };
 
 export type OpenClawPackageManifest = {

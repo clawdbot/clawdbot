@@ -2,7 +2,6 @@
 import type { webhook } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
-  buildChannelInboundMediaPayload,
   formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatLocationText,
@@ -322,7 +321,7 @@ async function finalizeLineInboundContext(params: {
   });
 
   const agentBody = params.agentBody ?? params.rawBody;
-  const mediaPayload = buildChannelInboundMediaPayload(toInboundMediaFacts(params.media));
+  const media = toInboundMediaFacts(params.media);
   const body = formatInboundEnvelope({
     channel: "LINE",
     from: conversationLabel,
@@ -356,7 +355,7 @@ async function finalizeLineInboundContext(params: {
     Surface: "line",
     MessageSid: params.messageSid,
     Timestamp: params.timestamp,
-    ...mediaPayload,
+    media,
     ...params.locationContext,
     CommandAuthorized: params.commandAuthorized,
     OriginatingChannel: "line" as const,

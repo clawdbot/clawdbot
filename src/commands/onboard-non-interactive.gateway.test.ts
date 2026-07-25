@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -16,14 +15,6 @@ type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemon
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
   vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
 );
-const createPreMigrationBackupMock = vi.hoisted(() => vi.fn(async () => undefined));
-const migrationProviderMock = vi.hoisted(() => ({
-  id: "hermes",
-  label: "Hermes",
-  description: "Hermes migration provider",
-  plan: vi.fn(),
-  apply: vi.fn(),
-}));
 const healthCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",
@@ -157,21 +148,6 @@ vi.mock("./health.js", () => ({
   healthCommand: healthCommandMock,
 }));
 
-vi.mock("../plugins/migration-provider-runtime.js", () => ({
-  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
-  resolvePluginMigrationProviders: () => [migrationProviderMock],
-  resolvePluginMigrationProvider: ({ providerId }: { providerId: string }) =>
-    providerId === migrationProviderMock.id ? migrationProviderMock : undefined,
-}));
-
-vi.mock("./migrate/apply.js", async (importActual) => {
-  const actual = await importActual<typeof import("./migrate/apply.js")>();
-  return {
-    ...actual,
-    createPreMigrationBackup: createPreMigrationBackupMock,
-  };
-});
-
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => gatewayServiceMock,
 }));
@@ -246,18 +222,6 @@ function readFirstMockCall(mock: unknown, label: string): unknown[] {
 
 type EnsureWorkspaceOptions = {
   skipBootstrap?: boolean;
-};
-
-type MigrationPlanCall = {
-  config?: OpenClawConfig;
-  includeSecrets?: boolean;
-  overwrite?: boolean;
-  source?: string;
-};
-
-type MigrationApplyCall = {
-  reportDir?: string;
-  source?: string;
 };
 
 type GatewayHealthCall = {
@@ -395,9 +359,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     capturedReplaceConfigFileCalls.length = 0;
     ensureWorkspaceAndSessionsMock.mockClear();
     installGatewayDaemonNonInteractiveMock.mockClear();
-    createPreMigrationBackupMock.mockClear();
-    migrationProviderMock.plan.mockReset();
-    migrationProviderMock.apply.mockReset();
     healthCommandMock.mockClear();
     gatewayServiceMock.isLoaded.mockClear();
     gatewayServiceMock.readRuntime.mockClear();
@@ -624,82 +585,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(workspaceArg).toBe(workspace);
       expect(runtimeArg).toBe(runtime);
       expect(optionsArg.skipBootstrap).toBe(true);
-    });
-  }, 60_000);
-
-  it("applies non-interactive migration imports instead of ignoring import flags", async () => {
-    await withStateDir("state-noninteractive-import-", async (stateDir) => {
-      const source = path.join(stateDir, "hermes-home");
-      const workspace = path.join(stateDir, "openclaw");
-      const planned: MigrationPlan = {
-        providerId: "hermes",
-        source,
-        target: workspace,
-        summary: {
-          total: 1,
-          planned: 1,
-          migrated: 0,
-          skipped: 0,
-          conflicts: 0,
-          errors: 0,
-          sensitive: 0,
-        },
-        items: [
-          {
-            id: "workspace:AGENTS.md",
-            kind: "workspace",
-            action: "copy",
-            status: "planned",
-            source: path.join(source, "AGENTS.md"),
-            target: path.join(workspace, "AGENTS.md"),
-          },
-        ],
-      };
-      const applied: MigrationApplyResult = {
-        ...planned,
-        summary: {
-          ...planned.summary,
-          planned: 0,
-          migrated: 1,
-        },
-        items: planned.items.map((item) => ({ ...item, status: "migrated" as const })),
-      };
-      migrationProviderMock.plan.mockResolvedValueOnce(planned);
-      migrationProviderMock.apply.mockResolvedValueOnce(applied);
-
-      await runNonInteractiveSetup(
-        {
-          nonInteractive: true,
-          mode: "local",
-          workspace,
-          authChoice: "skip",
-          skipHealth: true,
-          importFrom: "hermes",
-          importSource: source,
-        },
-        runtime,
-      );
-
-      expect(migrationProviderMock.plan).toHaveBeenCalledOnce();
-      const [planCall] = readFirstMockCall(
-        migrationProviderMock.plan,
-        "migrationProvider.plan",
-      ) as [MigrationPlanCall];
-      expect(planCall.source).toBe(source);
-      expect(planCall.includeSecrets).toBe(false);
-      expect(planCall.overwrite).toBe(false);
-      expect(planCall.config?.agents?.defaults?.workspace).toBe(workspace);
-      expect(migrationProviderMock.apply).toHaveBeenCalledOnce();
-      const [applyCall, appliedPlan] = readFirstMockCall(
-        migrationProviderMock.apply,
-        "migrationProvider.apply",
-      ) as [MigrationApplyCall, MigrationPlan];
-      expect(applyCall.source).toBe(source);
-      expect(applyCall.reportDir).toContain(path.join(stateDir, "migration", "hermes"));
-      expect(appliedPlan).toBe(planned);
-      expect(readTestConfig().agents?.defaults?.workspace).toBe(workspace);
-      expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
-      expect(healthCommandMock).not.toHaveBeenCalled();
     });
   }, 60_000);
 

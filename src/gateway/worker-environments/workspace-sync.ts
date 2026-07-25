@@ -3,13 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { type PreparedWorkerSsh, workerSshCommandOptions } from "./ssh.js";
-import type {
-  WorkerTunnelHandle,
-  WorkerWorkspaceCommand,
-  WorkerWorkspaceReconcileRequest,
-  WorkerWorkspaceReconcileResult,
-  WorkerWorkspaceSyncRequest,
-  WorkerWorkspaceSyncResult,
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelHandle,
+  type WorkerWorkspaceCommand,
+  type WorkerWorkspaceReconcileRequest,
+  type WorkerWorkspaceReconcileResult,
+  type WorkerWorkspaceSyncRequest,
+  type WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
 import {
   createAcceptedWorkspacePublisherFactory,
@@ -91,7 +92,7 @@ export function createWorkerWorkspaceActions(
   const requirePrepared = (): PreparedWorkerSsh => {
     const prepared = options.getPrepared();
     if (!options.isConnected() || !prepared) {
-      throw new Error("Worker tunnel owner is no longer connected");
+      throw new WorkerTunnelOwnerDisconnectedError();
     }
     return prepared;
   };

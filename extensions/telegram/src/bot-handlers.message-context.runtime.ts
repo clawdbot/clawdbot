@@ -82,6 +82,7 @@ export function createTelegramMessageContextRuntime({
       chatId: msg.chat.id,
       msg,
       ...(botUserId !== undefined ? { botUserId } : {}),
+      ...(threadId != null ? { providerObservedThreadId: threadId } : {}),
       ...(threadId != null ? { threadId } : {}),
     });
 
@@ -96,6 +97,7 @@ export function createTelegramMessageContextRuntime({
     const {
       sourceMessage: _sourceMessage,
       promptContextProjectionMarker: _promptContextProjectionMarker,
+      threadBinding: _threadBinding,
       ...entry
     } = node;
     const projectedEntry = { ...entry, sender: resolvePromptSender(node, ctx) };
