@@ -46,9 +46,11 @@ describe("ChatSessionRailState", () => {
     vi.unstubAllGlobals();
   });
 
-  it("moves between hidden, pill, expanded, and restore-icon modes", () => {
+  it("moves between restore-icon, pill, and expanded modes", () => {
     const state = new ChatSessionRailState("pill");
-    expect(state.mode(input({ running: false, digest: null }))).toBe("hidden");
+    // Idle with nothing to show keeps the restore icon: the companion must
+    // stay one click away at any point, never fully hidden.
+    expect(state.mode(input({ running: false, digest: null }))).toBe("restore-icon");
     expect(state.mode(input())).toBe("pill");
     state.expand();
     expect(state.mode(input())).toBe("expanded");
@@ -56,6 +58,15 @@ describe("ChatSessionRailState", () => {
     expect(state.mode(input())).toBe("pill");
     state.hide();
     expect(state.mode(input())).toBe("restore-icon");
+  });
+
+  it("opens digest-less from the restore icon and resets per session", () => {
+    const state = new ChatSessionRailState("pill");
+    const idle = { running: false, activeRunId: null, digest: null } as const;
+    state.show();
+    expect(state.mode(input(idle))).toBe("pill");
+    state.resetManualOpen();
+    expect(state.mode(input(idle))).toBe("restore-icon");
   });
 
   it("keeps a companion thread renderable without an observer digest", () => {

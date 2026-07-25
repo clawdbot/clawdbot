@@ -49,23 +49,32 @@ function unreadFinalDigest(digest: SessionObserverDigest, lastReadAt?: number): 
 export class ChatSessionRailState {
   private autoExpandedRunIds = new Set<string>();
   private autoExpandedRunId: string | null = null;
+  // Explicit open from the restore icon while idle: the companion must stay
+  // reachable at any point, even with no digest and an empty thread.
+  private manualOpen = false;
 
   constructor(
     private displayPreference: ChatObserverDisplayPreference = loadChatObserverDisplayPreference(),
   ) {}
 
+  resetManualOpen(): void {
+    this.manualOpen = false;
+  }
+
   mode(input: SessionRailInput): SessionRailMode {
     const digest = visibleDigest(input);
     const digestRenderable =
       digest !== null && (input.running || unreadFinalDigest(digest, input.lastReadAt));
-    const renderable = digestRenderable || input.hasCompanionActivity;
+    const renderable = digestRenderable || input.hasCompanionActivity || this.manualOpen;
     if (this.displayPreference === "off") {
       this.autoExpandedRunId = null;
-      return input.running || renderable ? "restore-icon" : "hidden";
+      return "restore-icon";
     }
     if (!renderable) {
       this.autoExpandedRunId = null;
-      return "hidden";
+      // Idle sessions keep the low-noise restore icon so companion questions
+      // stay one click away after a run's final digest has been read.
+      return "restore-icon";
     }
     const runId = input.activeRunId ?? digest?.runId ?? null;
     const critical = digest?.health === "stuck" || digest?.health === "waiting-on-user";
@@ -93,12 +102,14 @@ export class ChatSessionRailState {
   hide(): void {
     this.displayPreference = "off";
     this.autoExpandedRunId = null;
+    this.manualOpen = false;
     storeChatObserverDisplayPreference("off");
   }
 
   show(): void {
     this.displayPreference = "pill";
     this.autoExpandedRunId = null;
+    this.manualOpen = true;
     storeChatObserverDisplayPreference("pill");
   }
 }
@@ -187,6 +198,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   protected override willUpdate(changedProperties: PropertyValues<this>) {
     if (changedProperties.has("sessionKey")) {
       this.terminalAgeReference = Date.now();
+      // A manual idle-open is a per-session gesture; it must not leak the
+      // rail open into the next selected session.
+      this.railState.resetManualOpen();
     }
     if (changedProperties.has("digest") && this.digest) {
       if (this.digest.health === "done" || this.digest.health === "failed") {
