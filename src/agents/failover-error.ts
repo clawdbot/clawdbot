@@ -643,6 +643,22 @@ function resolveFailoverClassificationFromErrorInternal(
       reason: err.reason,
     };
   }
+  const hasProvisioningCause =
+    findErrorProperty(err, (candidate) => isSandboxProvisioningError(candidate) || undefined) !==
+    undefined;
+  const directSignal = normalizeDirectErrorSignal(err);
+  const directCodeReason = directSignal.code
+    ? failoverReasonFromClassification(classifyFailoverSignal({ code: directSignal.code }))
+    : null;
+  const hasDirectFailoverMetadata =
+    directSignal.status !== undefined ||
+    (directCodeReason !== null && directCodeReason !== "timeout");
+  // Wrapper prose is not stronger evidence than a typed local provisioning
+  // cause. Keep explicit provider status/code precedence, but do not let copied
+  // timeout or rate-limit wording consume model fallbacks. See #106516.
+  if (hasProvisioningCause && !hasDirectFailoverMetadata) {
+    return null;
+  }
   const signal = normalizeErrorSignal(err, providerHint);
   const codeReason = signal.code
     ? failoverReasonFromClassification(classifyFailoverSignal({ code: signal.code }))

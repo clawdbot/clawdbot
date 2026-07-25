@@ -915,14 +915,15 @@ describe("runWithModelFallback", () => {
     );
   });
 
-  it("does not consume model fallbacks for sandbox provisioning failures", async () => {
+  it("does not consume model fallbacks for wrapped sandbox provisioning failures", async () => {
     const cfg = makeCfg();
     const diagnostics = captureModelFailoverDiagnostics();
     const provisioningError = new SandboxProvisioningError(
       "docker",
       new Error("Sandbox image not found"),
     );
-    const run = vi.fn().mockRejectedValue(provisioningError);
+    const wrappedError = new Error("sandbox startup timed out", { cause: provisioningError });
+    const run = vi.fn().mockRejectedValue(wrappedError);
 
     try {
       await expect(
@@ -934,7 +935,7 @@ describe("runWithModelFallback", () => {
           sessionKey: "agent:test:sandbox-provisioning",
           run,
         }),
-      ).rejects.toBe(provisioningError);
+      ).rejects.toBe(wrappedError);
     } finally {
       diagnostics.stop();
     }
