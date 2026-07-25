@@ -20,6 +20,8 @@ export const CORE_READINESS_SUBJECT_REFS = {
   deliveryRuntime: "openclaw/delivery-runtime/active",
   scheduler: "openclaw/scheduler/active",
   sessionStorage: "openclaw/session-storage/active",
+  hostingProfile: "openclaw/hosting-profile/selected",
+  nodeController: "openclaw/nodes/managed",
 } as const;
 const OPENCLAW_INSTANCE_ID_ENV = "OPENCLAW_INSTANCE_ID";
 const OPENCLAW_HOST_INSTANCE_ID = process.env[OPENCLAW_INSTANCE_ID_ENV]?.trim();

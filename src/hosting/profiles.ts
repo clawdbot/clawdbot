@@ -5,15 +5,18 @@ import {
   WORKSPACE_WRITABLE_CRITERION_ID,
   type ReadinessCondition,
 } from "../readiness/conditions.js";
+import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "../readiness/subjects.js";
 import type { HostingProfileId } from "./types.js";
 
 export const HOSTING_PROFILE_IDS = ["local", "container", "reverse-proxy", "node-mode"] as const;
 
 export const HOSTING_PROFILE_ENV = "OPENCLAW_HOSTING_PROFILE";
 
-type HostingProfileSource = "argument" | "environment" | "config";
+export const HOSTING_PROFILE_CONTRACT_VERSION = 1 as const;
 
-type HostingProfileSelection = {
+export type HostingProfileSource = "argument" | "environment" | "config";
+
+export type HostingProfileSelection = {
   profile: HostingProfileId;
   source: HostingProfileSource;
 };
@@ -143,13 +146,44 @@ export type NodeModeReadinessEvidence = {
   targets?: { knownCount: number; connectedCount: number };
   commandApproval?: { configured: boolean; approvedCommandCount: number };
   controlChannel?: { connectedCount: number };
+  subjects?: ReadinessSubject[];
 };
 
+export function buildHostingProfileSubjects(
+  selection: HostingProfileSelection,
+  nodeMode?: NodeModeReadinessEvidence,
+): ReadinessSubject[] {
+  const subjects: ReadinessSubject[] = [
+    {
+      ref: CORE_READINESS_SUBJECT_REFS.hostingProfile,
+      kind: "openclaw.hosting-profile",
+      id: selection.profile,
+      generation: String(HOSTING_PROFILE_CONTRACT_VERSION),
+      parentRef: CORE_READINESS_SUBJECT_REFS.gateway,
+    },
+  ];
+  if (selection.profile === "node-mode") {
+    subjects.push(
+      {
+        ref: CORE_READINESS_SUBJECT_REFS.nodeController,
+        kind: "openclaw.node-controller",
+        parentRef: CORE_READINESS_SUBJECT_REFS.gateway,
+      },
+      ...(nodeMode?.subjects ?? []),
+    );
+  }
+  return subjects;
+}
+
 function buildNodeModeConditions(evidence?: NodeModeReadinessEvidence): ReadinessCondition[] {
+  const subjectRef = CORE_READINESS_SUBJECT_REFS.nodeController;
+  const relatedSubjectRefs = evidence?.subjects?.map((subject) => subject.ref);
   const pairing = evidence?.pairing;
   const pairingCondition: ReadinessCondition = pairing?.error
     ? {
         type: "NodePairingReady",
+        subjectRef,
+        relatedSubjectRefs,
         status: "Unknown",
         requirement: "required",
         reason: pairing.timedOut ? "NodePairingTimedOut" : "NodePairingUnavailable",
@@ -158,6 +192,8 @@ function buildNodeModeConditions(evidence?: NodeModeReadinessEvidence): Readines
     : (pairing?.pairedCount ?? 0) > 0
       ? {
           type: "NodePairingReady",
+          subjectRef,
+          relatedSubjectRefs,
           status: "True",
           requirement: "required",
           reason: "NodePairingReady",
@@ -165,6 +201,8 @@ function buildNodeModeConditions(evidence?: NodeModeReadinessEvidence): Readines
         }
       : {
           type: "NodePairingReady",
+          subjectRef,
+          relatedSubjectRefs,
           status: "False",
           requirement: "required",
           reason: (pairing?.pendingCount ?? 0) > 0 ? "NodePairingPending" : "NodePairingMissing",
@@ -174,6 +212,8 @@ function buildNodeModeConditions(evidence?: NodeModeReadinessEvidence): Readines
   const connectedCount = evidence?.targets?.connectedCount ?? 0;
   const targetCondition: ReadinessCondition = {
     type: "ControlledTargetsReady",
+    subjectRef,
+    relatedSubjectRefs,
     status: connectedCount > 0 ? "True" : "False",
     requirement: "required",
     reason: connectedCount > 0 ? "ControlledTargetsReady" : "ControlledTargetsDisconnected",
@@ -186,6 +226,8 @@ function buildNodeModeConditions(evidence?: NodeModeReadinessEvidence): Readines
   const approvedCount = evidence?.commandApproval?.approvedCommandCount ?? 0;
   const commandCondition: ReadinessCondition = {
     type: "CommandApprovalReady",
+    subjectRef,
+    relatedSubjectRefs,
     status: evidence?.commandApproval?.configured ? "True" : "False",
     requirement: "required",
     reason: evidence?.commandApproval?.configured
@@ -199,6 +241,8 @@ function buildNodeModeConditions(evidence?: NodeModeReadinessEvidence): Readines
   const controlCount = evidence?.controlChannel?.connectedCount ?? 0;
   const controlCondition: ReadinessCondition = {
     type: "ControlChannelReady",
+    subjectRef,
+    relatedSubjectRefs,
     status: controlCount > 0 ? "True" : "False",
     requirement: "required",
     reason: controlCount > 0 ? "ControlChannelReady" : "ControlChannelUnavailable",
@@ -215,6 +259,8 @@ function buildContainerCondition(facts: HostingRuntimeFacts): ReadinessCondition
   if (facts.bind === "loopback" || isLoopbackHost(facts.bindHost)) {
     return {
       type: "ContainerStateReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
+      relatedSubjectRefs: [CORE_READINESS_SUBJECT_REFS.hostingProfile],
       status: "False",
       requirement: "required",
       reason: "ContainerGatewayLoopback",
@@ -223,6 +269,8 @@ function buildContainerCondition(facts: HostingRuntimeFacts): ReadinessCondition
   }
   return {
     type: "ContainerStateReady",
+    subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
+    relatedSubjectRefs: [CORE_READINESS_SUBJECT_REFS.hostingProfile],
     status: "True",
     requirement: "required",
     reason: "ContainerStateReady",
@@ -234,6 +282,8 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
   if (facts.authMode !== "trusted-proxy") {
     return {
       type: "TrustedProxyReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
+      relatedSubjectRefs: [CORE_READINESS_SUBJECT_REFS.hostingProfile],
       status: "False",
       requirement: "required",
       reason: "TrustedProxyAuthMissing",
@@ -243,6 +293,8 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
   if (!facts.trustedProxyUserHeader?.trim()) {
     return {
       type: "TrustedProxyReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
+      relatedSubjectRefs: [CORE_READINESS_SUBJECT_REFS.hostingProfile],
       status: "False",
       requirement: "required",
       reason: "TrustedProxyHeaderMissing",
@@ -257,6 +309,8 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
   if (validSources.length === 0) {
     return {
       type: "TrustedProxyReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
+      relatedSubjectRefs: [CORE_READINESS_SUBJECT_REFS.hostingProfile],
       status: "False",
       requirement: "required",
       reason: "TrustedProxySourcesMissing",
@@ -268,6 +322,8 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
   if (isLoopbackHost(facts.bindHost) && !loopbackConfigured) {
     return {
       type: "TrustedProxyReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
+      relatedSubjectRefs: [CORE_READINESS_SUBJECT_REFS.hostingProfile],
       status: "False",
       requirement: "required",
       reason: "TrustedProxyIngressUnsafe",
@@ -277,6 +333,8 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
   if (loopbackConfigured && !facts.trustedProxyAllowLoopback) {
     return {
       type: "TrustedProxyReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
+      relatedSubjectRefs: [CORE_READINESS_SUBJECT_REFS.hostingProfile],
       status: "False",
       requirement: "required",
       reason: "TrustedProxyIngressUnsafe",
@@ -286,6 +344,8 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
   }
   return {
     type: "TrustedProxyReady",
+    subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
+    relatedSubjectRefs: [CORE_READINESS_SUBJECT_REFS.hostingProfile],
     status: "True",
     requirement: "required",
     reason: "TrustedProxyReady",
@@ -301,6 +361,7 @@ export function buildHostingProfileConditions(
   const conditions: ReadinessCondition[] = [
     {
       type: "ProfileSelected",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.hostingProfile,
       status: "True",
       requirement: "required",
       reason: "ProfileSelected",

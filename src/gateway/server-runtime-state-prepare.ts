@@ -8,10 +8,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createNodeModeReadinessEvidenceResolver } from "../hosting/node-mode.js";
 import {
   advisoryCriteriaForHostingProfile,
+  buildHostingProfileSubjects,
   buildHostingProfileConditions,
+  HOSTING_PROFILE_CONTRACT_VERSION,
   isReadinessCriterionSelectedByHostingProfile,
   requiredCriteriaForHostingProfile,
-  resolveHostingProfile,
+  resolveHostingProfileSelection,
 } from "../hosting/profiles.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -477,10 +479,14 @@ export async function prepareGatewayRuntimeState(params: {
               port,
               authMode: auth.mode,
               trustedProxyUserHeader: auth.trustedProxy?.userHeader,
-              trustedProxyCount: snapshot.config.gateway?.trustedProxies?.length ?? 0,
+              trustedProxySources: snapshot.config.gateway?.trustedProxies ?? [],
+              trustedProxyAllowLoopback: auth.trustedProxy?.allowLoopback === true,
             },
             nodeMode,
           )
+        : [];
+      const profileSubjects = profileSelection
+        ? buildHostingProfileSubjects(profileSelection, nodeMode)
         : [];
       if (snapshot !== pluginRuntime.readinessSnapshot) {
         continue;
@@ -491,7 +497,7 @@ export async function prepareGatewayRuntimeState(params: {
         gateway: "responding",
         plugins: buildGatewayPluginReadinessInput(snapshot.registry),
         additionalConditions: [...profileConditions, ...contribution.conditions],
-        additionalSubjects: contribution.subjects,
+        additionalSubjects: [...profileSubjects, ...contribution.subjects],
       });
     }
     throw new Error("Readiness runtime changed while it was being evaluated.");
@@ -503,10 +509,32 @@ export async function prepareGatewayRuntimeState(params: {
       env: process.env,
       override: opts.hostingProfileOverride,
     });
+    const failureContext = profileSelection
+      ? {
+          conditions: buildHostingProfileConditions(profileSelection.profile, {
+            bind: opts.bind ?? snapshot.config.gateway?.bind ?? "loopback",
+            bindHost,
+            port,
+            authMode: snapshot.auth.mode,
+            trustedProxyUserHeader: snapshot.auth.trustedProxy?.userHeader,
+            trustedProxySources: snapshot.config.gateway?.trustedProxies ?? [],
+            trustedProxyAllowLoopback: snapshot.auth.trustedProxy?.allowLoopback === true,
+          }).filter((condition) => condition.type === "ProfileSelected"),
+          subjects: buildHostingProfileSubjects(profileSelection),
+        }
+      : undefined;
     return evaluateConfiguredGatewayReadiness({
       config: snapshot.config,
       identity: readinessIdentity,
       canonicalEvaluationEnabled: profileSelection !== undefined,
+      failureContext,
+      profileMetadata: profileSelection
+        ? {
+            profileContractVersion: HOSTING_PROFILE_CONTRACT_VERSION,
+            profile: profileSelection.profile,
+            profileSource: profileSelection.source,
+          }
+        : undefined,
       evaluateGateway: getGatewayReadiness,
       evaluateRuntime: evaluateRuntimeReadiness,
     });

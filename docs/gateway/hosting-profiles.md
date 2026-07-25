@@ -62,24 +62,25 @@ When more than one input is present, precedence is:
 Supported values are `local`, `container`, `reverse-proxy`, and `node-mode`. Invalid values stop
 Gateway startup.
 
-## Runtime identity
+## Readiness identity
 
-Hosts may attach readiness evidence to a logical runtime and one process or container incarnation:
+The canonical result identifies the Gateway lifecycle, selected profile, and any observed managed
+nodes through the shared readiness subject package. A host may assign the Gateway lifecycle an
+opaque stable ID:
 
 ```bash
-openclaw gateway run \
-  --hosting-profile container \
-  --runtime-id tenant-42/scout-primary \
-  --incarnation-id container-7f3a
+OPENCLAW_INSTANCE_ID=tenant-42/scout-primary \
+  openclaw gateway run --hosting-profile container
 ```
 
-`OPENCLAW_RUNTIME_ID` and `OPENCLAW_INCARNATION_ID` provide the same values through the
-environment. OpenClaw defaults the logical runtime ID to `local` and generates an incarnation ID
-when they are omitted.
+When omitted, OpenClaw generates an ID for the Gateway serving lifecycle. It remains stable across
+readiness evaluations, config reload, and drain, and changes when the Gateway process restarts.
 
 Readiness, health, and status report `profileContractVersion: 1`, the selected `profile`, its
-selection source (`argument`, `environment`, or `config`), and the activation identity. These
-fields are omitted when no profile is selected. Use
+selection source (`argument`, `environment`, or `config`), and an
+`openclaw/hosting-profile/selected` subject. Node mode also reports the observed node subjects, and
+its conditions refer to those subjects so repeated results can be diffed. Profile fields are
+omitted when no profile is selected. Use
 [`openclaw ready`](/cli/ready) or `/readyz` for the serving decision; `/healthz` remains a shallow
 liveness check.
 
