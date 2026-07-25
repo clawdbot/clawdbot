@@ -752,6 +752,10 @@
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
     },
+    "./plugin-sdk/test-state": {
+      "types": "./dist/plugin-sdk/test-state.d.ts",
+      "default": "./dist/plugin-sdk/test-state.js"
+    },
     "./plugin-sdk/temp-path": {
       "types": "./dist/plugin-sdk/temp-path.d.ts",
       "default": "./dist/plugin-sdk/temp-path.js"
