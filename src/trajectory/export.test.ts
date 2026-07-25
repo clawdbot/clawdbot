@@ -1891,7 +1891,7 @@ describe("exportTrajectoryBundle", () => {
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
   });
 
-  it("redactToolPayloadText does not corrupt valid JSON containing escaped quotes in secret-key values", () => {
+  it("redactTrajectoryBundleFileContent is safe — post-serialization text pass no longer runs on bundle files", () => {
     // The text-pass regexes operate on plain text, not pre-serialized JSON.
     // When a JSON value contains an escaped quote (\\"), the pattern
     // "(?:token|apiKey|...)"\s*:\s*"([^"]+)" captures only the prefix
@@ -1899,19 +1899,22 @@ describe("exportTrajectoryBundle", () => {
     // leaves trailing content outside the string boundary, producing
     // invalid JSON.
     //
-    // Before the fix, the text pass runs via redactTrajectoryBundleFileContent
-    // on every serialized bundle file.  This test proves the mechanism
-    // exists so the removal of the vulnerable call site is justified.
+    // This test proves that redactToolPayloadText itself is not designed for
+    // already-serialized JSON — when called on valid JSON with an escaped
+    // quote in a secret-key value, it corrupts the structure.
+    //
+    // The fix removes the call to redactToolPayloadText on bundle file
+    // content (redactTrajectoryBundleFileContent).  The structured pass
+    // (redactSecrets / redactTrajectoryExportValue) handles secret masking
+    // on in-memory values before serialization, so the text pass was
+    // redundant and actively dangerous.
     const input = '{"token":"***\\"abc-12345","note":"safe"}';
-
-    // This input is valid JSON (tokens like sk-fake... are not real secrets)
     expect(() => JSON.parse(input)).not.toThrow();
 
     const output = redactToolPayloadText(input);
-
-    // The text pass must NOT make valid JSON unparseable.  If it does,
-    // the call to redactToolPayloadText on serialized JSON is unsafe.
-    expect(() => JSON.parse(output)).not.toThrow();
+    // redactToolPayloadText corrupts this input.  This is the mechanism that
+    // makes redactTrajectoryBundleFileContent unsafe.
+    expect(() => JSON.parse(output)).toThrow();
   });
 
   it("preserves JSON validity when bundle values contain escaped quotes (regression: text pass corrupts serialized JSON)", async () => {

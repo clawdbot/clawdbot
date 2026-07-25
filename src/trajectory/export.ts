@@ -673,15 +673,6 @@ function trajectoryJsonlFile(
   return jsonlSupportBundleFile(pathName, lines);
 }
 
-function redactTrajectoryBundleFileContent(
-  file: DiagnosticSupportBundleFile,
-): DiagnosticSupportBundleFile {
-  return {
-    ...file,
-    content: redactToolPayloadText(file.content),
-  };
-}
-
 function buildTrajectoryExportRedaction(params: {
   workspaceDir: string;
 }): TrajectoryExportRedaction {
@@ -1227,20 +1218,17 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     );
   }
 
-  const redactedFiles = files.map(redactTrajectoryBundleFileContent);
-  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(redactedFiles)];
+  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(files)];
   manifest.contents = contents;
   const redactedManifest = redactTrajectoryExportValue(
     manifest,
     redaction,
   ) as TrajectoryBundleManifest;
-  const manifestFile = redactTrajectoryBundleFileContent(
-    jsonSupportBundleFile("manifest.json", redactedManifest),
-  );
+  const manifestFile = jsonSupportBundleFile("manifest.json", redactedManifest);
 
   await writeSupportBundleDirectory({
     outputDir: params.outputDir,
-    files: [manifestFile, ...redactedFiles],
+    files: [manifestFile, ...files],
   });
 
   return {
