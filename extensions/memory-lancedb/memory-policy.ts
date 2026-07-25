@@ -60,7 +60,7 @@ export function normalizeRecallQuery(
   return normalized.length > limit ? truncateUtf16Safe(normalized, limit).trimEnd() : normalized;
 }
 
-export function normalizeMaxChars(value: number | undefined, fallback: number): number {
+function normalizeMaxChars(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(0, Math.floor(value))
     : fallback;

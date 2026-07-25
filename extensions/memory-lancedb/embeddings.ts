@@ -23,7 +23,7 @@ const loadMemoryHostCoreModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/memory-host-core"),
 );
 
-type Embeddings = {
+export type Embeddings = {
   embed(text: string, options?: { timeoutMs?: number }): Promise<number[]>;
 };
 

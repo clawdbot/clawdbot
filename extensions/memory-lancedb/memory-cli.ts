@@ -1,14 +1,15 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import type { OpenClawPluginApi } from "./api.js";
+import type { Embeddings } from "./embeddings.js";
 import {
   MEMORY_QUERY_COLUMNS,
   type MemoryQueryColumn,
   type MemoryQueryFilter,
+  type MemoryDB,
 } from "./lancedb-store.js";
+import { normalizeRecallQuery } from "./memory-policy.js";
 
-export function parsePositiveIntegerOption(
-  value: string | undefined,
-  flag: string,
-): number | undefined {
+function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -19,7 +20,7 @@ export function parsePositiveIntegerOption(
   return parsed;
 }
 
-export function parseMemoryCliColumns(value: unknown): MemoryQueryColumn[] {
+function parseMemoryCliColumns(value: unknown): MemoryQueryColumn[] {
   if (typeof value !== "string") {
     return [...MEMORY_QUERY_COLUMNS];
   }
@@ -34,7 +35,7 @@ export function parseMemoryCliColumns(value: unknown): MemoryQueryColumn[] {
   return columns as MemoryQueryColumn[];
 }
 
-export function parseMemoryCliOrder(value: unknown): {
+function parseMemoryCliOrder(value: unknown): {
   column: MemoryQueryColumn;
   direction: 1 | -1;
 } | null {
@@ -98,4 +99,109 @@ export function parseMemoryCliFilter(rawValue: unknown): MemoryQueryFilter | und
     throw new Error("--filter LIKE requires a quoted string");
   }
   return { column, operator, value };
+}
+
+export function registerMemoryCli(
+  api: OpenClawPluginApi,
+  db: MemoryDB,
+  embeddings: Embeddings,
+  resolveCliAgentId: (rawAgentId: unknown) => string,
+  recallMaxChars: number | undefined,
+): void {
+  api.registerCli(
+    ({ program }) => {
+      const memory = program.command("ltm").description("LanceDB memory plugin commands");
+
+      memory
+        .command("list")
+        .description("List memories")
+        .option("--agent <id>", "Agent id (default: configured default agent)")
+        .option("--limit <n>", "Max results")
+        .option("--order-by-created-at", "Order memories by createdAt descending", false)
+        .action(async (opts) => {
+          const agentId = resolveCliAgentId(opts.agent);
+          const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+          const entries = await db.list(agentId, limit, {
+            orderByCreatedAt: Boolean(opts.orderByCreatedAt),
+          });
+          console.log(JSON.stringify(entries, null, 2));
+        });
+
+      memory
+        .command("search")
+        .description("Search memories")
+        .argument("<query>", "Search query")
+        .option("--agent <id>", "Agent id (default: configured default agent)")
+        .option("--limit <n>", "Max results", "5")
+        .action(async (query, opts) => {
+          const agentId = resolveCliAgentId(opts.agent);
+          const vector = await embeddings.embed(normalizeRecallQuery(query, recallMaxChars));
+          const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+          const results = await db.search(agentId, vector, limit, 0.3);
+          const output = results.map((r) => ({
+            id: r.entry.id,
+            text: r.entry.text,
+            category: r.entry.category,
+            importance: r.entry.importance,
+            score: r.score,
+          }));
+          console.log(JSON.stringify(output, null, 2));
+        });
+
+      memory
+        .command("query")
+        .description("Query memories (non-vector search)")
+        .option("--agent <id>", "Agent id (default: configured default agent)")
+        .option("--cols <columns>", "Columns to select, comma-separated")
+        .option("--filter <condition>", "Filter condition")
+        .option("--limit <n>", "Limit number of results", "10")
+        .option("--order-by <order>", "Order by column and direction (e.g., createdAt:desc)")
+        .action(async (opts) => {
+          const agentId = resolveCliAgentId(opts.agent);
+          const outputColumns = parseMemoryCliColumns(opts.cols);
+          const order = parseMemoryCliOrder(opts.orderBy);
+          const selectedColumns = [...outputColumns];
+          if (order && !selectedColumns.includes(order.column)) {
+            selectedColumns.push(order.column);
+          }
+          const limit = parsePositiveIntegerOption(opts.limit, "--limit") ?? 10;
+          let rows = await db.query(agentId, {
+            columns: selectedColumns,
+            filter: parseMemoryCliFilter(opts.filter),
+            ...(order ? {} : { limit }),
+          });
+          if (order) {
+            rows.sort((a, b) => {
+              const aValue = a[order.column] as number | string;
+              const bValue = b[order.column] as number | string;
+              if (aValue < bValue) {
+                return -1 * order.direction;
+              }
+              if (aValue > bValue) {
+                return order.direction;
+              }
+              return 0;
+            });
+            rows = rows.slice(0, limit);
+            if (!outputColumns.includes(order.column)) {
+              for (const row of rows) {
+                delete row[order.column];
+              }
+            }
+          }
+          console.log(JSON.stringify(rows, null, 2));
+        });
+
+      memory
+        .command("stats")
+        .description("Show memory statistics")
+        .option("--agent <id>", "Agent id (default: configured default agent)")
+        .action(async (opts) => {
+          const agentId = resolveCliAgentId(opts.agent);
+          const count = await db.count(agentId);
+          console.log(`Total memories: ${count}`);
+        });
+    },
+    { commands: ["ltm"] },
+  );
 }
