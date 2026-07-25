@@ -73,8 +73,8 @@ export function buildContextEngineCompactionSessionTarget(params: {
       (targetSessionId && targetSessionId !== marker.sessionId) ||
       (targetStorePath && path.resolve(targetStorePath) !== path.resolve(marker.storePath)) ||
       (candidateSessionKey &&
-        markerMatches.length > 0 &&
-        suppliedEntry?.sessionId !== marker.sessionId))
+        ((suppliedEntry && suppliedEntry.sessionId !== marker.sessionId) ||
+          (!suppliedEntry && markerMatches.length > 0))))
   ) {
     throw new Error("Legacy compaction transcript identity is inconsistent");
   }

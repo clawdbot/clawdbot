@@ -9,7 +9,11 @@ import { parseSessionFileEntriesWithWarnings } from "../agents/sessions/session-
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntries,
+  loadSessionEntry,
+  loadTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import {
   isCanonicalSessionTranscriptEntry,
@@ -34,6 +38,7 @@ import {
   PERSISTED_LEGACY_MEDIA_KEYS,
 } from "../media/media-facts.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
 import { isRegularNonSymlinkFile, resolveTrajectoryRuntimeFile } from "./runtime-file.js";
@@ -251,12 +256,39 @@ async function readSessionEntries(params: {
   ) {
     throw new Error("Trajectory export transcript target conflicts with the legacy marker");
   }
+  const suppliedKeyEntry = params.sessionKey
+    ? loadSessionEntry({
+        agentId: marker.agentId,
+        sessionKey: params.sessionKey,
+        storePath: marker.storePath,
+      })
+    : undefined;
+  const markerMatches = listSessionEntries({
+    agentId: marker.agentId,
+    readOnly: true,
+    storePath: marker.storePath,
+  }).filter(({ entry }) => entry.sessionId === marker.sessionId);
+  if (suppliedKeyEntry && suppliedKeyEntry.sessionId !== marker.sessionId) {
+    throw new Error("Trajectory export session key conflicts with the legacy marker");
+  }
+  if (params.sessionKey && !suppliedKeyEntry && markerMatches.length > 0) {
+    throw new Error("Trajectory export session key is not mapped to the legacy marker");
+  }
+  const markerSessionKey = suppliedKeyEntry
+    ? params.sessionKey
+    : (resolvePreferredSessionKeyForSessionIdMatches(
+        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        marker.sessionId,
+      ) ?? (markerMatches.length === 0 ? params.sessionKey : undefined));
+  if (!markerSessionKey && markerMatches.length > 0) {
+    throw new Error("Trajectory export legacy marker session key is ambiguous");
+  }
   return collectSessionEntries(
     (
       await loadTranscriptEvents({
         agentId: marker.agentId,
-        sessionId: params.sessionId,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        sessionId: marker.sessionId,
+        ...(markerSessionKey ? { sessionKey: markerSessionKey } : {}),
         storePath: marker.storePath,
       })
     ).map((value, index) => ({ row: index + 1, value })),
@@ -420,7 +452,7 @@ async function readRuntimeTrajectoryEvents(params: {
   warnings: JsonlParseWarning[];
 }> {
   const marker = params.sessionTarget ?? parseSqliteSessionFileMarker(params.sessionFile);
-  if (marker && marker.sessionId === params.sessionId) {
+  if (marker && (params.sessionTarget ? marker.sessionId === params.sessionId : true)) {
     const events = await loadSqliteTrajectoryRuntimeEvents({
       agentId: marker.agentId,
       sessionId: marker.sessionId,

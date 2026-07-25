@@ -7,6 +7,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
+  listSessionEntries,
   loadSessionEntry,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
@@ -159,7 +160,9 @@ async function handleTranscriptUpdateBroadcast(
   const targetAgentId = normalizeOptionalString(update.target?.agentId);
   const targetSessionId = normalizeOptionalString(update.target?.sessionId);
   const targetSessionKey = normalizeOptionalString(update.target?.sessionKey);
-  const targetKeyAgentId = parseAgentSessionKey(targetSessionKey)?.agentId;
+  const suppliedSessionKey = normalizeOptionalString(update.sessionKey);
+  const candidateSessionKey = targetSessionKey ?? suppliedSessionKey;
+  const targetKeyAgentId = parseAgentSessionKey(candidateSessionKey)?.agentId;
   const targetStorePath = normalizeOptionalString(update.target?.storePath);
   const completeTarget = Boolean(
     targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
@@ -168,11 +171,19 @@ async function handleTranscriptUpdateBroadcast(
     legacyMarker && !completeTarget
       ? resolveTranscriptSessionKeyBySessionId(legacyMarker)
       : undefined;
-  const targetKeyEntry =
-    targetSessionKey && legacyMarker && !completeTarget
+  const markerMatches =
+    legacyMarker && !completeTarget
+      ? listSessionEntries({
+          agentId: legacyMarker.agentId,
+          readOnly: true,
+          storePath: legacyMarker.storePath,
+        }).filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)
+      : [];
+  const candidateKeyEntry =
+    candidateSessionKey && legacyMarker && !completeTarget
       ? loadSessionEntry({
           agentId: legacyMarker.agentId,
-          sessionKey: targetSessionKey,
+          sessionKey: candidateSessionKey,
           storePath: legacyMarker.storePath,
         })
       : undefined;
@@ -186,23 +197,27 @@ async function handleTranscriptUpdateBroadcast(
     ((targetAgentId && targetAgentId !== legacyMarker.agentId) ||
       (targetSessionId &&
         targetSessionId !== legacyMarker.sessionId &&
-        targetKeyEntry?.sessionId !== legacyMarker.sessionId) ||
+        candidateKeyEntry?.sessionId !== legacyMarker.sessionId) ||
       (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
-      (targetSessionKey && targetKeyEntry?.sessionId !== legacyMarker.sessionId) ||
+      (candidateSessionKey &&
+        ((candidateKeyEntry && candidateKeyEntry.sessionId !== legacyMarker.sessionId) ||
+          (!candidateKeyEntry && markerMatches.length > 0))) ||
       (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)))
   ) {
     return;
   }
   const compatibleLegacyMarker = completeTarget ? undefined : legacyMarker;
-  const storageAgentId = targetAgentId ?? update.agentId ?? compatibleLegacyMarker?.agentId;
-  let sessionKey = update.target?.sessionKey ?? update.sessionKey;
-  if (!sessionKey && compatibleLegacyMarker) {
-    sessionKey = markerSessionKey;
-  }
+  const storageAgentId = compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId;
+  const sessionKey = compatibleLegacyMarker
+    ? candidateKeyEntry?.sessionId === compatibleLegacyMarker.sessionId ||
+      (!candidateKeyEntry && markerMatches.length === 0)
+      ? candidateSessionKey
+      : markerSessionKey
+    : candidateSessionKey;
   if (!sessionKey || update.message === undefined) {
     return;
   }
-  const effectiveAgentId = update.target?.agentId ?? update.agentId;
+  const effectiveAgentId = compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId;
   const defaultGlobalAgentId =
     sessionKey === "global"
       ? normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()))

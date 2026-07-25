@@ -68,12 +68,13 @@ export async function resolveAgentRunSessionTarget(params: {
           storePath: legacyMarker.storePath,
         })
       : [];
+  const markerMatches = legacyMarker
+    ? markerEntries.filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)
+    : [];
   const markerSessionKey =
     legacyMarker && !hasCompleteTypedTarget
       ? resolvePreferredSessionKeyForSessionIdMatches(
-          markerEntries
-            .filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)
-            .map(({ sessionKey, entry }) => [sessionKey, entry]),
+          markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
           legacyMarker.sessionId,
         )
       : undefined;
@@ -88,6 +89,11 @@ export async function resolveAgentRunSessionTarget(params: {
   const suppliedKeyAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
   const targetKeyAgentId = parseAgentSessionKey(targetSessionKey)?.agentId;
   const compatibilityKeyAgentId = parseAgentSessionKey(compatibilitySessionKey)?.agentId;
+  const candidateMarkerKey = targetSessionKey ?? suppliedSessionKey;
+  const candidateMarkerEntry = candidateMarkerKey
+    ? markerEntries.find(({ sessionKey: candidateKey }) => candidateKey === candidateMarkerKey)
+        ?.entry
+    : undefined;
   if (
     legacyMarker &&
     !hasCompleteTypedTarget &&
@@ -103,12 +109,9 @@ export async function resolveAgentRunSessionTarget(params: {
   if (
     legacyMarker &&
     !hasCompleteTypedTarget &&
-    (targetSessionKey || suppliedSessionKey) &&
-    !markerEntries.some(
-      ({ sessionKey: candidateKey, entry }) =>
-        candidateKey === (targetSessionKey ?? suppliedSessionKey) &&
-        entry.sessionId === legacyMarker.sessionId,
-    )
+    candidateMarkerKey &&
+    ((candidateMarkerEntry && candidateMarkerEntry.sessionId !== legacyMarker.sessionId) ||
+      (!candidateMarkerEntry && markerMatches.length > 0))
   ) {
     throw new Error("Legacy SQLite transcript marker conflicts with the supplied session key");
   }
