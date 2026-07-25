@@ -32,10 +32,17 @@ export async function resolveAgentRunSessionTarget(params: {
   sessionTarget?: AgentRunSessionTarget;
 }): Promise<ResolvedAgentRunSessionTarget> {
   const sessionTarget = params.sessionTarget;
+  const targetAgentId = normalizeOptionalString(sessionTarget?.agentId);
+  const targetSessionId = normalizeOptionalString(sessionTarget?.sessionId);
+  const targetSessionKey = normalizeOptionalString(sessionTarget?.sessionKey);
+  const targetStorePath = normalizeOptionalString(sessionTarget?.storePath);
+  const hasCompleteTypedTarget = Boolean(
+    targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
+  );
   const legacySessionFile = normalizeOptionalString(params.sessionFile);
   const legacyMarker = parseSqliteSessionFileMarker(legacySessionFile);
   if (
-    !sessionTarget &&
+    !hasCompleteTypedTarget &&
     legacySessionFile &&
     !legacyMarker &&
     !legacySessionFile.startsWith("agent:") &&
@@ -46,17 +53,12 @@ export async function resolveAgentRunSessionTarget(params: {
       "File-backed transcript targets are unsupported; migrate the session to SQLite first",
     );
   }
-  const agentId =
-    normalizeOptionalString(sessionTarget?.agentId) ?? legacyMarker?.agentId ?? params.agentId;
-  const sessionId =
-    normalizeOptionalString(sessionTarget?.sessionId) ??
-    legacyMarker?.sessionId ??
-    params.sessionId;
+  const agentId = targetAgentId ?? legacyMarker?.agentId ?? params.agentId;
+  const sessionId = targetSessionId ?? legacyMarker?.sessionId ?? params.sessionId;
   const compatibilitySessionKey =
     legacySessionFile?.startsWith("agent:") || legacySessionFile?.startsWith("in-memory:")
       ? legacySessionFile
       : undefined;
-  const targetSessionKey = normalizeOptionalString(sessionTarget?.sessionKey);
   const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
   const markerSessionKey =
     legacyMarker && !targetSessionKey && !suppliedSessionKey
@@ -80,16 +82,12 @@ export async function resolveAgentRunSessionTarget(params: {
     !targetSessionKey && !suppliedSessionKey && sessionKey === compatibilitySessionKey;
   const suppliedKeyAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
   const compatibilityKeyAgentId = parseAgentSessionKey(compatibilitySessionKey)?.agentId;
-  const hasCompleteTypedTarget = Boolean(
-    normalizeOptionalString(sessionTarget?.agentId) &&
-    normalizeOptionalString(sessionTarget?.sessionId) &&
-    normalizeOptionalString(sessionTarget?.sessionKey) &&
-    normalizeOptionalString(sessionTarget?.storePath),
-  );
   if (
     legacyMarker &&
     !hasCompleteTypedTarget &&
-    ((params.agentId && params.agentId !== legacyMarker.agentId) ||
+    ((targetAgentId && targetAgentId !== legacyMarker.agentId) ||
+      (targetSessionId && targetSessionId !== legacyMarker.sessionId) ||
+      (params.agentId && params.agentId !== legacyMarker.agentId) ||
       (suppliedKeyAgentId && suppliedKeyAgentId !== legacyMarker.agentId) ||
       params.sessionId !== legacyMarker.sessionId)
   ) {
@@ -106,7 +104,7 @@ export async function resolveAgentRunSessionTarget(params: {
   const effectiveAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
   if (sessionTarget && sessionKey) {
     const storePath =
-      normalizeOptionalString(sessionTarget.storePath) ??
+      targetStorePath ??
       resolveStorePath(params.config?.session?.store, { agentId: effectiveAgentId });
     return await resolveSessionTranscriptRuntimeTarget({
       ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),

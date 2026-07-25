@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -177,16 +178,21 @@ export async function resolveExistingAttemptTranscriptState(params: {
   sessionKey?: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): Promise<ExistingAttemptTranscriptState> {
+  const agentId = normalizeOptionalString(params.sessionTarget?.agentId) ?? params.agentId;
   const storePath =
-    params.sessionTarget?.storePath ??
-    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+    normalizeOptionalString(params.sessionTarget?.storePath) ??
+    resolveStorePath(params.config?.session?.store, { agentId });
+  const sessionId = normalizeOptionalString(params.sessionTarget?.sessionId) ?? params.sessionId;
+  const sessionKey =
+    normalizeOptionalString(params.sessionTarget?.sessionKey) ??
+    normalizeOptionalString(params.sessionKey);
   let hasBootstrapTranscriptState = false;
-  if (storePath && params.sessionKey) {
+  if (storePath && sessionKey) {
     try {
       const sqliteEvents = await loadTranscriptEvents({
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
+        agentId,
+        sessionId,
+        sessionKey,
         storePath,
       });
       hasBootstrapTranscriptState = sqliteEvents.some(isTranscriptMessageEvent);

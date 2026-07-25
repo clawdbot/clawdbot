@@ -119,6 +119,44 @@ describe("agent run session target", () => {
     ).rejects.toThrow("Compatibility session key conflicts with the supplied agent identity");
   });
 
+  it("does not let a partial typed target suppress file-backed rejection", async () => {
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "legacy-session",
+        sessionFile: path.join(tempDir, "legacy-session.jsonl"),
+        sessionTarget: { agentId: "main", sessionId: "legacy-session" },
+      }),
+    ).rejects.toThrow("File-backed transcript targets are unsupported");
+  });
+
+  it("rejects a partial typed target that conflicts with a legacy marker", async () => {
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "legacy-session",
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "legacy-session",
+          storePath: path.join(tempDir, "legacy.json"),
+        }),
+        sessionTarget: { agentId: "worker", sessionId: "legacy-session" },
+      }),
+    ).rejects.toThrow("Legacy SQLite transcript marker conflicts");
+  });
+
+  it("normalizes partial typed identity before comparing a legacy marker", async () => {
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "legacy-session",
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "legacy-session",
+          storePath: path.join(tempDir, "legacy.json"),
+        }),
+        sessionTarget: { agentId: " main ", sessionId: " legacy-session " },
+      }),
+    ).resolves.toMatchObject({ agentId: "main", sessionId: "legacy-session" });
+  });
+
   it("ignores a stale compatibility token when a typed key is present", async () => {
     const storePath = path.join(tempDir, "target", "sessions.json");
 
