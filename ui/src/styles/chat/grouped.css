@@ -411,7 +411,21 @@
   font-size: 12px;
   line-height: 1.4;
   text-align: center;
-  white-space: pre-wrap;
+}
+
+.chat-notice .chat-text {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.chat-notice :where(ul, ol, pre, blockquote) {
+  display: inline-block;
+  text-align: left;
+}
+
+.chat-notice :where(:not(pre) > code) {
+  color: inherit;
 }
 
 /* Avatar Styles */
