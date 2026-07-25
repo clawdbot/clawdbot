@@ -226,6 +226,11 @@ only for providers declared by installed plugin manifests. It cannot supply API
 base URLs or request headers, and a catalog older than the installed release's
 build stamp is ignored.
 
+The hosted file is published from the public
+[`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
+Its scheduled workflow refreshes from OpenClaw's shipped plugin manifests and
+pricing sources; every catalog content change is preserved as a public commit.
+
 Run `openclaw models refresh` for an immediate check, or disable every hosted
 catalog request with `models.catalogRefresh.enabled: false`. A self-hosted mirror
 can be selected with an HTTPS `models.catalogRefresh.url` (or localhost HTTP
