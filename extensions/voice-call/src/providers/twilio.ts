@@ -41,6 +41,16 @@ export type { TwilioProviderOptions } from "./twilio.types.js";
 
 const TWILIO_CALL_NOT_IN_PROGRESS_CODE = 21220;
 const TWILIO_CALL_UPDATE_RETRY_DELAYS_MS = [250, 750] as const;
+const REALTIME_STREAM_HANDOFF_TIMEOUT_MS = 10_000;
+
+/**
+ * Lets the realtime bridge report the provider-owned end of a bidirectional
+ * stream.  A Media Streams `clear` only flushes audio; it does not end a
+ * `<Connect><Stream>` verb or acknowledge that TwiML playback can take over.
+ */
+export interface TwilioRealtimeStreamHandoff {
+  waitForStreamEnd(callSid: string): Promise<void> | null;
+}
 
 function isTwilioCallNotInProgressError(err: unknown): boolean {
   return err instanceof TwilioApiError && err.twilioCode === TWILIO_CALL_NOT_IN_PROGRESS_CODE;
@@ -94,6 +104,8 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /** Optional media stream handler for sending audio */
   private mediaStreamHandler: MediaStreamHandler | null = null;
+  /** Optional realtime bridge lifecycle observer for TwiML handoffs. */
+  private realtimeStreamHandoff: TwilioRealtimeStreamHandoff | null = null;
 
   /** Map of call SID to stream SID for media streams */
   private callStreamMap = new Map<string, string>();
@@ -168,6 +180,10 @@ export class TwilioProvider implements VoiceCallProvider {
 
   setMediaStreamHandler(handler: MediaStreamHandler): void {
     this.mediaStreamHandler = handler;
+  }
+
+  setRealtimeStreamHandoff(handoff: TwilioRealtimeStreamHandoff): void {
+    this.realtimeStreamHandoff = handoff;
   }
 
   registerCallStream(callSid: string, streamSid: string): void {
@@ -670,6 +686,25 @@ export class TwilioProvider implements VoiceCallProvider {
     // before redirecting the call to the DTMF TwiML.
     this.clearTtsQueue(input.providerCallId, "dtmf");
 
+    // Realtime calls use a separate `<Connect><Stream>` bridge, so clearing
+    // the classic MediaStreamHandler cannot release that stream.  Twilio does
+    // not acknowledge a `clear`; its documented lifecycle signal is the
+    // stream `stop`/WebSocket close after a live-call TwiML update replaces the
+    // `<Connect><Stream>` verb.  Park the call, wait for that concrete signal,
+    // then make the DTMF update.  Do not guess with a delay: sending digits
+    // while the realtime stream still owns audio is not recognized reliably by
+    // IVRs even though a human can hear the tones.
+    const streamEnded = this.realtimeStreamHandoff?.waitForStreamEnd(input.providerCallId);
+    if (streamEnded) {
+      const handoffTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Pause length="60" />
+  <Redirect method="POST">${escapeXml(webhookUrl)}</Redirect>
+</Response>`;
+      await this.updateLiveCallTwiml(input.providerCallId, handoffTwiml, "sendDtmf.streamHandoff");
+      await this.waitForRealtimeStreamEnd(input.providerCallId, streamEnded);
+    }
+
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play digits="${escapeXml(input.digits)}" />
@@ -677,6 +712,32 @@ export class TwilioProvider implements VoiceCallProvider {
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "sendDtmf");
+  }
+
+  private async waitForRealtimeStreamEnd(
+    callSid: string,
+    streamEnded: Promise<void>,
+  ): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        streamEnded,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            reject(
+              new Error(
+                `Timed out waiting for realtime stream to end before sending DTMF for ${callSid}`,
+              ),
+            );
+          }, REALTIME_STREAM_HANDOFF_TIMEOUT_MS);
+          timeout.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   /**

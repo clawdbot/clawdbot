@@ -252,6 +252,9 @@ export class VoiceCallWebhookServer {
 
   setRealtimeHandler(handler: RealtimeCallHandler): void {
     this.realtimeHandler = handler;
+    if (this.provider.name === "twilio") {
+      (this.provider as TwilioProvider).setRealtimeStreamHandoff(handler);
+    }
   }
 
   private clearPendingDisconnectHangup(providerCallId: string): void {

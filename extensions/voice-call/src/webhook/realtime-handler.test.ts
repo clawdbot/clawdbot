@@ -330,6 +330,41 @@ describe("RealtimeCallHandler path routing", () => {
     );
   });
 
+  it("exposes a stream-end promise that resolves from Twilio's stop lifecycle event", async () => {
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-dtmf-handoff")),
+      },
+    });
+    const server = await startRealtimeServer(handler);
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-dtmf-handoff", callSid: "CA-dtmf-handoff" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(handler.waitForStreamEnd("CA-dtmf-handoff")).not.toBeNull();
+        });
+        const streamEnded = handler.waitForStreamEnd("CA-dtmf-handoff");
+        if (!streamEnded) {
+          throw new Error("expected active realtime stream end promise");
+        }
+
+        ws.send(JSON.stringify({ event: "stop", streamSid: "MZ-dtmf-handoff" }));
+        await streamEnded;
+        expect(handler.waitForStreamEnd("CA-dtmf-handoff")).toBeNull();
+      } finally {
+        ws.close();
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("preserves a public path prefix ahead of serve.path", () => {
     const handler = makeHandler({ streamPath: "/custom/stream/realtime" });
     handler.setPublicUrl("https://public.example/api/voice/webhook");

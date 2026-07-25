@@ -30,6 +30,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
+import type { TwilioRealtimeStreamHandoff } from "../providers/twilio.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
@@ -310,7 +311,7 @@ function appendRecentTalkEventMetadata(
   call.metadata = metadata;
 }
 
-export class RealtimeCallHandler {
+export class RealtimeCallHandler implements TwilioRealtimeStreamHandoff {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
   private readonly pendingStreamTokens = new Map<string, PendingStreamToken>();
   private readonly activeBridgesByCallId = new Map<string, ActiveRealtimeVoiceBridge>();
@@ -318,6 +319,8 @@ export class RealtimeCallHandler {
     string,
     (reason: TelephonyCloseReason) => void
   >();
+  /** Resolves only when Twilio has actually ended the realtime media stream. */
+  private readonly activeStreamEndByCallId = new Map<string, Promise<void>>();
   private readonly partialUserTranscriptsByCallId = new Map<string, string>();
   private readonly rawPartialUserTranscriptsByCallId = new Map<string, string>();
   private readonly partialUserTranscriptUpdatedAtByCallId = new Map<string, number>();
@@ -413,6 +416,16 @@ export class RealtimeCallHandler {
       let initialized = false;
       let activeCallSid = "unknown";
       let stopReceived = false;
+      let resolveStreamEnd: (() => void) | undefined;
+      let streamEndResolved = false;
+      const resolveActiveStreamEnd = () => {
+        if (streamEndResolved) {
+          return;
+        }
+        streamEndResolved = true;
+        resolveStreamEnd?.();
+        this.activeStreamEndByCallId.delete(activeCallSid);
+      };
       let lastMediaTimestamp: number | undefined;
       let lastMediaGapWarnAt = 0;
 
@@ -439,6 +452,10 @@ export class RealtimeCallHandler {
               return;
             }
             bridge = nextBridge;
+            const streamEnded = new Promise<void>((resolve) => {
+              resolveStreamEnd = resolve;
+            });
+            this.activeStreamEndByCallId.set(activeCallSid, streamEnded);
             return;
           }
           if (!bridge) {
@@ -475,6 +492,7 @@ export class RealtimeCallHandler {
           }
           if (frame.kind === "stop") {
             stopReceived = true;
+            resolveActiveStreamEnd();
             this.closeTelephonyBridge(activeCallSid, bridge, "completed");
           }
         } catch (error) {
@@ -483,6 +501,7 @@ export class RealtimeCallHandler {
       });
 
       ws.on("close", (code) => {
+        resolveActiveStreamEnd();
         const reason = stopReceived || code === 1000 || code === 1005 ? "completed" : "error";
         this.closeTelephonyBridge(activeCallSid, bridge, reason);
       });
@@ -508,6 +527,10 @@ export class RealtimeCallHandler {
     } catch (error) {
       return { success: false, error: formatErrorMessage(error) };
     }
+  }
+
+  waitForStreamEnd(callSid: string): Promise<void> | null {
+    return this.activeStreamEndByCallId.get(callSid) ?? null;
   }
 
   issueStreamSession(request: StreamSessionRequest = {}): StreamSession {

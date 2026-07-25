@@ -577,6 +577,40 @@ describe("TwilioProvider", () => {
     );
   });
 
+  it("waits for the realtime stream lifecycle to end before sending DTMF", async () => {
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-dtmf-realtime",
+    });
+    let endStream: (() => void) | undefined;
+    const streamEnded = new Promise<void>((resolve) => {
+      endStream = resolve;
+    });
+    provider.setRealtimeStreamHandoff({
+      waitForStreamEnd: vi.fn(() => streamEnded),
+    });
+
+    const sending = provider.sendDtmf({
+      callId: "call-dtmf-realtime",
+      providerCallId: "CA-dtmf-realtime",
+      digits: "2",
+    });
+
+    await vi.waitFor(() => expect(apiRequest).toHaveBeenCalledOnce());
+    const [, handoffParams] = requireApiRequestCall(apiRequest) as [string, { Twiml?: string }];
+    expect(handoffParams.Twiml).toContain('<Pause length="60"');
+    expect(handoffParams.Twiml).not.toContain("<Play");
+
+    endStream?.();
+    await sending;
+
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+    const [, dtmfParams] = requireApiRequestCall(apiRequest, 1) as [string, { Twiml?: string }];
+    expect(dtmfParams.Twiml).toContain('<Play digits="2"');
+    expect(apiRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      apiRequest.mock.invocationCallOrder[1]!,
+    );
+  });
+
   it("retries startListening when Twilio briefly rejects a live-call update as not in progress", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
