@@ -1,7 +1,7 @@
 // Gateway TLS runtime loads configured certificates or generates a local
 // self-signed pair, returning server-ready options plus client fingerprint.
 import { X509Certificate } from "node:crypto";
-import fsSync, { type Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
@@ -52,19 +52,6 @@ type PublishedGeneratedTlsOutput = {
   degradationReasons: GatewayTlsDegradation["reason"][];
   identity: Stats;
 };
-
-function removeGeneratedTlsOutputIfOwned(finalPath: string, expectedIdentity: Stats): boolean {
-  try {
-    const currentIdentity = fsSync.lstatSync(finalPath);
-    if (!currentIdentity.isFile() || !sameFileIdentity(currentIdentity, expectedIdentity)) {
-      return false;
-    }
-    fsSync.unlinkSync(finalPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function publishGeneratedTlsOutput(
   stagedPath: string,
@@ -117,9 +104,8 @@ async function publishGeneratedTlsOutput(
     }
     return { degradationReasons, identity: publishedIdentity };
   } catch (error) {
-    if (publishedIdentity && removeGeneratedTlsOutputIfOwned(finalPath, publishedIdentity)) {
-      await syncDirectory(parentReceipt).catch(() => undefined);
-    }
+    // Node has no cross-platform unlink-if-inode-matches primitive. Preserve a published
+    // output on failure rather than risk deleting a pathname replacement during rollback.
     throw error;
   }
 }
@@ -214,9 +200,7 @@ async function generateSelfSignedCert(params: {
         keyDirectory,
       );
     } catch (error) {
-      if (removeGeneratedTlsOutputIfOwned(params.certPath, certPublication.identity)) {
-        await syncDirectory(certDirectory).catch(() => undefined);
-      }
+      // Preserve the published certificate: conditional pathname removal is not atomic.
       throw error;
     }
     keyPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));

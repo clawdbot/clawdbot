@@ -14,7 +14,7 @@ import {
 } from "@openclaw/fs-safe/durability";
 import { z } from "zod";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
-import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
+import { requireDirectorySync, syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import {
   canonicalPathFromExistingAncestor,
@@ -343,9 +343,9 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         await pendingHandle.close();
       }
       await publishedDirectory.assertCurrent();
-      await publishedDirectory.sync();
+      requireDirectorySync(await publishedDirectory.sync(), "SQLite snapshot directory");
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
-      await syncDirectory(repositoryReceipt);
+      requireDirectorySync(await syncDirectory(repositoryReceipt), "SQLite snapshot repository");
       await publishedDirectory.assertCurrent();
       await publishSnapshotEntryNoOverwrite(
         path.join(stagingDir, SNAPSHOT_SQLITE_FILENAME),
@@ -361,7 +361,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         publishedEntries,
       );
       await publishedDirectory.assertCurrent();
-      await publishedDirectory.sync();
+      requireDirectorySync(await publishedDirectory.sync(), "SQLite snapshot directory");
       await assertPendingSnapshotContents(snapshotDir);
       const publishedManifest = await readSnapshotManifest(snapshotDir, snapshotId);
       if (!isDeepStrictEqual(publishedManifest, manifest)) {
@@ -386,7 +386,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       }
       await publishedDirectory.assertCurrent();
       fsSync.unlinkSync(pendingPath);
-      await publishedDirectory.sync();
+      requireDirectorySync(await publishedDirectory.sync(), "SQLite snapshot directory");
       await publishedDirectory.assertCurrent();
       const committedManifest = await readSnapshotManifest(snapshotDir, snapshotId);
       if (!isDeepStrictEqual(committedManifest, manifest)) {
@@ -799,7 +799,7 @@ async function ensurePrivateDirectory(
       }
     }
   }
-  return await ensureDurableDirectory({
+  const receipt = await ensureDurableDirectory({
     directoryPath,
     label: scopeLabel,
     expectedExistingIdentity,
@@ -831,12 +831,14 @@ async function ensurePrivateDirectory(
       applyPrivateModeSync(result.path, SNAPSHOT_DIRECTORY_MODE);
     },
   });
+  requireDirectorySync(receipt.parentSync, scopeLabel);
+  return receipt;
 }
 
 async function ensureRestoreParentDirectory(
   directoryPath: string,
 ): Promise<DurableDirectoryReceipt> {
-  return await ensureDurableDirectory({
+  const receipt = await ensureDurableDirectory({
     directoryPath,
     label: "SQLite restore target",
     create: async (targetPath) => {
@@ -849,6 +851,8 @@ async function ensureRestoreParentDirectory(
       }
     },
   });
+  requireDirectorySync(receipt.parentSync, "SQLite restore target");
+  return receipt;
 }
 
 function assertDirectory(stat: Stats, pathname: string, label: string): void {
@@ -1164,11 +1168,14 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
       cause: cleanupOutcome.error,
     });
   }
-  await syncDirectory({
-    path: trustedRootPath,
-    realPath: trustedRootPath,
-    identity: options.expectedRootIdentity,
-  });
+  requireDirectorySync(
+    await syncDirectory({
+      path: trustedRootPath,
+      realPath: trustedRootPath,
+      identity: options.expectedRootIdentity,
+    }),
+    "Private SQLite staging root",
+  );
   if (!outcome.ok) {
     throw outcome.error;
   }

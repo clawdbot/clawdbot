@@ -233,7 +233,7 @@ describe("backup archive publication", () => {
       durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
 
       await expect(publishPreparedBackupArchive({ plan, prepared, log })).rejects.toThrow(
-        /does not support crash-durable synchronization \(ENOTSUP\)/iu,
+        /does not support crash-durable directory synchronization \(ENOTSUP\)/iu,
       );
       await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("complete archive");
       expect(log).toHaveBeenCalledWith(expect.stringContaining("concurrent replacement"));

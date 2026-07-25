@@ -9,7 +9,7 @@ import {
   type BackupArchiveCleanupReceipt,
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
-import { syncDirectoryIfSupported } from "./directory-durability.js";
+import { requireDirectorySync, syncDirectoryIfSupported } from "./directory-durability.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 type BackupArchiveLogger = (message: string) => void;
@@ -101,12 +101,7 @@ async function syncPublishedArchiveCommit(
   const outcome = await syncDirectory(plan.parentReceipt, {
     label: "backup publication directory",
   });
-  if (outcome.status === "unsupported") {
-    const code = outcome.code ? ` (${outcome.code})` : "";
-    throw new Error(
-      `Backup publication directory does not support crash-durable synchronization${code}.`,
-    );
-  }
+  requireDirectorySync(outcome, "Backup publication directory");
 }
 
 function isUnsupportedHardLinkError(error: unknown): boolean {

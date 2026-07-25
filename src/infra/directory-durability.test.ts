@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { syncDirectoryIfSupported } from "./directory-durability.js";
+import { requireDirectorySync, syncDirectoryIfSupported } from "./directory-durability.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -10,6 +10,19 @@ afterEach(() => {
 });
 
 describe("directory durability compatibility", () => {
+  it("accepts completed and unnecessary strict sync outcomes", () => {
+    expect(() => requireDirectorySync({ status: "synced" }, "test directory")).not.toThrow();
+    expect(() => requireDirectorySync({ status: "not-needed" }, "test directory")).not.toThrow();
+  });
+
+  it("rejects unsupported strict sync outcomes with their platform code", () => {
+    expect(() =>
+      requireDirectorySync({ status: "unsupported", code: "ENOTSUP" }, "test directory"),
+    ).toThrow(
+      /test directory does not support crash-durable directory synchronization \(ENOTSUP\)/u,
+    );
+  });
+
   it.runIf(process.platform !== "win32")("reports a completed directory sync", async () => {
     const directoryPath = tempDirs.make("openclaw-directory-sync-");
 

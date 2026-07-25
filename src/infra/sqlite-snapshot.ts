@@ -7,6 +7,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pinDirectory, syncDirectory } from "@openclaw/fs-safe/durability";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { requireDirectorySync } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
@@ -498,12 +499,18 @@ export async function publishVerifiedSqliteFile(
     target ??= await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
     ownershipPinned = true;
-    await syncDirectory(targetDirectoryReceipt);
+    requireDirectorySync(
+      await syncDirectory(targetDirectoryReceipt),
+      "SQLite publication directory",
+    );
     await fs.unlink(stagedPath);
     const expectedIdentity = await target.stat();
     publishedIdentity = expectedIdentity;
     await fs.rmdir(stagingDir);
-    await syncDirectory(targetDirectoryReceipt);
+    requireDirectorySync(
+      await syncDirectory(targetDirectoryReceipt),
+      "SQLite publication directory",
+    );
     const linkedContent = await hashOpenPublishedFile(target, options.targetPath, expectedIdentity);
     assertExpectedContent(linkedContent, expectedContent, options.targetPath);
     await target.close();

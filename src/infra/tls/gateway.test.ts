@@ -287,7 +287,7 @@ describe("loadGatewayTlsRuntime", () => {
     await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
   });
 
-  it("removes the owned certificate when key publication loses a race", async () => {
+  it("preserves the published certificate when key publication loses a race", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
@@ -309,7 +309,7 @@ describe("loadGatewayTlsRuntime", () => {
 
     expect(result.enabled).toBe(false);
     expect(result.error).toContain("key destination appeared");
-    await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
     await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("foreign key material");
   });
 

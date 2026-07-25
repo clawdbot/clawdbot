@@ -21,6 +21,10 @@ import {
 
 const durabilityTestState = vi.hoisted(() => ({
   beforeSync: undefined as ((directoryPath: string) => void | Promise<void>) | undefined,
+  pinnedSyncOutcome: undefined as
+    | { status: "synced" }
+    | { status: "unsupported"; code?: string }
+    | undefined,
 }));
 
 vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
@@ -35,7 +39,7 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
         close: async () => pinned.close(),
         sync: async () => {
           await durabilityTestState.beforeSync?.(pinned.receipt.path);
-          return await pinned.sync();
+          return durabilityTestState.pinnedSyncOutcome ?? (await pinned.sync());
         },
       };
     },
@@ -58,6 +62,7 @@ const STATE_LEASE_MARKER = "snapshot-must-not-retain-active-lease";
 
 afterEach(() => {
   durabilityTestState.beforeSync = undefined;
+  durabilityTestState.pinnedSyncOutcome = undefined;
 });
 
 async function createTempDir(): Promise<string> {
@@ -415,6 +420,25 @@ describe("local SQLite snapshot repository", () => {
       openSpy.mockRestore();
     }
     expect(syncFailed).toBe(true);
+    await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+  });
+
+  it("rejects unsupported snapshot directory synchronization", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    durabilityTestState.pinnedSyncOutcome = { status: "unsupported", code: "ENOTSUP" };
+
+    await expect(
+      provider.create({
+        path: sourcePath,
+        identity: { role: "generic", id: "unsupported-directory-sync" },
+      }),
+    ).rejects.toThrow(
+      /SQLite snapshot directory does not support crash-durable directory synchronization \(ENOTSUP\)/u,
+    );
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
 

@@ -1,5 +1,7 @@
 import { syncDirectory, type DirectorySyncOutcome } from "@openclaw/fs-safe/durability";
 
+type DirectoryDurabilityOutcome = DirectorySyncOutcome | { status: "not-needed" };
+
 function isUnsupportedDirectorySyncError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
   return (
@@ -10,7 +12,16 @@ function isUnsupportedDirectorySyncError(error: unknown): boolean {
   );
 }
 
-/** Compatibility adapter for former best-effort call sites; crash commits use syncDirectory. */
+/** Require a real directory sync at product commit boundaries. */
+export function requireDirectorySync(outcome: DirectoryDurabilityOutcome, label: string): void {
+  if (outcome.status !== "unsupported") {
+    return;
+  }
+  const code = outcome.code ? ` (${outcome.code})` : "";
+  throw new Error(`${label} does not support crash-durable directory synchronization${code}.`);
+}
+
+/** Compatibility adapter for former best-effort call sites. */
 export async function syncDirectoryIfSupported(
   directoryPath: string,
 ): Promise<DirectorySyncOutcome> {

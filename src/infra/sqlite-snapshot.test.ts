@@ -5,6 +5,23 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+
+const durabilityTestState = vi.hoisted(() => ({
+  syncOutcome: undefined as
+    | { status: "synced" }
+    | { status: "unsupported"; code?: string }
+    | undefined,
+}));
+
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
+  return {
+    ...actual,
+    syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
+      durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
+  };
+});
+
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const tempDirs: string[] = [];
@@ -27,6 +44,7 @@ function isDirectoryOpen(flags: string | number | undefined): boolean {
 }
 
 afterEach(async () => {
+  durabilityTestState.syncOutcome = undefined;
   await Promise.all(tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true })));
 });
 
@@ -649,6 +667,20 @@ describe("createVerifiedSqliteSnapshot", () => {
     } finally {
       openSpy.mockRestore();
     }
+  });
+
+  it("removes its published target when directory sync is unsupported", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    createEmptySqliteDatabase(sqlite, sourcePath);
+    durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
+
+    await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+      /SQLite publication directory does not support crash-durable directory synchronization \(ENOTSUP\)/u,
+    );
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.runIf(process.platform !== "win32")(
