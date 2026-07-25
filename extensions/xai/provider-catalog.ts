@@ -20,6 +20,12 @@ const PROVIDER_ID = "xai";
 const XAI_MODELS_ENDPOINT = `${XAI_BASE_URL}/models`;
 const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 const XAI_GROK_OAUTH_MODELS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/models`;
+// The Grok OAuth proxy answers /v1/responses with HTTP 426 unless the caller reports a
+// Grok CLI client version at or above xAI's floor; /v1/models stays ungated, so discovery
+// looks healthy while every inference turn fails. Raise when xAI raises the minimum.
+const XAI_GROK_OAUTH_HEADERS = {
+  "x-grok-client-version": "0.1.202",
+} satisfies ModelProviderConfig["headers"];
 const XAI_MODELS_CACHE_TTL_MS = 60_000;
 const XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS = 60_000;
 // Composer emits replayable Responses reasoning, but the OAuth catalog omits that capability.
@@ -42,11 +48,27 @@ export function buildXaiProvider(
   };
 }
 
-function buildXaiOAuthFallbackProvider(): ModelProviderConfig {
+/**
+ * The client version is a contract with xAI's own Grok proxy, and provider-level
+ * headers survive an operator's `models.providers.xai.baseUrl` override (config
+ * wins over the catalog baseUrl when the two merge). Withhold the header unless
+ * the effective route is still the canonical proxy so a custom endpoint never
+ * receives vendor identity it did not ask for.
+ */
+function resolveGrokOAuthHeaders(configuredBaseUrl?: string): ModelProviderConfig["headers"] {
+  const effectiveBaseUrl = configuredBaseUrl?.trim().replace(/\/+$/, "");
+  return !effectiveBaseUrl || effectiveBaseUrl === XAI_GROK_OAUTH_BASE_URL
+    ? XAI_GROK_OAUTH_HEADERS
+    : undefined;
+}
+
+function buildXaiOAuthFallbackProvider(configuredBaseUrl?: string): ModelProviderConfig {
+  const headers = resolveGrokOAuthHeaders(configuredBaseUrl);
   return {
     baseUrl: XAI_GROK_OAUTH_BASE_URL,
     api: "openai-responses",
     auth: "oauth",
+    ...(headers ? { headers } : {}),
     models: buildXaiCatalogModels(),
   };
 }
@@ -173,19 +195,20 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
 
 export async function buildLiveXaiOAuthProvider(params: {
   discoveryApiKey: string;
+  /** Operator-configured xAI base URL, used to gate the Grok client-version header. */
+  configuredBaseUrl?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  const fallback = buildXaiOAuthFallbackProvider();
+  // Destructure the fallback instead of picking fields: the live path must carry
+  // every provider-level setting the fallback declares (notably the Grok client
+  // version header), or discovery success would silently drop it.
+  const { models, ...providerConfig } = buildXaiOAuthFallbackProvider(params.configuredBaseUrl);
   return await buildLiveModelProviderConfig({
     providerId: PROVIDER_ID,
     endpoint: XAI_GROK_OAUTH_MODELS_ENDPOINT,
-    providerConfig: {
-      baseUrl: fallback.baseUrl,
-      api: fallback.api,
-      auth: fallback.auth,
-    },
-    models: fallback.models,
+    providerConfig,
+    models,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
     signal: params.signal,

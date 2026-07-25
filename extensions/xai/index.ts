@@ -1,10 +1,11 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Xai plugin entrypoint registers its OpenClaw integration.
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyXaiRuntimeModelCompat,
   buildXaiImageGenerationProvider,
@@ -52,6 +53,11 @@ import {
 } from "./xai-oauth.js";
 
 const PROVIDER_ID = "xai";
+
+/** Reads the operator's xAI base-URL override so the catalog can scope vendor headers to it. */
+function resolveConfiguredXaiBaseUrl(config: OpenClawConfig): string | undefined {
+  return normalizeOptionalString(config.models?.providers?.[PROVIDER_ID]?.baseUrl);
+}
 
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
   /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
@@ -213,9 +219,11 @@ export default defineSingleProviderPluginEntry({
               : {}),
           });
           if (runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey) {
+            const configuredBaseUrl = resolveConfiguredXaiBaseUrl(ctx.config);
             return {
               provider: await buildLiveXaiOAuthProvider({
                 discoveryApiKey: runtimeAuth.apiKey,
+                ...(configuredBaseUrl ? { configuredBaseUrl } : {}),
               }),
             };
           }
