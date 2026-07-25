@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  SessionDiscussionInfoLoader,
-  SessionDiscussionOpener,
-  SessionDiscussionStateListener,
-} from "./session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./session-discussion-panel.ts";
 import "./session-discussion-panel.ts";
+
+type SessionDiscussionInfoLoader = SessionDiscussionPanelConfig["loadInfo"];
+type SessionDiscussionOpener = SessionDiscussionPanelConfig["openDiscussion"];
+type SessionDiscussionStateListener = SessionDiscussionPanelConfig["onStateChange"];
 
 type DiscussionPanelElement = HTMLElement & {
   sessionKey: string;
