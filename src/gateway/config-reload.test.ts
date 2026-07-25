@@ -4066,7 +4066,7 @@ describe("startGatewayConfigReloader", () => {
       harness.watcher.emit("change");
     }
     const latestConfig = {
-      gateway: { reload: { debounceMs: 0 } },
+      gateway: { reload: {} },
       hooks: { enabled: false },
     } satisfies OpenClawConfig;
     harness.emitWrite({
@@ -4128,7 +4128,7 @@ describe("startGatewayConfigReloader", () => {
 
     expect(readSnapshot).toHaveBeenCalledOnce();
     const latestConfig = {
-      gateway: { reload: { debounceMs: 0 } },
+      gateway: { reload: {} },
       hooks: { enabled: false },
     } satisfies OpenClawConfig;
     harness.emitWrite({
