@@ -1,7 +1,14 @@
 // Line tests cover message cards plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
+import {
+  datetimePickerAction,
+  messageAction,
+  normalizeLineAction,
+  postbackAction,
+  uriAction,
+  type Action,
+} from "./actions.js";
 import { registerLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
@@ -376,7 +383,7 @@ describe("action label/data surrogate-safe truncation", () => {
   it("messageAction drops a half emoji instead of leaving a lone surrogate", () => {
     const action = messageAction(labelWithEmoji) as { label: string };
 
-    expect(action.label).toBe("1234567890123456789");
+    expect(action.label).toBe(labelWithEmoji);
     expect(loneHighSurrogate.test(action.label)).toBe(false);
   });
 
@@ -389,11 +396,11 @@ describe("action label/data surrogate-safe truncation", () => {
   it("uriAction drops a half emoji instead of leaving a lone surrogate", () => {
     const action = uriAction(labelWithEmoji, "https://example.com") as { label: string };
 
-    expect(action.label).toBe("1234567890123456789");
+    expect(action.label).toBe(labelWithEmoji);
     expect(loneHighSurrogate.test(action.label)).toBe(false);
   });
 
-  it("postbackAction truncates labels but visibly disables overlong callback data", () => {
+  it("postbackAction preserves valid grapheme labels but disables overlong callback data", () => {
     const exactData = `${"d".repeat(298)}😀`;
     const overlongData = `${"d".repeat(299)}😀`;
     const action = postbackAction(labelWithEmoji, "data") as { label: string };
@@ -402,7 +409,7 @@ describe("action label/data surrogate-safe truncation", () => {
 
     expect(exactData).toHaveLength(300);
     expect(overlongData).toHaveLength(301);
-    expect(action.label).toBe("1234567890123456789");
+    expect(action.label).toBe(labelWithEmoji);
     expect(loneHighSurrogate.test(action.label)).toBe(false);
     expect(exact.data).toBe(exactData);
     expect(unavailable).toEqual({
@@ -412,19 +419,19 @@ describe("action label/data surrogate-safe truncation", () => {
     });
   });
 
-  it("postbackAction truncates displayText on surrogate boundaries but keeps undefined", () => {
-    const displayText = `${"t".repeat(299)}😀`;
+  it("postbackAction truncates displayText by grapheme cluster but keeps undefined", () => {
+    const displayText = `${"t".repeat(300)}😀`;
     const withDisplay = postbackAction("Label", "data", displayText) as {
       displayText?: string;
     };
     const withoutDisplay = postbackAction("Label", "data") as { displayText?: string };
 
-    expect(withDisplay.displayText).toBe("t".repeat(299));
+    expect(withDisplay.displayText).toBe("t".repeat(300));
     expect(loneHighSurrogate.test(withDisplay.displayText ?? "")).toBe(false);
     expect(withoutDisplay.displayText).toBeUndefined();
   });
 
-  it("datetimePickerAction truncates labels but visibly disables overlong callback data", () => {
+  it("datetimePickerAction preserves valid grapheme labels but disables overlong callback data", () => {
     const exactData = `${"d".repeat(298)}😀`;
     const overlongData = `${"d".repeat(299)}😀`;
     const action = datetimePickerAction(labelWithEmoji, "data", "datetime") as { label: string };
@@ -433,7 +440,7 @@ describe("action label/data surrogate-safe truncation", () => {
 
     expect(exactData).toHaveLength(300);
     expect(overlongData).toHaveLength(301);
-    expect(action.label).toBe("1234567890123456789");
+    expect(action.label).toBe(labelWithEmoji);
     expect(loneHighSurrogate.test(action.label)).toBe(false);
     expect(exact.data).toBe(exactData);
     expect(unavailable).toEqual({
@@ -501,7 +508,7 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(loneHighSurrogate.test(altText)).toBe(false);
   });
 
-  it("media control postback labels truncate on surrogate boundaries", () => {
+  it("media control postback labels count grapheme clusters", () => {
     const card = createMediaPlayerCard({
       title: "Track",
       controls: {
@@ -516,7 +523,7 @@ describe("action label/data surrogate-safe truncation", () => {
       .flatMap((content) => content.contents ?? [])
       .find((button) => button.action?.data === "extra")?.action;
 
-    expect(extraAction?.label).toBe("x".repeat(14));
+    expect(extraAction?.label).toBe(`${"x".repeat(14)}😀`);
     expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
   });
 
@@ -574,6 +581,141 @@ describe("action label/data surrogate-safe truncation", () => {
       label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",
     });
+  });
+
+  it("normalizes raw actions at exported template builder boundaries", () => {
+    const oversizedPostback: Action = {
+      type: "postback",
+      label: "Open",
+      data: "x".repeat(301),
+    };
+    const oversizedUri: Action = {
+      type: "uri",
+      label: "Open",
+      uri: `https://e.example/?q=${"x".repeat(1200)}`,
+    };
+    const unavailableAction = {
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    };
+    const unavailableLink = {
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+    };
+
+    const buttons = createButtonTemplate(undefined, "Pick", [oversizedPostback], {
+      defaultAction: oversizedUri,
+    }).template as {
+      actions: Action[];
+      defaultAction?: Action;
+    };
+    expect(buttons.actions).toEqual([unavailableAction]);
+    expect(buttons.defaultAction).toEqual(unavailableLink);
+
+    const carousel = createTemplateCarousel([
+      {
+        text: "Pick",
+        actions: [oversizedPostback],
+        defaultAction: oversizedUri,
+      },
+    ]).template as {
+      columns: Array<{ actions: Action[]; defaultAction?: Action }>;
+    };
+    expect(carousel.columns[0]?.actions).toEqual([unavailableAction]);
+    expect(carousel.columns[0]?.defaultAction).toEqual(unavailableLink);
+
+    const imageCarousel = createImageCarousel([
+      { imageUrl: "https://e.example/image.jpg", action: oversizedPostback },
+    ]).template as { columns: Array<{ action: Action }> };
+    expect(imageCarousel.columns[0]?.action).toEqual(unavailableAction);
+  });
+
+  it("normalizes every length-constrained raw action field", () => {
+    expect(
+      normalizeLineAction({
+        type: "uri",
+        label: "Open",
+        uri: "https://e.example",
+        altUri: { desktop: `https://e.example/?q=${"x".repeat(1200)}` },
+      }),
+    ).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+    });
+
+    const postback = normalizeLineAction({
+      type: "postback",
+      label: "Open",
+      data: "action=open",
+      displayText: "d".repeat(301),
+      text: "t".repeat(301),
+      fillInText: "f".repeat(301),
+    });
+    expect(postback).toMatchObject({
+      displayText: "d".repeat(300),
+      text: "t".repeat(300),
+      fillInText: "f".repeat(300),
+    });
+
+    expect(
+      normalizeLineAction({ type: "message", label: "Open", text: "x".repeat(301) }),
+    ).toMatchObject({ text: "x".repeat(300) });
+    const emojiText = "😀".repeat(300);
+    expect(messageAction("Open", emojiText)).toMatchObject({ text: emojiText });
+    expect(
+      normalizeLineAction({
+        type: "clipboard",
+        label: "Copy",
+        clipboardText: "x".repeat(1001),
+      }),
+    ).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: clipboard text exceeds LINE's limit.",
+    });
+  });
+
+  it("normalizes raw actions at exported flex builder boundaries", () => {
+    const oversizedUri: Action = {
+      type: "uri",
+      label: "Open",
+      uri: `https://e.example/?q=${"x".repeat(1200)}`,
+    };
+    const oversizedPostback: Action = {
+      type: "postback",
+      label: "Open",
+      data: "x".repeat(301),
+    };
+
+    const image = createImageCard("https://e.example/image.jpg", "Image", undefined, {
+      action: oversizedUri,
+    });
+    expect((image.hero as { action?: Action }).action).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+    });
+
+    const card = createActionCard("Title", "Body", [
+      { label: "Open", action: oversizedPostback },
+    ]);
+    const button = (card.footer as { contents: Array<{ action: Action }> }).contents[0];
+    expect(button?.action).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    });
+
+    const validLongLabel = "x".repeat(40);
+    const labeledCard = createActionCard("Title", "Body", [
+      { label: validLongLabel, action: { type: "message", label: validLongLabel, text: "Open" } },
+    ]);
+    const labeledButton = (labeledCard.footer as { contents: Array<{ action: Action }> })
+      .contents[0];
+    expect(labeledButton?.action.label).toBe(validLongLabel);
   });
 
   it("media control cards visibly disable overlong opaque callbacks", () => {

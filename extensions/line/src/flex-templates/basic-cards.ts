@@ -1,5 +1,6 @@
 // Line plugin module implements basic cards behavior.
 import { attachFooterText } from "./common.js";
+import { normalizeLineAction } from "../actions.js";
 import type {
   Action,
   CardAction,
@@ -209,7 +210,8 @@ export function createImageCard(
       size: "full",
       aspectRatio: options?.aspectRatio ?? "20:13",
       aspectMode: options?.aspectMode ?? "cover",
-      action: options?.action,
+      action:
+        options?.action === undefined ? undefined : normalizeLineAction(options.action, 40),
     } as FlexImage,
     body: {
       type: "box",
@@ -284,7 +286,7 @@ export function createActionCard(
         (action, index) =>
           ({
             type: "button",
-            action: action.action,
+            action: normalizeLineAction(action.action, 40),
             style: index === 0 ? "primary" : "secondary",
             margin: index > 0 ? "sm" : undefined,
           }) as FlexButton,
