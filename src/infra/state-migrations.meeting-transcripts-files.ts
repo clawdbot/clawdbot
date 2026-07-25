@@ -4,7 +4,7 @@ import fsSync, { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
@@ -13,7 +13,7 @@ import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
 import { sha256File, sha256Hex } from "./crypto-digest.js";
 import { assertNoSymlinkParents } from "./fs-safe-advanced.js";
-import { resolveNodeSqliteLocation } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
   "metadata.json",
@@ -207,7 +207,7 @@ async function optionalRegularFile(filePath: string): Promise<boolean> {
 }
 
 export function openLegacyMeetingTranscriptStage(databasePath: string): DatabaseSync {
-  const database = new DatabaseSync(resolveNodeSqliteLocation(databasePath));
+  const database = openNodeSqliteDatabase(databasePath);
   database.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE staged_utterances (

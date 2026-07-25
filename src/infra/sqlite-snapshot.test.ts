@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { createPrivateSqliteDirectory, createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const tempDirs: string[] = [];
 

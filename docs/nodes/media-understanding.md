@@ -354,7 +354,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
             maxChars: 500,
             models: [
               { provider: "openai", model: "gpt-5.6-sol" },
-              { provider: "anthropic", model: "claude-opus-4-8" },
+              { provider: "anthropic", model: "claude-opus-5" },
               {
                 type: "cli",
                 command: "gemini",

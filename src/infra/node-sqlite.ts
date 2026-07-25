@@ -1,13 +1,16 @@
 // Loads node:sqlite with OpenClaw warning handling.
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
+
+type NodeSqliteDatabaseOptions = ConstructorParameters<
+  typeof import("node:sqlite").DatabaseSync
+>[1];
 
 export function resolveSqliteFilesystemPath(pathname: string): string {
   if (process.platform !== "win32") {
@@ -23,25 +26,6 @@ export function resolveNodeSqliteLocation(location: string): string {
     return location;
   }
   return resolveSqliteFilesystemPath(location);
-}
-
-export function resolveNodeSqliteReadOnlyLocation(
-  pathname: string,
-  hasWalSidecars: boolean,
-): string {
-  if (process.platform === "win32") {
-    const resolvedPath = path.resolve(pathname);
-    // SQLite URI authorities reject UNC hosts, while ordinary Windows paths
-    // preserve UNC and already-namespaced locations through the Windows VFS.
-    if (hasWalSidecars || resolvedPath.startsWith("\\\\")) {
-      return path.toNamespacedPath(resolvedPath);
-    }
-    return `${pathToFileURL(resolvedPath).href}?mode=ro&immutable=1`;
-  }
-  if (hasWalSidecars) {
-    return pathname;
-  }
-  return `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
 }
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
@@ -97,4 +81,18 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
       cause: err,
     });
   }
+}
+
+/** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */
+export function openNodeSqliteDatabase(
+  location: string,
+  options?: NodeSqliteDatabaseOptions,
+): import("node:sqlite").DatabaseSync {
+  const sqlite = requireNodeSqlite();
+  // Callers may pass file: URIs or already-namespaced paths from specialized
+  // resolvers; location normalization must remain idempotent for those forms.
+  const resolvedLocation = resolveNodeSqliteLocation(location);
+  return options === undefined
+    ? new sqlite.DatabaseSync(resolvedLocation)
+    : new sqlite.DatabaseSync(resolvedLocation, options);
 }

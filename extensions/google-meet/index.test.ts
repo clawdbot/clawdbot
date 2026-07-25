@@ -2884,7 +2884,7 @@ describe("google-meet plugin", () => {
     leaveConfirmationRequired?: boolean;
     nonFinalTranscriptGate?: Promise<void>;
     onNonFinalTranscriptRead?: () => void;
-    skipNonFinalTranscriptGateReads?: number;
+    shouldGateNonFinalTranscriptRead?: () => boolean;
     transcript?: {
       droppedLines?: number;
       epoch?: string;
@@ -2951,10 +2951,7 @@ describe("google-meet plugin", () => {
           const script = String(request.body?.fn);
           if (script.includes("const expectedSessionId =")) {
             const finalizing = script.includes("if (true &&");
-            if (
-              !finalizing &&
-              transcriptReadIndex >= (options?.skipNonFinalTranscriptGateReads ?? 0)
-            ) {
+            if (!finalizing && options?.shouldGateNonFinalTranscriptRead?.() === true) {
               options?.onNonFinalTranscriptRead?.();
               await options?.nonFinalTranscriptGate;
             }
@@ -3151,12 +3148,13 @@ describe("google-meet plugin", () => {
       markReadStarted = resolve;
     });
     let activeReads = 0;
+    let gateNonFinalTranscriptReads = false;
     try {
       const callGatewayFromCli = mockLocalMeetBrowserRequestWithTabState({
         transcript: { lines: [{ text: "partial" }] },
         finalTranscript: { lines: [{ text: "partial" }, { text: "complete caption" }] },
         nonFinalTranscriptGate: readGate,
-        skipNonFinalTranscriptGateReads: 1,
+        shouldGateNonFinalTranscriptRead: () => gateNonFinalTranscriptReads,
         onNonFinalTranscriptRead: () => {
           activeReads += 1;
           markReadStarted?.();
@@ -3167,6 +3165,7 @@ describe("google-meet plugin", () => {
         url: MEET_URL,
       })) as { session: { id: string } };
 
+      gateNonFinalTranscriptReads = true;
       const lateRead = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
         sessionId: joined.session.id,
       });
@@ -4389,19 +4388,15 @@ describe("google-meet plugin", () => {
     }
   });
 
-  it("keeps waiting while the Meet microphone is muted during intro readiness", async () => {
+  it("keeps default intro speech blocked while the Meet microphone is muted", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
-      let inspectCount = 0;
-      mockLocalMeetBrowserRequest(() => {
-        inspectCount += 1;
-        return meetBrowserState({ micMuted: true });
-      });
+      mockLocalMeetBrowserRequest(meetBrowserState({ micMuted: true }));
       const { methods } = setup({
         chrome: {
           audioBridgeCommand: ["bridge", "start"],
-          waitForInCallMs: 100,
+          waitForInCallMs: 1,
         },
       });
       const handler = methods.get("googlemeet.join") as
@@ -4425,7 +4420,6 @@ describe("google-meet plugin", () => {
       expect(health.micMuted).toBe(true);
       expect(health.speechReady).toBe(false);
       expect(health.speechBlockedReason).toBe("meet-microphone-muted");
-      expect(inspectCount).toBeGreaterThanOrEqual(2);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }

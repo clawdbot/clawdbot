@@ -3,8 +3,13 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
-import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import {
+  confirmSqliteFileIntegrity,
+  isTerminalSqliteIntegrityError,
+  type SqliteIntegrityConfirmation,
+} from "../infra/sqlite-integrity.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -113,11 +118,30 @@ const terminalOpenLatch = createSqliteTerminalOpenLatch({
   closeByPath: closeOpenClawAgentDatabaseByPath,
 });
 
+/** Reconfirm an advisory worker failure on the live owner connection. */
+export function confirmOpenClawAgentDatabaseIntegrity(
+  pathname: string,
+): SqliteIntegrityConfirmation {
+  const resolvedPath = path.resolve(pathname);
+  closeOpenClawAgentDatabaseByPath(resolvedPath);
+  // Closing breaks process ownership of the pathname. A replacement must
+  // revalidate and claim its schema before the path can become trusted again.
+  validatedAgentDatabasePaths.delete(resolvedPath);
+  return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
+}
+
 /** Latch background verification damage so later opens fail without rescanning. */
-export function recordOpenClawAgentDatabaseOpenFailure(pathname: string, error: Error): void {
-  // Quarantine revokes this process's trust because doctor may replace the file.
-  validatedAgentDatabasePaths.delete(path.resolve(pathname));
-  terminalOpenLatch.record(pathname, error);
+export function recordOpenClawAgentDatabaseOpenFailure(
+  pathname: string,
+  error: Error,
+  generation?: SqliteFileGeneration,
+): boolean {
+  const recorded = terminalOpenLatch.record(pathname, error, generation);
+  if (recorded) {
+    // Quarantine revokes this process's trust because doctor may replace the file.
+    validatedAgentDatabasePaths.delete(path.resolve(pathname));
+  }
+  return recorded;
 }
 
 /**
@@ -155,10 +179,9 @@ function logSlowAgentDatabaseOpen(params: {
 export function inspectOpenClawAgentDatabaseOwner(
   pathname: string,
 ): OpenClawAgentDatabaseOwnerInspection {
-  const sqlite = requireNodeSqlite();
   let db: DatabaseSync | undefined;
   try {
-    db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname), { readOnly: true });
+    db = openNodeSqliteDatabase(pathname, { readOnly: true });
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);
     const existing = readExistingAgentSchemaMeta(db);
@@ -210,10 +233,9 @@ export function openOpenClawAgentDatabase(
       cachedDatabases.delete(pathname);
       cachedDatabaseOpenFailures.delete(pathname);
     }
-    const sqlite = requireNodeSqlite();
     // After the collision probe, this sentinel is only a cache key: SQLite opens :memory:,
     // and no directory, lease, registry row, WAL sidecar, or file write may be created.
-    const db = new sqlite.DatabaseSync(":memory:");
+    const db = openNodeSqliteDatabase(":memory:");
     configureSqlitePreSchemaPragmas(db, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     });
@@ -274,8 +296,7 @@ export function openOpenClawAgentDatabase(
     // Free a slot before constructing the new handle: under real descriptor
     // pressure the 65th open would otherwise fail before eviction could run.
     evictLruAgentDatabaseHandles();
-    const sqlite = requireNodeSqlite();
-    const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname));
+    const db = openNodeSqliteDatabase(pathname);
     openedDb = db;
     // Eviction churn must avoid schema/registry busy waits on the event loop while
     // reconcile workers hold write transactions on these same agent databases.

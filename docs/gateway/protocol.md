@@ -577,7 +577,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
-    - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session.
+    - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session. Supplying `runId` keeps cancellation scoped to that run. Set `clearQueued: true` on a key-only non-global request to also discard followup and lane queues owned by that session. Existing callers that omit `clearQueued` preserve those queues. The literal `global` key keeps the existing agent-qualified `chat.abort` ownership rules and does not perform non-global followup or lane cleanup.
     - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. Spawn lineage (`spawnedBy`, `spawnedWorkspaceDir`, `spawnedCwd`, `spawnDepth`, `subagentRole`, `subagentControlScope`) is no longer publicly patchable; those facts are written once by trusted creation paths, and requests that still send them are rejected.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.

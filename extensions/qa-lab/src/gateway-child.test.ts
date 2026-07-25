@@ -1241,9 +1241,9 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
-  it("allows loaded runners time to reap force-killed gateway process groups", () => {
+  it("lets the gateway finish its bounded shutdown before process-tree escalation", () => {
     expect(testing.resolveQaGatewayChildStopTimeouts()).toEqual({
-      gracefulTimeoutMs: 5_000,
+      gracefulTimeoutMs: 30_000,
       forceTimeoutMs: 10_000,
     });
     expect(
