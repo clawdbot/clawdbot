@@ -280,8 +280,23 @@ async function readGatewayStartupConfig(params: {
   cfg: OpenClawConfig;
   snapshot: ConfigFileSnapshot | null;
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+  configLayersReadOnly?: boolean;
 }> {
-  const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
+  const [{ loadConfigLayers }, { readConfigFileSnapshotWithPluginMetadata }] = await Promise.all([
+    import("./config-layers.js"),
+    import("../../config/config.js"),
+  ]);
+  const layeredConfig = await params.startupTrace.measure("cli.config-layers", () =>
+    loadConfigLayers(params.opts.configLayer),
+  );
+  if (layeredConfig) {
+    return {
+      cfg: layeredConfig.snapshot.config,
+      snapshot: layeredConfig.snapshot,
+      startupConfigSnapshotRead: layeredConfig,
+      configLayersReadOnly: true,
+    };
+  }
   let blockedRecoveryConfig: OpenClawConfig | null = null;
   const snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
     await params.startupTrace.measure("cli.config-snapshot", () =>
@@ -759,6 +774,15 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
 
   setConsoleTimestampPrefix(true);
 
+  const configLayersRequested =
+    typeof opts.configLayer === "string" ||
+    (Array.isArray(opts.configLayer) && opts.configLayer.length > 0);
+  if (devMode && configLayersRequested) {
+    defaultRuntime.error("--dev cannot be combined with --config-layer");
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
+    return;
+  }
+
   if (devMode) {
     if (opts.reset) {
       // Recheck immediately before full reset; gateway module loading above can take seconds.
@@ -780,11 +804,16 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
 
   gatewayLog.info("loading configuration…");
-  const { cfg, lowerPrecedenceEnv, snapshot, startupConfigSnapshotRead } =
-    await readGatewayStartupConfigWithShellEnv({
-      opts,
-      startupTrace,
-    });
+  const {
+    cfg,
+    lowerPrecedenceEnv,
+    snapshot,
+    startupConfigSnapshotRead,
+    configLayersReadOnly = false,
+  } = await readGatewayStartupConfigWithShellEnv({
+    opts,
+    startupTrace,
+  });
   if (
     !enforceGatewayRunFutureConfigGuard({
       opts,
@@ -1158,8 +1187,12 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       beginBoot,
       completeBoot,
       start: async ({ startupStartedAt, requestHotReloadRecovery } = {}) => {
-        const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
-        startupConfigSnapshotReadForNextStart = undefined;
+        const startupConfigSnapshotReadForThisStart = configLayersReadOnly
+          ? startupConfigSnapshotRead
+          : startupConfigSnapshotReadForNextStart;
+        if (!configLayersReadOnly) {
+          startupConfigSnapshotReadForNextStart = undefined;
+        }
         return await startGatewayServer(port, {
           bind,
           auth: authOverride,
@@ -1169,6 +1202,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
             : {}),
+          ...(configLayersReadOnly ? { configLayersReadOnly: true } : {}),
           ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
           ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
           ...(devMode

@@ -30,6 +30,10 @@ field map and defaults.
 **New to configuration?** Start with `openclaw onboard` for interactive setup, or check out the [Configuration Examples](/gateway/configuration-examples) guide for complete copy-paste configs.
 </Tip>
 
+For launchers that need multiple independently owned, ordered inputs, see
+[Configuration layers](/gateway/config-layers). Layers are opt-in, read-only,
+and composed only when `--config-layer` is supplied.
+
 ## Minimal config
 
 ```json5

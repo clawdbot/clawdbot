@@ -63,6 +63,10 @@ openclaw gateway run   # equivalent, explicit form
 <ParamField path="--password-file <path>" type="string">
   Read the Gateway password from a file.
 </ParamField>
+<ParamField path="--config-layer <id=path>" type="string">
+  Add an ordered, read-only startup config layer. Repeat the option to compose
+  multiple ordinary JSON5 files. See [Configuration layers](/gateway/config-layers).
+</ParamField>
 <ParamField path="--tailscale <mode>" type="string">
   Tailscale exposure: `off`, `serve`, `funnel`.
 </ParamField>

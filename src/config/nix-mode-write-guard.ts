@@ -1,10 +1,34 @@
 // Guards config writes that are disallowed in Nix-managed installs.
-import { resolveIsNixMode } from "./paths.js";
+import path from "node:path";
+import { resolveConfigPath, resolveIsNixMode } from "./paths.js";
 
 /** Agent-first Nix install docs shown when runtime config writes are blocked. */
 const NIX_OPENCLAW_AGENT_FIRST_URL = "https://github.com/openclaw/nix-openclaw#quick-start";
 /** Public OpenClaw Nix overview shown with immutable-config errors. */
 const OPENCLAW_NIX_OVERVIEW_URL = "https://docs.openclaw.ai/install/nix";
+
+type RuntimeConfigWriteBlock = { configPath: string; reason: string };
+
+const runtimeConfigWriteBlocks = new Set<RuntimeConfigWriteBlock>();
+
+/** Block persistence to one runtime-owned config path until cleanup. */
+export function blockConfigWritesForRuntime(params: RuntimeConfigWriteBlock): () => void {
+  const block = { ...params, configPath: path.resolve(params.configPath) };
+  runtimeConfigWriteBlocks.add(block);
+  return () => {
+    runtimeConfigWriteBlocks.delete(block);
+  };
+}
+
+/** Error thrown when runtime ownership makes the canonical config immutable. */
+export class RuntimeConfigMutationBlockedError extends Error {
+  readonly code = "OPENCLAW_CONFIG_RUNTIME_IMMUTABLE";
+
+  constructor(reason: string, configPath?: string) {
+    super([reason, ...(configPath ? [`Config path: ${configPath}`] : [])].join("\n"));
+    this.name = "RuntimeConfigMutationBlockedError";
+  }
+}
 
 /** Error thrown when a mutating config path is attempted while Nix owns config state. */
 export class NixModeConfigMutationError extends Error {
@@ -36,6 +60,13 @@ export function assertConfigWriteAllowedInCurrentMode(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): void {
+  const resolvedConfigPath = path.resolve(params.configPath ?? resolveConfigPath(params.env));
+  const runtimeConfigWriteBlock = Array.from(runtimeConfigWriteBlocks).find(
+    (block) => block.configPath === resolvedConfigPath,
+  );
+  if (runtimeConfigWriteBlock) {
+    throw new RuntimeConfigMutationBlockedError(runtimeConfigWriteBlock.reason, params.configPath);
+  }
   if (!resolveIsNixMode(params.env)) {
     return;
   }

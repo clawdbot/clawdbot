@@ -1625,6 +1625,7 @@
                     "group": "Configuration",
                     "pages": [
                       "gateway/configuration",
+                      "gateway/config-layers",
                       "gateway/configuration-reference",
                       "gateway/config-agents",
                       "gateway/config-channels",

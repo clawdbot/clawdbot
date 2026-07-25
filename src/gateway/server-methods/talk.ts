@@ -737,7 +737,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const snapshot = await readConfigFileSnapshot();
+    const snapshot = context.configSnapshot ?? (await readConfigFileSnapshot());
     const runtimeConfig = context.getRuntimeConfig();
     const configPayload: Record<string, unknown> = {};
 

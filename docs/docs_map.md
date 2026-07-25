@@ -3383,6 +3383,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Commands (chat command handling)
   - H2: Related
 
+## gateway/config-layers.md
+
+- Route: /gateway/config-layers
+- Headings:
+  - H2: How composition works
+  - H2: Why OpenClaw owns composition
+  - H2: Native config handling
+  - H2: Lobster example
+  - H3: 1. Scout global config
+  - H3: 2. Tenant network config
+  - H3: 3. Operator-local config
+  - H2: V1 lifecycle and write boundary
+
 ## gateway/config-tools.md
 
 - Route: /gateway/config-tools

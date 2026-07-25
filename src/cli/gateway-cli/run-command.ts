@@ -30,6 +30,11 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
     .option("--password <password>", "Password for auth mode=password")
     .option("--password-file <path>", "Read gateway password from file")
     .option(
+      "--config-layer <id=path>",
+      "Add an ordered configuration layer (repeatable)",
+      (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
+    )
+    .option(
       "--tailscale <mode>",
       `Tailscale exposure mode (${formatModeChoices(GATEWAY_TAILSCALE_MODES)})`,
     )

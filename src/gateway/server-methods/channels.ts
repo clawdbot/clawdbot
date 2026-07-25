@@ -688,7 +688,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const accountId = normalizeOptionalString(parsedParams.accountId);
-    const snapshot = await readConfigFileSnapshot();
+    const snapshot = context.configSnapshot ?? (await readConfigFileSnapshot());
     if (!snapshot.valid) {
       respond(
         false,
