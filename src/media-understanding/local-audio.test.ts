@@ -117,6 +117,7 @@ describe("local audio selection", () => {
       "sherpa-onnx-offline",
       "whisper-cli",
     ]);
+    expect(selection.entries.flatMap((entry) => entry.args ?? [])).toContain("{{AttachmentPath}}");
 
     recordLocalAudioBackendObservation({
       command: "/custom/bin/whisper-cli",

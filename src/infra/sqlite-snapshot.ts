@@ -16,6 +16,11 @@ import {
 } from "./node-sqlite.js";
 import { resolveSystemBin } from "./resolve-system-bin.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import {
+  openSqliteDirectoryForDurability,
+  syncSqliteDirectoryForDurability,
+  type SqlitePathIdentityReceipt,
+} from "./sqlite-path-durability.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
 const SQLITE_DIRECTORY_MODE = 0o700;
@@ -563,11 +568,25 @@ export async function publishVerifiedSqliteFile(
   options: PublishVerifiedSqliteFileOptions,
 ): Promise<void> {
   await assertTargetAbsent(options.targetPath);
-  const targetDirectory = path.dirname(options.targetPath);
-  const stagingDir = await createPrivateSqliteTempDirectory(
-    targetDirectory,
-    `.sqlite-publish-${randomUUID()}-`,
+  const targetDirectory = path.resolve(path.dirname(options.targetPath));
+  const targetDirectoryReceipt: SqlitePathIdentityReceipt = {
+    path: targetDirectory,
+    identity: await fs.lstat(targetDirectory),
+  };
+  const targetDirectoryPin = await openSqliteDirectoryForDurability(
+    targetDirectoryReceipt,
+    "SQLite publication directory",
   );
+  let stagingDir: string;
+  try {
+    stagingDir = await createPrivateSqliteTempDirectory(
+      targetDirectory,
+      `.sqlite-publish-${randomUUID()}-`,
+    );
+  } catch (error) {
+    await targetDirectoryPin.close().catch(() => undefined);
+    throw error;
+  }
   const stagedPath = path.join(stagingDir, "database.sqlite");
   let stagingIdentity: Stats | undefined;
   let source: FileHandle | undefined;
@@ -651,12 +670,12 @@ export async function publishVerifiedSqliteFile(
     target ??= await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
     ownershipPinned = true;
-    await syncDirectoryBestEffort(targetDirectory);
+    await syncSqliteDirectoryForDurability(targetDirectoryReceipt);
     await fs.unlink(stagedPath);
     const expectedIdentity = await target.stat();
     publishedIdentity = expectedIdentity;
     await fs.rmdir(stagingDir);
-    await syncDirectoryBestEffort(targetDirectory);
+    await syncSqliteDirectoryForDurability(targetDirectoryReceipt);
     const linkedContent = await hashOpenPublishedFile(target, options.targetPath, expectedIdentity);
     assertExpectedContent(linkedContent, expectedContent, options.targetPath);
     await target.close();
@@ -733,7 +752,7 @@ export async function publishVerifiedSqliteFile(
         !ownershipPinned,
       );
       if (removed) {
-        await syncDirectoryBestEffort(targetDirectory).catch(() => undefined);
+        await syncSqliteDirectoryForDurability(targetDirectoryReceipt).catch(() => undefined);
       }
     }
     if (stagingIdentity) {
@@ -752,6 +771,7 @@ export async function publishVerifiedSqliteFile(
     if (source) {
       await source.close().catch(() => undefined);
     }
+    await targetDirectoryPin.close().catch(() => undefined);
   }
 }
 
@@ -810,7 +830,9 @@ export async function createVerifiedSqliteSnapshot(
       await loadSqliteVecExtension({ db: source });
       assertSqliteIntegrity(source, options.sourcePath);
       options.validate?.(source, options.sourcePath);
-      source.prepare("VACUUM INTO ?").run(resolveSqliteFilesystemPath(stagedPath));
+      // Copy in incremental steps so concurrent writers are blocked only while
+      // each batch is read. Compaction happens after releasing the live source.
+      await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
     } finally {
       source.close();
     }
@@ -822,12 +844,15 @@ export async function createVerifiedSqliteSnapshot(
     try {
       snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
       await loadSqliteVecExtension({ db: snapshot });
+      // Online backup preserves WAL mode. Switch the private copy to rollback
+      // journaling so verification and restore need only the published file.
+      snapshot.exec("PRAGMA journal_mode = DELETE;");
       if (options.transform) {
         await options.transform(snapshot);
-        // A transform may delete sensitive rows. Compact again so the
-        // published artifact cannot retain their bytes in free pages.
-        snapshot.exec("VACUUM;");
       }
+      // Compact the private copy so the published artifact is single-file and
+      // cannot retain deleted or transformed data in free pages.
+      snapshot.exec("VACUUM;");
       assertSqliteIntegrity(snapshot, options.targetPath);
       options.validate?.(snapshot, options.targetPath);
       const userVersion = readSqliteUserVersion(snapshot);

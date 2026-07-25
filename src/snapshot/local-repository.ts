@@ -18,6 +18,12 @@ import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
+  ensureDurableSqliteDirectory,
+  openSqliteDirectoryForDurability,
+  syncSqliteDirectoryForDurability,
+  type DurableSqliteDirectoryReceipt,
+} from "../infra/sqlite-path-durability.js";
+import {
   createPrivateSqliteDirectory,
   createPrivateSqliteTempDirectory,
   createVerifiedSqliteSnapshot,
@@ -241,8 +247,11 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
   }
 
   async create(database: SnapshotDatabaseRef): Promise<SnapshotResult> {
-    await ensurePrivateDirectory(this.#repositoryPath, "SQLite snapshot repository");
-    const repositoryIdentity = await fs.lstat(this.#repositoryPath);
+    const repositoryReceipt = await ensurePrivateDirectory(
+      this.#repositoryPath,
+      "SQLite snapshot repository",
+    );
+    const repositoryIdentity = repositoryReceipt.identity;
     const trustedRepositoryPath = await assertTrustedStagingRoot(
       repositoryIdentity,
       this.#repositoryPath,
@@ -318,14 +327,29 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       publishedIdentity = await fs.lstat(snapshotDir);
       applyPrivateModeSync(snapshotDir, SNAPSHOT_DIRECTORY_MODE);
       await assertPrivateStagingDirectory(publishedIdentity, snapshotDir);
-      publishedDirectory = await fs.open(snapshotDir, "r");
+      publishedDirectory = await openSqliteDirectoryForDurability(
+        { path: snapshotDir, identity: publishedIdentity },
+        "SQLite snapshot directory",
+      );
       await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
       const pendingPath = path.join(snapshotDir, SNAPSHOT_PENDING_FILENAME);
-      await fs.writeFile(pendingPath, "", {
-        flag: "wx",
-        mode: SNAPSHOT_FILE_MODE,
+      const pendingHandle = await fs.open(pendingPath, "wx+", SNAPSHOT_FILE_MODE);
+      try {
+        publishedEntries.set(SNAPSHOT_PENDING_FILENAME, await pendingHandle.stat());
+        await pendingHandle.sync();
+      } finally {
+        await pendingHandle.close();
+      }
+      await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
+      await syncSqliteDirectoryForDurability({
+        path: snapshotDir,
+        identity: publishedIdentity,
       });
-      publishedEntries.set(SNAPSHOT_PENDING_FILENAME, await fs.lstat(pendingPath));
+      await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
+      await syncSqliteDirectoryForDurability({
+        path: trustedRepositoryPath,
+        identity: repositoryIdentity,
+      });
       await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
       await publishSnapshotEntryNoOverwrite(
         path.join(stagingDir, SNAPSHOT_SQLITE_FILENAME),
@@ -341,7 +365,10 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         publishedEntries,
       );
       await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
-      await syncDirectoryBestEffort(snapshotDir);
+      await syncSqliteDirectoryForDurability({
+        path: snapshotDir,
+        identity: publishedIdentity,
+      });
       await assertPendingSnapshotContents(snapshotDir);
       const publishedManifest = await readSnapshotManifest(snapshotDir, snapshotId);
       if (!isDeepStrictEqual(publishedManifest, manifest)) {
@@ -364,11 +391,13 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       ) {
         throw new Error(`SQLite snapshot pending marker changed: ${pendingPath}`);
       }
+      await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
       fsSync.unlinkSync(pendingPath);
-      publishedEntries.delete(SNAPSHOT_PENDING_FILENAME);
-      await syncDirectoryBestEffort(snapshotDir);
-      await publishedDirectory.close();
-      publishedDirectory = undefined;
+      await syncSqliteDirectoryForDurability({
+        path: snapshotDir,
+        identity: publishedIdentity,
+      });
+      await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
       const committedManifest = await readSnapshotManifest(snapshotDir, snapshotId);
       if (!isDeepStrictEqual(committedManifest, manifest)) {
         throw new Error(`SQLite snapshot manifest changed after commit: ${snapshotDir}`);
@@ -379,13 +408,12 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         committedArtifact,
         committedManifest,
       );
-      const currentIdentity = await fs.lstat(snapshotDir);
-      if (!sameFileIdentity(publishedIdentity, currentIdentity)) {
-        throw new Error(`SQLite snapshot directory changed during publication: ${snapshotDir}`);
-      }
       await assertExactSnapshotContents(snapshotDir);
+      await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
-      await syncDirectoryBestEffort(trustedRepositoryPath);
+      publishedEntries.delete(SNAPSHOT_PENDING_FILENAME);
+      await publishedDirectory.close();
+      publishedDirectory = undefined;
       return { ref: { path: snapshotRefPath }, manifest };
     } catch (error) {
       await publishedDirectory?.close().catch(() => undefined);
@@ -461,7 +489,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       );
     }
     const restoreParentPath = path.dirname(canonicalTargetPath);
-    await ensureRestoreParentDirectory(restoreParentPath);
+    const restoreParentReceipt = await ensureRestoreParentDirectory(restoreParentPath);
     const trustedRestoreParentPath = await fs.realpath(restoreParentPath);
     const trustedTargetPath = path.join(
       trustedRestoreParentPath,
@@ -481,6 +509,11 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       );
     }
     const restoreParentIdentity = await fs.lstat(trustedRestoreParentPath);
+    if (!sameFileIdentity(restoreParentReceipt.identity, restoreParentIdentity)) {
+      throw new Error(
+        `SQLite restore parent changed after durable creation: ${trustedRestoreParentPath}`,
+      );
+    }
     // Existing databases need a crash-recoverable main/WAL/SHM swap protocol.
     // This path is deliberately fresh-only and refuses every preexisting sidecar.
     await assertFreshRestorePathsAbsent(trustedTargetPath);
@@ -751,42 +784,82 @@ function buildSnapshotId(now: Date): string {
   return `${timestamp}-${randomUUID()}`;
 }
 
-async function ensurePrivateDirectory(directoryPath: string, scopeLabel: string): Promise<void> {
-  if (process.platform === "win32") {
-    const parentResult = await ensureAbsoluteDirectory(path.dirname(directoryPath), {
-      mode: SNAPSHOT_DIRECTORY_MODE,
-      scopeLabel,
-    });
-    if (!parentResult.ok) {
-      throw parentResult.error;
-    }
+async function ensurePrivateDirectory(
+  directoryPath: string,
+  scopeLabel: string,
+): Promise<DurableSqliteDirectoryReceipt> {
+  let expectedExistingIdentity: Stats | undefined;
+  if (process.platform !== "win32") {
     try {
-      await createPrivateSqliteDirectory(directoryPath);
-      return;
+      const existingIdentity = await fs.lstat(directoryPath);
+      assertDirectory(existingIdentity, directoryPath, scopeLabel);
+      // Repair only after ownership and ancestors prove another user cannot
+      // redirect chmod, then bind the durability pin to that exact directory.
+      await assertTrustedStagingRoot(existingIdentity, directoryPath, {
+        allowModeRepair: true,
+      });
+      applyPrivateModeSync(directoryPath, SNAPSHOT_DIRECTORY_MODE);
+      const repairedIdentity = await fs.lstat(directoryPath);
+      if (!sameFileIdentity(existingIdentity, repairedIdentity)) {
+        throw new Error(`${scopeLabel} changed during private mode repair: ${directoryPath}`);
+      }
+      expectedExistingIdentity = repairedIdentity;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
     }
   }
-  const result = await ensureAbsoluteDirectory(directoryPath, {
-    mode: SNAPSHOT_DIRECTORY_MODE,
-    scopeLabel,
+  return await ensureDurableSqliteDirectory({
+    directoryPath,
+    label: scopeLabel,
+    expectedExistingIdentity,
+    create: async (targetPath) => {
+      if (process.platform === "win32") {
+        const parentResult = await ensureAbsoluteDirectory(path.dirname(targetPath), {
+          mode: SNAPSHOT_DIRECTORY_MODE,
+          scopeLabel,
+        });
+        if (!parentResult.ok) {
+          throw parentResult.error;
+        }
+        try {
+          await createPrivateSqliteDirectory(targetPath);
+          return;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+            throw error;
+          }
+        }
+      }
+      const result = await ensureAbsoluteDirectory(targetPath, {
+        mode: SNAPSHOT_DIRECTORY_MODE,
+        scopeLabel,
+      });
+      if (!result.ok) {
+        throw result.error;
+      }
+      applyPrivateModeSync(result.path, SNAPSHOT_DIRECTORY_MODE);
+    },
   });
-  if (!result.ok) {
-    throw result.error;
-  }
-  applyPrivateModeSync(result.path, SNAPSHOT_DIRECTORY_MODE);
 }
 
-async function ensureRestoreParentDirectory(directoryPath: string): Promise<void> {
-  const result = await ensureAbsoluteDirectory(directoryPath, {
-    mode: SNAPSHOT_DIRECTORY_MODE,
-    scopeLabel: "SQLite restore target",
+async function ensureRestoreParentDirectory(
+  directoryPath: string,
+): Promise<DurableSqliteDirectoryReceipt> {
+  return await ensureDurableSqliteDirectory({
+    directoryPath,
+    label: "SQLite restore target",
+    create: async (targetPath) => {
+      const result = await ensureAbsoluteDirectory(targetPath, {
+        mode: SNAPSHOT_DIRECTORY_MODE,
+        scopeLabel: "SQLite restore target",
+      });
+      if (!result.ok) {
+        throw result.error;
+      }
+    },
   });
-  if (!result.ok) {
-    throw result.error;
-  }
 }
 
 function assertDirectory(stat: Stats, pathname: string, label: string): void {
@@ -978,14 +1051,20 @@ async function assertSnapshotContents(snapshotDir: string, expected: Set<string>
 
 async function isIncompleteSnapshotDirectory(snapshotDir: string): Promise<boolean> {
   const entries = await fs.readdir(snapshotDir, { withFileTypes: true });
+  const knownEntries = new Set([
+    SNAPSHOT_MANIFEST_FILENAME,
+    SNAPSHOT_PENDING_FILENAME,
+    SNAPSHOT_SQLITE_FILENAME,
+  ]);
+  for (const entry of entries) {
+    if (!knownEntries.has(entry.name) || entry.isSymbolicLink() || !entry.isFile()) {
+      throw new Error(
+        `SQLite snapshot contains unexpected incomplete entry: ${path.join(snapshotDir, entry.name)}`,
+      );
+    }
+  }
   const names = new Set(entries.map((entry) => entry.name));
-  if (names.has(SNAPSHOT_PENDING_FILENAME)) {
-    return true;
-  }
-  if (names.has(SNAPSHOT_MANIFEST_FILENAME)) {
-    return false;
-  }
-  return entries.length === 0;
+  return names.size === 0 || names.has(SNAPSHOT_PENDING_FILENAME);
 }
 
 async function assertFreshRestorePathsAbsent(databasePath: string): Promise<void> {
@@ -1113,7 +1192,10 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
       cause: cleanupOutcome.error,
     });
   }
-  await syncDirectoryBestEffort(trustedRootPath).catch(() => undefined);
+  await syncSqliteDirectoryForDurability({
+    path: trustedRootPath,
+    identity: options.expectedRootIdentity,
+  });
   if (!outcome.ok) {
     throw outcome.error;
   }
@@ -1123,6 +1205,7 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
 async function assertTrustedStagingRoot(
   expectedIdentity: Stats,
   rootPath: string,
+  options: { allowModeRepair?: boolean } = {},
 ): Promise<string> {
   const resolvedRootPath = path.resolve(rootPath);
   const trustedRootPath = await fs.realpath(resolvedRootPath);
@@ -1136,13 +1219,18 @@ async function assertTrustedStagingRoot(
     return trustedRootPath;
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  if (uid === undefined || rootIdentity.uid !== uid || (rootIdentity.mode & 0o022) !== 0) {
+  const unsafeMode = (rootIdentity.mode & 0o022) !== 0;
+  if (
+    uid === undefined ||
+    rootIdentity.uid !== uid ||
+    (unsafeMode && options.allowModeRepair !== true)
+  ) {
     throw new Error(
       `Private SQLite staging root must be owned by the current user and not writable by other users: ${resolvedRootPath}`,
     );
   }
   if (process.platform === "darwin") {
-    await assertTrustedMacosAcl(trustedRootPath, true);
+    await assertTrustedMacosAcl(trustedRootPath, options.allowModeRepair !== true);
   }
   await assertTrustedPosixStagingAncestors(trustedRootPath, rootIdentity, uid);
   return trustedRootPath;

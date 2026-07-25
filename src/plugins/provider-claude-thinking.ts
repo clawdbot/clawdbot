@@ -3,10 +3,12 @@
 // `plugin-sdk/provider-model-shared`.
 import {
   CLAUDE_FABLE_5_THINKING_PROFILE,
+  CLAUDE_OPUS_5_THINKING_PROFILE,
   CLAUDE_SONNET_5_THINKING_PROFILE,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
@@ -44,6 +46,11 @@ export function resolveClaudeThinkingProfile(
   }
   if (resolveClaudeSonnet5ModelIdentity(ref)) {
     return CLAUDE_SONNET_5_THINKING_PROFILE;
+  }
+  // Before the generic xhigh branch: Opus 5 defaults thinking on ("high"),
+  // unlike Opus 4.7/4.8 whose omitted-thinking default is off.
+  if (resolveClaudeOpus5ModelIdentity(ref)) {
+    return CLAUDE_OPUS_5_THINKING_PROFILE;
   }
   if (supportsClaudeNativeXhighEffort(ref)) {
     return {

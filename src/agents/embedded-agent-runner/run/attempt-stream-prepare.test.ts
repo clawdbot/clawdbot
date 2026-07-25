@@ -24,9 +24,21 @@ vi.mock("./tool-activity-heartbeat.js", () => ({
 }));
 
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
-function prepareCatalogExecutor(projections: ToolSearchTargetTranscriptProjection[]) {
-  const runAbortController = new AbortController();
+function prepareCatalogExecutor(
+  projections: ToolSearchTargetTranscriptProjection[],
+  options?: {
+    getRunState?: () => {
+      aborted: boolean;
+      promptError: unknown;
+      timedOut: boolean;
+      yieldDetected: boolean;
+    };
+    runAbortController?: AbortController;
+  },
+) {
+  const runAbortController = options?.runAbortController ?? new AbortController();
   return prepareEmbeddedAttemptStream({
     attempt: {
       runId: "run-output-schema",
@@ -43,12 +55,14 @@ function prepareCatalogExecutor(projections: ToolSearchTargetTranscriptProjectio
     runAbortController,
     abortRun: vi.fn(),
     markExternalAbort: vi.fn(),
-    getRunState: () => ({
-      aborted: false,
-      promptError: undefined,
-      timedOut: false,
-      yieldDetected: false,
-    }),
+    getRunState:
+      options?.getRunState ??
+      (() => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      })),
     hasDeliveredSourceReply: () => false,
     markSourceReplyDelivered: vi.fn(),
     onBlockReply: vi.fn(),
@@ -149,5 +163,30 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(returned).toMatchObject({ details: { id: 42 } });
     expect(Object.isFrozen(returned)).toBe(true);
     expect(Object.isFrozen(returned.details)).toBe(true);
+  });
+
+  it("distinguishes an accepted abort from normal steering closure and sessions_yield", () => {
+    const runAbortController = new AbortController();
+    let aborted = false;
+    const prepared = prepareCatalogExecutor([], {
+      runAbortController,
+      getRunState: () => ({
+        aborted,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+    });
+
+    expect(prepared.queueHandle.isAborted?.()).toBe(false);
+    prepared.stopAcceptingSteerMessages();
+    expect(prepared.queueHandle.isStopped?.()).toBe(true);
+    expect(prepared.queueHandle.isAborted?.()).toBe(false);
+
+    runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
+    expect(prepared.queueHandle.isAborted?.()).toBe(false);
+
+    aborted = true;
+    expect(prepared.queueHandle.isAborted?.()).toBe(true);
   });
 });

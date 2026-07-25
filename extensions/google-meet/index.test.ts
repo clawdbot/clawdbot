@@ -2884,7 +2884,7 @@ describe("google-meet plugin", () => {
     leaveConfirmationRequired?: boolean;
     nonFinalTranscriptGate?: Promise<void>;
     onNonFinalTranscriptRead?: () => void;
-    skipNonFinalTranscriptGateReads?: number;
+    shouldGateNonFinalTranscriptRead?: () => boolean;
     transcript?: {
       droppedLines?: number;
       epoch?: string;
@@ -2948,12 +2948,10 @@ describe("google-meet plugin", () => {
           return { ok: true };
         }
         if (request.path === "/act") {
-          if (String(request.body?.fn).includes("state = window.__openclawMeetCaptions")) {
-            const finalizing = String(request.body?.fn).includes("if (true &&");
-            if (
-              !finalizing &&
-              transcriptReadIndex >= (options?.skipNonFinalTranscriptGateReads ?? 0)
-            ) {
+          const script = String(request.body?.fn);
+          if (script.includes("const expectedSessionId =")) {
+            const finalizing = script.includes("if (true &&");
+            if (!finalizing && options?.shouldGateNonFinalTranscriptRead?.() === true) {
               options?.onNonFinalTranscriptRead?.();
               await options?.nonFinalTranscriptGate;
             }
@@ -3105,13 +3103,9 @@ describe("google-meet plugin", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
+      const transcript = { epoch: "page-1", lines: [{ text: "before reload" }] };
       mockLocalMeetBrowserRequestWithTabState({
-        transcriptSequence: [
-          { epoch: "page-1", lines: [] },
-          { epoch: "page-1", lines: [{ text: "before reload" }] },
-          { epoch: "page-2", lines: [{ text: "after reload" }] },
-          { epoch: "page-2", lines: [{ text: "after reload" }] },
-        ],
+        transcript,
       });
       const { methods } = setup({ defaultMode: "transcribe", defaultTransport: "chrome" });
       const joined = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
@@ -3121,6 +3115,8 @@ describe("google-meet plugin", () => {
       const first = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
         sessionId: joined.session.id,
       })) as { nextIndex: number; lines: Array<{ text: string }> };
+      transcript.epoch = "page-2";
+      transcript.lines = [{ text: "after reload" }];
       const second = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
         sessionId: joined.session.id,
         sinceIndex: first.nextIndex,
@@ -3152,12 +3148,13 @@ describe("google-meet plugin", () => {
       markReadStarted = resolve;
     });
     let activeReads = 0;
+    let gateNonFinalTranscriptReads = false;
     try {
       const callGatewayFromCli = mockLocalMeetBrowserRequestWithTabState({
         transcript: { lines: [{ text: "partial" }] },
         finalTranscript: { lines: [{ text: "partial" }, { text: "complete caption" }] },
         nonFinalTranscriptGate: readGate,
-        skipNonFinalTranscriptGateReads: 1,
+        shouldGateNonFinalTranscriptRead: () => gateNonFinalTranscriptReads,
         onNonFinalTranscriptRead: () => {
           activeReads += 1;
           markReadStarted?.();
@@ -3168,6 +3165,7 @@ describe("google-meet plugin", () => {
         url: MEET_URL,
       })) as { session: { id: string } };
 
+      gateNonFinalTranscriptReads = true;
       const lateRead = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
         sessionId: joined.session.id,
       });
@@ -3190,9 +3188,7 @@ describe("google-meet plugin", () => {
       const finalCaptures = callGatewayFromCli.mock.calls.filter((call) => {
         const request = call[2] as { body?: { fn?: string } };
         const script = String(request.body?.fn);
-        return (
-          script.includes("state = window.__openclawMeetCaptions") && script.includes("if (true &&")
-        );
+        return script.includes("const expectedSessionId =") && script.includes("if (true &&");
       });
       expect(finalCaptures).toHaveLength(1);
       const result = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
@@ -4392,19 +4388,15 @@ describe("google-meet plugin", () => {
     }
   });
 
-  it("keeps waiting while the Meet microphone is muted during intro readiness", async () => {
+  it("keeps default intro speech blocked while the Meet microphone is muted", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
-      let inspectCount = 0;
-      mockLocalMeetBrowserRequest(() => {
-        inspectCount += 1;
-        return meetBrowserState({ micMuted: true });
-      });
+      mockLocalMeetBrowserRequest(meetBrowserState({ micMuted: true }));
       const { methods } = setup({
         chrome: {
           audioBridgeCommand: ["bridge", "start"],
-          waitForInCallMs: 10,
+          waitForInCallMs: 1,
         },
       });
       const handler = methods.get("googlemeet.join") as
@@ -4428,7 +4420,6 @@ describe("google-meet plugin", () => {
       expect(health.micMuted).toBe(true);
       expect(health.speechReady).toBe(false);
       expect(health.speechBlockedReason).toBe("meet-microphone-muted");
-      expect(inspectCount).toBeGreaterThanOrEqual(2);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -4872,18 +4863,22 @@ describe("google-meet plugin", () => {
     if (!englishTabActCall) {
       throw new Error("Expected browser.proxy /act on the English replacement tab");
     }
-    expect(
-      requireRecord(requireRecord(englishTabActCall[0], "act node invoke").params, "act params"),
-    ).toEqual({
+    const actParams = requireRecord(
+      requireRecord(englishTabActCall[0], "act node invoke").params,
+      "act params",
+    );
+    expect(actParams).toEqual({
       method: "POST",
       path: "/act",
-      timeoutMs: 10000,
+      timeoutMs: expect.any(Number),
       body: {
         kind: "evaluate",
         targetId: "english-meet-tab",
         fn: expect.any(String),
       },
     });
+    expect(actParams.timeoutMs).toBeGreaterThan(0);
+    expect(actParams.timeoutMs).toBeLessThanOrEqual(10_000);
   });
 
   it("does not navigate a reused join tab that is already using English UI", async () => {

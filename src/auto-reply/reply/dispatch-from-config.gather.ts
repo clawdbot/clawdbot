@@ -407,14 +407,7 @@ export async function gatherDispatchRequest(
   };
   const buildMessageReceivedHookContext = () => {
     const mediaRemoteHost = normalizeOptionalString(ctx.MediaRemoteHost);
-    const hasUnstagedRemoteMediaMetadata = Boolean(
-      hookContext.mediaPath ||
-      hookContext.mediaUrl ||
-      hookContext.mediaType ||
-      hookContext.mediaPaths?.length ||
-      hookContext.mediaUrls?.length ||
-      hookContext.mediaTypes?.length,
-    );
+    const hasUnstagedRemoteMediaMetadata = Boolean(hookContext.media?.length);
     if (hookMediaMetadataStaged || !mediaRemoteHost || !hasUnstagedRemoteMediaMetadata) {
       return hookContext;
     }
@@ -427,6 +420,7 @@ export async function gatherDispatchRequest(
       ...buildHookState(messageReceivedCtx).hookContext,
       mediaRemoteHost,
       mediaStagingPending: true,
+      originalMedia: hookContext.media?.map((entry) => ({ ...entry })),
       originalMediaPath: hookContext.mediaPath,
       originalMediaUrl: hookContext.mediaUrl,
       originalMediaType: hookContext.mediaType,

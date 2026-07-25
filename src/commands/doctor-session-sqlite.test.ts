@@ -850,6 +850,46 @@ describe("runDoctorSessionSqlite", () => {
     expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
   });
 
+  it("repairs canonical index corruption in place during recovery", async () => {
+    const { sqlitePath, store } = await createImportedStoreForCompaction();
+    createCanonicalCacheIndexDrift(sqlitePath);
+    expect(
+      recordOpenClawDatabaseQuarantine({
+        env: store.env,
+        kind: "agent",
+        path: sqlitePath,
+        reason: "canonical cache index drift",
+      }),
+    ).toBe(true);
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "recover",
+      store: store.storePath,
+    });
+
+    expect(report.totals.issues).toBe(0);
+    expect(report.targets[0]?.corruptRecovery).toBeUndefined();
+    expect(fs.existsSync(sqlitePath)).toBe(true);
+    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
+
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(
+        database
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+          .get("doctor", "canonical-index"),
+      ).toEqual({ value_json: '{"ok":true}' });
+    } finally {
+      database.close();
+    }
+    expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
+  });
+
   it.skipIf(process.platform === "win32")(
     "reapplies owner-only permissions after compaction",
     async () => {
@@ -2825,6 +2865,39 @@ function createUnsafeIndexDrift(sqlitePath: string): void {
     database
       .prepare(
         "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_session_index ON unsafe_session_index_records(alternate_value)' WHERE name = 'unsafe_session_index'",
+      )
+      .run();
+    database.exec("PRAGMA writable_schema = OFF;");
+    const schemaVersionRow = database.prepare("PRAGMA schema_version;").get() as
+      | Record<string, unknown>
+      | undefined;
+    const schemaVersion = Number(
+      schemaVersionRow?.schema_version ??
+        (schemaVersionRow ? Object.values(schemaVersionRow)[0] : undefined),
+    );
+    database.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
+  } finally {
+    database.close();
+  }
+}
+
+function createCanonicalCacheIndexDrift(sqlitePath: string): void {
+  const sqlite = nodeSqlite.requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
+      VALUES ('doctor', 'canonical-index', '{"ok":true}', 100, 1);
+      DROP INDEX idx_agent_cache_expiry;
+      CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
+    `);
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        `UPDATE sqlite_schema
+            SET sql = 'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
+          WHERE name = 'idx_agent_cache_expiry'`,
       )
       .run();
     database.exec("PRAGMA writable_schema = OFF;");

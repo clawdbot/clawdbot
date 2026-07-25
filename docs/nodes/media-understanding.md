@@ -15,7 +15,7 @@ Vendor plugins register capability metadata (which provider supports which media
 
 <Steps>
   <Step title="Collect attachments">
-    Collect inbound attachments (`MediaPaths`, `MediaUrls`, `MediaTypes`).
+    Collect ordered inbound media facts (`path`, `url`, `contentType`, and `kind`).
   </Step>
   <Step title="Select per capability">
     For each enabled capability (image/audio/video), select attachments per the `attachments` policy (default: first attachment only).
@@ -101,7 +101,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
         "gemini-3-flash",
         "--allowed-tools",
         "read_file",
-        "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+        "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
       ],
       maxChars: 500,
       maxBytes: 52428800,
@@ -110,7 +110,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     }
     ```
 
-    CLI templates can also use `{{MediaDir}}` (directory containing the media file), `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension).
+    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` names remain deprecated compatibility aliases.
 
   </Tab>
 </Tabs>
@@ -288,7 +288,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
                 "gemini-3-flash",
                 "--allowed-tools",
                 "read_file",
-                "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+                "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
               ],
               capabilities: ["image", "video"],
             },
@@ -316,7 +316,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
               {
                 type: "cli",
                 command: "whisper",
-                args: ["--model", "base", "{{MediaPath}}"],
+                args: ["--model", "base", "{{AttachmentPath}}"],
               },
             ],
           },
@@ -333,7 +333,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
                   "gemini-3-flash",
                   "--allowed-tools",
                   "read_file",
-                  "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+                  "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
                 ],
               },
             ],
@@ -363,7 +363,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
                   "gemini-3-flash",
                   "--allowed-tools",
                   "read_file",
-                  "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+                  "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
                 ],
               },
             ],

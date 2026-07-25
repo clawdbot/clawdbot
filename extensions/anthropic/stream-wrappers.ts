@@ -7,6 +7,7 @@ import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -52,7 +53,8 @@ type DynamicFastMode = boolean | (() => boolean | undefined);
 function isAnthropic1MModel(modelId: string): boolean {
   if (
     resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined ||
-    resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined
+    resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined
   ) {
     return true;
   }

@@ -281,7 +281,15 @@ remain read-only even on a continuation-enabled node.
 See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)
 for the node command and security boundary.
 
-## Thinking defaults (Claude Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
+## Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
+
+`anthropic/claude-opus-5` uses adaptive thinking at `high` effort by default
+and supports the full `low` through `max` effort range. Use `/think off` to
+disable thinking (Anthropic allows that only at effort `high` or below), or
+`/think xhigh|max` for the higher native effort levels. OpenClaw omits manual
+thinking budgets, custom sampling parameters, and assistant prefills for
+Opus 5 because Anthropic rejects those request features on this model. The 1M
+context window is the model default — no `[1m]` opt-in is needed.
 
 `anthropic/claude-sonnet-5` uses adaptive thinking at `high` effort by default.
 Use `/think off` to disable thinking, or `/think xhigh|max` for the model's

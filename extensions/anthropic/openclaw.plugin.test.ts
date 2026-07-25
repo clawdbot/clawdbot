@@ -57,6 +57,29 @@ describe("Anthropic plugin manifest", () => {
     });
   });
 
+  it("publishes the exact Claude Opus 5 API contract", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.find((model) => model.id === "claude-opus-5")).toEqual({
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+    // Opus 5's 1M window is the model default, so the CLI row is not clamped to 200k.
+    const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
+    expect(cliModels.find((model) => model.id === "claude-opus-5")).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("declares direct API limits without overstating bare Claude CLI context", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
     for (const id of ["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"]) {

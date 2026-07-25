@@ -46,6 +46,24 @@ type, then path or URL extension; undownloaded native attachments should still
 contribute one type-only fact each. Do not use the formatter to synthesize the
 primary inbound body.
 
+Normalize plugin-owned attachment records with `toInboundMediaFacts(...)`, then
+pass the resulting ordered array through the context's `media` field:
+
+```ts
+const media = toInboundMediaFacts([
+  { path: saved.path, url: nativeUrl, contentType: saved.contentType, messageId },
+]);
+
+const ctx = finalizeInboundContext({ Body: caption, media });
+```
+
+Array position is attachment identity. Per-fact `transcribed`, `messageId`, and
+`workspaceDir` replace the legacy parallel index/workspace fields. The
+`MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, `MediaTypes`,
+`MediaTranscribedIndexes`, `MediaWorkspaceDir`, and `MediaStaged` context fields,
+plus `buildChannelInboundMediaPayload(...)`, remain available only as deprecated
+compatibility. New plugins should not construct or read them.
+
 Bundled/native channels that already receive the injected plugin runtime
 object can call the same helpers under `runtime.channel.inbound.*` instead of
 importing this subpath directly:

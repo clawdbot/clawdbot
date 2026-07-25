@@ -81,6 +81,7 @@ describe("anthropic-vertex provider plugin", () => {
     expect(result.provider.models.map((model) => model.id)).toEqual([
       "claude-fable-5",
       "claude-mythos-5",
+      "claude-opus-5",
       "claude-opus-4-8",
       "claude-opus-4-6",
       "claude-sonnet-4-6",
@@ -98,8 +99,9 @@ describe("anthropic-vertex provider plugin", () => {
       max: "max",
     });
     expect(result.provider.models[2]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
-    expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
+    expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
     expect(result.provider.models[4]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
+    expect(result.provider.models[5]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
   });
 
   it.each(["global", "us", "eu"])("publishes Sonnet 5 for the %s endpoint", (region) => {
@@ -300,6 +302,38 @@ describe("anthropic-vertex provider plugin", () => {
       maxTokens: 128_000,
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: null },
     });
+  });
+
+  it("restores Opus 5 metadata for explicit Vertex catalog rows", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic-vertex",
+      modelId: "claude-opus-5",
+      model: {
+        id: "claude-opus-5",
+        name: "Claude Opus 5",
+        api: "anthropic-messages",
+        provider: "anthropic-vertex",
+        baseUrl: "https://aiplatform.googleapis.com",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+
+    // Opus 5 keeps thinking disableable, so off/minimal must not be remapped.
+    expect(normalized).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+    expect(normalized?.thinkingLevelMap).not.toHaveProperty("off");
   });
 
   it("restores Mythos 5 metadata for explicit Vertex catalog rows", async () => {

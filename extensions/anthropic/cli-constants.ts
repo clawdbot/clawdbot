@@ -19,6 +19,7 @@ export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = `anthropic/${CLAUDE_CLI_CA
 /** Default Claude CLI models allowed when setup seeds the model allowlist. */
 export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
   CLAUDE_CLI_DEFAULT_MODEL_REF,
+  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-5`,
   `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-5`,
   `${CLAUDE_CLI_BACKEND_ID}/claude-fable-5`,
   `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-7`,
@@ -29,6 +30,8 @@ export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
 /** User-facing Claude CLI model aliases normalized before execution. */
 export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
   opus: "opus",
+  "opus-5": "claude-opus-5",
+  "claude-opus-5": "claude-opus-5",
   "opus-4.8": "claude-opus-4-8",
   "opus-4.7": "claude-opus-4-7",
   "opus-4.6": "claude-opus-4-6",

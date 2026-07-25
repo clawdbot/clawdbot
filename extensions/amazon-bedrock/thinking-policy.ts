@@ -10,6 +10,7 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 
@@ -62,6 +63,7 @@ export function isLatestAdaptiveBedrockModelRef(
     resolveClaudeFable5ModelIdentity(modelRef) !== undefined ||
     resolveClaudeMythos5ModelIdentity(modelRef) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(modelRef) !== undefined ||
+    resolveClaudeOpus5ModelIdentity(modelRef) !== undefined ||
     [modelId, canonicalModelId].some(
       (candidate) =>
         isOpus47OrNewerBedrockModelRef(candidate) || isMythosPreviewBedrockModelRef(candidate),
@@ -77,7 +79,8 @@ export function supportsBedrockNativeMaxEffort(
   if (
     resolveClaudeFable5ModelIdentity({ id: modelId, params }) ||
     resolveClaudeMythos5ModelIdentity({ id: modelId, params }) ||
-    resolveClaudeSonnet5ModelIdentity({ id: modelId, params })
+    resolveClaudeSonnet5ModelIdentity({ id: modelId, params }) ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId, params })
   ) {
     return true;
   }
@@ -96,7 +99,7 @@ export function resolveBedrockNativeThinkingLevelMap(
   if (resolveClaudeFable5ModelIdentity(modelRef) || resolveClaudeMythos5ModelIdentity(modelRef)) {
     return { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
   }
-  if (resolveClaudeSonnet5ModelIdentity(modelRef)) {
+  if (resolveClaudeSonnet5ModelIdentity(modelRef) || resolveClaudeOpus5ModelIdentity(modelRef)) {
     return { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
   }
   if (!supportsBedrockNativeMaxEffort(modelId, params)) {
@@ -120,7 +123,8 @@ export function resolveBedrockClaudeThinkingProfile(
   if (
     resolveClaudeFable5ModelIdentity({ id: trimmed, params }) ||
     resolveClaudeMythos5ModelIdentity({ id: trimmed, params }) ||
-    resolveClaudeSonnet5ModelIdentity({ id: trimmed, params })
+    resolveClaudeSonnet5ModelIdentity({ id: trimmed, params }) ||
+    resolveClaudeOpus5ModelIdentity({ id: trimmed, params })
   ) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],

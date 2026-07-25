@@ -11,6 +11,7 @@ import {
   modelCostsEqual,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -112,6 +113,18 @@ function buildAnthropicVertexCatalog(region: string, nowMs: number): ModelDefini
     }),
     ...sonnet5,
     buildAnthropicVertexModel({
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      maxTokens: ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS,
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    }),
+    buildAnthropicVertexModel({
       id: "claude-opus-4-8",
       name: "Claude Opus 4.8",
       reasoning: true,
@@ -150,7 +163,8 @@ export function normalizeAnthropicVertexResolvedModel(
   const fable5 = resolveClaudeFable5ModelIdentity(ref) !== undefined;
   const mythos5 = resolveClaudeMythos5ModelIdentity(ref) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(ref) !== undefined;
-  if (!fable5 && !mythos5 && !sonnet5) {
+  const opus5 = resolveClaudeOpus5ModelIdentity(ref) !== undefined;
+  if (!fable5 && !mythos5 && !sonnet5 && !opus5) {
     return undefined;
   }
   const input: ProviderRuntimeModel["input"] = model.input.includes("image")

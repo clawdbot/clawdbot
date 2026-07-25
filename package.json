@@ -601,6 +601,10 @@
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
     },
+    "./plugin-sdk/media-local-roots": {
+      "types": "./dist/plugin-sdk/media-local-roots.d.ts",
+      "default": "./dist/plugin-sdk/media-local-roots.js"
+    },
     "./plugin-sdk/media-store": {
       "types": "./dist/plugin-sdk/media-store.d.ts",
       "default": "./dist/plugin-sdk/media-store.js"
