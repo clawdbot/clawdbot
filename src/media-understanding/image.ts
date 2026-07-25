@@ -385,7 +385,11 @@ async function withImageDescriptionTimeout<T>(params: {
           try {
             params.signal?.throwIfAborted();
           } catch (error) {
-            reject(error);
+            reject(
+              error instanceof Error
+                ? error
+                : new Error("image description aborted", { cause: error }),
+            );
           }
         };
         params.signal?.addEventListener("abort", onAbort, { once: true });

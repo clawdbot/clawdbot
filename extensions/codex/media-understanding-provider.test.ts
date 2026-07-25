@@ -223,7 +223,10 @@ describe("codex media understanding provider", () => {
         await new Promise<never>((_, reject) => {
           options?.abandonSignal?.addEventListener(
             "abort",
-            () => reject(options.abandonSignal?.reason),
+            () => {
+              const reason = options.abandonSignal?.reason;
+              reject(reason instanceof Error ? reason : new Error("Codex startup aborted"));
+            },
             { once: true },
           );
         }),
