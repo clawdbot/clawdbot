@@ -1,4 +1,4 @@
-import Foundation
+import Darwin
 import UIKit
 import XCTest
 
@@ -1036,21 +1036,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     private static func terminateDebugAppProcess() -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = [
-            "simctl",
-            "terminate",
-            "booted",
-            Self.debugAppBundleIdentifier,
-        ]
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
+        let command = "/usr/bin/xcrun simctl terminate booted \(Self.debugAppBundleIdentifier)"
+        return system(command) == 0
     }
 
     private func waitForAppToStop(_ app: XCUIApplication, timeout: TimeInterval) -> Bool {
