@@ -436,6 +436,13 @@ Implemented:
 - operator report via `tools/ai_intelligence/report_routing_telemetry.py`;
 - Daily Executive Briefing AI routing telemetry summary;
 - OpenClaw dashboard AI routing telemetry panel.
+- OpenClaw dashboard AI Model Scorecard review page with immutable
+  approval, rejection, promotion, and audit views.
+
+Dashboard scorecard mutations are restricted to loopback requests and require
+the operator to type the exact current pipeline or decision ID. Remote
+dashboard connections remain review-only. Operators should use an SSH tunnel
+to `127.0.0.1:5051` when performing an approval action.
 
 ## 18. Production Promotion Requirements
 

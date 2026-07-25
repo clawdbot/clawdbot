@@ -72,6 +72,8 @@ Phase 2F.4G is implemented and activation-proved on the loopback Gateway:
 - activation and rollback checkpoint is recorded under `reports/architect/`;
 - usage and failover telemetry persist to `ai_intelligence.observed_model_usage`;
 - Daily Executive Briefing and OpenClaw dashboard surface routing telemetry status.
+- the OpenClaw dashboard exposes scorecard evidence and audit history, with
+  approval and promotion actions restricted to exact-ID loopback requests.
 
 ## Kimi K3 decision
 

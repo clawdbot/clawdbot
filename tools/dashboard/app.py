@@ -40,6 +40,26 @@ MODELS = [
 
 BACKUP_DIR = Path.home() / "openclaw-backups"
 
+OPENCLAW_ROOT = Path(__file__).resolve().parents[2]
+AI_REPORT_DIR = OPENCLAW_ROOT / "reports/ai_intelligence"
+AI_EVALUATION_PATH = AI_REPORT_DIR / "evaluation_lab/evaluation-lab-latest.json"
+AI_APPROVAL_PATH = AI_REPORT_DIR / "evaluation_approvals/evaluation-approval-latest.json"
+AI_CANDIDATES_PATH = (
+    AI_REPORT_DIR
+    / "evaluation_approvals/approved-scorecard-candidates-latest.json"
+)
+AI_PROMOTION_DIR = AI_REPORT_DIR / "scorecard_promotions"
+AI_SCORECARD_PATH = OPENCLAW_ROOT / "config/ai_intelligence/scorecard.json"
+AI_APPROVAL_TOOL = (
+    OPENCLAW_ROOT / "tools/ai_intelligence/approve_evaluation_lab.py"
+)
+AI_PROMOTION_TOOL = (
+    OPENCLAW_ROOT / "tools/ai_intelligence/promote_approved_scorecard.py"
+)
+AI_INTELLIGENCE_PYTHON = (
+    OPENCLAW_ROOT / "tools/ai_intelligence/.venv/bin/python"
+)
+
 
 
 def run_command(cmd, timeout=20):
@@ -1086,6 +1106,7 @@ def openclaw_shared_navigation():
         ("/", "Overview"),
         ("/ranchbrain", "RanchBrain"),
         ("/ranchbrain/review", "Notes"),
+        ("/ai-scorecard", "AI Model Scorecard"),
         ("/documentation", "Foundational Documentation"),
         ("/pdf", "PDF"),
         ("/backup-recovery", "Backup & Recovery Center"),
@@ -1307,6 +1328,283 @@ def ranchbrain_review_reject():
 
     run_review_action("reject", memory_id)
     return redirect("/ranchbrain/review")
+
+
+def load_json_object(path):
+    if not path.is_file():
+        return None
+
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected a JSON object: {path}")
+    return value
+
+
+def scorecard_action_is_local():
+    return request.remote_addr in {"127.0.0.1", "::1"}
+
+
+def scorecard_snapshot():
+    evaluation = load_json_object(AI_EVALUATION_PATH)
+    approval = load_json_object(AI_APPROVAL_PATH)
+    candidates = load_json_object(AI_CANDIDATES_PATH)
+    scorecard = load_json_object(AI_SCORECARD_PATH)
+
+    audits = []
+    if AI_PROMOTION_DIR.is_dir():
+        for path in sorted(
+            AI_PROMOTION_DIR.glob("scorecard-promotion-*.json"),
+            reverse=True,
+        )[:20]:
+            if path.name == "scorecard-promotion-latest.json":
+                continue
+            audit = load_json_object(path)
+            if audit:
+                audits.append(audit)
+
+    eligible = []
+    if evaluation:
+        for benchmark_id, result in evaluation.get(
+            "benchmark_reconciliation", {}
+        ).items():
+            if (
+                result.get("promotion_eligible") is True
+                and result.get("winner_passed_deterministic_validation")
+                is True
+                and result.get("final_winner")
+            ):
+                eligible.append(
+                    {
+                        "benchmark_id": benchmark_id,
+                        "model": result["final_winner"],
+                        "status": result.get("final_status", "unknown"),
+                    }
+                )
+
+    decision_id = str((approval or {}).get("decision_id", ""))
+    applied_decisions = {
+        str(audit.get("decision_id", ""))
+        for audit in audits
+        if audit.get("status") == "applied"
+    }
+
+    return {
+        "evaluation": evaluation,
+        "approval": approval,
+        "candidates": candidates,
+        "scorecard": scorecard,
+        "eligible": eligible,
+        "audits": audits,
+        "promotion_applied": bool(decision_id and decision_id in applied_decisions),
+    }
+
+
+def run_scorecard_action(tool, *arguments):
+    result = subprocess.run(
+        [str(AI_INTELLIGENCE_PYTHON), str(tool), *arguments],
+        cwd=str(OPENCLAW_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    output = (result.stdout + "\n" + result.stderr).strip()
+    return result.returncode == 0, output[-2000:]
+
+
+def scorecard_redirect(result, message):
+    return redirect(
+        "/ai-scorecard?result="
+        + quote(result)
+        + "&message="
+        + quote(message[:1000])
+    )
+
+
+@app.route("/ai-scorecard")
+def ai_scorecard():
+    try:
+        snapshot = scorecard_snapshot()
+        evaluation = snapshot["evaluation"] or {}
+        approval = snapshot["approval"] or {}
+        pipeline_id = str(evaluation.get("pipeline_id", ""))
+        decision_id = str(approval.get("decision_id", ""))
+        decision = str(approval.get("decision", "none"))
+        action_allowed = scorecard_action_is_local()
+        result = str(request.args.get("result") or "")
+        message = str(request.args.get("message") or "")
+
+        notice = ""
+        if message:
+            color = "#14532d" if result == "success" else "#7f1d1d"
+            notice = (
+                f'<div class="panel" style="background:{color};">'
+                f"{html_module.escape(message)}</div>"
+            )
+
+        eligible_rows = ""
+        for candidate in snapshot["eligible"]:
+            eligible_rows += f"""
+<tr>
+  <td>{html_module.escape(str(candidate['benchmark_id']))}</td>
+  <td>{html_module.escape(str(candidate['model']))}</td>
+  <td>{html_module.escape(str(candidate['status']))}</td>
+</tr>
+"""
+        if not eligible_rows:
+            eligible_rows = "<tr><td colspan='3'>No promotion-eligible winners.</td></tr>"
+
+        audit_rows = ""
+        for audit in snapshot["audits"]:
+            changes = ", ".join(
+                f"{item.get('registry_id')}.{item.get('criterion')}: "
+                f"{item.get('old_score')} → {item.get('new_score')}"
+                for item in audit.get("changes", [])
+            )
+            audit_rows += f"""
+<tr>
+  <td>{html_module.escape(str(audit.get('applied_at', 'unknown')))}</td>
+  <td>{html_module.escape(str(audit.get('decision_id', 'unknown')))}</td>
+  <td>{html_module.escape(str(audit.get('status', 'unknown')))}</td>
+  <td>{html_module.escape(changes or 'No changes recorded')}</td>
+</tr>
+"""
+        if not audit_rows:
+            audit_rows = "<tr><td colspan='4'>No scorecard promotions recorded.</td></tr>"
+
+        actions = """
+<div class="panel">
+  <h2>Approval Actions</h2>
+  <p>Actions are disabled on non-local connections. Use an SSH tunnel to
+  <code>127.0.0.1:5051</code> to approve, reject, or promote.</p>
+</div>
+"""
+        if action_allowed:
+            approval_forms = ""
+            if pipeline_id and decision == "none":
+                approval_forms = f"""
+<form method="POST" action="/ai-scorecard/approve">
+  <label>Type <code>APPROVE {html_module.escape(pipeline_id)}</code></label><br>
+  <input name="confirmation" style="width:100%;margin:8px 0;padding:8px;">
+  <input name="note" placeholder="Optional approval note"
+         style="width:100%;margin:8px 0;padding:8px;">
+  <button class="approve" type="submit">Approve Evaluation</button>
+</form>
+<form method="POST" action="/ai-scorecard/reject" style="margin-top:18px;">
+  <label>Type <code>REJECT {html_module.escape(pipeline_id)}</code></label><br>
+  <input name="confirmation" style="width:100%;margin:8px 0;padding:8px;">
+  <input name="note" placeholder="Optional rejection note"
+         style="width:100%;margin:8px 0;padding:8px;">
+  <button class="reject" type="submit">Reject Evaluation</button>
+</form>
+"""
+            elif decision == "approved" and decision_id and not snapshot["promotion_applied"]:
+                approval_forms = f"""
+<form method="POST" action="/ai-scorecard/promote">
+  <label>Type <code>PROMOTE {html_module.escape(decision_id)}</code></label><br>
+  <input name="confirmation" style="width:100%;margin:8px 0;padding:8px;">
+  <button class="approve" type="submit">Promote Approved Scorecard</button>
+</form>
+"""
+            else:
+                approval_forms = (
+                    "<p>No action is currently available for this pipeline.</p>"
+                )
+            actions = f"""
+<div class="panel">
+  <h2>Approval Actions — Local Connection</h2>
+  <p>Every action requires the exact current pipeline or decision ID.</p>
+  {approval_forms}
+</div>
+"""
+
+        body = f"""
+{notice}
+<div class="panel">
+  <h2>Current Evaluation</h2>
+  <p><b>Pipeline:</b> {html_module.escape(pipeline_id or 'unavailable')}</p>
+  <p><b>Decision:</b> {html_module.escape(decision)}</p>
+  <p><b>Decision ID:</b> {html_module.escape(decision_id or 'none')}</p>
+  <p><b>Official promotion:</b>
+     {'Applied' if snapshot['promotion_applied'] else 'Not applied'}</p>
+  <p><b>Automatic routing:</b> Not enabled by scorecard promotion.</p>
+</div>
+<div class="panel">
+  <h2>Promotion-Eligible Winners</h2>
+  <table style="width:100%;border-collapse:collapse;">
+    <tr><th>Benchmark</th><th>Model</th><th>Status</th></tr>
+    {eligible_rows}
+  </table>
+</div>
+{actions}
+<div class="panel">
+  <h2>Promotion Audit History</h2>
+  <table style="width:100%;border-collapse:collapse;">
+    <tr><th>Applied</th><th>Decision</th><th>Status</th><th>Changes</th></tr>
+    {audit_rows}
+  </table>
+</div>
+"""
+        return ranchbrain_shell("AI Model Scorecard", body)
+    except Exception as exc:
+        return ranchbrain_shell(
+            "AI Model Scorecard",
+            f"<div class='panel'>Error: {html_module.escape(str(exc))}</div>",
+        ), 500
+
+
+def require_local_scorecard_action():
+    if not scorecard_action_is_local():
+        abort(403)
+
+
+@app.route("/ai-scorecard/approve", methods=["POST"])
+def ai_scorecard_approve():
+    require_local_scorecard_action()
+    evaluation = load_json_object(AI_EVALUATION_PATH) or {}
+    pipeline_id = str(evaluation.get("pipeline_id", ""))
+    if not pipeline_id or request.form.get("confirmation", "") != f"APPROVE {pipeline_id}":
+        return scorecard_redirect("error", "Approval confirmation did not match.")
+    note = str(request.form.get("note") or "").strip()[:500]
+    arguments = ["--approve", pipeline_id]
+    if note:
+        arguments.extend(["--note", note])
+    success, output = run_scorecard_action(AI_APPROVAL_TOOL, *arguments)
+    return scorecard_redirect("success" if success else "error", output)
+
+
+@app.route("/ai-scorecard/reject", methods=["POST"])
+def ai_scorecard_reject():
+    require_local_scorecard_action()
+    evaluation = load_json_object(AI_EVALUATION_PATH) or {}
+    pipeline_id = str(evaluation.get("pipeline_id", ""))
+    if not pipeline_id or request.form.get("confirmation", "") != f"REJECT {pipeline_id}":
+        return scorecard_redirect("error", "Rejection confirmation did not match.")
+    note = str(request.form.get("note") or "").strip()[:500]
+    arguments = ["--reject", pipeline_id]
+    if note:
+        arguments.extend(["--note", note])
+    success, output = run_scorecard_action(AI_APPROVAL_TOOL, *arguments)
+    return scorecard_redirect("success" if success else "error", output)
+
+
+@app.route("/ai-scorecard/promote", methods=["POST"])
+def ai_scorecard_promote():
+    require_local_scorecard_action()
+    approval = load_json_object(AI_APPROVAL_PATH) or {}
+    decision_id = str(approval.get("decision_id", ""))
+    if (
+        approval.get("decision") != "approved"
+        or not decision_id
+        or request.form.get("confirmation", "") != f"PROMOTE {decision_id}"
+    ):
+        return scorecard_redirect("error", "Promotion confirmation did not match.")
+    success, output = run_scorecard_action(
+        AI_PROMOTION_TOOL,
+        "--apply",
+        decision_id,
+    )
+    return scorecard_redirect("success" if success else "error", output)
 
 
 
