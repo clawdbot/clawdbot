@@ -42,6 +42,7 @@ const tempDirs = useReefTempDirs(afterEach);
 afterEach(() => {
   durabilityTestState.parentSyncOutcome = undefined;
   durabilityTestState.syncOutcome = undefined;
+  vi.restoreAllMocks();
 });
 
 describe("Node stores", () => {
@@ -106,6 +107,7 @@ describe("Node stores", () => {
   it.each(["parent", "final"] as const)(
     "rejects an append when %s journal directory synchronization is unsupported",
     async (stage) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const directory = tempDirs.make(`reef-audit-${stage}-unsupported-`);
       const path = join(directory, "nested", "audit.jsonl");
       if (stage === "parent") {
@@ -121,6 +123,18 @@ describe("Node stores", () => {
       );
     },
   );
+
+  it("accepts unsupported journal directory synchronization on Windows", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const directory = tempDirs.make("reef-audit-windows-unsupported-");
+    const path = join(directory, "nested", "audit.jsonl");
+    durabilityTestState.parentSyncOutcome = { status: "unsupported", code: "EPERM" };
+    durabilityTestState.syncOutcome = { status: "unsupported", code: "EPERM" };
+
+    await expect(
+      new JsonlAuditStore(path, auditKey).appendEvent("one", { id: 1 }, 10),
+    ).resolves.toMatchObject({ event: { seq: 1, type: "one" } });
+  });
 
   it("rejects a corrupt middle JSONL record", async () => {
     const directory = tempDirs.make("reef-audit-corrupt-");

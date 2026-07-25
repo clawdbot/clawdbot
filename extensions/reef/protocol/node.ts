@@ -282,7 +282,7 @@ function replayKey(peer: string, id: string): string {
 function requireJournalDirectorySync(
   outcome: DirectorySyncOutcome | { status: "not-needed" },
 ): void {
-  if (outcome.status !== "unsupported") {
+  if (outcome.status !== "unsupported" || process.platform === "win32") {
     return;
   }
   const code = outcome.code ? ` (${outcome.code})` : "";
