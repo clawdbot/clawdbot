@@ -115,15 +115,15 @@ async function assertRawParentWithinRoot(params: {
   filePath: string;
   cwd: string;
   root: string;
-}): Promise<void> {
+}): Promise<string> {
   // Win32 resolves reparse-point/.. paths lexically, so it has no equivalent escape.
   // Avoid adding another realpath to this hot path on Windows, where it is expensive.
   if (process.platform === "win32") {
-    return;
+    return resolveSandboxInputPath(params.filePath, params.cwd);
   }
   const expanded = expandPath(params.filePath);
   if (isWindowsDrivePath(expanded)) {
-    return;
+    return path.win32.normalize(expanded);
   }
   // Do not use path.resolve here: it would erase the symlink-sensitive `..` before
   // native realpath can traverse the raw parent chain. The final component stays
@@ -146,6 +146,7 @@ async function assertRawParentWithinRoot(params: {
       `Path escapes sandbox root (${shortenHomePath(rootCanonical)}): ${params.filePath}`,
     );
   }
+  return targetCanonical;
 }
 
 export async function assertSandboxPath(params: {
@@ -168,7 +169,15 @@ export async function assertSandboxPath(params: {
   });
   // The alias guard owns its specific symlink/hardlink errors; this closes the raw
   // symlink-then-`..` gap that lexical normalization hides from that guard.
-  await assertRawParentWithinRoot(params);
+  const rawTarget = await assertRawParentWithinRoot(params);
+  if (path.resolve(rawTarget) !== path.resolve(resolved.resolved)) {
+    await assertNoPathAliasEscape({
+      absolutePath: rawTarget,
+      rootPath: params.root,
+      boundaryLabel: "sandbox root",
+      policy,
+    });
+  }
   return resolved;
 }
 

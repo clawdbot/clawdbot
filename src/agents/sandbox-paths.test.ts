@@ -148,6 +148,16 @@ describe("assertSandboxPath", () => {
           assertSandboxPath({ filePath: `${root}/sub/up/../..`, cwd: root, root }),
         ).rejects.toThrow(/escapes sandbox root/i);
 
+        await fs.mkdir(path.join(root, "a"));
+        await fs.mkdir(path.join(root, "b"));
+        await fs.symlink("../b", path.join(root, "a", "up"));
+        await fs.symlink(path.join(outside, "secret.txt"), path.join(root, "escape"));
+        const escapedFinalSymlink = `${root}/a/up/../escape`;
+        await expect(fs.readFile(escapedFinalSymlink, "utf8")).resolves.toBe("outside");
+        await expect(
+          assertSandboxPath({ filePath: escapedFinalSymlink, cwd: root, root }),
+        ).rejects.toThrow(/symlink escapes sandbox root/i);
+
         await fs.symlink(outside, path.join(root, "outside-link"));
         await expect(
           assertSandboxPath({
