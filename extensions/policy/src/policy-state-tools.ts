@@ -1,4 +1,4 @@
-// Policy plugin TOOLS.md evidence.
+// Policy plugin AGENTS.md Tools-section evidence.
 import { COLLAPSE_HYPHENS, NON_SLUG_CHARS, TRIM_HYPHENS } from "./policy-state-types.js";
 import type { PolicyToolEvidence } from "./policy-state-types.js";
 
@@ -12,8 +12,36 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     return [];
   }
   const tools: PolicyToolEvidence[] = [];
+  let localNotesMode: "plain" | "migrated" | undefined;
   for (let index = 0; index < section.length; index += 1) {
     const line = section[index]?.text ?? "";
+    if (
+      line.includes("Skills provide your tools.") &&
+      line.includes("Keep local notes") &&
+      line.includes("TOOLS.md")
+    ) {
+      localNotesMode = "plain";
+      continue;
+    }
+    if (/^###\s+Local notes\s*$/iu.test(line)) {
+      localNotesMode = "plain";
+      continue;
+    }
+    if (/^###\s+Local notes \(migrated from TOOLS\.md\)\s*$/iu.test(line)) {
+      localNotesMode = "migrated";
+      continue;
+    }
+    const sectionHeading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(line);
+    if (localNotesMode && sectionHeading && slugify(sectionHeading[2] ?? "") === "tools") {
+      localNotesMode = undefined;
+      continue;
+    }
+    if (localNotesMode === "plain" && /^###\s+/u.test(line)) {
+      localNotesMode = undefined;
+    }
+    if (localNotesMode) {
+      continue;
+    }
     const heading = /^###\s+([^\s#]+)(.*)$/.exec(line);
     const bullet = /^[-*+]\s+([^:\s][^:]*?)\s*:(.*)$/.exec(line);
     const match = heading ?? bullet;
@@ -35,7 +63,7 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
       capabilities?: readonly string[];
     } = {
       id,
-      source: `oc://TOOLS.md/tools/${id}`,
+      source: `oc://AGENTS.md/tools/${id}`,
       line: section[index]?.line ?? index + 1,
     };
     const metaLines = [match[2] ?? ""];
@@ -74,21 +102,46 @@ function markdownSectionLines(
 ): readonly { readonly line: number; readonly text: string }[] {
   const lines = raw.split(/\r?\n/);
   let sectionDepth: number | undefined;
+  let foundSection = false;
+  let fence: { marker: "`" | "~"; length: number } | undefined;
   const section: { line: number; text: string }[] = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
+    const fenceRun = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    const closingFenceRun = /^\s*(`{3,}|~{3,})\s*$/.exec(line)?.[1];
+    const marker = fenceRun?.[0] as "`" | "~" | undefined;
+    if (marker && !fence) {
+      fence = { marker, length: fenceRun!.length };
+      continue;
+    }
+    if (
+      closingFenceRun &&
+      fence &&
+      closingFenceRun[0] === fence.marker &&
+      closingFenceRun.length >= fence.length
+    ) {
+      fence = undefined;
+      continue;
+    }
+    if (fence) {
+      continue;
+    }
     const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (heading !== null) {
       const depth = heading[1]?.length ?? 0;
       const slug = slugify(heading[2] ?? "");
       if (sectionDepth !== undefined && depth <= sectionDepth) {
-        break;
+        sectionDepth = undefined;
       }
       if (sectionDepth !== undefined) {
         section.push({ line: index + 1, text: line });
         continue;
       }
-      if (sectionDepth === undefined && slug === sectionSlug) {
+      if (slug === sectionSlug) {
+        if (foundSection) {
+          section.push({ line: index + 1, text: line });
+        }
+        foundSection = true;
         sectionDepth = depth;
       }
       continue;

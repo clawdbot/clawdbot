@@ -70,7 +70,7 @@ describe("scanPolicyTools", () => {
     ).resolves.toEqual([
       {
         id: "deploy-tool",
-        source: "oc://TOOLS.md/tools/deploy-tool",
+        source: "oc://AGENTS.md/tools/deploy-tool",
         line: 2,
         risk: "critical",
         sensitivity: "restricted",
@@ -79,7 +79,7 @@ describe("scanPolicyTools", () => {
       },
       {
         id: "inspect",
-        source: "oc://TOOLS.md/tools/inspect",
+        source: "oc://AGENTS.md/tools/inspect",
         line: 3,
         risk: "low",
         sensitivity: "public",
@@ -94,12 +94,54 @@ describe("scanPolicyTools", () => {
     ).resolves.toEqual([
       {
         id: "deploy",
-        source: "oc://TOOLS.md/tools/deploy",
+        source: "oc://AGENTS.md/tools/deploy",
         line: 2,
         risk: "critical",
         owner: "ops",
       },
     ]);
+  });
+
+  it("ignores local-note examples inside fenced blocks", async () => {
+    await expect(
+      scanPolicyTools(
+        [
+          "## Tools",
+          "```markdown",
+          "- SSH: home-server -> 192.168.1.100",
+          "### Cameras",
+          "```",
+        ].join("\n"),
+      ),
+    ).resolves.toEqual([]);
+  });
+
+  it("ignores the complete local-notes subsection", async () => {
+    await expect(
+      scanPolicyTools(
+        ["## Tools", "### Local notes", "- SSH: prod-host", "### deploy risk: high"].join("\n"),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high" })]);
+  });
+
+  it("keeps longer fences open across shorter delimiter runs", async () => {
+    await expect(
+      scanPolicyTools(["## Tools", "````markdown", "```", "- SSH: home-server", "````"].join("\n")),
+    ).resolves.toEqual([]);
+  });
+
+  it("scans a migrated legacy Tools section after its document heading", async () => {
+    await expect(
+      scanPolicyTools(
+        [
+          "## Tools",
+          "### Local notes (migrated from TOOLS.md)",
+          "# TOOLS.md",
+          "## Tools",
+          "### deploy risk: high sensitivity: restricted owner: ops",
+        ].join("\n"),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high", owner: "ops" })]);
   });
 });
 

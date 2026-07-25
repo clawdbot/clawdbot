@@ -1100,7 +1100,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([]);
   });
 
-  it("does not include unrelated TOOLS.md evidence in channel-only attestations", async () => {
+  it("does not include unrelated AGENTS.md tool evidence in channel-only attestations", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const policy = { channels: { denyRules: [] } };
     const policyHash = policyDocumentHash(policy);
@@ -1126,7 +1126,7 @@ describe("registerPolicyDoctorChecks", () => {
     }).attestationHash;
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
     const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash })),

@@ -188,7 +188,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       : undefined;
   const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile(ctx) : undefined;
   if (requiredMetadata.size > 0) {
-    const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
+    const toolsFile = await readWorkspaceFile(ctx, "AGENTS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
       includeIngress,
