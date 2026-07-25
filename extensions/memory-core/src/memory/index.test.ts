@@ -23,7 +23,11 @@ import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import { closeMemoryIndexManagersForAgent } from "./manager.js";
+import {
+  closeAllMemoryIndexManagers,
+  closeMemoryIndexManagersForAgent,
+  MemoryIndexManager as RuntimeMemoryIndexManager,
+} from "./manager.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -1675,6 +1679,98 @@ describe("memory index", () => {
     expect(third === second).toBe(false);
     expect((second as unknown as { closed: boolean }).closed).toBe(true);
     expect((third as unknown as { closed: boolean }).closed).toBe(false);
+  });
+
+  it("does not block another agent while one scope retires its manager", async () => {
+    const firstCfg = createCfg({
+      model: "first-model",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg: firstCfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+
+    const replacementPromise = getMemorySearchManager({
+      cfg: createCfg({ model: "second-model" }),
+      agentId: "main",
+    });
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+    const otherAgentPromise = getMemorySearchManager({
+      cfg: createCfg({ model: "other-model" }),
+      agentId: "other",
+    });
+    let otherAgentSettled = false;
+    void otherAgentPromise.then(
+      () => {
+        otherAgentSettled = true;
+      },
+      () => {
+        otherAgentSettled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() => expect(otherAgentSettled).toBe(true));
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const otherAgent = requireManager(await otherAgentPromise);
+    const replacement = requireManager(await replacementPromise);
+    managersForCleanup.add(otherAgent);
+    managersForCleanup.add(replacement);
+    expect((otherAgent as unknown as { closed: boolean }).closed).toBe(false);
+  });
+
+  it("global teardown waits for an admitted builtin manager replacement", async () => {
+    const first = await RuntimeMemoryIndexManager.get({
+      cfg: createCfg({ model: "first-model" }),
+      agentId: "main",
+    });
+    if (!first) {
+      throw new Error("Expected first memory index manager");
+    }
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+
+    const replacementPromise = RuntimeMemoryIndexManager.get({
+      cfg: createCfg({ model: "second-model" }),
+      agentId: "main",
+    });
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+    const globalClosePromise = closeAllMemoryIndexManagers();
+    let globalCloseSettled = false;
+    void globalClosePromise.then(
+      () => {
+        globalCloseSettled = true;
+      },
+      () => {
+        globalCloseSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(globalCloseSettled).toBe(false);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const replacement = await replacementPromise;
+    await globalClosePromise;
+    if (!replacement) {
+      throw new Error("Expected replacement memory index manager");
+    }
+    managersForCleanup.add(replacement);
+    expect((replacement as unknown as { closed: boolean }).closed).toBe(true);
   });
 
   it("retains a failed scoped close owner until provider retirement succeeds", async () => {

@@ -103,7 +103,7 @@ const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 const MEMORY_INDEX_MANAGER_SCOPE_CLOSES_KEY = Symbol.for("openclaw.memoryIndexManagerScopeCloses");
 const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
-  "openclaw.memoryIndexManagerGlobalLifecycle.v2",
+  "openclaw.memoryIndexManagerGlobalLifecycle.v3",
 );
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
@@ -123,20 +123,21 @@ const INDEX_SCOPE_CLOSES = resolveGlobalSingleton<Map<string, Promise<void>>>(
   () => new Map(),
 );
 const INDEX_GLOBAL_LIFECYCLE = resolveGlobalSingleton<{
-  tail: Promise<void>;
+  closePromise: Promise<void> | null;
   closeFailed: boolean;
 }>(MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY, () => ({
-  tail: Promise.resolve(),
+  closePromise: null,
   closeFailed: false,
 }));
 
-async function runMemoryIndexManagerGlobalOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const result = INDEX_GLOBAL_LIFECYCLE.tail.then(operation, operation);
-  INDEX_GLOBAL_LIFECYCLE.tail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return await result;
+async function runMemoryIndexManagerGlobalClose(operation: () => Promise<void>): Promise<void> {
+  const previous = INDEX_GLOBAL_LIFECYCLE.closePromise ?? Promise.resolve();
+  const closePromise = previous.then(operation, operation);
+  INDEX_GLOBAL_LIFECYCLE.closePromise = closePromise;
+  await closePromise;
+  if (INDEX_GLOBAL_LIFECYCLE.closePromise === closePromise) {
+    INDEX_GLOBAL_LIFECYCLE.closePromise = null;
+  }
 }
 
 async function closeAllMemoryIndexManagersUnlocked(): Promise<void> {
@@ -221,7 +222,7 @@ const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   EMBEDDING_PROBE_CACHE.clear();
-  await runMemoryIndexManagerGlobalOperation(async () => {
+  await runMemoryIndexManagerGlobalClose(async () => {
     try {
       await closeAllMemoryIndexManagersUnlocked();
       INDEX_GLOBAL_LIFECYCLE.closeFailed = false;
@@ -341,6 +342,16 @@ async function runMemoryIndexManagerScopeOperation<T>(
   },
   operation: () => Promise<T>,
 ): Promise<T> {
+  while (INDEX_GLOBAL_LIFECYCLE.closePromise) {
+    const globalClose = INDEX_GLOBAL_LIFECYCLE.closePromise;
+    try {
+      await globalClose;
+    } catch {
+      if (INDEX_GLOBAL_LIFECYCLE.closePromise === globalClose) {
+        await closeAllMemoryIndexManagers();
+      }
+    }
+  }
   const scopeKey = resolveMemoryIndexManagerScopeKey(params);
   const previousOperation = INDEX_SCOPE_CLOSES.get(scopeKey) ?? Promise.resolve();
   const result = previousOperation.then(operation, operation);
@@ -507,18 +518,24 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     purpose?: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
-    return await runMemoryIndexManagerGlobalOperation(async () => {
-      if (INDEX_GLOBAL_LIFECYCLE.closeFailed) {
-        try {
-          await closeAllMemoryIndexManagersUnlocked();
-          INDEX_GLOBAL_LIFECYCLE.closeFailed = false;
-        } catch (err) {
-          INDEX_GLOBAL_LIFECYCLE.closeFailed = true;
-          throw err;
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const purpose =
+      params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
+    return await runMemoryIndexManagerScopeOperation(
+      { agentId: params.agentId, workspaceDir, purpose },
+      async () => {
+        if (INDEX_GLOBAL_LIFECYCLE.closeFailed) {
+          try {
+            await closeAllMemoryIndexManagersUnlocked();
+            INDEX_GLOBAL_LIFECYCLE.closeFailed = false;
+          } catch (err) {
+            INDEX_GLOBAL_LIFECYCLE.closeFailed = true;
+            throw err;
+          }
         }
-      }
-      return await MemoryIndexManager.getWithinGlobalLifecycle(params);
-    });
+        return await MemoryIndexManager.getWithinGlobalLifecycle(params);
+      },
+    );
   }
 
   private static async getWithinGlobalLifecycle(params: {
@@ -583,19 +600,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (transient) {
       return await getOrCreate();
     }
-    return await runMemoryIndexManagerScopeOperation(
-      { agentId, workspaceDir, purpose },
-      async () => {
-        const cachedManager = INDEX_CACHE.get(key);
-        await closeMemoryIndexManagersForScopeUnlocked({
-          agentId,
-          workspaceDir,
-          purpose,
-          ...(cachedManager?.closed ? {} : { exceptKey: key }),
-        });
-        return await getOrCreate();
-      },
-    );
+    const cachedManager = INDEX_CACHE.get(key);
+    await closeMemoryIndexManagersForScopeUnlocked({
+      agentId,
+      workspaceDir,
+      purpose,
+      ...(cachedManager?.closed ? {} : { exceptKey: key }),
+    });
+    return await getOrCreate();
   }
 
   private constructor(params: {
