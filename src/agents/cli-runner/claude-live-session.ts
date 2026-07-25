@@ -24,7 +24,10 @@ import {
 } from "../../infra/exec-approvals.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  LEGACY_IMPLICIT_AGENT_ID,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agent-scope-config.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
@@ -980,7 +983,9 @@ function readConfiguredExecPolicy(context: PreparedCliRunContext): {
     context.params.agentId ??
     resolveAgentIdFromSessionKey(
       context.params.sessionKey,
-      context.params.config ? resolveDefaultAgentId(context.params.config) : undefined,
+      context.params.config
+        ? resolveDefaultAgentId(context.params.config)
+        : LEGACY_IMPLICIT_AGENT_ID,
     );
   const agentExec = context.params.config
     ? resolveAgentConfig(context.params.config, agentId)?.tools?.exec

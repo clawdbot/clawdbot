@@ -6,7 +6,10 @@ import {
   isSameOpenClawAgentDatabasePath,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
-import { inspectOpenClawAgentDatabaseOwner } from "../../state/openclaw-agent-db.js";
+import {
+  inspectOpenClawAgentDatabaseOwner,
+  isIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 
 /** SQLite database target resolved from a legacy session store path. */
 type ResolvedSqliteStoreTarget = {
@@ -239,6 +242,16 @@ export function resolveSqliteTargetFromSessionStorePath(
   options: ResolveSqliteStoreTargetOptions = {},
 ): ResolvedSqliteStoreTarget {
   const unsuffixedTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  const requestedAgentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
+  if (
+    requestedAgentId &&
+    isIncognitoOpenClawAgentSqlitePath(unsuffixedTarget.path, {
+      agentId: requestedAgentId,
+      env: options.env,
+    })
+  ) {
+    return { agentId: requestedAgentId, path: unsuffixedTarget.path };
+  }
   if (unsuffixedTarget.agentId) {
     return unsuffixedTarget;
   }

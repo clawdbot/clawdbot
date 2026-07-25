@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 describe("resolveSqliteTargetFromSessionStorePath", () => {
@@ -39,6 +40,19 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
       path: databasePath,
       shared: true,
     });
+  });
+
+  it("keeps an incognito sentinel owned by its requested agent", () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-incognito-target-") };
+    const databasePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "ops", env });
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(databasePath, {
+        agentId: "ops",
+        defaultAgentId: "main",
+        env,
+      }),
+    ).toEqual({ agentId: "ops", path: databasePath });
   });
 
   it("keeps custom store targets distinct when templates share a directory", () => {

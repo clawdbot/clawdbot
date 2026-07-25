@@ -302,9 +302,11 @@ export function collectExecPolicyScopeSnapshots(params: {
   hostDefaults?: ExecPolicyHostDefaults;
   hostDefaultSource?: string;
 }): ExecPolicyScopeSnapshot[] {
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const snapshots = [
     resolveExecPolicyScopeSnapshot({
       approvals: params.approvals,
+      agentId: defaultAgentId,
       scopeExecConfig: params.cfg.tools?.exec,
       configPath: "tools.exec",
       hostPath: params.hostPath,
@@ -314,7 +316,6 @@ export function collectExecPolicyScopeSnapshots(params: {
     }),
   ];
   const globalExecConfig = params.cfg.tools?.exec;
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const configuredAgents = listAgentEntries(params.cfg);
   const configAgentIds = new Set(
     configuredAgents
@@ -322,7 +323,7 @@ export function collectExecPolicyScopeSnapshots(params: {
       .map((agent) => agent.id),
   );
   const approvalAgentIds = Object.keys(params.approvals.agents ?? {}).filter(
-    (agentId) => agentId !== "*" && agentId !== "default",
+    (agentId) => agentId !== "*" && agentId !== "default" && agentId !== defaultAgentId,
   );
   const agentIds = sortUniqueStrings([...configAgentIds, ...approvalAgentIds]);
   for (const agentId of agentIds) {
