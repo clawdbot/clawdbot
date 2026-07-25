@@ -11,6 +11,7 @@ import {
   type WorkboardExecution,
   type WorkboardMetadata,
   type WorkboardNotification,
+  type WorkboardProof,
   type WorkboardRunAttempt,
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
@@ -48,6 +49,22 @@ export function cardSessionKey(card: WorkboardCard): string | undefined {
 
 export function cardRunId(card: WorkboardCard): string | undefined {
   return card.runId ?? card.execution?.runId;
+}
+
+export function isStructuredPassedProof(proof: WorkboardProof | undefined): boolean {
+  if (proof?.status !== "passed") {
+    return false;
+  }
+  const source = proof.command?.trim() || proof.url?.trim();
+  const note = proof.note?.trim();
+  return Boolean(source && note && !/^(?:ok|done|complete|verified)$/i.test(note));
+}
+
+export function pullRequestUrls(card: WorkboardCard): string[] {
+  const urls = [card.sourceUrl, ...(card.metadata?.links ?? []).map((link) => link.url)].filter(
+    (url): url is string => Boolean(url),
+  );
+  return urls.filter((url) => /github\.com\/[^/]+\/[^/]+\/pull\/\d+(?:[/?#]|$)/i.test(url));
 }
 
 function executionAttemptStatus(execution: WorkboardExecution): WorkboardAttemptStatus {

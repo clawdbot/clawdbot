@@ -518,6 +518,11 @@ export function createWorkboardTools(params: {
           createdCardIds: Type.Optional(
             Type.Array(Type.String(), { description: "Cards created during this run." }),
           ),
+          completionWaiver: Type.Optional(
+            Type.String({
+              description: "Documented reason required child work is intentionally still open.",
+            }),
+          ),
         },
         { additionalProperties: false },
       ),
@@ -776,7 +781,27 @@ export function createWorkboardTools(params: {
           summary: Type.Optional(Type.String({ description: "Decomposition summary." })),
           completeParent: Type.Optional(
             Type.Boolean({
-              description: "Complete the parent after child creation. Default true.",
+              description:
+                "Complete the parent after child creation. Default false; decomposition is planning until explicitly completed.",
+            }),
+          ),
+          proof: Type.Optional(
+            Type.Object(
+              {
+                status: Type.Optional(
+                  Type.String({ description: "passed, failed, skipped, or unknown." }),
+                ),
+                label: Type.Optional(Type.String({ description: "Proof label." })),
+                command: Type.Optional(Type.String({ description: "Command or step run." })),
+                url: Type.Optional(Type.String({ description: "Proof URL." })),
+                note: Type.Optional(Type.String({ description: "Proof note." })),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+          completionWaiver: Type.Optional(
+            Type.String({
+              description: "Documented reason required child work is intentionally still open.",
             }),
           ),
           children: Type.Array(

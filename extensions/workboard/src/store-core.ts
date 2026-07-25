@@ -18,16 +18,19 @@ import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-autom
 import {
   assertCanMutateClaimedCard,
   cardBoardId,
+  cardChildIds,
   cardParentIds,
   compareCards,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
+  isStructuredPassedProof,
   lifecycleStatusSourceUpdatedAtFromPatch,
   removeUndefinedCardFields,
   shouldSkipPersistedLifecycleStatusUpdate,
   syncExecutionAttemptMetadata,
   updateEvent,
   appendEvent,
+  pullRequestUrls,
 } from "./store-card-helpers.js";
 import { WorkboardChangeTracker } from "./store-change-tracker.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
@@ -433,6 +436,9 @@ export class WorkboardCoreStore {
       ...(completedAt ? { completedAt } : {}),
       ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
     };
+    if (card.status === "done") {
+      await this.assertDoneTransitionAllowed(undefined, card);
+    }
     await this.store.register(card.id, { version: 1, card });
     try {
       for (const parent of parentCards) {
@@ -650,11 +656,67 @@ export class WorkboardCoreStore {
       throw new Error("card dependencies are not done.");
     }
     if (next.status === "done") {
+      await this.assertDoneTransitionAllowed(existing, next);
       return;
     }
     const scheduledAt = next.metadata?.automation?.scheduledAt;
     if ((scheduledAt && scheduledAt > now) || (existing.status === "scheduled" && !scheduledAt)) {
       throw new Error("card is scheduled for later.");
+    }
+  }
+
+  private async assertDoneTransitionAllowed(
+    existing: WorkboardCard | undefined,
+    next: WorkboardCard,
+  ): Promise<void> {
+    const proof = next.metadata?.proof?.findLast(isStructuredPassedProof);
+    if (!proof) {
+      throw new Error(
+        "done gate: a passed structured proof with an exact command or URL and result note is required.",
+      );
+    }
+    if (next.metadata?.workflowState === "decomposed") {
+      throw new Error(
+        "done gate: a decomposed/planning card must remain open until execution is complete.",
+      );
+    }
+    const cardsById = new Map((await this.list()).map((card) => [card.id, card]));
+    if (existing) {
+      cardsById.set(existing.id, next);
+    }
+    for (const parentId of cardParentIds(next)) {
+      if (cardsById.get(parentId)?.status !== "done") {
+        throw new Error(`done gate: dependency ${parentId} is not done.`);
+      }
+    }
+    for (const childId of cardChildIds(next)) {
+      const child = cardsById.get(childId);
+      if (!child) {
+        throw new Error(`done gate: required child ${childId} is missing.`);
+      }
+      if (child.status !== "done" && (next.metadata?.completionWaiver?.trim().length ?? 0) < 12) {
+        throw new Error(`done gate: required child ${childId} is ${child.status}, not done.`);
+      }
+    }
+    for (const link of next.metadata?.links ?? []) {
+      if (link.type !== "blocked_by") {
+        continue;
+      }
+      const blocker = link.targetCardId ? cardsById.get(link.targetCardId) : undefined;
+      if (!blocker || blocker.status !== "done") {
+        throw new Error(
+          `done gate: unresolved blocker ${link.targetCardId ?? link.url ?? "(unknown)"}.`,
+        );
+      }
+    }
+    if (pullRequestUrls(next).length > 0) {
+      const note = proof.note?.toLowerCase() ?? "";
+      const hasCommit = /\b[0-9a-f]{7,40}\b/i.test(proof.note ?? "");
+      if (!/\bmerged\b/.test(note) || !/\breview(?:ed)?\b/.test(note) || !hasCommit) {
+        throw new Error(
+          "done gate: a pull request remains in review until merged exact-head/review proof includes the commit SHA.",
+        );
+      }
     }
   }
 

@@ -1037,6 +1037,8 @@ export function normalizeMetadata(
   const hasArchivedAt = Object.hasOwn(record, "archivedAt");
   const hasStale = Object.hasOwn(record, "stale");
   const hasLifecycleStatusSourceUpdatedAt = Object.hasOwn(record, "lifecycleStatusSourceUpdatedAt");
+  const hasWorkflowState = Object.hasOwn(record, "workflowState");
+  const hasCompletionWaiver = Object.hasOwn(record, "completionWaiver");
   const links = Array.isArray(record.links)
     ? record.links.map(normalizeLink).filter((link): link is WorkboardLink => link !== null)
     : undefined;
@@ -1140,6 +1142,14 @@ export function normalizeMetadata(
       typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
         ? Math.max(0, Math.trunc(record.failureCount))
         : fallback.failureCount,
+    workflowState: hasWorkflowState
+      ? record.workflowState === "planned" || record.workflowState === "decomposed"
+        ? record.workflowState
+        : undefined
+      : fallback.workflowState,
+    completionWaiver: hasCompletionWaiver
+      ? normalizeBoundedString(record.completionWaiver, undefined, 2000, "completion waiver")
+      : fallback.completionWaiver,
   };
   return trimMetadataToBudget(normalized, options);
 }
@@ -1257,6 +1267,8 @@ export function removeUndefinedMetadataFields(metadata: WorkboardMetadata): Work
     "stale",
     "lifecycleStatusSourceUpdatedAt",
     "failureCount",
+    "workflowState",
+    "completionWaiver",
   ] as const) {
     const value = next[key];
     if (

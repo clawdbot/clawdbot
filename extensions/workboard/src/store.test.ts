@@ -614,6 +614,11 @@ describe("WorkboardStore", () => {
       toStatus: "running",
     });
 
+    await store.addProof(card.id, {
+      status: "passed",
+      command: "pnpm test",
+      note: "Tests passed.",
+    });
     const done = await store.update(card.id, { status: "done" });
     expect(done.completedAt).toBeGreaterThanOrEqual(done.startedAt ?? 0);
 
@@ -1103,10 +1108,7 @@ describe("WorkboardStore", () => {
       },
     });
 
-    const failed = await store.complete(card.id, {
-      summary: "A later run failed.",
-      proof: { ...proofInput, status: "failed" },
-    });
+    const failed = await store.addProof(card.id, { ...proofInput, status: "failed" });
 
     expect(failed.metadata?.proof?.map((entry) => [entry.id, entry.status])).toEqual([
       ["proof-unknown", "unknown"],
@@ -1146,6 +1148,7 @@ describe("WorkboardStore", () => {
       status: "passed" as const,
       createdAt: 1_000,
       command: "pnpm test extensions/workboard",
+      note: "Tests passed.",
     };
     const card = await store.create({
       title: "Reuse terminal proof",
@@ -1155,7 +1158,7 @@ describe("WorkboardStore", () => {
     const completed = await store.complete(card.id, {
       summary: "Already passed.",
       proofId: proof.id,
-      proof: { status: "passed", command: proof.command },
+      proof: { status: "passed", command: proof.command, note: "Tests passed." },
     });
 
     expect(completed.metadata?.proof).toEqual([proof]);
@@ -1531,7 +1534,21 @@ describe("WorkboardStore", () => {
 
   it("reports an active claim after a dependency-backed card starts running", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const parent = await store.create({ title: "Parent", status: "done" });
+    const parent = await store.create({
+      title: "Parent",
+      status: "done",
+      metadata: {
+        proof: [
+          {
+            id: "parent-proof",
+            status: "passed",
+            createdAt: 1,
+            command: "pnpm test",
+            note: "Tests passed.",
+          },
+        ],
+      },
+    });
     const child = await store.create({ title: "Child", parents: [parent.id] });
 
     await store.claim(child.id, { ownerId: "main", ttlSeconds: 60 });
@@ -1650,7 +1667,12 @@ describe("WorkboardStore", () => {
       store.create({ title: "Unscoped child", idempotencyKey: "fanout:1" }),
     ).resolves.toMatchObject({ title: "Unscoped child" });
 
-    await store.complete(parent.id, { summary: "Parent done." });
+    await store.complete(parent.id, {
+      summary: "Parent done.",
+      proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      completionWaiver:
+        "Child cards are intentionally follow-up work promoted after parent completion.",
+    });
     const promoted = await store.promoteReady();
 
     expect(promoted.cards).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
@@ -1728,7 +1750,7 @@ describe("WorkboardStore", () => {
   it("keeps future scheduled cards scheduled until their time arrives", async () => {
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(0);
+      vi.setSystemTime(1);
       const store = new WorkboardStore(createMemoryStore());
       const card = await store.create({
         title: "Later",
@@ -1779,7 +1801,12 @@ describe("WorkboardStore", () => {
       await expect(store.claim(implicit.id, { ownerId: "main" })).rejects.toThrow(/scheduled/);
       await expect(store.move(manual.id, "running", manual.position)).rejects.toThrow(/scheduled/);
 
-      await store.complete(parent.id, { summary: "Parent done." });
+      await store.complete(parent.id, {
+        summary: "Parent done.",
+        proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+        completionWaiver:
+          "Child cards are intentionally follow-up work promoted after parent completion.",
+      });
       expect((await store.dispatch(5_000)).promoted).toEqual([]);
       await expect(store.get(dependent.id)).resolves.toMatchObject({ status: "scheduled" });
 
@@ -1847,7 +1874,12 @@ describe("WorkboardStore", () => {
     );
     await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(/dependencies/);
 
-    await store.complete(parent.id, { summary: "Parent done." });
+    await store.complete(parent.id, {
+      summary: "Parent done.",
+      proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      completionWaiver:
+        "Child cards are intentionally follow-up work promoted after parent completion.",
+    });
     const dispatch = await store.dispatch();
 
     expect(dispatch.promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
@@ -1884,7 +1916,12 @@ describe("WorkboardStore", () => {
       ),
     );
 
-    await store.complete(parent.id, { summary: "Parent done." });
+    await store.complete(parent.id, {
+      summary: "Parent done.",
+      proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      completionWaiver:
+        "Child cards are intentionally follow-up work promoted after parent completion.",
+    });
     entriesSpy.mockClear();
     const dispatch = await store.dispatch();
 
@@ -1903,14 +1940,57 @@ describe("WorkboardStore", () => {
   it("rejects terminal children with incomplete dependency parents", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const runningParent = await store.create({ title: "Running parent", status: "running" });
-    const doneChild = await store.create({ title: "Done child", status: "done" });
+    const doneChild = await store.create({
+      title: "Done child",
+      status: "done",
+      metadata: {
+        proof: [
+          {
+            id: "child-proof",
+            status: "passed",
+            createdAt: 1,
+            command: "pnpm test",
+            note: "Tests passed.",
+          },
+        ],
+      },
+    });
 
     await expect(store.linkCards(runningParent.id, doneChild.id)).rejects.toThrow(/terminal child/);
     await expect(
-      store.create({ title: "Already done", status: "done", parents: [runningParent.id] }),
+      store.create({
+        title: "Already done",
+        status: "done",
+        parents: [runningParent.id],
+        metadata: {
+          proof: [
+            {
+              id: "already-proof",
+              status: "passed",
+              createdAt: 1,
+              command: "pnpm test",
+              note: "Tests passed.",
+            },
+          ],
+        },
+      }),
     ).rejects.toThrow(/terminal child/);
 
-    const doneParent = await store.create({ title: "Done parent", status: "done" });
+    const doneParent = await store.create({
+      title: "Done parent",
+      status: "done",
+      metadata: {
+        proof: [
+          {
+            id: "done-parent-proof",
+            status: "passed",
+            createdAt: 1,
+            command: "pnpm test",
+            note: "Tests passed.",
+          },
+        ],
+      },
+    });
     await expect(store.linkCards(doneParent.id, doneChild.id)).resolves.toMatchObject({
       id: doneChild.id,
       status: "done",
@@ -2022,7 +2102,13 @@ describe("WorkboardStore", () => {
       ownerId: "main",
       token: "token-1",
       summary: "Implemented and verified.",
-      proof: { status: "passed", command: "pnpm test extensions/workboard" },
+      proof: {
+        status: "passed",
+        command: "pnpm test extensions/workboard",
+        note: "Tests passed.",
+      },
+      completionWaiver:
+        "Follow-up child is intentionally tracked as separate post-completion work.",
       artifacts: [{ path: "/tmp/log.txt", label: "log" }],
       createdCardIds: [child.id],
     });
@@ -2085,7 +2171,10 @@ describe("WorkboardStore", () => {
           metadata: { failureCount: 2 },
         })
       ).id,
-      { summary: "Recovered." },
+      {
+        summary: "Recovered.",
+        proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      },
     );
     expect(recovered.metadata?.failureCount).toBeUndefined();
   });
@@ -2097,7 +2186,10 @@ describe("WorkboardStore", () => {
     const longSummary = "x".repeat(1000);
     const longReason = "y".repeat(1000);
 
-    const completed = await store.complete(completeCard.id, { summary: longSummary });
+    const completed = await store.complete(completeCard.id, {
+      summary: longSummary,
+      proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+    });
     const blocked = await store.block(blockCard.id, { reason: longReason });
 
     expect(completed.metadata?.comments?.[0]?.body).toBe(longSummary);
@@ -2263,7 +2355,12 @@ describe("WorkboardStore", () => {
       maxRetries: 1,
       metadata: { failureCount: 2 },
     });
-    await store.complete(parent.id, { summary: "Parent done." });
+    await store.complete(parent.id, {
+      summary: "Parent done.",
+      proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      completionWaiver:
+        "Child cards are intentionally follow-up work promoted after parent completion.",
+    });
 
     const dependentDispatch = await store.dispatch();
 
@@ -2396,6 +2493,15 @@ describe("WorkboardStore", () => {
       title: "Needs proof",
       status: "done",
       metadata: {
+        proof: [
+          {
+            id: "needs-proof-seed",
+            status: "passed",
+            createdAt: 1,
+            command: "pnpm test",
+            note: "Tests passed.",
+          },
+        ],
         diagnostics: [
           {
             kind: "missing_proof",
@@ -2411,7 +2517,9 @@ describe("WorkboardStore", () => {
 
     const updated = await store.addProof(card.id, { status: "passed", label: "CI" });
 
-    expect(updated.metadata?.proof).toEqual([expect.objectContaining({ label: "CI" })]);
+    expect(updated.metadata?.proof).toEqual(
+      expect.arrayContaining([expect.objectContaining({ label: "CI" })]),
+    );
     expect(updated.metadata?.diagnostics).toBeUndefined();
   });
 
@@ -2421,6 +2529,15 @@ describe("WorkboardStore", () => {
       title: "Needs artifact",
       status: "done",
       metadata: {
+        proof: [
+          {
+            id: "needs-artifact-seed",
+            status: "passed",
+            createdAt: 1,
+            command: "pnpm test",
+            note: "Tests passed.",
+          },
+        ],
         diagnostics: [
           {
             kind: "missing_proof",
@@ -2474,6 +2591,15 @@ describe("WorkboardStore", () => {
       title: "Done with attachment",
       status: "done",
       metadata: {
+        proof: [
+          {
+            id: "attachment-proof-seed",
+            status: "passed",
+            createdAt: 1,
+            command: "pnpm test",
+            note: "Tests passed.",
+          },
+        ],
         attachments: [
           {
             id: "attachment-proof",
@@ -2659,7 +2785,16 @@ describe("WorkboardStore", () => {
     const child = await store.create({ title: "Child", parents: [parent.id] });
 
     await expect(
-      store.complete(parent.id, { createdCardIds: [child.id], summary: "done" }, null),
+      store.complete(
+        parent.id,
+        {
+          createdCardIds: [child.id],
+          summary: "done",
+          proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+          completionWaiver: "Child cards remain as separately tracked follow-up work.",
+        },
+        null,
+      ),
     ).resolves.toMatchObject({
       status: "done",
       metadata: { automation: { createdCardIds: [child.id] } },
@@ -2724,12 +2859,30 @@ describe("WorkboardStore", () => {
       status: "running",
       agentId: "agent-a",
     });
-    await store.complete(parent.id, { summary: "Use board-scoped queues." }, null);
+    await store.complete(
+      parent.id,
+      {
+        summary: "Use board-scoped queues.",
+        proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      },
+      null,
+    );
     await store.create({
       title: "Older task",
       status: "done",
       agentId: "agent-a",
-      metadata: { automation: { summary: "Finished related cleanup." } },
+      metadata: {
+        automation: { summary: "Finished related cleanup." },
+        proof: [
+          {
+            id: "older-proof",
+            status: "passed",
+            createdAt: 1,
+            command: "pnpm test",
+            note: "Tests passed.",
+          },
+        ],
+      },
     });
     const child = await store.create({
       title: "Implement",
@@ -2813,7 +2966,10 @@ describe("WorkboardStore", () => {
       eventKinds: ["completed"],
     });
 
-    await store.complete(card.id, { summary: "Done." });
+    await store.complete(card.id, {
+      summary: "Done.",
+      proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+    });
 
     const preview = await store.notificationEvents({ subscriptionId: subscription.id });
     expect(preview.events).toEqual([expect.objectContaining({ kind: "completed" })]);
@@ -2976,8 +3132,14 @@ describe("WorkboardStore", () => {
       target: "session:operator",
     });
 
-    await store.complete(unrelated.id, { summary: "Other done." });
-    await store.complete(matching.id, { summary: "Matching done." });
+    await store.complete(unrelated.id, {
+      summary: "Other done.",
+      proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+    });
+    await store.complete(matching.id, {
+      summary: "Matching done.",
+      proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+    });
 
     await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
       subscription: expect.objectContaining({ id: subscription.id }),
@@ -2999,7 +3161,10 @@ describe("WorkboardStore", () => {
       eventKinds: ["completed"],
     });
 
-    await store.complete(card.id, { summary: "Ops done." });
+    await store.complete(card.id, {
+      summary: "Ops done.",
+      proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+    });
 
     await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
       subscription: expect.objectContaining({ id: subscription.id, cardId: card.id }),
@@ -3213,7 +3378,8 @@ describe("WorkboardStore", () => {
       ],
     });
 
-    expect(result.parent.status).toBe("done");
+    expect(result.parent.status).toBe("todo");
+    expect(result.parent.metadata?.workflowState).toBe("decomposed");
     expect(result.parent.events?.at(-1)).toMatchObject({ kind: "decomposed" });
     expect(result.parent.metadata?.automation?.createdCardIds).toEqual(
       result.children.map((child) => child.id),
@@ -3328,8 +3494,38 @@ describe("WorkboardStore", () => {
       store.complete(parent.id, {
         createdCardIds: result.children.map((child) => child.id),
         summary: "Children recorded.",
+        proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
       }),
-    ).resolves.toMatchObject({ status: "done" });
+    ).rejects.toThrow(/required child/);
+    await expect(store.get(parent.id)).resolves.toMatchObject({
+      status: "todo",
+      metadata: { workflowState: "decomposed" },
+    });
+  });
+
+  it("requires explicit proof and waiver when decomposition completes an open parent", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent" });
+
+    await expect(
+      store.decompose(parent.id, {
+        completeParent: true,
+        children: [{ title: "Child" }],
+      }),
+    ).rejects.toThrow(/structured proof/);
+    await expect(store.list()).resolves.toEqual([expect.objectContaining({ id: parent.id })]);
+
+    const result = await store.decompose(parent.id, {
+      completeParent: true,
+      proof: { status: "passed", command: "pnpm test", note: "Decomposition gate passed." },
+      completionWaiver: "Child execution is intentionally tracked as follow-up work.",
+      children: [{ title: "Child" }],
+    });
+
+    expect(result.parent.status).toBe("done");
+    expect(result.parent.metadata?.automation?.createdCardIds).toEqual(
+      result.children.map((child) => child.id),
+    );
   });
 
   it("omits derived child idempotency keys when the parent key is already at the limit", async () => {
@@ -3358,7 +3554,8 @@ describe("WorkboardStore", () => {
       children: [{ title: "Ignored duplicate", idempotencyKey: "child-key" }],
     });
 
-    expect(result.parent.status).toBe("done");
+    expect(result.parent.status).toBe("todo");
+    expect(result.parent.metadata?.workflowState).toBe("decomposed");
     expect(result.children).toEqual([expect.objectContaining({ id: existingChild.id })]);
     expect(result.parent.metadata?.automation?.createdCardIds).toEqual([existingChild.id]);
     await expect(store.get(existingChild.id)).resolves.toMatchObject({
@@ -3370,11 +3567,84 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("rejects duplicate child idempotency keys within one decomposition", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent" });
+
+    await expect(
+      store.decompose(parent.id, {
+        children: [
+          { title: "First child", idempotencyKey: "same-child" },
+          { title: "Duplicate child", idempotencyKey: "same-child" },
+        ],
+      }),
+    ).rejects.toThrow("duplicate child idempotency key: same-child");
+
+    await expect(store.list()).resolves.toEqual([expect.objectContaining({ id: parent.id })]);
+  });
+
   it("rejects invalid status values", async () => {
     const store = new WorkboardStore(createMemoryStore());
     await expect(store.create({ title: "Bad card", status: "later" })).rejects.toThrow(
       /status must be one of/,
     );
+  });
+
+  it("requires strong proof before any card can become done", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Proof gate" });
+
+    await expect(store.update(card.id, { status: "done" })).rejects.toThrow(/structured proof/);
+    await expect(
+      store.complete(card.id, { proof: { status: "passed", note: "done" } }),
+    ).rejects.toThrow(/structured proof/);
+    await expect(
+      store.complete(card.id, {
+        proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      }),
+    ).resolves.toMatchObject({ status: "done" });
+  });
+
+  it("rejects completion while required children or blockers remain", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent" });
+    await store.create({ title: "Child", parents: [parent.id] });
+    await expect(
+      store.complete(parent.id, {
+        proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      }),
+    ).rejects.toThrow(/required child/);
+
+    const blocker = await store.create({ title: "Blocker" });
+    const blocked = await store.create({ title: "Blocked" });
+    await store.addLink(blocked.id, { type: "blocked_by", targetCardId: blocker.id });
+    await expect(
+      store.complete(blocked.id, {
+        proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      }),
+    ).rejects.toThrow(/unresolved blocker/);
+  });
+
+  it("keeps pull-request cards in review until merged exact-head proof exists", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Review PR",
+      sourceUrl: "https://github.com/acme/project/pull/42",
+    });
+    await expect(
+      store.complete(card.id, {
+        proof: { status: "passed", command: "pnpm test", note: "Tests passed." },
+      }),
+    ).rejects.toThrow(/pull request remains in review/);
+    await expect(
+      store.complete(card.id, {
+        proof: {
+          status: "passed",
+          command: "pnpm test",
+          note: "PR merged and reviewed at commit abcdef1234567.",
+        },
+      }),
+    ).resolves.toMatchObject({ status: "done" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

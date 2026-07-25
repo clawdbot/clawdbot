@@ -244,6 +244,12 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
     }
     const summary = normalizeBoundedString(input.summary, undefined, 2000, "summary");
+    const completionWaiver = normalizeBoundedString(
+      input.completionWaiver,
+      undefined,
+      2000,
+      "completion waiver",
+    );
     const proofInput =
       input.proof && typeof input.proof === "object" && !Array.isArray(input.proof)
         ? (input.proof as WorkboardProofInput)
@@ -286,6 +292,8 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           claim: undefined,
           attempts: closeRunningAttempts(metadata.attempts, now, "succeeded"),
           failureCount: 0,
+          workflowState: undefined,
+          ...(completionWaiver ? { completionWaiver } : {}),
           automation: normalizeAutomation(
             {
               ...metadata.automation,
@@ -545,12 +553,26 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const existingCardIds = new Set((await this.list()).map((card) => card.id));
       const children: WorkboardCard[] = [];
       const reusedChildSnapshots = new Map<string, WorkboardCard>();
+      const childIdempotencyKeys = new Set<string>();
       try {
         for (const rawChild of childrenInput) {
           if (!rawChild || typeof rawChild !== "object" || Array.isArray(rawChild)) {
             throw new Error("children must be objects.");
           }
           const child = rawChild as WorkboardDecomposeChildInput;
+          const childIdempotencyKey = normalizeBoundedString(
+            child.idempotencyKey ??
+              deriveChildIdempotencyKey(parentAutomation?.idempotencyKey, children.length + 1),
+            undefined,
+            160,
+            "idempotency key",
+          );
+          if (childIdempotencyKey) {
+            if (childIdempotencyKeys.has(childIdempotencyKey)) {
+              throw new Error(`duplicate child idempotency key: ${childIdempotencyKey}`);
+            }
+            childIdempotencyKeys.add(childIdempotencyKey);
+          }
           const created = await this.createDirect(
             {
               ...child,
@@ -558,9 +580,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
               boardId: child.boardId ?? parentAutomation?.boardId,
               tenant: child.tenant ?? parentAutomation?.tenant,
               createdByCardId: parent.id,
-              idempotencyKey:
-                child.idempotencyKey ??
-                deriveChildIdempotencyKey(parentAutomation?.idempotencyKey, children.length + 1),
+              idempotencyKey: childIdempotencyKey,
             },
             scope === null ? undefined : scope,
           );
@@ -579,11 +599,22 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           );
         }
         const summary = normalizeBoundedString(input.summary, undefined, 2000, "decompose summary");
-        const completeParent = input.completeParent !== false;
+        const completionWaiver = normalizeBoundedString(
+          input.completionWaiver,
+          undefined,
+          2000,
+          "completion waiver",
+        );
+        const completeParent = input.completeParent === true;
         const updatedParent = completeParent
           ? await this.completeDirect(
               parent.id,
-              { summary, createdCardIds: children.map((child) => child.id) },
+              {
+                summary,
+                proof: input.proof,
+                createdCardIds: children.map((child) => child.id),
+                ...(completionWaiver ? { completionWaiver } : {}),
+              },
               scope,
             )
           : await (async () => {
@@ -597,6 +628,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                       : latestParent.status,
                   metadata: {
                     ...latestParent.metadata,
+                    workflowState: "decomposed",
                     automation: normalizeAutomation(
                       {
                         ...latestParent.metadata?.automation,
@@ -605,6 +637,16 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                       },
                       latestParent.metadata?.automation,
                     ),
+                    notifications: [
+                      ...(latestParent.metadata?.notifications ?? []),
+                      {
+                        id: randomUUID(),
+                        kind: "decomposed",
+                        createdAt: Date.now(),
+                        sequence: this.nextNotificationSequence(Date.now()),
+                        message: capText(summary, 240) ?? "Workboard card decomposed.",
+                      } satisfies WorkboardNotification,
+                    ].slice(-MAX_CARD_NOTIFICATIONS),
                   },
                 },
                 { enforceStatusHolds: true },

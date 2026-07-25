@@ -113,6 +113,7 @@ export type WorkboardCompleteInput = {
   proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
+  completionWaiver?: unknown;
 };
 export type WorkboardBlockInput = {
   ownerId?: unknown;
@@ -170,6 +171,8 @@ export type WorkboardDecomposeInput = {
   summary?: unknown;
   children?: unknown;
   completeParent?: unknown;
+  proof?: unknown;
+  completionWaiver?: unknown;
 };
 export type WorkboardNotificationSubscribeInput = {
   boardId?: unknown;

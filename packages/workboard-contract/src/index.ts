@@ -73,7 +73,7 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "orphaned_session",
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
-export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;
+export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "decomposed", "failed", "stale"] as const;
 export const WORKBOARD_BOARD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 
 export function isValidWorkboardBoardId(value: unknown): value is string {
@@ -336,6 +336,10 @@ export type WorkboardMetadata = {
   stale?: WorkboardStaleState;
   lifecycleStatusSourceUpdatedAt?: number;
   failureCount?: number;
+  /** Explicit, documented reason why required child work remains open. */
+  completionWaiver?: string;
+  /** Planning/decomposition is not execution completion. */
+  workflowState?: "planned" | "decomposed";
 };
 
 export type WorkboardCard = {

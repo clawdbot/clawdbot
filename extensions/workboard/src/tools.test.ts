@@ -414,6 +414,7 @@ describe("workboard tools", () => {
         id: parent.id,
         token,
         command: "pnpm test extensions/workboard",
+        note: "Tests passed.",
       }),
     );
     expect(pendingProof.proofId).toEqual(expect.any(String));
@@ -423,8 +424,13 @@ describe("workboard tools", () => {
         token,
         summary: "Done.",
         createdCardIds: [child.id],
+        completionWaiver: "Child is intentionally promoted as separate follow-up work.",
         proofId: pendingProof.proofId,
-        proof: { status: "passed", command: "pnpm test extensions/workboard" },
+        proof: {
+          status: "passed",
+          command: "pnpm test extensions/workboard",
+          note: "Tests passed.",
+        },
       }),
     );
     expect(completed.card).toMatchObject({
@@ -541,7 +547,10 @@ describe("workboard tools", () => {
         children: [{ title: "Child A" }, { title: "Child B" }],
       }),
     );
-    expect(decomposed.parent).toMatchObject({ status: "done" });
+    expect(decomposed.parent).toMatchObject({
+      status: "todo",
+      metadata: { workflowState: "decomposed" },
+    });
     expect(decomposed.children).toEqual([
       expect.objectContaining({ title: "Child A" }),
       expect.objectContaining({ title: "Child B" }),
@@ -581,7 +590,7 @@ describe("workboard tools", () => {
         subscriptionId: (subscription.subscription as { id: string }).id,
       }),
     );
-    expect(events.events).toEqual([expect.objectContaining({ kind: "completed" })]);
+    expect(events.events).toEqual([]);
 
     const attached = readPayload(
       await tools.get("workboard_attachment_add")?.execute("call-attach", {

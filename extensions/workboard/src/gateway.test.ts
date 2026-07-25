@@ -642,7 +642,15 @@ describe("workboard gateway methods", () => {
 
     const completeRespond = vi.fn();
     await methods.get("workboard.cards.complete")?.handler({
-      params: { id: cardId, summary: "Operator closed it." },
+      params: {
+        id: cardId,
+        summary: "Operator closed it.",
+        proof: {
+          status: "passed",
+          command: "pnpm test extensions/workboard/src/gateway.test.ts",
+          note: "Gateway lifecycle test passed.",
+        },
+      },
       respond: completeRespond,
     } as never);
     expect(completeRespond.mock.calls[0]?.[1]).toMatchObject({
