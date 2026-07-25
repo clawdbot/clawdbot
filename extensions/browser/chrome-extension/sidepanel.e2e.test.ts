@@ -11,7 +11,11 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
-import { copyCopilotSidepanelExtension } from "./sidepanel.e2e-support.js";
+import {
+  copyCopilotSidepanelExtension,
+  isSidePanelTarget,
+  resolveChromiumExecutable,
+} from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
   runtime: {
@@ -72,18 +76,17 @@ type PanelTarget = {
   disabled: (selector: string) => Promise<boolean>;
   fill: (selector: string, value: string) => Promise<void>;
   hidden: (selector: string) => Promise<boolean>;
+  pressEnter: (
+    selector: string,
+    isComposing: boolean,
+  ) => Promise<{
+    defaultPrevented: boolean;
+    value: string;
+  }>;
   screenshot: (targetPath: string) => Promise<void>;
   text: (selector: string) => Promise<string>;
   wakeBackground: () => Promise<void>;
 };
-
-function isSidePanelTarget(target: TargetInfo): boolean {
-  try {
-    return new URL(target.url).pathname.endsWith("/sidepanel.html");
-  } catch {
-    return false;
-  }
-}
 
 function textValue(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -360,22 +363,6 @@ async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Pr
   };
 }
 
-async function resolveChromiumExecutable(): Promise<string | undefined> {
-  const override = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
-  const candidates = [override, "/usr/bin/chromium-browser", "/usr/bin/chromium"].filter(
-    (candidate): candidate is string => Boolean(candidate),
-  );
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // Continue to Playwright's managed Chromium.
-    }
-  }
-  return undefined;
-}
-
 async function restartServiceWorker(
   browserCdp: CDPSession,
   worker: Worker,
@@ -480,6 +467,15 @@ function createPanelTarget(root: CDPSession, sessionId: string): PanelTarget {
       await evaluate<boolean>(
         `document.querySelector(${selectorExpression(selector)})?.classList.contains("hidden") === true`,
       ),
+    pressEnter: async (selector, isComposing) =>
+      await evaluate<{ defaultPrevented: boolean; value: string }>(`(() => {
+        const input = document.querySelector(${selectorExpression(selector)});
+        const event = new KeyboardEvent("keydown", {
+          key: "Enter", bubbles: true, cancelable: true, isComposing: ${isComposing},
+        });
+        input.dispatchEvent(event);
+        return { defaultPrevented: event.defaultPrevented, value: input.value };
+      })()`),
     screenshot: async (targetPath) => {
       await send("Page.enable");
       const result = await send("Page.captureScreenshot", { format: "png", fromSurface: true });
@@ -723,9 +719,19 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 15_000,
       })
       .toBe(true);
+    await alphaPanel.fill("#message-input", "にほん");
+    expect(await alphaPanel.pressEnter("#message-input", true)).toEqual({
+      defaultPrevented: false,
+      value: "にほん",
+    });
+    expect(gateway.chatSends).toHaveLength(0);
+    expect(await alphaPanel.allText(".message.user")).toEqual([]);
     await alphaPanel.fill("#message-input", "alpha marker");
     await expect.poll(async () => !(await alphaPanel.disabled("#send-button"))).toBe(true);
-    await alphaPanel.click("#send-button");
+    expect(await alphaPanel.pressEnter("#message-input", false)).toEqual({
+      defaultPrevented: true,
+      value: "",
+    });
     await expect
       .poll(
         async () => ({
