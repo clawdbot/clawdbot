@@ -39,7 +39,7 @@ function resolveGitTimeoutMs(env = process.env) {
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return DEFAULT_GIT_TIMEOUT_MS;
   }
-  return Math.min(Math.trunc(parsed), MAX_GIT_TIMEOUT_MS);
+  return Math.max(1, Math.min(Math.trunc(parsed), MAX_GIT_TIMEOUT_MS));
 }
 
 export function parseArgs(argv) {

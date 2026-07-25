@@ -82,5 +82,19 @@ if (process.argv.includes("diff")) {
     expect(result.stderr).toContain(
       "release metadata guard: git diff --name-only --diff-filter=ACMR origin/main...HEAD timed out after 500ms.",
     );
+
+    const fractionalResult = spawnSync(process.execPath, [scriptPath], {
+      cwd: path.resolve(import.meta.dirname, "../.."),
+      env: {
+        ...process.env,
+        OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS: "0.5",
+        PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+
+    expect(fractionalResult.status).toBe(1);
+    expect(fractionalResult.stderr).toContain("timed out after 1ms.");
   });
 });
