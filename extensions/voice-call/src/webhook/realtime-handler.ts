@@ -30,7 +30,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import type { TwilioRealtimeStreamHandoff } from "../providers/twilio.js";
+import type { TwilioRealtimeStreamHandoff } from "../providers/twilio/realtime-dtmf-handoff.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
