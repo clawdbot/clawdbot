@@ -1,3 +1,4 @@
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 // Msteams tests cover message handler.authz plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
@@ -900,11 +901,9 @@ describe("msteams monitor handler authz", () => {
         "the forwarded body text\n" +
         "[/Forwarded message]",
     );
-    expect(ctxPayload.SupplementalContext).toMatchObject({
-      quote: {
-        body: "the original message text",
-        sender: "Ryan Gregg (test)",
-      },
+    expect(ctxPayload).toMatchObject({
+      ReplyToBody: "the original message text",
+      ReplyToSender: "Ryan Gregg (test)",
     });
   });
 
@@ -957,24 +956,20 @@ describe("msteams monitor handler authz", () => {
         }),
       );
 
-      expect(
-        runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-      ).not.toHaveBeenCalled();
+      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(() =>
-        expect(
-          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-        ).toHaveBeenCalledTimes(1),
+        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
+          1,
+        ),
       );
 
       const ctxPayload = recordFromMockCall(firstSettledDispatch().ctxPayload);
       expect(ctxPayload.BodyForAgent).toBe("Current message\nFollow up");
-      expect(ctxPayload.SupplementalContext).toMatchObject({
-        quote: {
-          id: "quoted-message-1",
-          body: "the original message text",
-          sender: "Ryan Gregg (test)",
-        },
+      expect(ctxPayload).toMatchObject({
+        ReplyToId: "quoted-message-1",
+        ReplyToBody: "the original message text",
+        ReplyToSender: "Ryan Gregg (test)",
       });
     } finally {
       vi.useRealTimers();
@@ -1076,7 +1071,8 @@ describe("msteams monitor handler authz", () => {
     const dispatched = firstSettledDispatch();
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
     expect(ctxPayload.BodyForAgent).toBe("Current message");
-    expect(ctxPayload.SupplementalContext).toEqual({});
+    expect(ctxPayload.ReplyToBody).toBeUndefined();
+    expect(ctxPayload.ReplyToSender).toBeUndefined();
     expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
   });
 
@@ -1130,7 +1126,8 @@ describe("msteams monitor handler authz", () => {
     expect(ctxPayload.BodyForAgent).toBe(
       "[Thread history]\nAlice: Allowed parent context\n[/Thread history]\n\nCurrent message",
     );
-    expect(ctxPayload.SupplementalContext).toEqual({});
+    expect(ctxPayload.ReplyToBody).toBeUndefined();
+    expect(ctxPayload.ReplyToSender).toBeUndefined();
     expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
   });
 
@@ -1194,21 +1191,20 @@ describe("msteams monitor handler authz", () => {
         }),
       );
 
-      expect(
-        runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-      ).not.toHaveBeenCalled();
+      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(() =>
-        expect(
-          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-        ).toHaveBeenCalledTimes(1),
+        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
+          1,
+        ),
       );
 
       const ctxPayload = recordFromMockCall(firstSettledDispatch().ctxPayload);
       expect(ctxPayload.BodyForAgent).toBe(
         "[Thread history]\nAlice: Allowed parent context\n[/Thread history]\n\nCurrent message\nFollow up",
       );
-      expect(ctxPayload.SupplementalContext).toEqual({});
+      expect(ctxPayload.ReplyToBody).toBeUndefined();
+      expect(ctxPayload.ReplyToSender).toBeUndefined();
       expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
     } finally {
       vi.useRealTimers();
@@ -1274,23 +1270,22 @@ describe("msteams monitor handler authz", () => {
 
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(() =>
-        expect(
-          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-        ).toHaveBeenCalledTimes(2),
+        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
+          2,
+        ),
       );
 
       const firstPayload = recordFromMockCall(settledDispatchAt(0).ctxPayload);
       const secondPayload = recordFromMockCall(settledDispatchAt(1).ctxPayload);
       expect(firstPayload.BodyForAgent).toBe("Thread A message");
-      expect(firstPayload.SupplementalContext).toMatchObject({
-        quote: {
-          id: "quoted-message-thread-a",
-          body: "thread A quote",
-          sender: "Sender",
-        },
+      expect(firstPayload).toMatchObject({
+        ReplyToId: "thread-a",
+        ReplyToBody: "thread A quote",
+        ReplyToSender: "Sender",
       });
       expect(secondPayload.BodyForAgent).toBe("Thread B message");
-      expect(secondPayload.SupplementalContext).toEqual({});
+      expect(secondPayload.ReplyToBody).toBeUndefined();
+      expect(secondPayload.ReplyToSender).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
@@ -1342,9 +1337,9 @@ describe("msteams monitor handler authz", () => {
 
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(() =>
-        expect(
-          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-        ).toHaveBeenCalledTimes(2),
+        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
+          2,
+        ),
       );
 
       expect(recordFromMockCall(settledDispatchAt(0).ctxPayload).BodyForAgent).toBe(
