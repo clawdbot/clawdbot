@@ -1352,6 +1352,15 @@ openclaw-chat-sidebar-region,
   padding: 16px;
 }
 
+/* Full-height panel kinds need a bounded wrapper so their inner content can
+   shrink and scroll instead of expanding past the rail. */
+.sidebar-panel-host--fill {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 openclaw-session-discussion {
   display: flex;
   flex: 1 1 0;
