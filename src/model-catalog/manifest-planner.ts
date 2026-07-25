@@ -8,6 +8,7 @@ import type {
   ModelCatalog,
   ModelCatalogAlias,
   ModelCatalogDiscovery,
+  ModelCatalogModel,
   ModelCatalogProvider,
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
@@ -63,6 +64,19 @@ export type ManifestModelCatalogSuppressionEntry = {
 type ManifestModelCatalogSuppressionPlan = {
   suppressions: readonly ManifestModelCatalogSuppressionEntry[];
 };
+
+function mergeRemoteModelWithTrustedTransport(
+  remoteModel: ModelCatalogModel,
+  trustedModel: ModelCatalogModel | undefined,
+): ModelCatalogModel {
+  // Spread keeps an untrusted own `__proto__` key as data instead of invoking
+  // Object.prototype's setter while trusted transport fields win explicitly.
+  return {
+    ...remoteModel,
+    ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
+    ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
+  };
+}
 
 export function planManifestModelCatalogRows(params: {
   registry: ManifestModelCatalogRegistry;
@@ -175,14 +189,9 @@ function planManifestModelCatalogPluginEntries(params: {
             provider: plannedProvider,
             providerCatalog: {
               ...providerDefaults,
-              models: remoteProvider.models.map((model) => {
-                const trustedModel = manifestModelsById.get(model.id);
-                return {
-                  ...model,
-                  ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
-                  ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
-                };
-              }),
+              models: remoteProvider.models.map((model) =>
+                mergeRemoteModelWithTrustedTransport(model, manifestModelsById.get(model.id)),
+              ),
             },
             source: "runtime-refresh",
           })
