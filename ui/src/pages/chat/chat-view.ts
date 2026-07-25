@@ -17,7 +17,7 @@ import type {
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
@@ -63,6 +63,7 @@ import type {
   SidebarContent,
   SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
+import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
   type ChatTranscriptController,
@@ -163,6 +164,7 @@ export type ChatProps = {
   workspaceConflict?: WorkspaceResultConflict;
   onDismissWorkspaceConflict?: () => void;
   sessions: SessionsListResult | null;
+  swarmSessions?: readonly GatewaySessionRow[];
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
   providerUsage?: ProviderUsageDisplayProps;
@@ -631,7 +633,12 @@ export function renderChat(props: ChatProps) {
                     ></openclaw-chat-observer-hud>
                   `
                 : nothing}
-              ${scrollToBottomButton} ${chatColumnFooter}
+              ${scrollToBottomButton}
+              ${renderChatSwarmProgress({
+                sessions: props.swarmSessions ?? [],
+                sessionKey: props.sessionKey,
+              })}
+              ${chatColumnFooter}
               ${renderSideChatPanel({
                 ...sideChatProps,
                 // Detached slash sends are refused while disconnected (see

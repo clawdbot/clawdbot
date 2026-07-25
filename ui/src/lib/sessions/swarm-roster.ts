@@ -1,14 +1,9 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
-import type { SessionCapability } from "../sessions/index.ts";
-import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
-import { hydrateSwarmSessionRows, mergeSwarmSessionRows } from "./swarm-dashboard-roster.ts";
-import type { BoardSnapshot } from "./types.ts";
-import type { BoardViewSnapshot } from "./view-types.ts";
+import { fetchChildSessionRows } from "./child-session-data.ts";
+import type { SessionCapability } from "./index.ts";
 
-const SWARM_TAB_ID = "builtin-swarm";
-const SWARM_WIDGET_NAME = "builtin:swarm";
+const SWARM_SESSION_PAGE_SIZE = 10_000;
 
 function readSwarmEnabled(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
@@ -34,6 +29,41 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
   const agent = agentId ? (asNullableRecord(entries?.[agentId]) ?? listedAgent) : null;
   const agentEnabled = readSwarmEnabled(asNullableRecord(agent?.tools)?.swarm);
   return agentEnabled ?? globalEnabled ?? false;
+}
+
+function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
+  // Callers pass hydrated rows first and the current lifecycle-decorated page
+  // second, so equal persisted timestamps intentionally prefer the latter.
+  return (candidate.updatedAt ?? 0) >= (current.updatedAt ?? 0);
+}
+
+export function mergeSwarmSessionRows(
+  childRows: readonly GatewaySessionRow[],
+  currentRows: readonly GatewaySessionRow[],
+): GatewaySessionRow[] {
+  const merged = new Map<string, GatewaySessionRow>();
+  for (const row of [...childRows, ...currentRows]) {
+    const current = merged.get(row.key);
+    if (!current || isNewerSessionRow(row, current)) {
+      merged.set(row.key, row);
+    }
+  }
+  return [...merged.values()];
+}
+
+export async function hydrateSwarmSessionRows(params: {
+  sessions: SessionCapability;
+  parentKey: string;
+  currentRows: readonly GatewaySessionRow[];
+  isCurrent: () => boolean;
+}): Promise<GatewaySessionRow[] | null> {
+  const childRows = await fetchChildSessionRows({
+    sessions: params.sessions,
+    parentKey: params.parentKey,
+    isCurrent: params.isCurrent,
+    pageSize: SWARM_SESSION_PAGE_SIZE,
+  });
+  return childRows ? mergeSwarmSessionRows(params.currentRows, childRows) : null;
 }
 
 type SwarmHydrationParams = {
@@ -143,62 +173,4 @@ export class SwarmRosterHydrator {
     this.attempts = 0;
     this.timer = null;
   }
-}
-
-function hasSwarmRowsForSession(
-  sessions: readonly GatewaySessionRow[],
-  sessionKey: string,
-): boolean {
-  return sessions.some(
-    (row) =>
-      Boolean(row.swarmGroupId?.trim()) &&
-      ((row.parentSessionKey && areUiSessionKeysEquivalent(row.parentSessionKey, sessionKey)) ||
-        (row.spawnedBy && areUiSessionKeysEquivalent(row.spawnedBy, sessionKey)) ||
-        ((): boolean => {
-          const owner = row.swarmGroupId?.split(":").slice(1, -1).join(":");
-          return Boolean(owner && areUiSessionKeysEquivalent(owner, sessionKey));
-        })()),
-  );
-}
-
-/** Creates the ephemeral board card from the live session roster, never from persisted board state. */
-export function withSwarmWidget(
-  snapshot: BoardSnapshot,
-  sessions: readonly GatewaySessionRow[],
-): BoardViewSnapshot {
-  // Keep the card mounted through terminal collector updates so its explicit
-  // empty state is visible before the retention sweep removes the group.
-  if (!hasSwarmRowsForSession(sessions, snapshot.sessionKey)) {
-    return snapshot;
-  }
-  const tabs = snapshot.tabs.some((tab) => tab.tabId === SWARM_TAB_ID)
-    ? snapshot.tabs
-    : [
-        ...snapshot.tabs,
-        {
-          tabId: SWARM_TAB_ID,
-          title: t("labsPage.swarm.title"),
-          position: Math.max(-1, ...snapshot.tabs.map((tab) => tab.position)) + 1,
-          chatDock: "right" as const,
-        },
-      ];
-  const widget = {
-    name: SWARM_WIDGET_NAME,
-    tabId: SWARM_TAB_ID,
-    title: t("labsPage.swarm.title"),
-    contentKind: "builtin" as const,
-    builtin: "swarm" as const,
-    readOnly: true,
-    sizeW: 12,
-    sizeH: 4,
-    position: 0,
-    grantState: "granted" as const,
-    revision: snapshot.revision,
-  } satisfies BoardViewSnapshot["widgets"][number];
-  const widgets = snapshot.widgets.some((candidate) => candidate.name === SWARM_WIDGET_NAME)
-    ? snapshot.widgets.map((candidate) =>
-        candidate.name === SWARM_WIDGET_NAME ? widget : candidate,
-      )
-    : [...snapshot.widgets, widget];
-  return { ...snapshot, tabs, widgets };
 }
