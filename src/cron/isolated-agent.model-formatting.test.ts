@@ -36,8 +36,10 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "claude-opus-4-6",
   DEFAULT_PROVIDER: "anthropic",
   getModelRefStatus: getModelRefStatusMock,
-  loadPreparedModelCatalogOwnerSnapshot: loadModelCatalogMock,
+  loadResolvedPublishedModelCatalogOwner: loadModelCatalogMock,
   normalizeModelSelection: normalizeModelSelectionMock,
+  publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
+    owner.agentId === agentId.trim().toLowerCase(),
   resolveAgentConfig: (cfg: { agents?: { list?: AgentConfig[] } }, agentId: string) =>
     cfg.agents?.list?.find((agent) => agent.id === agentId),
   resolveAgentWorkspaceDir: (
@@ -378,7 +380,7 @@ describe("cron model formatting and precedence edge cases", () => {
           agentId: "main",
           agentDir: "/tmp/owner-agent",
           workspaceDir: "/tmp/owner-workspace",
-          catalog: ownerCatalog,
+          modelCatalog: { entries: ownerCatalog, routeVariants: [] },
         },
       });
     });
