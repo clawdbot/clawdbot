@@ -396,6 +396,10 @@
     "target": "Moonshot AI"
   },
   {
+    "source": "Neon AI Gateway",
+    "target": "Neon AI Gateway"
+  },
+  {
     "source": "Model providers",
     "target": "模型提供商"
   },
